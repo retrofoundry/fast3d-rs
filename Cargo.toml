@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "fast3d",
+    "fast3d-glium-renderer",
+    "fast3d-wgpu-renderer",
+]
+default-members = [
+    "fast3d",
+    "fast3d-glium-renderer",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+
+[workspace.dependencies.f3dglium]
+package = "fast3d-glium-renderer"
+path = "./fast3d-glium-renderer"
+version = "0.1.0"
+
+[workspace.dependencies.f3dwgpu]
+package = "fast3d-wgpu-renderer"
+path = "./fast3d-wgpu-renderer"
+version = "0.1.0"
+
+[workspace.dependencies]
+bytemuck = { version = "1.13.1", features = ["derive"] }
+glam = { git = "https://github.com/bitshifter/glam-rs.git", branch = "neon", features = ["approx", "bytemuck"] }
+log = "0.4"
+fast3d = { version = "0.1.0", path = "./fast3d" }

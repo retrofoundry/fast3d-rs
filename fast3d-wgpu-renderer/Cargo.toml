@@ -1,0 +1,14 @@
+[package]
+name = "fast3d-wgpu-renderer"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+log.workspace = true
+fast3d.workspace = true
+wgpu = "0.16"

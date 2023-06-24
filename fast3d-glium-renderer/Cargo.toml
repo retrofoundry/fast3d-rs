@@ -1,0 +1,13 @@
+[package]
+name = "fast3d-glium-renderer"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+glam.workspace = true
+log.workspace = true
+fast3d.workspace = true
+glium = { git = "https://github.com/retrofoundry/glium", branch = "helix" }

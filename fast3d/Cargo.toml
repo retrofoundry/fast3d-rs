@@ -1,0 +1,22 @@
+[package]
+name = "fast3d"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[features]
+default = ["f3dex2"]
+
+f3dex2 = []
+f3dex2e = ["gbifloats", "f3dex2"]
+f3dzex2 = ["f3dex2"]
+
+gbifloats = []
+
+[dependencies]
+bytemuck.workspace = true
+farbe = "0.2.0"
+glam.workspace = true
+log.workspace = true
