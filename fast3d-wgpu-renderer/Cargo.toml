@@ -2,6 +2,12 @@
 name = "fast3d-wgpu-renderer"
 version.workspace = true
 edition.workspace = true
+description = "WGPU renderer for fast3d-rs"
+homepage = "https://crates.io/crates/fast3d-wgpu-renderer"
+repository.workspace = true
+keywords.workspace = true
+license-file.workspace = true
+readme.workspace = true
 
 [lib]
 crate-type = ["lib", "cdylib"]

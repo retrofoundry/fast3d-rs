@@ -2,6 +2,12 @@
 name = "fast3d-glium-renderer"
 version.workspace = true
 edition.workspace = true
+description = "Glium renderer for fast3d-rs"
+homepage = "https://crates.io/crates/fast3d-glium-renderer"
+repository.workspace = true
+keywords.workspace = true
+license-file.workspace = true
+readme.workspace = true
 
 [lib]
 crate-type = ["lib", "cdylib"]
@@ -10,4 +16,4 @@ crate-type = ["lib", "cdylib"]
 glam.workspace = true
 log.workspace = true
 fast3d.workspace = true
-glium = { git = "https://github.com/retrofoundry/glium", branch = "helix" }
+glium = "0.32.1"
