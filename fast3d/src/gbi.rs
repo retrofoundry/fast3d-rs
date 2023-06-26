@@ -1,6 +1,6 @@
 use self::defines::{Gfx, G_RDPFULLSYNC, G_RDPLOADSYNC, G_RDPPIPESYNC, G_RDPTILESYNC};
 
-use super::{graphics::GraphicsIntermediateDevice, rdp::RDP, rsp::RSP};
+use super::{output::RCPOutput, rdp::RDP, rsp::RSP};
 use std::collections::HashMap;
 
 pub mod defines;
@@ -23,7 +23,7 @@ pub enum GBIResult {
 pub type GBICommand = fn(
     dp: &mut RDP,
     rsp: &mut RSP,
-    gfx_device: &mut GraphicsIntermediateDevice,
+    gfx_device: &mut RCPOutput,
     command: &mut *mut Gfx,
 ) -> GBIResult;
 
@@ -70,7 +70,7 @@ impl GBI {
         &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        gfx_device: &mut GraphicsIntermediateDevice,
+        gfx_device: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };

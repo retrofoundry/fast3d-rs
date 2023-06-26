@@ -1,149 +1,28 @@
+use crate::output::models::{
+    OutputFogParams, OutputSampler, OutputStencil, OutputUniforms, OutputUniformsBlend,
+    OutputUniformsCombine, OutputVBO,
+};
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
 };
+use texture_cache::TextureCache;
 
-use self::defines::{BlendState, CompareFunction, Face};
+use self::gfx::{BlendState, CompareFunction, Face};
 
 use super::{
+    models::{color_combiner::CombineParams, tile_descriptor::TileDescriptor},
     rdp::NUM_TILE_DESCRIPTORS,
-    utils::{
-        color_combiner::CombineParams,
-        texture::{ImageFormat, ImageSize},
-        texture_cache::TextureCache,
-        tile_descriptor::TileDescriptor,
-    },
 };
 
-pub mod defines;
+pub mod gfx;
+pub mod models;
+pub mod texture_cache;
 
 const TEXTURE_CACHE_MAX_SIZE: usize = 500;
 
-pub struct GraphicsIntermediateTexture {
-    pub game_address: usize,
-    pub format: ImageFormat,
-    pub size: ImageSize,
-    pub width: u32,
-    pub height: u32,
-    pub data: Vec<u8>,
-
-    // when a texture has been created in a gfx backend, this field will be Some
-    pub device_id: Option<u32>,
-}
-
-impl GraphicsIntermediateTexture {
-    pub fn new(
-        game_address: usize,
-        format: ImageFormat,
-        size: ImageSize,
-        width: u32,
-        height: u32,
-        data: Vec<u8>,
-    ) -> Self {
-        Self {
-            game_address,
-            format,
-            size,
-            width,
-            height,
-            data,
-            device_id: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct GraphicsIntermediateSampler {
-    pub tile: usize,
-    pub linear_filter: bool,
-    pub clamp_s: u32,
-    pub clamp_t: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct GraphicsIntermediateStencil {
-    pub depth_write_enabled: bool,
-    pub depth_compare: CompareFunction,
-    pub polygon_offset: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GraphicsIntermediateUniformsBlend {
-    pub fog_color: glam::Vec4,
-    pub blend_color: glam::Vec4,
-}
-
-impl GraphicsIntermediateUniformsBlend {
-    pub const EMPTY: Self = GraphicsIntermediateUniformsBlend {
-        fog_color: glam::Vec4::ZERO,
-        blend_color: glam::Vec4::ZERO,
-    };
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GraphicsIntermediateUniformsCombine {
-    pub prim_color: glam::Vec4,
-    pub env_color: glam::Vec4,
-    pub key_center: glam::Vec3,
-    pub key_scale: glam::Vec3,
-    pub prim_lod: glam::Vec2,
-    pub convert_k4: f32,
-    pub convert_k5: f32,
-}
-
-impl GraphicsIntermediateUniformsCombine {
-    pub const EMPTY: Self = GraphicsIntermediateUniformsCombine {
-        prim_color: glam::Vec4::ZERO,
-        env_color: glam::Vec4::ZERO,
-        key_center: glam::Vec3::ZERO,
-        key_scale: glam::Vec3::ZERO,
-        prim_lod: glam::Vec2::ZERO,
-        convert_k4: 0.0,
-        convert_k5: 0.0,
-    };
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct GraphicsIntermediateUniforms {
-    pub blend: GraphicsIntermediateUniformsBlend,
-    pub combine: GraphicsIntermediateUniformsCombine,
-}
-
-impl GraphicsIntermediateUniforms {
-    pub const EMPTY: Self = GraphicsIntermediateUniforms {
-        blend: GraphicsIntermediateUniformsBlend::EMPTY,
-        combine: GraphicsIntermediateUniformsCombine::EMPTY,
-    };
-}
-
 #[derive(Debug, Clone)]
-pub struct GraphicsIntermediateVBO {
-    pub vbo: Vec<u8>,
-    pub num_tris: usize,
-}
-
-impl GraphicsIntermediateVBO {
-    pub const EMPTY: Self = GraphicsIntermediateVBO {
-        vbo: Vec::new(),
-        num_tris: 0,
-    };
-}
-
-#[derive(Debug, Clone)]
-pub struct GraphicsIntermediateFogParams {
-    pub multiplier: i16,
-    pub offset: i16,
-}
-
-impl GraphicsIntermediateFogParams {
-    pub const EMPTY: Self = GraphicsIntermediateFogParams {
-        multiplier: 0,
-        offset: 0,
-    };
-}
-
-#[derive(Debug, Clone)]
-pub struct GraphicsDrawCall {
+pub struct IntermediateDrawCall {
     // Shader Configuration
     pub other_mode_h: u32,
     pub other_mode_l: u32,
@@ -156,10 +35,10 @@ pub struct GraphicsDrawCall {
     pub textures: [Option<u64>; 2],
 
     // Samplers
-    pub samplers: [Option<GraphicsIntermediateSampler>; 2],
+    pub samplers: [Option<OutputSampler>; 2],
 
     // Stencil
-    pub stencil: Option<GraphicsIntermediateStencil>,
+    pub stencil: Option<OutputStencil>,
 
     // Viewport
     pub viewport: glam::Vec4,
@@ -174,20 +53,20 @@ pub struct GraphicsDrawCall {
     pub cull_mode: Option<Face>,
 
     // Uniforms
-    pub uniforms: GraphicsIntermediateUniforms,
+    pub uniforms: OutputUniforms,
 
     // Triangle Data
-    pub vbo: GraphicsIntermediateVBO,
+    pub vbo: OutputVBO,
 
     // Projection Matrix
     pub projection_matrix: glam::Mat4,
 
     // Fog Params
-    pub fog: GraphicsIntermediateFogParams,
+    pub fog: OutputFogParams,
 }
 
-impl GraphicsDrawCall {
-    pub const EMPTY: Self = GraphicsDrawCall {
+impl IntermediateDrawCall {
+    pub const EMPTY: Self = IntermediateDrawCall {
         other_mode_h: 0,
         other_mode_l: 0,
         geometry_mode: 0,
@@ -201,10 +80,10 @@ impl GraphicsDrawCall {
         scissor: [0; 4],
         blend_state: None,
         cull_mode: None,
-        uniforms: GraphicsIntermediateUniforms::EMPTY,
-        vbo: GraphicsIntermediateVBO::EMPTY,
+        uniforms: OutputUniforms::EMPTY,
+        vbo: OutputVBO::EMPTY,
         projection_matrix: glam::Mat4::ZERO,
-        fog: GraphicsIntermediateFogParams::EMPTY,
+        fog: OutputFogParams::EMPTY,
     };
 
     pub fn finalize(&mut self) {
@@ -220,27 +99,27 @@ impl GraphicsDrawCall {
     }
 }
 
-pub struct GraphicsIntermediateDevice {
+pub struct RCPOutput {
     pub texture_cache: TextureCache,
-    pub draw_calls: Vec<GraphicsDrawCall>,
+    pub draw_calls: Vec<IntermediateDrawCall>,
 }
 
-impl Default for GraphicsIntermediateDevice {
+impl Default for RCPOutput {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl GraphicsIntermediateDevice {
+impl RCPOutput {
     pub fn new() -> Self {
-        GraphicsIntermediateDevice {
+        RCPOutput {
             texture_cache: TextureCache::new(TEXTURE_CACHE_MAX_SIZE),
             // start draw calls with a default draw call
-            draw_calls: vec![GraphicsDrawCall::EMPTY],
+            draw_calls: vec![IntermediateDrawCall::EMPTY],
         }
     }
 
-    fn current_draw_call(&mut self) -> &mut GraphicsDrawCall {
+    fn current_draw_call(&mut self) -> &mut IntermediateDrawCall {
         self.draw_calls.last_mut().unwrap()
     }
 
@@ -290,7 +169,7 @@ impl GraphicsIntermediateDevice {
         clamp_t: u32,
     ) {
         let draw_call = self.current_draw_call();
-        draw_call.samplers[tile] = Some(GraphicsIntermediateSampler {
+        draw_call.samplers[tile] = Some(OutputSampler {
             tile,
             linear_filter,
             clamp_s,
@@ -306,7 +185,7 @@ impl GraphicsIntermediateDevice {
         polygon_offset: bool,
     ) {
         let draw_call = self.current_draw_call();
-        draw_call.stencil = Some(GraphicsIntermediateStencil {
+        draw_call.stencil = Some(OutputStencil {
             depth_write_enabled,
             depth_compare,
             polygon_offset,
@@ -320,7 +199,7 @@ impl GraphicsIntermediateDevice {
 
     pub fn set_fog(&mut self, multiplier: i16, offset: i16) {
         let draw_call = self.current_draw_call();
-        draw_call.fog = GraphicsIntermediateFogParams { multiplier, offset };
+        draw_call.fog = OutputFogParams { multiplier, offset };
     }
 
     pub fn set_viewport(&mut self, x: f32, y: f32, width: f32, height: f32) {
@@ -355,12 +234,12 @@ impl GraphicsIntermediateDevice {
         convert_k: [i32; 6],
     ) {
         let draw_call = self.current_draw_call();
-        draw_call.uniforms = GraphicsIntermediateUniforms {
-            blend: GraphicsIntermediateUniformsBlend {
+        draw_call.uniforms = OutputUniforms {
+            blend: OutputUniformsBlend {
                 fog_color,
                 blend_color,
             },
-            combine: GraphicsIntermediateUniformsCombine {
+            combine: OutputUniformsCombine {
                 prim_color,
                 env_color,
                 key_center,
@@ -374,7 +253,7 @@ impl GraphicsIntermediateDevice {
 
     pub fn set_vbo(&mut self, vbo: Vec<u8>, num_tris: usize) {
         let draw_call = self.current_draw_call();
-        draw_call.vbo = GraphicsIntermediateVBO { vbo, num_tris };
+        draw_call.vbo = OutputVBO { vbo, num_tris };
         draw_call.finalize();
 
         // start a new draw call that's a copy of the current one

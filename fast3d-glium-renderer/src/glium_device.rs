@@ -2,12 +2,11 @@ use std::{borrow::Cow, collections::HashMap};
 
 use fast3d::{
     gbi::defines::G_TX,
-    graphics::{
-        defines::{BlendComponent, BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
-        GraphicsIntermediateFogParams, GraphicsIntermediateSampler, GraphicsIntermediateStencil,
-        GraphicsIntermediateTexture, GraphicsIntermediateUniforms,
+    models::color_combiner::CombineParams,
+    output::{
+        gfx::{BlendComponent, BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
+        models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
     },
-    utils::color_combiner::CombineParams,
 };
 use glam::Vec4Swizzles;
 use glium::{
@@ -161,7 +160,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         }
     }
 
-    pub fn set_depth_stencil_params(&mut self, params: Option<GraphicsIntermediateStencil>) {
+    pub fn set_depth_stencil_params(&mut self, params: Option<OutputStencil>) {
         self.draw_params.depth = if let Some(params) = params {
             glium::Depth {
                 test: match params.depth_compare {
@@ -280,12 +279,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         self.shader_cache.insert(shader_hash, program);
     }
 
-    pub fn bind_texture(
-        &mut self,
-        display: &Display,
-        tile: usize,
-        texture: &mut GraphicsIntermediateTexture,
-    ) {
+    pub fn bind_texture(&mut self, display: &Display, tile: usize, texture: &mut OutputTexture) {
         // check if we've already uploaded this texture to the GPU
         if let Some(texture_id) = texture.device_id {
             // trace!("Texture found in GPU cache");
@@ -307,7 +301,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         self.textures.push(TextureData::new(native_texture));
     }
 
-    pub fn bind_sampler(&mut self, tile: usize, sampler: &GraphicsIntermediateSampler) {
+    pub fn bind_sampler(&mut self, tile: usize, sampler: &OutputSampler) {
         if let Some(texture_data) = self.textures.get_mut(self.current_texture_ids[tile]) {
             let wrap_s = clamp_to_glium(sampler.clamp_s);
             let wrap_t = clamp_to_glium(sampler.clamp_t);
@@ -336,9 +330,9 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         display: &Display,
         target: &mut Frame,
         projection_matrix: glam::Mat4,
-        fog: &GraphicsIntermediateFogParams,
+        fog: &OutputFogParams,
         vbo: &[u8],
-        uniforms: &GraphicsIntermediateUniforms,
+        uniforms: &OutputUniforms,
     ) {
         // Grab current program
         let program = self.shader_cache.get(&self.current_shader).unwrap();

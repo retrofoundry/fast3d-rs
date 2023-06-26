@@ -1,6 +1,6 @@
 use crate::gbi::defines::DirLight;
 
-use super::{gbi::defines::Light, utils::color::Color};
+use super::{gbi::defines::Light, models::color::Color};
 use glam::{Mat4, Vec2, Vec3A};
 
 pub const MATRIX_STACK_SIZE: usize = 32;

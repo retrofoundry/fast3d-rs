@@ -2,7 +2,7 @@ use log::trace;
 
 use super::{
     gbi::{defines::Gfx, GBIResult, GBI},
-    graphics::GraphicsIntermediateDevice,
+    output::RCPOutput,
     rdp::RDP,
     rsp::RSP,
 };
@@ -39,14 +39,13 @@ impl RCP {
     /// This funtion is called to process a work buffer.
     /// It takes in a pointer to the start of the work buffer and will
     /// process until it hits a `G_ENDDL` inidicating the end.
-    pub fn run(&mut self, gfx_device: &mut GraphicsIntermediateDevice, commands: usize) {
+    pub fn run(&mut self, gfx_device: &mut RCPOutput, commands: usize) {
         self.reset();
-
         self.run_dl(gfx_device, commands);
         self.rdp.flush(gfx_device);
     }
 
-    fn run_dl(&mut self, gfx_device: &mut GraphicsIntermediateDevice, commands: usize) {
+    fn run_dl(&mut self, gfx_device: &mut RCPOutput, commands: usize) {
         let mut command = commands as *mut Gfx;
 
         loop {
@@ -55,9 +54,7 @@ impl RCP {
                 .handle_command(&mut self.rdp, &mut self.rsp, gfx_device, &mut command)
             {
                 GBIResult::Recurse(new_command) => self.run_dl(gfx_device, new_command),
-                GBIResult::Unknown(opcode) => {
-                    trace!("Unknown GBI command: {:#x}", opcode)
-                }
+                GBIResult::Unknown(opcode) => trace!("Unknown GBI command: {:#x}", opcode),
                 GBIResult::Return => return,
                 GBIResult::Continue => {}
             }

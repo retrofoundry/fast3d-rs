@@ -11,11 +11,11 @@ use fast3d::{
         other_mode_l_alpha_compare_dither, other_mode_l_alpha_compare_threshold,
         other_mode_l_uses_alpha, other_mode_l_uses_fog, other_mode_l_uses_texture_edge,
     },
-    rdp::OtherModeHCycleType,
-    utils::{
+    models::{
         color_combiner::{CombineParams, ACMUX, CCMUX},
         texture::TextFilt,
     },
+    rdp::OtherModeHCycleType,
 };
 
 pub struct WgpuProgram {

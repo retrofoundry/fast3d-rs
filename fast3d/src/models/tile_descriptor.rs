@@ -1,4 +1,4 @@
-use super::texture::{ImageFormat, ImageSize};
+use crate::models::texture::{ImageFormat, ImageSize};
 
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct TileDescriptor {
