@@ -3,12 +3,12 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::graphics::GraphicsIntermediateTexture;
+use crate::output::models::OutputTexture;
 
-use super::texture::{ImageFormat, ImageSize};
+use crate::models::texture::{ImageFormat, ImageSize};
 
 pub struct TextureCache {
-    pub map: HashMap<u64, GraphicsIntermediateTexture>,
+    pub map: HashMap<u64, OutputTexture>,
     pub lru: VecDeque<u64>,
     pub capacity: usize,
 }
@@ -42,7 +42,7 @@ impl TextureCache {
         None
     }
 
-    pub fn get(&mut self, hash: u64) -> Option<&GraphicsIntermediateTexture> {
+    pub fn get(&mut self, hash: u64) -> Option<&OutputTexture> {
         if let Some(texture) = self.map.get(&hash) {
             self.lru.push_back(hash);
             return Some(texture);
@@ -51,7 +51,7 @@ impl TextureCache {
         None
     }
 
-    pub fn get_mut(&mut self, hash: u64) -> Option<&mut GraphicsIntermediateTexture> {
+    pub fn get_mut(&mut self, hash: u64) -> Option<&mut OutputTexture> {
         if let Some(texture) = self.map.get_mut(&hash) {
             self.lru.push_back(hash);
             return Some(texture);
@@ -76,8 +76,7 @@ impl TextureCache {
             }
         }
 
-        let texture =
-            GraphicsIntermediateTexture::new(game_address, format, size, width, height, data);
+        let texture = OutputTexture::new(game_address, format, size, width, height, data);
 
         let mut hasher = DefaultHasher::new();
         game_address.hash(&mut hasher);

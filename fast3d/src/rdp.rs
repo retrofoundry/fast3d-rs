@@ -5,11 +5,12 @@ use std::hash::{Hash, Hasher};
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
-use crate::graphics::defines::{BlendState, CompareFunction, Face};
+use crate::output::{
+    gfx::{BlendState, CompareFunction, Face},
+    RCPOutput,
+};
 
-use super::graphics::GraphicsIntermediateDevice;
-use super::utils::color::Color;
-use super::utils::texture::RenderingStateTexture;
+use super::models::{color::Color, texture::RenderingStateTexture};
 use super::{
     gbi::{
         defines::Viewport,
@@ -18,8 +19,7 @@ use super::{
             other_mode_l_uses_alpha, other_mode_l_uses_texture_edge, translate_cull_mode,
         },
     },
-    rsp::RSPGeometry,
-    utils::{
+    models::{
         color_combiner::CombineParams,
         texture::{
             translate_tile_ci4, translate_tile_ci8, translate_tile_i4, translate_tile_i8,
@@ -29,6 +29,7 @@ use super::{
         },
         tile_descriptor::TileDescriptor,
     },
+    rsp::RSPGeometry,
 };
 
 use farbe::image::n64::ImageSize as FarbeImageSize;
@@ -340,11 +341,7 @@ impl RDP {
 
     // Textures
 
-    pub fn import_tile_texture(
-        &mut self,
-        gfx_device: &mut GraphicsIntermediateDevice,
-        tmem_index: usize,
-    ) {
+    pub fn import_tile_texture(&mut self, gfx_device: &mut RCPOutput, tmem_index: usize) {
         let tile = self.tile_descriptors[self.texture_state.tile as usize];
         let format = tile.format as u32;
         let size = tile.size as u32;
@@ -436,7 +433,7 @@ impl RDP {
             && self.combine.uses_texture1()
     }
 
-    pub fn flush_textures(&mut self, gfx_device: &mut GraphicsIntermediateDevice) {
+    pub fn flush_textures(&mut self, gfx_device: &mut RCPOutput) {
         // if textures are not on, then we have no textures to flush
         // if !self.texture_state.on {
         //     return;
@@ -489,7 +486,7 @@ impl RDP {
         }
     }
 
-    pub fn flush(&mut self, gfx_device: &mut GraphicsIntermediateDevice) {
+    pub fn flush(&mut self, gfx_device: &mut RCPOutput) {
         if self.buf_vbo_len > 0 {
             let vbo = bytemuck::cast_slice(&self.buf_vbo[..self.buf_vbo_len]);
             gfx_device.set_vbo(vbo.to_vec(), self.buf_vbo_num_tris);
@@ -515,7 +512,7 @@ impl RDP {
 
     fn process_depth_params(
         &mut self,
-        gfx_device: &mut GraphicsIntermediateDevice,
+        gfx_device: &mut RCPOutput,
         geometry_mode: u32,
         render_mode: u32,
     ) {
@@ -569,11 +566,7 @@ impl RDP {
         gfx_device.set_depth_stencil_params(depth_test, depth_write, depth_compare, polygon_offset);
     }
 
-    pub fn update_render_state(
-        &mut self,
-        gfx_device: &mut GraphicsIntermediateDevice,
-        geometry_mode: u32,
-    ) {
+    pub fn update_render_state(&mut self, gfx_device: &mut RCPOutput, geometry_mode: u32) {
         let cull_mode = translate_cull_mode(geometry_mode);
         if cull_mode != self.rendering_state.cull_mode {
             self.flush(gfx_device);

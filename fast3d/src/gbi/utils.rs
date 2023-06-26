@@ -1,11 +1,11 @@
 use crate::{
-    graphics::defines::{BlendFactor, Face},
+    models::texture::TextFilt,
+    output::gfx::{BlendFactor, Face},
     rdp::{
         AlphaCompare, BlendParamB, BlendParamPMColor, OtherModeHCycleType, OtherModeH_Layout,
         OtherModeLayoutL,
     },
     rsp::RSPGeometry,
-    utils::texture::TextFilt,
 };
 
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {

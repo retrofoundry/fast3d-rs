@@ -6,12 +6,11 @@ use wgpu::util::{align_to, DeviceExt};
 
 use fast3d::{
     gbi::defines::G_TX,
-    graphics::{
-        defines::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
-        GraphicsIntermediateFogParams, GraphicsIntermediateSampler, GraphicsIntermediateStencil,
-        GraphicsIntermediateTexture, GraphicsIntermediateUniforms,
+    models::color_combiner::CombineParams,
+    output::{
+        gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
+        models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
     },
-    utils::color_combiner::CombineParams,
 };
 
 use super::wgpu_program::WgpuProgram;
@@ -493,7 +492,7 @@ impl WgpuGraphicsDevice {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         tile: usize,
-        texture: &mut GraphicsIntermediateTexture,
+        texture: &mut OutputTexture,
     ) {
         // check if we've already uploaded this texture to the GPU
         if let Some(texture_id) = texture.device_id {
@@ -546,12 +545,7 @@ impl WgpuGraphicsDevice {
         self.textures.push(TextureData::new(texture_view));
     }
 
-    pub fn bind_sampler(
-        &mut self,
-        device: &wgpu::Device,
-        tile: usize,
-        sampler: &GraphicsIntermediateSampler,
-    ) {
+    pub fn bind_sampler(&mut self, device: &wgpu::Device, tile: usize, sampler: &OutputSampler) {
         if let Some(texture_data) = self.textures.get_mut(self.current_texture_ids[tile]) {
             texture_data.sampler = Some(device.create_sampler(&wgpu::SamplerDescriptor {
                 label: None,
@@ -577,8 +571,8 @@ impl WgpuGraphicsDevice {
         &mut self,
         queue: &wgpu::Queue,
         projection_matrix: glam::Mat4,
-        fog: &GraphicsIntermediateFogParams,
-        uniforms: &GraphicsIntermediateUniforms,
+        fog: &OutputFogParams,
+        uniforms: &OutputUniforms,
     ) {
         // Grab current program
         let program = self.shader_cache.get_mut(&self.current_shader).unwrap();
@@ -641,7 +635,7 @@ impl WgpuGraphicsDevice {
         surface_texture_format: wgpu::TextureFormat,
         blend_state: Option<BlendState>,
         cull_mode: Option<Face>,
-        depth_stencil: Option<GraphicsIntermediateStencil>,
+        depth_stencil: Option<OutputStencil>,
     ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
         // Grab current program
         let program = self.shader_cache.get_mut(&self.current_shader).unwrap();
@@ -788,14 +782,10 @@ impl WgpuGraphicsDevice {
 }
 
 fn face_to_wgpu(face: Option<Face>) -> Option<wgpu::Face> {
-    if let Some(face) = face {
-        Some(match face {
-            Face::Front => wgpu::Face::Front,
-            Face::Back => wgpu::Face::Back,
-        })
-    } else {
-        None
-    }
+    face.map(|face| match face {
+        Face::Front => wgpu::Face::Front,
+        Face::Back => wgpu::Face::Back,
+    })
 }
 
 fn compare_function_to_wgpu(func: CompareFunction) -> wgpu::CompareFunction {
@@ -812,22 +802,18 @@ fn compare_function_to_wgpu(func: CompareFunction) -> wgpu::CompareFunction {
 }
 
 fn blend_state_to_wgpu(state: Option<BlendState>) -> Option<wgpu::BlendState> {
-    if let Some(state) = state {
-        Some(wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: blend_factor_to_wgpu(state.color.src_factor),
-                dst_factor: blend_factor_to_wgpu(state.color.dst_factor),
-                operation: blend_op_to_wgpu(state.color.operation),
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: blend_factor_to_wgpu(state.alpha.src_factor),
-                dst_factor: blend_factor_to_wgpu(state.alpha.dst_factor),
-                operation: blend_op_to_wgpu(state.alpha.operation),
-            },
-        })
-    } else {
-        None
-    }
+    state.map(|state| wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor: blend_factor_to_wgpu(state.color.src_factor),
+            dst_factor: blend_factor_to_wgpu(state.color.dst_factor),
+            operation: blend_op_to_wgpu(state.color.operation),
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: blend_factor_to_wgpu(state.alpha.src_factor),
+            dst_factor: blend_factor_to_wgpu(state.alpha.dst_factor),
+            operation: blend_op_to_wgpu(state.alpha.operation),
+        },
+    })
 }
 
 fn blend_factor_to_wgpu(factor: BlendFactor) -> wgpu::BlendFactor {

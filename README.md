@@ -4,7 +4,7 @@ fast3d-rs is a library written in Rust for rendering N64 graphics API commands.
 
 ## Features
 
-- [x] Several microcodes are supported and more will be added
+- [x] F3DEX2 microcode supported (more coming)
 - [x] OpenGL rendering
 - [ ] WGPU rendering
 
@@ -12,9 +12,9 @@ fast3d-rs is a library written in Rust for rendering N64 graphics API commands.
 
 The library consists of three main components:
 
-- `RCP` - This represents the N64 RCP and provides a reset and a run method.
-- `GraphicsIntermediateDevice` - This is a component given to the RCP run command that collects draw calls for parsing into different renderers
-- `GliumGraphicsDevice` - This is a renderer that can be used to render the draw backend agnostic draw calls produced
+- `RCP` - This represents the N64 RCP and provides a reset and a runDL method.
+- `RCPOutput` - This is a component given to the RCP run command that collects draw calls for parsing into different renderers
+- `GliumGraphicsDevice` - This is a renderer that can be used to render the output produced
 
 <details>
 <summary>OpenGL (Glium) Example</summary>
@@ -95,3 +95,4 @@ self.intermediate_graphics_device.clear_draw_calls();
 ```
   
 </details>
+

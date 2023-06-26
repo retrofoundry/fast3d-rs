@@ -1,4 +1,4 @@
-use crate::{graphics::GraphicsIntermediateDevice, rdp::RDP, rsp::RSP};
+use crate::{output::RCPOutput, rdp::RDP, rsp::RSP};
 
 use super::{
     defines::{Gfx, G_FILLRECT, G_TEXRECT, G_TEXRECTFLIP},
@@ -22,7 +22,7 @@ impl F3DEX2E {
     pub fn gdp_texture_rectangle(
         rdp: &mut RDP,
         rsp: &mut RSP,
-        gfx_device: &mut GraphicsIntermediateDevice,
+        output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -57,7 +57,7 @@ impl F3DEX2E {
         F3DEX2::gdp_texture_rectangle_raw(
             rdp,
             rsp,
-            gfx_device,
+            output,
             ulx as i32,
             uly as i32,
             lrx as i32,
@@ -74,7 +74,7 @@ impl F3DEX2E {
     pub fn gdp_fill_rectangle(
         rdp: &mut RDP,
         rsp: &mut RSP,
-        gfx_device: &mut GraphicsIntermediateDevice,
+        output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -93,7 +93,7 @@ impl F3DEX2E {
         let uly = get_cmd(w1, 0, 24) << 8 >> 8;
 
         F3DEX2::gdp_fill_rectangle_raw(
-            rdp, rsp, gfx_device, ulx as i32, uly as i32, lrx as i32, lry as i32,
+            rdp, rsp, output, ulx as i32, uly as i32, lrx as i32, lry as i32,
         )
     }
 }

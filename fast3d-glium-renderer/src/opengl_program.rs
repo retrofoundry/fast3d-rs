@@ -5,7 +5,7 @@ use fast3d::gbi::utils::{
     other_mode_l_uses_texture_edge,
 };
 
-use fast3d::utils::{
+use fast3d::models::{
     color_combiner::{CombineParams, ACMUX, CCMUX},
     texture::TextFilt,
 };
