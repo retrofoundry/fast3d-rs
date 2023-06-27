@@ -20,12 +20,8 @@ pub enum GBIResult {
     Continue,
 }
 
-pub type GBICommand = fn(
-    dp: &mut RDP,
-    rsp: &mut RSP,
-    gfx_device: &mut RCPOutput,
-    command: &mut *mut Gfx,
-) -> GBIResult;
+pub type GBICommand =
+    fn(dp: &mut RDP, rsp: &mut RSP, output: &mut RCPOutput, command: &mut *mut Gfx) -> GBIResult;
 
 trait GBIDefinition {
     fn setup(gbi: &mut GBI);
@@ -70,7 +66,7 @@ impl GBI {
         &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        gfx_device: &mut RCPOutput,
+        output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -79,7 +75,7 @@ impl GBI {
         let cmd = self.gbi_opcode_table.get(&opcode);
 
         match cmd {
-            Some(cmd) => cmd(rdp, rsp, gfx_device, command),
+            Some(cmd) => cmd(rdp, rsp, output, command),
             None => GBIResult::Unknown(opcode),
         }
     }

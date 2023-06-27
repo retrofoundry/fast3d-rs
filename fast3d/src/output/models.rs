@@ -5,11 +5,17 @@ pub struct OutputTexture {
     pub game_address: usize,
     pub format: ImageFormat,
     pub size: ImageSize,
+
+    // properties from tile descriptor
     pub width: u32,
     pub height: u32,
+    pub uls: u16,
+    pub ult: u16,
+
+    /// pixel data for the texture
     pub data: Vec<u8>,
 
-    // when a texture has been created in a gfx backend, this field will be Some
+    /// id of texture when it has been uploaded to a gfx device
     pub device_id: Option<u32>,
 }
 
@@ -20,6 +26,8 @@ impl OutputTexture {
         size: ImageSize,
         width: u32,
         height: u32,
+        uls: u16,
+        ult: u16,
         data: Vec<u8>,
     ) -> Self {
         Self {
@@ -28,6 +36,8 @@ impl OutputTexture {
             size,
             width,
             height,
+            uls,
+            ult,
             data,
             device_id: None,
         }

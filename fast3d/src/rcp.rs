@@ -39,21 +39,21 @@ impl RCP {
     /// This funtion is called to process a work buffer.
     /// It takes in a pointer to the start of the work buffer and will
     /// process until it hits a `G_ENDDL` inidicating the end.
-    pub fn run(&mut self, gfx_device: &mut RCPOutput, commands: usize) {
+    pub fn run(&mut self, output: &mut RCPOutput, commands: usize) {
         self.reset();
-        self.run_dl(gfx_device, commands);
-        self.rdp.flush(gfx_device);
+        self.run_dl(output, commands);
+        self.rdp.flush(output);
     }
 
-    fn run_dl(&mut self, gfx_device: &mut RCPOutput, commands: usize) {
+    fn run_dl(&mut self, output: &mut RCPOutput, commands: usize) {
         let mut command = commands as *mut Gfx;
 
         loop {
             match self
                 .gbi
-                .handle_command(&mut self.rdp, &mut self.rsp, gfx_device, &mut command)
+                .handle_command(&mut self.rdp, &mut self.rsp, output, &mut command)
             {
-                GBIResult::Recurse(new_command) => self.run_dl(gfx_device, new_command),
+                GBIResult::Recurse(new_command) => self.run_dl(output, new_command),
                 GBIResult::Unknown(opcode) => trace!("Unknown GBI command: {:#x}", opcode),
                 GBIResult::Return => return,
                 GBIResult::Continue => {}

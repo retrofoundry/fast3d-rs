@@ -217,14 +217,6 @@ impl<T> OpenGLProgram<T> {
                 uniform float uFogOffset;
             #endif
 
-            // Convert from 0...1 UNORM range to SNORM range
-            vec3 ConvertToSignedInt(vec3 t_Input) {
-                ivec3 t_Num = ivec3(t_Input * 255.0);
-                // Sign extend
-                t_Num = t_Num << 24 >> 24;
-                return vec3(t_Num) / 127.0;
-            }
-
             void main() {
                 if (aVtxPos.w == DRAWING_RECT) {
                     gl_Position = vec4(aVtxPos.xyz, 1.0);
@@ -238,12 +230,6 @@ impl<T> OpenGLProgram<T> {
                     vVtxColor = vec4(aVtxColor.rgb, fogValue / 255.0);
                 #else
                     vVtxColor = aVtxColor;
-                #endif
-
-                #ifdef LIGHTING
-                    // convert (unsigned) colors to normal vector components
-                    vec4 t_Normal = vec4(ConvertToSignedInt(aVtxColor.rgb), 0.0);
-                    // t_Normal = normalize(Mul(_Mat4x4(u_BoneMatrix[t_BoneIndex]), t_Normal));
                 #endif
 
                 #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)

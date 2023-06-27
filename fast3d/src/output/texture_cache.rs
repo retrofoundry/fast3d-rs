@@ -67,6 +67,8 @@ impl TextureCache {
         size: ImageSize,
         width: u32,
         height: u32,
+        uls: u16,
+        ult: u16,
         data: Vec<u8>,
     ) -> u64 {
         if self.map.len() >= self.capacity {
@@ -76,7 +78,7 @@ impl TextureCache {
             }
         }
 
-        let texture = OutputTexture::new(game_address, format, size, width, height, data);
+        let texture = OutputTexture::new(game_address, format, size, width, height, uls, ult, data);
 
         let mut hasher = DefaultHasher::new();
         game_address.hash(&mut hasher);

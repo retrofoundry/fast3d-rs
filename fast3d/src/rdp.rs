@@ -341,8 +341,8 @@ impl RDP {
 
     // Textures
 
-    pub fn import_tile_texture(&mut self, gfx_device: &mut RCPOutput, tmem_index: usize) {
-        let tile = self.tile_descriptors[self.texture_state.tile as usize];
+    pub fn import_tile_texture(&mut self, output: &mut RCPOutput, tmem_index: usize) {
+        let tile = self.tile_descriptors[self.texture_state.tile as usize + tmem_index];
         let format = tile.format as u32;
         let size = tile.size as u32;
         let width = tile.get_width() as u32;
@@ -351,12 +351,11 @@ impl RDP {
         let tmap_entry = self.tmem_map.get(&tile.tmem).unwrap();
         let texture_address = tmap_entry.address;
 
-        if let Some(hash) =
-            gfx_device
-                .texture_cache
-                .contains(texture_address, tile.format, tile.size)
+        if let Some(hash) = output
+            .texture_cache
+            .contains(texture_address, tile.format, tile.size)
         {
-            gfx_device.set_texture(tmem_index, hash);
+            output.set_texture(tmem_index, hash);
             return;
         }
 
@@ -417,15 +416,17 @@ impl RDP {
             }
         };
 
-        let hash = gfx_device.texture_cache.insert(
+        let hash = output.texture_cache.insert(
             texture_address,
             tile.format,
             tile.size,
             width,
             height,
+            tile.uls,
+            tile.ult,
             texture,
         );
-        gfx_device.set_texture(tmem_index, hash);
+        output.set_texture(tmem_index, hash);
     }
 
     pub fn uses_texture1(&self) -> bool {
@@ -433,7 +434,7 @@ impl RDP {
             && self.combine.uses_texture1()
     }
 
-    pub fn flush_textures(&mut self, gfx_device: &mut RCPOutput) {
+    pub fn flush_textures(&mut self, output: &mut RCPOutput) {
         // if textures are not on, then we have no textures to flush
         // if !self.texture_state.on {
         //     return;
@@ -455,10 +456,10 @@ impl RDP {
             for i in 0..2 {
                 if i == 0 || self.uses_texture1() {
                     if self.textures_changed[i as usize] {
-                        self.flush(gfx_device);
-                        gfx_device.clear_textures(i as usize);
+                        self.flush(output);
+                        output.clear_textures(i as usize);
 
-                        self.import_tile_texture(gfx_device, i as usize);
+                        self.import_tile_texture(output, i as usize);
                         self.textures_changed[i as usize] = false;
                     }
 
@@ -471,7 +472,7 @@ impl RDP {
                         || tile_descriptor.cm_s != texture.cms
                         || tile_descriptor.cm_t != texture.cmt
                     {
-                        gfx_device.set_sampler_parameters(
+                        output.set_sampler_parameters(
                             i as usize,
                             linear_filter,
                             tile_descriptor.cm_s as u32,
@@ -486,10 +487,10 @@ impl RDP {
         }
     }
 
-    pub fn flush(&mut self, gfx_device: &mut RCPOutput) {
+    pub fn flush(&mut self, output: &mut RCPOutput) {
         if self.buf_vbo_len > 0 {
             let vbo = bytemuck::cast_slice(&self.buf_vbo[..self.buf_vbo_len]);
-            gfx_device.set_vbo(vbo.to_vec(), self.buf_vbo_num_tris);
+            output.set_vbo(vbo.to_vec(), self.buf_vbo_num_tris);
             self.buf_vbo_len = 0;
             self.buf_vbo_num_tris = 0;
         }
@@ -512,13 +513,13 @@ impl RDP {
 
     fn process_depth_params(
         &mut self,
-        gfx_device: &mut RCPOutput,
+        output: &mut RCPOutput,
         geometry_mode: u32,
         render_mode: u32,
     ) {
         let depth_test = geometry_mode & RSPGeometry::G_ZBUFFER as u32 != 0;
         if depth_test != self.rendering_state.depth_test {
-            self.flush(gfx_device);
+            self.flush(output);
             self.rendering_state.depth_test = depth_test;
         }
 
@@ -535,14 +536,14 @@ impl RDP {
             };
 
             if depth_compare != self.rendering_state.depth_compare {
-                self.flush(gfx_device);
+                self.flush(output);
                 self.rendering_state.depth_compare = depth_compare;
             }
 
             depth_compare
         } else {
             if self.rendering_state.depth_compare != CompareFunction::Always {
-                self.flush(gfx_device);
+                self.flush(output);
                 self.rendering_state.depth_compare = CompareFunction::Always;
             }
 
@@ -552,29 +553,29 @@ impl RDP {
         // handle depth write
         let depth_write = render_mode & (1 << OtherModeLayoutL::Z_UPD as u32) != 0;
         if depth_write != self.rendering_state.depth_write {
-            self.flush(gfx_device);
+            self.flush(output);
             self.rendering_state.depth_write = depth_write;
         }
 
         // handle polygon offset (slope scale depth bias)
         let polygon_offset = zmode == ZMode::ZMODE_DEC as u32;
         if polygon_offset != self.rendering_state.polygon_offset {
-            self.flush(gfx_device);
+            self.flush(output);
             self.rendering_state.polygon_offset = polygon_offset;
         }
 
-        gfx_device.set_depth_stencil_params(depth_test, depth_write, depth_compare, polygon_offset);
+        output.set_depth_stencil_params(depth_test, depth_write, depth_compare, polygon_offset);
     }
 
-    pub fn update_render_state(&mut self, gfx_device: &mut RCPOutput, geometry_mode: u32) {
+    pub fn update_render_state(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
         let cull_mode = translate_cull_mode(geometry_mode);
         if cull_mode != self.rendering_state.cull_mode {
-            self.flush(gfx_device);
-            gfx_device.set_cull_mode(cull_mode);
+            self.flush(output);
+            output.set_cull_mode(cull_mode);
             self.rendering_state.cull_mode = cull_mode;
         }
 
-        self.process_depth_params(gfx_device, geometry_mode, self.other_mode_l);
+        self.process_depth_params(output, geometry_mode, self.other_mode_l);
 
         // handle alpha blending
         let do_blend = other_mode_l_uses_alpha(self.other_mode_l)
@@ -587,8 +588,8 @@ impl RDP {
                 None
             };
 
-            self.flush(gfx_device);
-            gfx_device.set_blend_state(blend_state);
+            self.flush(output);
+            output.set_blend_state(blend_state);
             self.rendering_state.blend_enabled = do_blend;
         }
 
@@ -596,8 +597,8 @@ impl RDP {
         if self.viewport_or_scissor_changed {
             let viewport = self.viewport;
             if viewport != self.rendering_state.viewport {
-                self.flush(gfx_device);
-                gfx_device.set_viewport(
+                self.flush(output);
+                output.set_viewport(
                     viewport.x as f32,
                     viewport.y as f32,
                     viewport.width as f32,
@@ -607,8 +608,8 @@ impl RDP {
             }
             let scissor = self.scissor;
             if scissor != self.rendering_state.scissor {
-                self.flush(gfx_device);
-                gfx_device.set_scissor(
+                self.flush(output);
+                output.set_scissor(
                     scissor.x as u32,
                     scissor.y as u32,
                     scissor.width as u32,

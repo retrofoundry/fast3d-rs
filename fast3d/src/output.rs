@@ -32,7 +32,7 @@ pub struct IntermediateDrawCall {
     pub shader_hash: u64,
 
     // Textures
-    pub textures: [Option<u64>; 2],
+    pub texture_indices: [Option<u64>; 2],
 
     // Samplers
     pub samplers: [Option<OutputSampler>; 2],
@@ -73,7 +73,7 @@ impl IntermediateDrawCall {
         combine: CombineParams::ZERO,
         tile_descriptors: [TileDescriptor::EMPTY; NUM_TILE_DESCRIPTORS],
         shader_hash: 0,
-        textures: [None; 2],
+        texture_indices: [None; 2],
         samplers: [None; 2],
         stencil: None,
         viewport: glam::Vec4::ZERO,
@@ -139,7 +139,7 @@ impl RCPOutput {
 
     pub fn clear_textures(&mut self, index: usize) {
         let draw_call = self.current_draw_call();
-        draw_call.textures[index] = None;
+        draw_call.texture_indices[index] = None;
     }
 
     pub fn set_program_params(
@@ -158,7 +158,7 @@ impl RCPOutput {
 
     pub fn set_texture(&mut self, tile: usize, hash: u64) {
         let draw_call = self.current_draw_call();
-        draw_call.textures[tile] = Some(hash);
+        draw_call.texture_indices[tile] = Some(hash);
     }
 
     pub fn set_sampler_parameters(
