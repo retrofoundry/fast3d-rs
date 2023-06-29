@@ -32,7 +32,7 @@ use super::{
 };
 
 use farbe::image::n64::ImageSize as FarbeImageSize;
-use crate::gbi::defines::RSP_GEOMETRY;
+use crate::gbi::defines::{G_TX, RSP_GEOMETRY};
 use crate::rsp::{RSP, RSPConstants};
 
 pub const SCREEN_WIDTH: f32 = 320.0;
@@ -557,6 +557,106 @@ impl RDP {
         self.other_mode_h = other_mode_h;
         self.other_mode_l = other_mode_l;
         self.shader_config_changed = true;
+    }
+
+    pub fn set_combine(&mut self, combine: CombineParams) {
+        self.combine = combine;
+        self.shader_config_changed = true;
+    }
+
+    pub fn set_tile(&mut self, tile: u8, format: u8, size: u8, line: u16, tmem: u16, palette: u8, cm_t: u8, cm_s: u8, mask_t: u8, mask_s: u8, shift_t: u8, shift_s: u8) {
+        assert!(tile < NUM_TILE_DESCRIPTORS as u8);
+        let tile = &mut self.tile_descriptors[tile as usize];
+        tile.set_format(format);
+        tile.set_size(size);
+        tile.line = line;
+        tile.tmem = tmem;
+        tile.palette = palette;
+        tile.cm_t = cm_t;
+        tile.mask_t = mask_t;
+        tile.shift_t = shift_t;
+        tile.cm_s = cm_s;
+        tile.mask_s = mask_s;
+        tile.shift_s = shift_s;
+
+        self.textures_changed[0] = true;
+        self.textures_changed[1] = true;
+    }
+
+    pub fn set_tile_size(&mut self, tile: u8, ult: u16, uls: u16, lrt: u16, lrs: u16) {
+        assert!(tile < NUM_TILE_DESCRIPTORS as u8);
+        let tile = &mut self.tile_descriptors[tile as usize];
+        tile.uls = uls;
+        tile.ult = ult;
+        tile.lrs = lrs;
+        tile.lrt = lrt;
+
+        self.textures_changed[0] = true;
+        self.textures_changed[1] = true;
+    }
+
+    pub fn load_tile(&mut self, tile: u8, ult: u16, uls: u16, lrt: u16, lrs: u16) {
+        // First, verify that we're loading the whole texture.
+        assert!(uls == 0 && ult == 0);
+        // Verify that we're loading into LOADTILE.
+        assert_eq!(tile, G_TX::LOADTILE);
+
+        let tile = &mut self.tile_descriptors[tile as usize];
+        self.tmem_map.insert(
+            tile.tmem,
+            TMEMMapEntry::new(self.texture_image_state.address),
+        );
+
+        tile.uls = uls;
+        tile.ult = ult;
+        tile.lrs = lrs;
+        tile.lrt = lrt;
+
+        trace!("texture {} is being marked as has changed", tile.tmem / 256);
+        let tmem_index = if tile.tmem != 0 { 1 } else { 0 };
+        self.textures_changed[tmem_index as usize] = true;
+    }
+
+    pub fn load_block(&mut self, tile: u8, ult: u16, uls: u16, dxt: u16, texels: u16) {
+        // First, verify that we're loading the whole texture.
+        assert!(uls == 0 && ult == 0);
+        // Verify that we're loading into LOADTILE.
+        assert_eq!(tile, G_TX::LOADTILE);
+
+        let tile = &mut self.tile_descriptors[tile as usize];
+        self.tmem_map.insert(
+            tile.tmem,
+            TMEMMapEntry::new(self.texture_image_state.address),
+        );
+
+        tile.uls = uls;
+        tile.ult = ult;
+        tile.lrs = texels;
+        tile.lrt = dxt;
+
+        let tmem_index = if tile.tmem != 0 { 1 } else { 0 };
+        self.textures_changed[tmem_index as usize] = true;
+    }
+
+    // TODO: Verify this method against a game that uses TLUTs
+    pub fn load_tlut(&mut self, tile: u8, high_index: u16) {
+        // Verify that we're loading into LOADTILE.
+        assert_eq!(tile, G_TX::LOADTILE);
+        assert_eq!(self.texture_image_state.size, ImageSize::G_IM_SIZ_16b as u8); // TLUTs are always 16-bit (so far)
+
+        assert!(
+            self.tile_descriptors[tile as usize].tmem == 256
+                && (high_index <= 127 || high_index == 255)
+                || self.tile_descriptors[tile as usize].tmem == 384 && high_index == 127
+        );
+
+        trace!("gdp_load_tlut(tile: {}, high_index: {})", tile, high_index);
+
+        let tile = &mut self.tile_descriptors[tile as usize];
+        self.tmem_map.insert(
+            tile.tmem,
+            TMEMMapEntry::new(self.texture_image_state.address),
+        );
     }
 
     // MARK: - Drawing

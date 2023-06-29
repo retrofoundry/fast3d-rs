@@ -1,3 +1,11 @@
+use crate::gbi::{GBI, GBIDefinition, GBIResult};
+use crate::gbi::defines::{G_SET, Gfx};
+use crate::gbi::utils::get_cmd;
+use crate::models::texture::TextureImageState;
+use crate::output::RCPOutput;
+use crate::rdp::RDP;
+use crate::rsp::RSP;
+
 pub struct F3D;
 
 impl F3D {
@@ -52,4 +60,13 @@ impl F3D {
     pub const G_MV_MATRIX_2: u8 = 0x98;
     pub const G_MV_MATRIX_3: u8 = 0x9a;
     pub const G_MV_MATRIX_4: u8 = 0x9c;
+}
+
+impl GBIDefinition for F3D {
+    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
+        gbi.register(F3D::G_SPNOOP as usize, |_, _, _, _| GBIResult::Continue);
+    }
+}
+
+impl F3D {
 }

@@ -4,6 +4,7 @@ use super::{output::RCPOutput, rdp::RDP, rsp::RSP};
 use std::collections::HashMap;
 
 pub mod defines;
+mod common;
 mod f3d;
 #[cfg(feature = "f3dex2")]
 mod f3dex2;
@@ -45,10 +46,8 @@ impl GBI {
     }
 
     pub fn setup(&mut self, rsp: &mut RSP) {
-        self.register(G_RDPLOADSYNC as usize, |_, _, _, _| GBIResult::Continue);
-        self.register(G_RDPPIPESYNC as usize, |_, _, _, _| GBIResult::Continue);
-        self.register(G_RDPTILESYNC as usize, |_, _, _, _| GBIResult::Continue);
-        self.register(G_RDPFULLSYNC as usize, |_, _, _, _| GBIResult::Continue);
+        common::Common::setup(self, rsp);
+        // f3d::F3D::setup(self, rsp);
 
         #[cfg(feature = "f3dex2")]
         f3dex2::F3DEX2::setup(self, rsp);

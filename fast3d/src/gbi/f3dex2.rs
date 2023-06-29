@@ -33,6 +33,7 @@ use crate::{
     },
     rsp::MAX_VERTICES,
 };
+use crate::gbi::f3d::F3D;
 use crate::rsp::RSPConstants;
 
 pub struct RSP_GEOMETRY;
@@ -167,24 +168,15 @@ impl GBIDefinition for F3DEX2 {
             G_RDPSETOTHERMODE as usize,
             F3DEX2::gdp_set_other_mode,
         );
-        gbi.register(G_SET::TEXIMG as usize, F3DEX2::gdp_set_texture_image);
-        gbi.register(G_LOAD::BLOCK as usize, F3DEX2::gdp_load_block);
-        gbi.register(G_LOAD::TILE as usize, F3DEX2::gdp_load_tile);
-        gbi.register(G_LOAD::TLUT as usize, F3DEX2::gdp_load_tlut);
-        gbi.register(G_SET::TILE as usize, F3DEX2::gdp_set_tile);
-        gbi.register(G_SET::TILESIZE as usize, F3DEX2::gdp_set_tile_size);
         gbi.register(G_SET::SCISSOR as usize, F3DEX2::gdp_set_scissor);
         gbi.register(G_SET::CONVERT as usize, F3DEX2::gdp_set_convert);
         gbi.register(G_SET::KEYR as usize, F3DEX2::gdp_set_key_r);
         gbi.register(G_SET::KEYGB as usize, F3DEX2::gdp_set_key_gb);
-        gbi.register(G_SET::COMBINE as usize, F3DEX2::gdp_set_combine);
         gbi.register(G_SET::ENVCOLOR as usize, F3DEX2::gdp_set_env_color);
         gbi.register(G_SET::PRIMCOLOR as usize, F3DEX2::gdp_set_prim_color);
         gbi.register(G_SET::BLENDCOLOR as usize, F3DEX2::gdp_set_blend_color);
         gbi.register(G_SET::FOGCOLOR as usize, F3DEX2::gdp_set_fog_color);
         gbi.register(G_SET::FILLCOLOR as usize, F3DEX2::gdp_set_fill_color);
-        gbi.register(G_SET::DEPTHIMG as usize, F3DEX2::gdp_set_depth_image);
-        gbi.register(G_SET::COLORIMG as usize, F3DEX2::gdp_set_color_image);
         gbi.register(G_TEXRECT as usize, F3DEX2::gdp_texture_rectangle);
         gbi.register(G_TEXRECTFLIP as usize, F3DEX2::gdp_texture_rectangle);
         gbi.register(G_FILLRECT as usize, F3DEX2::gdp_fill_rectangle);
@@ -562,214 +554,6 @@ impl F3DEX2 {
         GBIResult::Continue
     }
 
-    pub fn gdp_set_combine(
-        rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        rdp.combine = CombineParams::decode(w0, w1);
-        rdp.shader_config_changed = true;
-
-        GBIResult::Continue
-    }
-
-    pub fn gdp_set_tile(
-        rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let format = get_cmd(w0, 21, 3) as u8;
-        let size = get_cmd(w0, 19, 2) as u8;
-        let line = get_cmd(w0, 9, 9) as u16;
-        let tmem = get_cmd(w0, 0, 9) as u16;
-        let tile = get_cmd(w1, 24, 3) as u8;
-        let palette = get_cmd(w1, 20, 4) as u8;
-        let cm_t: u8 = get_cmd(w1, 18, 2) as u8;
-        let mask_t: u8 = get_cmd(w1, 14, 4) as u8;
-        let shift_t: u8 = get_cmd(w1, 10, 4) as u8;
-        let cm_s: u8 = get_cmd(w1, 8, 2) as u8;
-        let mask_s: u8 = get_cmd(w1, 4, 4) as u8;
-        let shift_s: u8 = get_cmd(w1, 0, 4) as u8;
-
-        let tile = &mut rdp.tile_descriptors[tile as usize];
-        tile.set_format(format);
-        tile.set_size(size);
-        tile.line = line;
-        tile.tmem = tmem;
-        tile.palette = palette;
-        tile.cm_t = cm_t;
-        tile.mask_t = mask_t;
-        tile.shift_t = shift_t;
-        tile.cm_s = cm_s;
-        tile.mask_s = mask_s;
-        tile.shift_s = shift_s;
-
-        rdp.textures_changed[0] = true;
-        rdp.textures_changed[1] = true;
-
-        GBIResult::Continue
-    }
-
-    pub fn gdp_set_tile_size(
-        rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let tile = get_cmd(w1, 24, 3) as u8;
-        let uls = get_cmd(w0, 12, 12) as u16;
-        let ult = get_cmd(w0, 0, 12) as u16;
-        let lrs = get_cmd(w1, 12, 12) as u16;
-        let lrt = get_cmd(w1, 0, 12) as u16;
-
-        let tile = &mut rdp.tile_descriptors[tile as usize];
-        tile.uls = uls;
-        tile.ult = ult;
-        tile.lrs = lrs;
-        tile.lrt = lrt;
-
-        rdp.textures_changed[0] = true;
-        rdp.textures_changed[1] = true;
-
-        GBIResult::Continue
-    }
-
-    pub fn gdp_set_texture_image(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let format = get_cmd(w0, 21, 3) as u8;
-        let size = get_cmd(w0, 19, 2) as u8;
-        let width = get_cmd(w0, 0, 10) as u16;
-        let address = rsp.from_segmented(w1);
-
-        rdp.texture_image_state = TextureImageState {
-            format,
-            size,
-            width,
-            address,
-        };
-
-        GBIResult::Continue
-    }
-
-    pub fn gdp_load_tlut(
-        rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let tile = get_cmd(w1, 24, 3) as u8;
-        let high_index = get_cmd(w1, 14, 10) as u16;
-
-        assert!(tile == G_TX::LOADTILE);
-        assert!(rdp.texture_image_state.size == ImageSize::G_IM_SIZ_16b as u8); // TLUTs are always 16-bit (so far)
-        assert!(
-            rdp.tile_descriptors[tile as usize].tmem == 256
-                && (high_index <= 127 || high_index == 255)
-                || rdp.tile_descriptors[tile as usize].tmem == 384 && high_index == 127
-        );
-
-        trace!("gdp_load_tlut(tile: {}, high_index: {})", tile, high_index);
-
-        let tile = &mut rdp.tile_descriptors[tile as usize];
-        rdp.tmem_map.insert(
-            tile.tmem,
-            TMEMMapEntry::new(rdp.texture_image_state.address),
-        );
-
-        GBIResult::Continue
-    }
-
-    pub fn gdp_load_block(
-        rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let tile = get_cmd(w1, 24, 3) as u8;
-        let uls = get_cmd(w0, 12, 12);
-        let ult = get_cmd(w0, 0, 12);
-        let _texels = get_cmd(w1, 12, 12) as u16;
-        let _dxt = get_cmd(w1, 0, 12);
-
-        // First, verify that we're loading the whole texture.
-        assert!(uls == 0 && ult == 0);
-        // Verify that we're loading into LOADTILE.
-        assert!(tile == G_TX::LOADTILE);
-
-        let tile = &mut rdp.tile_descriptors[tile as usize];
-        rdp.tmem_map.insert(
-            tile.tmem,
-            TMEMMapEntry::new(rdp.texture_image_state.address),
-        );
-
-        let tmem_index = if tile.tmem != 0 { 1 } else { 0 };
-        rdp.textures_changed[tmem_index as usize] = true;
-
-        GBIResult::Continue
-    }
-
-    pub fn gdp_load_tile(
-        rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let tile = get_cmd(w1, 24, 3) as u8;
-        let uls = get_cmd(w0, 12, 12) as u16;
-        let ult = get_cmd(w0, 0, 12) as u16;
-        let lrs = get_cmd(w1, 12, 12) as u16;
-        let lrt = get_cmd(w1, 0, 12) as u16;
-
-        // First, verify that we're loading the whole texture.
-        assert!(uls == 0 && ult == 0);
-        // Verify that we're loading into LOADTILE.
-        assert!(tile == G_TX::LOADTILE);
-
-        let tile = &mut rdp.tile_descriptors[tile as usize];
-        rdp.tmem_map.insert(
-            tile.tmem,
-            TMEMMapEntry::new(rdp.texture_image_state.address),
-        );
-
-        // TODO: Really necessary?
-        tile.uls = uls;
-        tile.ult = ult;
-        tile.lrs = lrs;
-        tile.lrt = lrt;
-
-        trace!("texture {} is being marked as has changed", tile.tmem / 256);
-        let tmem_index = if tile.tmem != 0 { 1 } else { 0 };
-        rdp.textures_changed[tmem_index as usize] = true;
-
-        GBIResult::Continue
-    }
-
     pub fn gdp_set_env_color(
         rdp: &mut RDP,
         _rsp: &mut RSP,
@@ -876,35 +660,6 @@ impl F3DEX2 {
         let packed_color = w1 as u16;
         rdp.fill_color = R5G5B5A1::to_rgba(packed_color);
 
-        GBIResult::Continue
-    }
-
-    pub fn gdp_set_depth_image(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        rdp.depth_image = rsp.from_segmented(w1);
-        GBIResult::Continue
-    }
-
-    pub fn gdp_set_color_image(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let _format = get_cmd(w0, 21, 3);
-        let _size = get_cmd(w0, 19, 2);
-        let _width = get_cmd(w0, 0, 11);
-
-        rdp.color_image = rsp.from_segmented(w1);
         GBIResult::Continue
     }
 
