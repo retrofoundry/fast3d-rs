@@ -215,20 +215,3 @@ impl TextureImageState {
         }
     }
 }
-
-#[derive(Debug, Clone, Copy)]
-pub struct RenderingStateTexture {
-    pub cms: u8,
-    pub cmt: u8,
-
-    pub linear_filter: bool,
-}
-
-impl RenderingStateTexture {
-    pub const EMPTY: Self = Self {
-        cms: 0,
-        cmt: 0,
-
-        linear_filter: false,
-    };
-}

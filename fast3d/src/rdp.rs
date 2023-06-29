@@ -6,11 +6,11 @@ use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
 use crate::output::{
-    gfx::{BlendState, CompareFunction, Face},
+    gfx::{BlendState, CompareFunction},
     RCPOutput,
 };
 
-use super::models::{color::Color, texture::RenderingStateTexture};
+use super::models::color::Color;
 use super::{
     gbi::{
         defines::Viewport,
@@ -81,38 +81,6 @@ impl OutputDimensions {
         width: 0,
         height: 0,
         aspect_ratio: 0.0,
-    };
-}
-
-pub struct RenderingState {
-    pub depth_compare: CompareFunction,
-    pub depth_test: bool,
-    pub depth_write: bool,
-    pub polygon_offset: bool,
-    pub blend_enabled: bool,
-    pub blend_state: BlendState,
-    pub viewport: Rect,
-    pub scissor: Rect,
-    pub shader_program_hash: u64,
-    pub textures: [RenderingStateTexture; 2],
-    pub cull_mode: Option<Face>,
-    pub blend_color: Color,
-}
-
-impl RenderingState {
-    pub const EMPTY: Self = Self {
-        depth_compare: CompareFunction::Always,
-        depth_test: false,
-        depth_write: false,
-        polygon_offset: false,
-        blend_enabled: false,
-        blend_state: BlendState::REPLACE,
-        viewport: Rect::ZERO,
-        scissor: Rect::ZERO,
-        shader_program_hash: 0,
-        textures: [RenderingStateTexture::EMPTY; 2],
-        cull_mode: None,
-        blend_color: Color::TRANSPARENT,
     };
 }
 
@@ -213,7 +181,6 @@ impl TMEMMapEntry {
 
 pub struct RDP {
     pub output_dimensions: OutputDimensions,
-    pub rendering_state: RenderingState,
 
     pub texture_state: TextureState,
     pub texture_image_state: TextureImageState, // coming via GBI (texture to load)
@@ -223,7 +190,6 @@ pub struct RDP {
 
     pub viewport: Rect,
     pub scissor: Rect,
-    pub viewport_or_scissor_changed: bool,
 
     pub combine: CombineParams,
     pub other_mode_l: u32,
@@ -260,7 +226,6 @@ impl RDP {
     pub fn new() -> Self {
         RDP {
             output_dimensions: OutputDimensions::ZERO,
-            rendering_state: RenderingState::EMPTY,
 
             texture_state: TextureState::EMPTY,
             texture_image_state: TextureImageState::EMPTY,
@@ -270,7 +235,6 @@ impl RDP {
 
             viewport: Rect::ZERO,
             scissor: Rect::ZERO,
-            viewport_or_scissor_changed: false,
 
             combine: CombineParams::ZERO,
             other_mode_l: 0,
@@ -331,7 +295,7 @@ impl RDP {
         self.viewport.width = width as u16;
         self.viewport.height = height as u16;
 
-        self.viewport_or_scissor_changed = true;
+        self.shader_config_changed = true;
     }
 
     pub fn adjust_x_for_viewport(&self, x: f32) -> f32 {
@@ -454,7 +418,7 @@ impl RDP {
             // );
 
             for i in 0..2 {
-                if i == 0 || self.uses_texture1() {
+                if (i == 0 && self.combine.uses_texture0()) || self.uses_texture1() {
                     if self.textures_changed[i as usize] {
                         self.flush(output);
                         output.clear_textures(i as usize);
@@ -467,21 +431,12 @@ impl RDP {
                         self.tile_descriptors[(self.texture_state.tile + i) as usize];
                     let linear_filter =
                         get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT;
-                    let texture = self.rendering_state.textures[i as usize];
-                    if linear_filter != texture.linear_filter
-                        || tile_descriptor.cm_s != texture.cms
-                        || tile_descriptor.cm_t != texture.cmt
-                    {
-                        output.set_sampler_parameters(
-                            i as usize,
-                            linear_filter,
-                            tile_descriptor.cm_s as u32,
-                            tile_descriptor.cm_t as u32,
-                        );
-                        self.rendering_state.textures[i as usize].linear_filter = linear_filter;
-                        self.rendering_state.textures[i as usize].cms = tile_descriptor.cm_s;
-                        self.rendering_state.textures[i as usize].cmt = tile_descriptor.cm_t;
-                    }
+                    output.set_sampler_parameters(
+                        i as usize,
+                        linear_filter,
+                        tile_descriptor.cm_s as u32,
+                        tile_descriptor.cm_t as u32,
+                    );
                 }
             }
         }
@@ -511,114 +466,67 @@ impl RDP {
 
     // MARK: - Blend
 
-    fn process_depth_params(
-        &mut self,
-        output: &mut RCPOutput,
-        geometry_mode: u32,
-        render_mode: u32,
-    ) {
+    fn process_depth_params(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
         let depth_test = geometry_mode & RSPGeometry::G_ZBUFFER as u32 != 0;
-        if depth_test != self.rendering_state.depth_test {
-            self.flush(output);
-            self.rendering_state.depth_test = depth_test;
-        }
 
         let zmode: u32 = self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03;
 
         // handle depth compare
         let depth_compare = if self.other_mode_l & (1 << OtherModeLayoutL::Z_CMP as u32) != 0 {
-            let depth_compare = match zmode {
+            match zmode {
                 x if x == ZMode::ZMODE_OPA as u32 => CompareFunction::Less,
                 x if x == ZMode::ZMODE_INTER as u32 => CompareFunction::Less, // TODO: Understand this
                 x if x == ZMode::ZMODE_XLU as u32 => CompareFunction::Less,
                 x if x == ZMode::ZMODE_DEC as u32 => CompareFunction::LessEqual,
                 _ => panic!("Unknown ZMode"),
-            };
-
-            if depth_compare != self.rendering_state.depth_compare {
-                self.flush(output);
-                self.rendering_state.depth_compare = depth_compare;
             }
-
-            depth_compare
         } else {
-            if self.rendering_state.depth_compare != CompareFunction::Always {
-                self.flush(output);
-                self.rendering_state.depth_compare = CompareFunction::Always;
-            }
-
             CompareFunction::Always
         };
 
         // handle depth write
-        let depth_write = render_mode & (1 << OtherModeLayoutL::Z_UPD as u32) != 0;
-        if depth_write != self.rendering_state.depth_write {
-            self.flush(output);
-            self.rendering_state.depth_write = depth_write;
-        }
+        let depth_write = self.other_mode_l & (1 << OtherModeLayoutL::Z_UPD as u32) != 0;
 
         // handle polygon offset (slope scale depth bias)
         let polygon_offset = zmode == ZMode::ZMODE_DEC as u32;
-        if polygon_offset != self.rendering_state.polygon_offset {
-            self.flush(output);
-            self.rendering_state.polygon_offset = polygon_offset;
-        }
 
         output.set_depth_stencil_params(depth_test, depth_write, depth_compare, polygon_offset);
     }
 
     pub fn update_render_state(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
         let cull_mode = translate_cull_mode(geometry_mode);
-        if cull_mode != self.rendering_state.cull_mode {
-            self.flush(output);
-            output.set_cull_mode(cull_mode);
-            self.rendering_state.cull_mode = cull_mode;
-        }
+        output.set_cull_mode(cull_mode);
 
-        self.process_depth_params(output, geometry_mode, self.other_mode_l);
+        self.process_depth_params(output, geometry_mode);
 
         // handle alpha blending
         let do_blend = other_mode_l_uses_alpha(self.other_mode_l)
             || other_mode_l_uses_texture_edge(self.other_mode_l);
 
-        if do_blend != self.rendering_state.blend_enabled {
-            let blend_state = if do_blend {
-                Some(BlendState::ALPHA_BLENDING)
-            } else {
-                None
-            };
+        let blend_state = if do_blend {
+            Some(BlendState::ALPHA_BLENDING)
+        } else {
+            None
+        };
 
-            self.flush(output);
-            output.set_blend_state(blend_state);
-            self.rendering_state.blend_enabled = do_blend;
-        }
+        output.set_blend_state(blend_state);
 
         // handle viewport and scissor
-        if self.viewport_or_scissor_changed {
-            let viewport = self.viewport;
-            if viewport != self.rendering_state.viewport {
-                self.flush(output);
-                output.set_viewport(
-                    viewport.x as f32,
-                    viewport.y as f32,
-                    viewport.width as f32,
-                    viewport.height as f32,
-                );
-                self.rendering_state.viewport = viewport;
-            }
-            let scissor = self.scissor;
-            if scissor != self.rendering_state.scissor {
-                self.flush(output);
-                output.set_scissor(
-                    scissor.x as u32,
-                    scissor.y as u32,
-                    scissor.width as u32,
-                    scissor.height as u32,
-                );
-                self.rendering_state.scissor = scissor;
-            }
-            self.viewport_or_scissor_changed = false;
-        }
+        let viewport = self.viewport;
+        output.set_viewport(
+            viewport.x as f32,
+            viewport.y as f32,
+            viewport.width as f32,
+            viewport.height as f32,
+        );
+
+        let scissor = self.scissor;
+        output.set_scissor(
+            scissor.x as u32,
+            scissor.y as u32,
+            scissor.width as u32,
+            scissor.height as u32,
+        );
     }
 
     // MARK: - Setters
