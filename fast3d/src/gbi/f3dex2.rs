@@ -470,37 +470,6 @@ impl F3DEX2 {
                 staging_vertex.color.b = vertex.color.b as f32 / 255.0;
             }
 
-            // if geometry_mode_uses_lighting(rsp.geometry_mode) {
-            //     if !rsp.lights_valid {
-            //         warn!("Lights not valid - recomputing normals");
-            //         rsp.lights_valid = true;
-            //     }
-
-            //     if rsp.geometry_mode & RSPGeometry::G_TEXTURE_GEN as u32 > 0 {
-            //         let dotx = vertex_normal.normal[0] as f32 * rsp.lookat_coeffs[0][0]
-            //             + vertex_normal.normal[1] as f32 * rsp.lookat_coeffs[0][1]
-            //             + vertex_normal.normal[2] as f32 * rsp.lookat_coeffs[0][2];
-
-            //         let doty = vertex_normal.normal[0] as f32 * rsp.lookat_coeffs[1][0]
-            //             + vertex_normal.normal[1] as f32 * rsp.lookat_coeffs[1][1]
-            //             + vertex_normal.normal[2] as f32 * rsp.lookat_coeffs[1][2];
-
-            //         U = ((dotx / 127.0 + 1.0) / 4.0) as i16 * rdp.texture_state.scale_s as i16;
-            //         V = ((doty / 127.0 + 1.0) / 4.0) as i16 * rdp.texture_state.scale_t as i16;
-            //     }
-
-            //     staging_vertex.color.r =
-            //         unsafe { rsp.lights[rsp.num_lights as usize].dir.col[0] as f32 / 255.0 };
-            //     staging_vertex.color.g =
-            //         unsafe { rsp.lights[rsp.num_lights as usize].dir.col[1] as f32 / 255.0 };
-            //     staging_vertex.color.b =
-            //         unsafe { rsp.lights[rsp.num_lights as usize].dir.col[2] as f32 / 255.0 };
-            // } else {
-            //     staging_vertex.color.r = vertex.color.r as f32 / 255.0;
-            //     staging_vertex.color.g = vertex.color.g as f32 / 255.0;
-            //     staging_vertex.color.b = vertex.color.b as f32 / 255.0;
-            // }
-
             staging_vertex.uv[0] = U as f32;
             staging_vertex.uv[1] = V as f32;
 
@@ -550,6 +519,11 @@ impl F3DEX2 {
         vertex_id3: usize,
         is_drawing_rect: bool,
     ) -> GBIResult {
+        if rdp.shader_config_changed {
+            rdp.flush(output);
+            rdp.shader_config_changed = false;
+        }
+
         let vertex1 = &rsp.vertex_table[vertex_id1];
         let vertex2 = &rsp.vertex_table[vertex_id2];
         let vertex3 = &rsp.vertex_table[vertex_id3];
@@ -563,21 +537,12 @@ impl F3DEX2 {
 
         rdp.update_render_state(output, rsp.geometry_mode);
 
-        // let shader_hash = rdp.shader_program_hash(rsp.geometry_mode);
-        // if shader_hash != rdp.rendering_state.shader_program_hash {
-        if rdp.shader_config_changed {
-            rdp.flush(output);
-
-            output.set_program_params(
-                rdp.other_mode_h,
-                rdp.other_mode_l,
-                rdp.combine,
-                rdp.tile_descriptors,
-            );
-
-            rdp.rendering_state.shader_program_hash = rdp.shader_program_hash(rsp.geometry_mode);
-            rdp.shader_config_changed = false;
-        }
+        output.set_program_params(
+            rdp.other_mode_h,
+            rdp.other_mode_l,
+            rdp.combine,
+            rdp.tile_descriptors,
+        );
 
         rdp.flush_textures(output);
 
@@ -762,7 +727,7 @@ impl F3DEX2 {
         rdp.scissor.width = width as u16;
         rdp.scissor.height = height as u16;
 
-        rdp.viewport_or_scissor_changed = true;
+        rdp.shader_config_changed = true;
         GBIResult::Continue
     }
 
@@ -1246,7 +1211,6 @@ impl F3DEX2 {
         let geometry_mode_saved = rsp.geometry_mode;
 
         rdp.viewport = default_viewport;
-        rdp.viewport_or_scissor_changed = true;
         rsp.geometry_mode = 0;
         rdp.shader_config_changed = true;
 
@@ -1270,9 +1234,8 @@ impl F3DEX2 {
         );
 
         rsp.geometry_mode = geometry_mode_saved;
-        rdp.shader_config_changed = true;
         rdp.viewport = viewport_saved;
-        rdp.viewport_or_scissor_changed = true;
+        rdp.shader_config_changed = true;
 
         if cycle_type == OtherModeHCycleType::G_CYC_COPY {
             rdp.other_mode_h = saved_other_mode_h;
