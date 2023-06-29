@@ -466,11 +466,7 @@ impl RDP {
 
     // MARK: - Blend
 
-    fn process_depth_params(
-        &mut self,
-        output: &mut RCPOutput,
-        geometry_mode: u32,
-    ) {
+    fn process_depth_params(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
         let depth_test = geometry_mode & RSPGeometry::G_ZBUFFER as u32 != 0;
 
         let zmode: u32 = self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03;
