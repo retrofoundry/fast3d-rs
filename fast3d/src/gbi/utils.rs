@@ -5,19 +5,20 @@ use crate::{
         AlphaCompare, BlendParamB, BlendParamPMColor, OtherModeHCycleType, OtherModeH_Layout,
         OtherModeLayoutL,
     },
-    rsp::RSPGeometry,
 };
+use crate::gbi::defines::RSP_GEOMETRY;
+use crate::rsp::RSPConstants;
 
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
     (val >> start_bit) & ((1 << num_bits) - 1)
 }
 
 pub fn geometry_mode_uses_lighting(geometry_mode: u32) -> bool {
-    geometry_mode & RSPGeometry::G_LIGHTING as u32 > 0
+    geometry_mode & RSP_GEOMETRY::G_LIGHTING as u32 > 0
 }
 
 pub fn geometry_mode_uses_fog(geometry_mode: u32) -> bool {
-    geometry_mode & RSPGeometry::G_FOG as u32 > 0
+    geometry_mode & RSP_GEOMETRY::G_FOG as u32 > 0
 }
 
 pub fn other_mode_l_uses_texture_edge(other_mode_l: u32) -> bool {
@@ -77,9 +78,9 @@ pub fn translate_blend_param_b(param: u32, src: BlendFactor) -> BlendFactor {
     }
 }
 
-pub fn translate_cull_mode(geometry_mode: u32) -> Option<Face> {
-    let cull_front = (geometry_mode & RSPGeometry::G_CULL_FRONT as u32) != 0;
-    let cull_back = (geometry_mode & RSPGeometry::G_CULL_BACK as u32) != 0;
+pub fn translate_cull_mode(geometry_mode: u32, rsp_constants: &RSPConstants) -> Option<Face> {
+    let cull_front = (geometry_mode & rsp_constants.G_CULL_FRONT) != 0;
+    let cull_back = (geometry_mode & rsp_constants.G_CULL_BACK) != 0;
 
     if cull_front && cull_back {
         panic!("Culling both front and back faces is not supported");

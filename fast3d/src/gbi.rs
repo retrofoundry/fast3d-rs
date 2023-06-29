@@ -24,7 +24,7 @@ pub type GBICommand =
     fn(dp: &mut RDP, rsp: &mut RSP, output: &mut RCPOutput, command: &mut *mut Gfx) -> GBIResult;
 
 trait GBIDefinition {
-    fn setup(gbi: &mut GBI);
+    fn setup(gbi: &mut GBI, rsp: &mut RSP);
 }
 
 pub struct GBI {
@@ -44,18 +44,18 @@ impl GBI {
         }
     }
 
-    pub fn setup(&mut self) {
+    pub fn setup(&mut self, rsp: &mut RSP) {
         self.register(G_RDPLOADSYNC as usize, |_, _, _, _| GBIResult::Continue);
         self.register(G_RDPPIPESYNC as usize, |_, _, _, _| GBIResult::Continue);
         self.register(G_RDPTILESYNC as usize, |_, _, _, _| GBIResult::Continue);
         self.register(G_RDPFULLSYNC as usize, |_, _, _, _| GBIResult::Continue);
 
         #[cfg(feature = "f3dex2")]
-        f3dex2::F3DEX2::setup(self);
+        f3dex2::F3DEX2::setup(self, rsp);
         #[cfg(feature = "f3dex2e")]
-        f3dex2e::F3DEX2E::setup(self);
+        f3dex2e::F3DEX2E::setup(self, rsp);
         #[cfg(feature = "f3dzex2")]
-        f3dzex2::F3DZEX2::setup(self);
+        f3dzex2::F3DZEX2::setup(self, rsp);
     }
 
     pub fn register(&mut self, opcode: usize, cmd: GBICommand) {

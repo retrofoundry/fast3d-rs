@@ -4,7 +4,7 @@ use glam::{Mat4, Vec2, Vec3A, Vec4};
 
 use log::trace;
 
-use super::defines::{Gfx, Light, Viewport, Vtx, G_FILLRECT, G_MTX, G_TEXRECT, G_TEXRECTFLIP};
+use super::defines::{Gfx, Light, Viewport, Vtx, G_FILLRECT, G_TEXRECT, G_TEXRECTFLIP};
 use super::utils::{
     geometry_mode_uses_fog, get_cmd, get_cycle_type_from_other_mode_h,
     get_textfilter_from_other_mode_h,
@@ -12,7 +12,7 @@ use super::utils::{
 use super::{
     super::{
         rdp::RDP,
-        rsp::{RSPGeometry, MATRIX_STACK_SIZE, RSP},
+        rsp::{MATRIX_STACK_SIZE, RSP},
     },
     defines::{G_LOAD, G_MW, G_SET},
 };
@@ -32,6 +32,27 @@ use crate::{
     },
     rsp::MAX_VERTICES,
 };
+use crate::rsp::RSPConstants;
+
+pub struct RSP_GEOMETRY;
+
+impl RSP_GEOMETRY {
+    pub const G_TEXTURE_ENABLE: u32 = 0;
+    pub const G_SHADING_SMOOTH: u32 = 1 << 21;
+    pub const G_CULL_FRONT: u32 = 1 << 9;
+    pub const G_CULL_BACK: u32 = 1 << 10;
+    pub const G_CULL_BOTH: u32 = Self::G_CULL_FRONT | Self::G_CULL_BACK;
+}
+
+struct G_MTX;
+impl G_MTX {
+    pub const NOPUSH: u8 = 0x00;
+    pub const PUSH: u8 = 0x01;
+    pub const MUL: u8 = 0x00;
+    pub const LOAD: u8 = 0x02;
+    pub const MODELVIEW: u8 = 0x00;
+    pub const PROJECTION: u8 = 0x04;
+}
 
 pub struct F3DEX2;
 
@@ -120,7 +141,7 @@ impl F3DEX2 {
 }
 
 impl GBIDefinition for F3DEX2 {
-    fn setup(gbi: &mut GBI) {
+    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
         gbi.register(F3DEX2::G_MTX as usize, F3DEX2::gsp_matrix);
         gbi.register(F3DEX2::G_POPMTX as usize, F3DEX2::gsp_pop_matrix);
         gbi.register(F3DEX2::G_MOVEMEM as usize, F3DEX2::gsp_movemem);
@@ -162,6 +183,17 @@ impl GBIDefinition for F3DEX2 {
         gbi.register(G_TEXRECT as usize, F3DEX2::gdp_texture_rectangle);
         gbi.register(G_TEXRECTFLIP as usize, F3DEX2::gdp_texture_rectangle);
         gbi.register(G_FILLRECT as usize, F3DEX2::gdp_fill_rectangle);
+
+        rsp.setup_constants(RSPConstants {
+            G_MTX_PUSH: G_MTX::PUSH,
+            G_MTX_LOAD: G_MTX::LOAD,
+            G_MTX_PROJECTION: G_MTX::PROJECTION,
+
+            G_SHADING_SMOOTH: RSP_GEOMETRY::G_SHADING_SMOOTH,
+            G_CULL_FRONT: RSP_GEOMETRY::G_CULL_FRONT,
+            G_CULL_BACK: RSP_GEOMETRY::G_CULL_BACK,
+            G_CULL_BOTH: RSP_GEOMETRY::G_CULL_BOTH,
+        })
     }
 }
 
@@ -175,53 +207,8 @@ impl F3DEX2 {
         let w0 = unsafe { (*(*command)).words.w0 };
         let w1 = unsafe { (*(*command)).words.w1 };
 
-        let params = get_cmd(w0, 0, 8) as u8 ^ G_MTX::PUSH;
-
-        let matrix = if cfg!(feature = "gbifloats") {
-            let addr = rsp.from_segmented(w1) as *const f32;
-            let slice = unsafe { slice::from_raw_parts(addr, 16) };
-            Mat4::from_floats(slice)
-        } else {
-            let addr = rsp.from_segmented(w1) as *const i32;
-            let slice = unsafe { slice::from_raw_parts(addr, 16) };
-            Mat4::from_fixed_point(slice)
-        };
-
-        if params & G_MTX::PROJECTION != 0 {
-            if (params & G_MTX::LOAD) != 0 {
-                // Load the input matrix into the projection matrix
-                // rsp.projection_matrix.copy_from_slice(&matrix);
-                rsp.projection_matrix = matrix;
-            } else {
-                // Multiply the current projection matrix with the input matrix
-                rsp.projection_matrix = matrix * rsp.projection_matrix;
-            }
-        } else {
-            // Modelview matrix
-            if params & G_MTX::PUSH != 0 && rsp.matrix_stack_pointer < MATRIX_STACK_SIZE {
-                // Push a copy of the current matrix onto the stack
-                rsp.matrix_stack_pointer += 1;
-
-                let src_index = rsp.matrix_stack_pointer - 2;
-                let dst_index = rsp.matrix_stack_pointer - 1;
-                let (left, right) = rsp.matrix_stack.split_at_mut(dst_index);
-                right[0] = left[src_index];
-            }
-
-            if params & G_MTX::LOAD != 0 {
-                // Load the input matrix into the current matrix
-                rsp.matrix_stack[rsp.matrix_stack_pointer - 1] = matrix;
-            } else {
-                // Multiply the current matrix with the input matrix
-                let result = matrix * rsp.matrix_stack[rsp.matrix_stack_pointer - 1];
-                rsp.matrix_stack[rsp.matrix_stack_pointer - 1] = result;
-            }
-
-            // Clear the lights_valid flag
-            rsp.lights_valid = false;
-        }
-
-        rsp.modelview_projection_matrix_changed = true;
+        let params = get_cmd(w0, 0, 8) as u8 ^ rsp.constants.G_MTX_PUSH;
+        rsp.matrix(w1, params);
 
         GBIResult::Continue
     }
@@ -233,25 +220,7 @@ impl F3DEX2 {
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w1 = unsafe { (*(*command)).words.w1 };
-
-        let num_matrices_to_pop = w1 / 64;
-
-        // If no matrices to pop, return
-        if num_matrices_to_pop == 0 || rsp.matrix_stack_pointer == 0 {
-            return GBIResult::Continue;
-        }
-
-        // Pop the specified number of matrices
-        for _ in 0..num_matrices_to_pop {
-            // Check if there are matrices left to pop
-            if rsp.matrix_stack_pointer > 0 {
-                // Decrement the matrix stack index
-                rsp.matrix_stack_pointer -= 1;
-            }
-        }
-
-        // Recalculate the modelview projection matrix
-        rsp.recompute_mvp_matrix();
+        rsp.pop_matrix(w1 >> 6);
 
         GBIResult::Continue
     }
@@ -318,7 +287,6 @@ impl F3DEX2 {
                 let multiplier = get_cmd(w1, 16, 16) as i16;
                 let offset = get_cmd(w1, 0, 16) as i16;
                 rsp.set_fog(multiplier, offset);
-                rsp.fog_changed = true;
             }
             m_type if m_type == G_MW::LIGHTCOL => {
                 let index = get_cmd(w0, 0, 16) / 24;
@@ -338,7 +306,7 @@ impl F3DEX2 {
 
     pub fn gsp_texture(
         rdp: &mut RDP,
-        _rsp: &mut RSP,
+        rsp: &mut RSP,
         _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
@@ -351,12 +319,7 @@ impl F3DEX2 {
         let tile = get_cmd(w0, 8, 3) as u8;
         let on = get_cmd(w0, 1, 7) as u8;
 
-        if rdp.texture_state.tile != tile {
-            rdp.textures_changed[0] = true;
-            rdp.textures_changed[1] = true;
-        }
-
-        rdp.texture_state = TextureState::new(on != 0, tile, level, scale_s, scale_t);
+        rsp.set_texture(rdp, tile, level, on, scale_s, scale_t);
 
         GBIResult::Continue
     }
@@ -370,123 +333,9 @@ impl F3DEX2 {
         let w0 = unsafe { (*(*command)).words.w0 };
         let w1 = unsafe { (*(*command)).words.w1 };
 
-        if rsp.modelview_projection_matrix_changed {
-            rdp.flush(output);
-            rsp.recompute_mvp_matrix();
-            output.set_projection_matrix(rsp.modelview_projection_matrix);
-            rsp.modelview_projection_matrix_changed = false;
-        }
-
-        let vertex_count = get_cmd(w0, 12, 8) as u8;
-        let mut write_index = get_cmd(w0, 1, 7) as u8 - get_cmd(w0, 12, 8) as u8;
-        let vertices = rsp.from_segmented(w1) as *const Vtx;
-
-        for i in 0..vertex_count {
-            let vertex = unsafe { &(*vertices.offset(i as isize)).vertex };
-            let vertex_normal = unsafe { &(*vertices.offset(i as isize)).normal };
-            let staging_vertex = &mut rsp.vertex_table[write_index as usize];
-
-            let mut U = (((vertex.texture_coords[0] as i32) * (rdp.texture_state.scale_s as i32))
-                >> 16) as i16;
-            let mut V = (((vertex.texture_coords[1] as i32) * (rdp.texture_state.scale_t as i32))
-                >> 16) as i16;
-
-            if rsp.geometry_mode & RSPGeometry::G_LIGHTING as u32 > 0 {
-                if !rsp.lights_valid {
-                    for i in 0..(rsp.num_lights + 1) {
-                        let light: &Light = &rsp.lights[i as usize];
-                        let normalized_light_vector = Vec3A::new(
-                            unsafe { light.dir.dir[0] as f32 / 127.0 },
-                            unsafe { light.dir.dir[1] as f32 / 127.0 },
-                            unsafe { light.dir.dir[2] as f32 / 127.0 },
-                        );
-
-                        calculate_normal_dir(
-                            &normalized_light_vector,
-                            &rsp.matrix_stack[rsp.matrix_stack_pointer - 1],
-                            &mut rsp.lights_coeffs[i as usize],
-                        );
-                    }
-
-                    calculate_normal_dir(
-                        &rsp.lookat[0],
-                        &rsp.matrix_stack[rsp.matrix_stack_pointer - 1],
-                        &mut rsp.lookat_coeffs[0],
-                    );
-
-                    calculate_normal_dir(
-                        &rsp.lookat[1],
-                        &rsp.matrix_stack[rsp.matrix_stack_pointer - 1],
-                        &mut rsp.lookat_coeffs[1],
-                    );
-
-                    rsp.lights_valid = true
-                }
-
-                let mut r = unsafe { rsp.lights[rsp.num_lights as usize].dir.col[0] as f32 };
-                let mut g = unsafe { rsp.lights[rsp.num_lights as usize].dir.col[1] as f32 };
-                let mut b = unsafe { rsp.lights[rsp.num_lights as usize].dir.col[2] as f32 };
-
-                for i in 0..rsp.num_lights {
-                    let mut intensity = vertex_normal.normal[0] as f32
-                        * rsp.lights_coeffs[i as usize][0]
-                        + vertex_normal.normal[1] as f32 * rsp.lights_coeffs[i as usize][1]
-                        + vertex_normal.normal[2] as f32 * rsp.lights_coeffs[i as usize][2];
-
-                    intensity /= 127.0;
-
-                    if intensity > 0.0 {
-                        unsafe {
-                            r += intensity * rsp.lights[i as usize].dir.col[0] as f32;
-                        }
-                        unsafe {
-                            g += intensity * rsp.lights[i as usize].dir.col[1] as f32;
-                        }
-                        unsafe {
-                            b += intensity * rsp.lights[i as usize].dir.col[2] as f32;
-                        }
-                    }
-                }
-
-                staging_vertex.color.r = if r > 255.0 { 255.0 } else { r } / 255.0;
-                staging_vertex.color.g = if g > 255.0 { 255.0 } else { g } / 255.0;
-                staging_vertex.color.b = if b > 255.0 { 255.0 } else { b } / 255.0;
-
-                if rsp.geometry_mode & RSPGeometry::G_TEXTURE_GEN as u32 > 0 {
-                    let dotx = vertex_normal.normal[0] as f32 * rsp.lookat_coeffs[0][0]
-                        + vertex_normal.normal[1] as f32 * rsp.lookat_coeffs[0][1]
-                        + vertex_normal.normal[2] as f32 * rsp.lookat_coeffs[0][2];
-
-                    let doty = vertex_normal.normal[0] as f32 * rsp.lookat_coeffs[1][0]
-                        + vertex_normal.normal[1] as f32 * rsp.lookat_coeffs[1][1]
-                        + vertex_normal.normal[2] as f32 * rsp.lookat_coeffs[1][2];
-
-                    U = ((dotx / 127.0 + 1.0) / 4.0) as i16 * rdp.texture_state.scale_s as i16;
-                    V = ((doty / 127.0 + 1.0) / 4.0) as i16 * rdp.texture_state.scale_t as i16;
-                }
-            } else {
-                staging_vertex.color.r = vertex.color.r as f32 / 255.0;
-                staging_vertex.color.g = vertex.color.g as f32 / 255.0;
-                staging_vertex.color.b = vertex.color.b as f32 / 255.0;
-            }
-
-            staging_vertex.uv[0] = U as f32;
-            staging_vertex.uv[1] = V as f32;
-
-            staging_vertex.position.x = vertex.position[0] as f32;
-            staging_vertex.position.y = vertex.position[1] as f32;
-            staging_vertex.position.z = vertex.position[2] as f32;
-            staging_vertex.position.w = 1.0;
-
-            if geometry_mode_uses_fog(rsp.geometry_mode) && rsp.fog_changed {
-                rdp.flush(output);
-                output.set_fog(rsp.fog_multiplier, rsp.fog_offset);
-            }
-
-            staging_vertex.color.a = vertex.color.a as f32 / 255.0;
-
-            write_index += 1;
-        }
+        let vertex_count = get_cmd(w0, 12, 8);
+        let write_index = get_cmd(w0, 1, 7) - get_cmd(w0, 12, 8);
+        rsp.set_vertex(rdp, output, w1, vertex_count, write_index);
 
         GBIResult::Continue
     }
@@ -530,12 +379,12 @@ impl F3DEX2 {
         let vertex_array = [vertex1, vertex2, vertex3];
 
         // Don't draw anything if both tris are being culled.
-        if (rsp.geometry_mode & RSPGeometry::G_CULL_BOTH as u32) == RSPGeometry::G_CULL_BOTH as u32
+        if (rsp.geometry_mode & RSP_GEOMETRY::G_CULL_BOTH) == RSP_GEOMETRY::G_CULL_BOTH
         {
             return GBIResult::Continue;
         }
 
-        rdp.update_render_state(output, rsp.geometry_mode);
+        rdp.update_render_state(output, rsp.geometry_mode, &rsp.constants);
 
         output.set_program_params(
             rdp.other_mode_h,
@@ -544,7 +393,7 @@ impl F3DEX2 {
             rdp.tile_descriptors,
         );
 
-        rdp.flush_textures(output);
+        rdp.flush_textures(rsp, output);
 
         output.set_uniforms(
             rdp.fog_color,
@@ -557,7 +406,7 @@ impl F3DEX2 {
             rdp.convert_k,
         );
 
-        let current_tile = rdp.tile_descriptors[rdp.texture_state.tile as usize];
+        let current_tile = rdp.tile_descriptors[rsp.texture_state.tile as usize];
         let tex_width = current_tile.get_width();
         let tex_height = current_tile.get_height();
         let use_texture = rdp.combine.uses_texture0() || rdp.combine.uses_texture1();

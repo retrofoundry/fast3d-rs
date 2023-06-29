@@ -29,10 +29,11 @@ use super::{
         },
         tile_descriptor::TileDescriptor,
     },
-    rsp::RSPGeometry,
 };
 
 use farbe::image::n64::ImageSize as FarbeImageSize;
+use crate::gbi::defines::RSP_GEOMETRY;
+use crate::rsp::{RSP, RSPConstants};
 
 pub const SCREEN_WIDTH: f32 = 320.0;
 pub const SCREEN_HEIGHT: f32 = 240.0;
@@ -182,7 +183,6 @@ impl TMEMMapEntry {
 pub struct RDP {
     pub output_dimensions: OutputDimensions,
 
-    pub texture_state: TextureState,
     pub texture_image_state: TextureImageState, // coming via GBI (texture to load)
     pub tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
     pub tmem_map: HashMap<u16, TMEMMapEntry>, // tmem address -> texture image state address
@@ -227,7 +227,6 @@ impl RDP {
         RDP {
             output_dimensions: OutputDimensions::ZERO,
 
-            texture_state: TextureState::EMPTY,
             texture_image_state: TextureImageState::EMPTY,
             tile_descriptors: [TileDescriptor::EMPTY; 8],
             tmem_map: HashMap::new(),
@@ -305,8 +304,8 @@ impl RDP {
 
     // Textures
 
-    pub fn import_tile_texture(&mut self, output: &mut RCPOutput, tmem_index: usize) {
-        let tile = self.tile_descriptors[self.texture_state.tile as usize + tmem_index];
+    pub fn import_tile_texture(&mut self, rsp: &RSP, output: &mut RCPOutput, tmem_index: usize) {
+        let tile = self.tile_descriptors[rsp.texture_state.tile as usize + tmem_index];
         let format = tile.format as u32;
         let size = tile.size as u32;
         let width = tile.get_width() as u32;
@@ -398,7 +397,7 @@ impl RDP {
             && self.combine.uses_texture1()
     }
 
-    pub fn flush_textures(&mut self, output: &mut RCPOutput) {
+    pub fn flush_textures(&mut self, rsp: &RSP, output: &mut RCPOutput) {
         // if textures are not on, then we have no textures to flush
         // if !self.texture_state.on {
         //     return;
@@ -423,12 +422,12 @@ impl RDP {
                         self.flush(output);
                         output.clear_textures(i as usize);
 
-                        self.import_tile_texture(output, i as usize);
+                        self.import_tile_texture(rsp, output, i as usize);
                         self.textures_changed[i as usize] = false;
                     }
 
                     let tile_descriptor =
-                        self.tile_descriptors[(self.texture_state.tile + i) as usize];
+                        self.tile_descriptors[(rsp.texture_state.tile + i) as usize];
                     let linear_filter =
                         get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT;
                     output.set_sampler_parameters(
@@ -467,7 +466,7 @@ impl RDP {
     // MARK: - Blend
 
     fn process_depth_params(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
-        let depth_test = geometry_mode & RSPGeometry::G_ZBUFFER as u32 != 0;
+        let depth_test = geometry_mode & RSP_GEOMETRY::G_ZBUFFER as u32 != 0;
 
         let zmode: u32 = self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03;
 
@@ -493,8 +492,8 @@ impl RDP {
         output.set_depth_stencil_params(depth_test, depth_write, depth_compare, polygon_offset);
     }
 
-    pub fn update_render_state(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
-        let cull_mode = translate_cull_mode(geometry_mode);
+    pub fn update_render_state(&mut self, output: &mut RCPOutput, geometry_mode: u32, rsp_constants: &RSPConstants) {
+        let cull_mode = translate_cull_mode(geometry_mode, rsp_constants);
         output.set_cull_mode(cull_mode);
 
         self.process_depth_params(output, geometry_mode);

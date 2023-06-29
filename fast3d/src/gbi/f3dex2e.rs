@@ -10,8 +10,8 @@ use super::{
 pub struct F3DEX2E;
 
 impl GBIDefinition for F3DEX2E {
-    fn setup(gbi: &mut GBI) {
-        F3DEX2::setup(gbi);
+    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
+        F3DEX2::setup(gbi, rsp);
         gbi.register(G_TEXRECT as usize, F3DEX2E::gdp_texture_rectangle);
         gbi.register(G_TEXRECTFLIP as usize, F3DEX2E::gdp_texture_rectangle);
         gbi.register(G_FILLRECT as usize, F3DEX2E::gdp_fill_rectangle);
