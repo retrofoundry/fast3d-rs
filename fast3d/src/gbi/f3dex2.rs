@@ -349,101 +349,9 @@ impl F3DEX2 {
         let w0 = unsafe { (*(*command)).words.w0 };
         let w1 = unsafe { (*(*command)).words.w1 };
 
-        let clear_bits = get_cmd(w0, 0, 24);
-        let set_bits = w1;
-
-        rsp.geometry_mode &= clear_bits as u32;
-        rsp.geometry_mode |= set_bits as u32;
-        rdp.shader_config_changed = true;
-
-        GBIResult::Continue
-    }
-
-    pub fn gsp_tri1_raw(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
-        vertex_id1: usize,
-        vertex_id2: usize,
-        vertex_id3: usize,
-        is_drawing_rect: bool,
-    ) -> GBIResult {
-        if rdp.shader_config_changed {
-            rdp.flush(output);
-            rdp.shader_config_changed = false;
-        }
-
-        let vertex1 = &rsp.vertex_table[vertex_id1];
-        let vertex2 = &rsp.vertex_table[vertex_id2];
-        let vertex3 = &rsp.vertex_table[vertex_id3];
-        let vertex_array = [vertex1, vertex2, vertex3];
-
-        // Don't draw anything if both tris are being culled.
-        if (rsp.geometry_mode & RSP_GEOMETRY::G_CULL_BOTH) == RSP_GEOMETRY::G_CULL_BOTH
-        {
-            return GBIResult::Continue;
-        }
-
-        rdp.update_render_state(output, rsp.geometry_mode, &rsp.constants);
-
-        output.set_program_params(
-            rdp.other_mode_h,
-            rdp.other_mode_l,
-            rdp.combine,
-            rdp.tile_descriptors,
-        );
-
-        rdp.flush_textures(rsp, output);
-
-        output.set_uniforms(
-            rdp.fog_color,
-            rdp.blend_color,
-            rdp.prim_color,
-            rdp.env_color,
-            rdp.key_center,
-            rdp.key_scale,
-            rdp.prim_lod,
-            rdp.convert_k,
-        );
-
-        let current_tile = rdp.tile_descriptors[rsp.texture_state.tile as usize];
-        let tex_width = current_tile.get_width();
-        let tex_height = current_tile.get_height();
-        let use_texture = rdp.combine.uses_texture0() || rdp.combine.uses_texture1();
-
-        for vertex in &vertex_array {
-            rdp.add_to_buf_vbo(vertex.position.x);
-            rdp.add_to_buf_vbo(vertex.position.y);
-            rdp.add_to_buf_vbo(vertex.position.z);
-            rdp.add_to_buf_vbo(if is_drawing_rect {
-                0.0
-            } else {
-                vertex.position.w
-            });
-
-            rdp.add_to_buf_vbo(vertex.color.r);
-            rdp.add_to_buf_vbo(vertex.color.g);
-            rdp.add_to_buf_vbo(vertex.color.b);
-            rdp.add_to_buf_vbo(vertex.color.a);
-
-            if use_texture {
-                let mut u = (vertex.uv[0] - (current_tile.uls as f32) * 8.0) / 32.0;
-                let mut v = (vertex.uv[1] - (current_tile.ult as f32) * 8.0) / 32.0;
-
-                if get_textfilter_from_other_mode_h(rdp.other_mode_h) != TextFilt::G_TF_POINT {
-                    u += 0.5;
-                    v += 0.5;
-                }
-
-                rdp.add_to_buf_vbo(u / tex_width as f32);
-                rdp.add_to_buf_vbo(v / tex_height as f32);
-            }
-        }
-
-        rdp.buf_vbo_num_tris += 1;
-        if rdp.buf_vbo_num_tris == MAX_BUFFERED {
-            rdp.flush(output);
-        }
+        let clear_bits = get_cmd(w0, 0, 24) as u32;
+        let set_bits = w1 as u32;
+        rsp.update_geometry_mode(rdp, clear_bits, set_bits);
 
         GBIResult::Continue
     }
@@ -460,7 +368,8 @@ impl F3DEX2 {
         let vertex_id2 = get_cmd(w0, 8, 8) / 2;
         let vertex_id3 = get_cmd(w0, 0, 8) / 2;
 
-        F3DEX2::gsp_tri1_raw(rdp, rsp, output, vertex_id1, vertex_id2, vertex_id3, false)
+        rdp.draw_triangles(rsp, output, vertex_id1, vertex_id2, vertex_id3, false);
+        GBIResult::Continue
     }
 
     pub fn gsp_tri2(
@@ -475,13 +384,14 @@ impl F3DEX2 {
         let vertex_id1 = get_cmd(w0, 16, 8) / 2;
         let vertex_id2 = get_cmd(w0, 8, 8) / 2;
         let vertex_id3 = get_cmd(w0, 0, 8) / 2;
-
-        F3DEX2::gsp_tri1_raw(rdp, rsp, output, vertex_id1, vertex_id2, vertex_id3, false);
+        rdp.draw_triangles(rsp, output, vertex_id1, vertex_id2, vertex_id3, false);
 
         let vertex_id1 = get_cmd(w1, 16, 8) / 2;
         let vertex_id2 = get_cmd(w1, 8, 8) / 2;
         let vertex_id3 = get_cmd(w1, 0, 8) / 2;
-        F3DEX2::gsp_tri1_raw(rdp, rsp, output, vertex_id1, vertex_id2, vertex_id3, false)
+        rdp.draw_triangles(rsp, output, vertex_id1, vertex_id2, vertex_id3, false);
+
+        GBIResult::Continue
     }
 
     pub fn sub_dl(
@@ -1063,24 +973,8 @@ impl F3DEX2 {
         rsp.geometry_mode = 0;
         rdp.shader_config_changed = true;
 
-        F3DEX2::gsp_tri1_raw(
-            rdp,
-            rsp,
-            output,
-            MAX_VERTICES,
-            MAX_VERTICES + 1,
-            MAX_VERTICES + 3,
-            true,
-        );
-        F3DEX2::gsp_tri1_raw(
-            rdp,
-            rsp,
-            output,
-            MAX_VERTICES + 1,
-            MAX_VERTICES + 2,
-            MAX_VERTICES + 3,
-            true,
-        );
+        rdp.draw_triangles(rsp, output, MAX_VERTICES, MAX_VERTICES + 1, MAX_VERTICES + 3, true);
+        rdp.draw_triangles(rsp, output, MAX_VERTICES + 1, MAX_VERTICES + 2, MAX_VERTICES + 3, true);
 
         rsp.geometry_mode = geometry_mode_saved;
         rdp.viewport = viewport_saved;

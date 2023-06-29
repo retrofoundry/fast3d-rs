@@ -553,6 +553,86 @@ impl RDP {
         self.key_scale.z = sb as f32 / 255.0;
     }
 
+    // MARK: - Drawing
+
+    pub fn draw_triangles(&mut self, rsp: &mut RSP, output: &mut RCPOutput, vertex_id1: usize, vertex_id2: usize, vertex_id3: usize, is_drawing_rect: bool) {
+        if self.shader_config_changed {
+            self.flush(output);
+            self.shader_config_changed = false;
+        }
+
+        let vertex1 = &rsp.vertex_table[vertex_id1];
+        let vertex2 = &rsp.vertex_table[vertex_id2];
+        let vertex3 = &rsp.vertex_table[vertex_id3];
+        let vertex_array = [vertex1, vertex2, vertex3];
+
+        // Don't draw anything if both tris are being culled.
+        if (rsp.geometry_mode & rsp.constants.G_CULL_BOTH) == rsp.constants.G_CULL_BOTH {
+            return;
+        }
+
+        self.update_render_state(output, rsp.geometry_mode, &rsp.constants);
+
+        output.set_program_params(
+            self.other_mode_h,
+            self.other_mode_l,
+            self.combine,
+            self.tile_descriptors,
+        );
+
+        self.flush_textures(rsp, output);
+
+        output.set_uniforms(
+            self.fog_color,
+            self.blend_color,
+            self.prim_color,
+            self.env_color,
+            self.key_center,
+            self.key_scale,
+            self.prim_lod,
+            self.convert_k,
+        );
+
+        let current_tile = self.tile_descriptors[rsp.texture_state.tile as usize];
+        let tex_width = current_tile.get_width();
+        let tex_height = current_tile.get_height();
+        let use_texture = self.combine.uses_texture0() || self.combine.uses_texture1();
+
+        for vertex in &vertex_array {
+            self.add_to_buf_vbo(vertex.position.x);
+            self.add_to_buf_vbo(vertex.position.y);
+            self.add_to_buf_vbo(vertex.position.z);
+            self.add_to_buf_vbo(if is_drawing_rect {
+                0.0
+            } else {
+                vertex.position.w
+            });
+
+            self.add_to_buf_vbo(vertex.color.r);
+            self.add_to_buf_vbo(vertex.color.g);
+            self.add_to_buf_vbo(vertex.color.b);
+            self.add_to_buf_vbo(vertex.color.a);
+
+            if use_texture {
+                let mut u = (vertex.uv[0] - (current_tile.uls as f32) * 8.0) / 32.0;
+                let mut v = (vertex.uv[1] - (current_tile.ult as f32) * 8.0) / 32.0;
+
+                if get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT {
+                    u += 0.5;
+                    v += 0.5;
+                }
+
+                self.add_to_buf_vbo(u / tex_width as f32);
+                self.add_to_buf_vbo(v / tex_height as f32);
+            }
+        }
+
+        self.buf_vbo_num_tris += 1;
+        if self.buf_vbo_num_tris == MAX_BUFFERED {
+            self.flush(output);
+        }
+    }
+
     // MARK: - Helpers
 
     pub fn scaled_x(&self) -> f32 {

@@ -168,6 +168,17 @@ impl RSP {
         self.segments[segment] = address;
     }
 
+    pub fn from_segmented(&self, address: usize) -> usize {
+        let segment = (address >> 24) & 0x0F;
+        let offset = address & 0x00FFFFFF;
+
+        if self.segments[segment] != 0 {
+            self.segments[segment] + offset
+        } else {
+            address
+        }
+    }
+
     pub fn set_fog(&mut self, multiplier: i16, offset: i16) {
         self.fog_multiplier = multiplier;
         self.fog_offset = offset;
@@ -185,17 +196,6 @@ impl RSP {
             light.raw.words[1] = value;
         }
         self.lights_valid = false;
-    }
-
-    pub fn from_segmented(&self, address: usize) -> usize {
-        let segment = (address >> 24) & 0x0F;
-        let offset = address & 0x00FFFFFF;
-
-        if self.segments[segment] != 0 {
-            self.segments[segment] + offset
-        } else {
-            address
-        }
     }
 
     pub fn set_clip_ratio(&mut self, _ratio: usize) {
@@ -239,6 +239,15 @@ impl RSP {
         } else {
             *lookat = Vec3A::ZERO;
         }
+    }
+
+    pub fn set_texture(&mut self, rdp: &mut RDP, tile: u8, level: u8, on: u8, scale_s: u16, scale_t: u16) {
+        if self.texture_state.tile != tile {
+            rdp.textures_changed[0] = true;
+            rdp.textures_changed[1] = true;
+        }
+
+        self.texture_state = TextureState::new(on != 0, tile, level, scale_s, scale_t);
     }
 
     pub fn set_vertex(&mut self, rdp: &mut RDP, output: &mut RCPOutput, address: usize, vertex_count: usize, mut write_index: usize) {
@@ -418,12 +427,10 @@ impl RSP {
         }
     }
 
-    pub fn set_texture(&mut self, rdp: &mut RDP, tile: u8, level: u8, on: u8, scale_s: u16, scale_t: u16) {
-        if self.texture_state.tile != tile {
-            rdp.textures_changed[0] = true;
-            rdp.textures_changed[1] = true;
-        }
+    pub fn update_geometry_mode(&mut self, rdp: &mut RDP, clear_bits: u32, set_bits: u32) {
+        self.geometry_mode &= !clear_bits;
+        self.geometry_mode |= set_bits;
 
-        self.texture_state = TextureState::new(on != 0, tile, level, scale_s, scale_t);
+        rdp.shader_config_changed = true;
     }
 }
