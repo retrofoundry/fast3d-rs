@@ -6,11 +6,11 @@ use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
 use crate::output::{
-    gfx::{BlendState, CompareFunction, Face},
+    gfx::{BlendState, CompareFunction},
     RCPOutput,
 };
 
-use super::models::{color::Color, texture::RenderingStateTexture};
+use super::models::color::Color;
 use super::{
     gbi::{
         defines::Viewport,
@@ -473,15 +473,13 @@ impl RDP {
 
         // handle depth compare
         let depth_compare = if self.other_mode_l & (1 << OtherModeLayoutL::Z_CMP as u32) != 0 {
-            let depth_compare = match zmode {
+            match zmode {
                 x if x == ZMode::ZMODE_OPA as u32 => CompareFunction::Less,
                 x if x == ZMode::ZMODE_INTER as u32 => CompareFunction::Less, // TODO: Understand this
                 x if x == ZMode::ZMODE_XLU as u32 => CompareFunction::Less,
                 x if x == ZMode::ZMODE_DEC as u32 => CompareFunction::LessEqual,
                 _ => panic!("Unknown ZMode"),
-            };
-
-            depth_compare
+            }
         } else {
             CompareFunction::Always
         };
