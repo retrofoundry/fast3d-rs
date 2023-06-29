@@ -25,17 +25,17 @@ use super::{
             translate_tile_ci4, translate_tile_ci8, translate_tile_i4, translate_tile_i8,
             translate_tile_ia16, translate_tile_ia4, translate_tile_ia8, translate_tile_rgba16,
             translate_tile_rgba32, translate_tlut, ImageFormat, ImageSize, TextFilt,
-            TextureImageState, TextureLUT, TextureState,
+            TextureImageState, TextureLUT,
         },
         tile_descriptor::TileDescriptor,
     },
 };
 
-use farbe::image::n64::ImageSize as FarbeImageSize;
 use crate::gbi::defines::{G_TX, RSP_GEOMETRY};
 use crate::models::color::R5G5B5A1;
 use crate::models::color_combiner::{ACMUX, CCMUX};
-use crate::rsp::{MAX_VERTICES, RSP, RSPConstants};
+use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
+use farbe::image::n64::ImageSize as FarbeImageSize;
 
 pub const SCREEN_WIDTH: f32 = 320.0;
 pub const SCREEN_HEIGHT: f32 = 240.0;
@@ -532,7 +532,7 @@ impl RDP {
     // MARK: - Blend
 
     fn process_depth_params(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
-        let depth_test = geometry_mode & RSP_GEOMETRY::G_ZBUFFER as u32 != 0;
+        let depth_test = geometry_mode & RSP_GEOMETRY::G_ZBUFFER != 0;
 
         let zmode: u32 = self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03;
 
@@ -558,7 +558,12 @@ impl RDP {
         output.set_depth_stencil_params(depth_test, depth_write, depth_compare, polygon_offset);
     }
 
-    pub fn update_render_state(&mut self, output: &mut RCPOutput, geometry_mode: u32, rsp_constants: &RSPConstants) {
+    pub fn update_render_state(
+        &mut self,
+        output: &mut RCPOutput,
+        geometry_mode: u32,
+        rsp_constants: &RSPConstants,
+    ) {
         let cull_mode = translate_cull_mode(geometry_mode, rsp_constants);
         output.set_cull_mode(cull_mode);
 
@@ -630,7 +635,21 @@ impl RDP {
         self.shader_config_changed = true;
     }
 
-    pub fn set_tile(&mut self, tile: u8, format: u8, size: u8, line: u16, tmem: u16, palette: u8, cm_t: u8, cm_s: u8, mask_t: u8, mask_s: u8, shift_t: u8, shift_s: u8) {
+    pub fn set_tile(
+        &mut self,
+        tile: u8,
+        format: u8,
+        size: u8,
+        line: u16,
+        tmem: u16,
+        palette: u8,
+        cm_t: u8,
+        cm_s: u8,
+        mask_t: u8,
+        mask_s: u8,
+        shift_t: u8,
+        shift_s: u8,
+    ) {
         assert!(tile < NUM_TILE_DESCRIPTORS as u8);
         let tile = &mut self.tile_descriptors[tile as usize];
         tile.set_format(format);
@@ -666,7 +685,7 @@ impl RDP {
             ((color >> 24) & 0xFF) as f32 / 255.0,
             ((color >> 16) & 0xFF) as f32 / 255.0,
             ((color >> 8) & 0xFF) as f32 / 255.0,
-            ((color >> 0) & 0xFF) as f32 / 255.0,
+            (color & 0xFF) as f32 / 255.0,
         );
     }
 
@@ -676,7 +695,7 @@ impl RDP {
             ((color >> 24) & 0xFF) as f32 / 255.0,
             ((color >> 16) & 0xFF) as f32 / 255.0,
             ((color >> 8) & 0xFF) as f32 / 255.0,
-            ((color >> 0) & 0xFF) as f32 / 255.0,
+            (color & 0xFF) as f32 / 255.0,
         );
     }
 
@@ -685,7 +704,7 @@ impl RDP {
             ((color >> 24) & 0xFF) as f32 / 255.0,
             ((color >> 16) & 0xFF) as f32 / 255.0,
             ((color >> 8) & 0xFF) as f32 / 255.0,
-            ((color >> 0) & 0xFF) as f32 / 255.0,
+            (color & 0xFF) as f32 / 255.0,
         );
     }
 
@@ -694,7 +713,7 @@ impl RDP {
             ((color >> 24) & 0xFF) as f32 / 255.0,
             ((color >> 16) & 0xFF) as f32 / 255.0,
             ((color >> 8) & 0xFF) as f32 / 255.0,
-            ((color >> 0) & 0xFF) as f32 / 255.0,
+            (color & 0xFF) as f32 / 255.0,
         );
     }
 
@@ -705,7 +724,15 @@ impl RDP {
 
     // MARK: - Drawing
 
-    pub fn draw_triangles(&mut self, rsp: &mut RSP, output: &mut RCPOutput, vertex_id1: usize, vertex_id2: usize, vertex_id3: usize, is_drawing_rect: bool) {
+    pub fn draw_triangles(
+        &mut self,
+        rsp: &mut RSP,
+        output: &mut RCPOutput,
+        vertex_id1: usize,
+        vertex_id2: usize,
+        vertex_id3: usize,
+        is_drawing_rect: bool,
+    ) {
         if self.shader_config_changed {
             self.flush(output);
             self.shader_config_changed = false;
@@ -965,8 +992,22 @@ impl RDP {
         rsp.geometry_mode = 0;
         self.shader_config_changed = true;
 
-        self.draw_triangles(rsp, output, MAX_VERTICES, MAX_VERTICES + 1, MAX_VERTICES + 3, true);
-        self.draw_triangles(rsp, output, MAX_VERTICES + 1, MAX_VERTICES + 2, MAX_VERTICES + 3, true);
+        self.draw_triangles(
+            rsp,
+            output,
+            MAX_VERTICES,
+            MAX_VERTICES + 1,
+            MAX_VERTICES + 3,
+            true,
+        );
+        self.draw_triangles(
+            rsp,
+            output,
+            MAX_VERTICES + 1,
+            MAX_VERTICES + 2,
+            MAX_VERTICES + 3,
+            true,
+        );
 
         rsp.geometry_mode = geometry_mode_saved;
         self.viewport = viewport_saved;

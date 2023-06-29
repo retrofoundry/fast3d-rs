@@ -1,5 +1,5 @@
-use crate::rsp::RSP;
 use super::{f3dex2::F3DEX2, GBIDefinition, GBI};
+use crate::rsp::RSP;
 
 pub struct F3DZEX2;
 

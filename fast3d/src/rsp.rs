@@ -1,13 +1,13 @@
+use crate::gbi::defines::{DirLight, Vtx, RSP_GEOMETRY};
 use std::slice;
-use crate::gbi::defines::{DirLight, RSP_GEOMETRY, Vtx};
 
 use super::{gbi::defines::Light, models::color::Color};
-use glam::{Mat4, Vec2, Vec3A};
 use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
 use crate::gbi::utils::geometry_mode_uses_fog;
 use crate::models::texture::TextureState;
 use crate::output::RCPOutput;
 use crate::rdp::RDP;
+use glam::{Mat4, Vec2, Vec3A};
 
 pub const MATRIX_STACK_SIZE: usize = 32;
 pub const MAX_VERTICES: usize = 256;
@@ -247,7 +247,15 @@ impl RSP {
         }
     }
 
-    pub fn set_texture(&mut self, rdp: &mut RDP, tile: u8, level: u8, on: u8, scale_s: u16, scale_t: u16) {
+    pub fn set_texture(
+        &mut self,
+        rdp: &mut RDP,
+        tile: u8,
+        level: u8,
+        on: u8,
+        scale_s: u16,
+        scale_t: u16,
+    ) {
         if self.texture_state.tile != tile {
             rdp.textures_changed[0] = true;
             rdp.textures_changed[1] = true;
@@ -256,7 +264,14 @@ impl RSP {
         self.texture_state = TextureState::new(on != 0, tile, level, scale_s, scale_t);
     }
 
-    pub fn set_vertex(&mut self, rdp: &mut RDP, output: &mut RCPOutput, address: usize, vertex_count: usize, mut write_index: usize) {
+    pub fn set_vertex(
+        &mut self,
+        rdp: &mut RDP,
+        output: &mut RCPOutput,
+        address: usize,
+        vertex_count: usize,
+        mut write_index: usize,
+    ) {
         if self.modelview_projection_matrix_changed {
             rdp.flush(output);
             self.recompute_mvp_matrix();
@@ -267,16 +282,16 @@ impl RSP {
         let vertices = self.from_segmented(address) as *const Vtx;
 
         for i in 0..vertex_count {
-            let vertex = unsafe { &(*vertices.offset(i as isize)).vertex };
-            let vertex_normal = unsafe { &(*vertices.offset(i as isize)).normal };
-            let staging_vertex = &mut self.vertex_table[write_index as usize];
+            let vertex = unsafe { &(*vertices.add(i)).vertex };
+            let vertex_normal = unsafe { &(*vertices.add(i)).normal };
+            let staging_vertex = &mut self.vertex_table[write_index];
 
             let mut U = (((vertex.texture_coords[0] as i32) * (self.texture_state.scale_s as i32))
                 >> 16) as i16;
             let mut V = (((vertex.texture_coords[1] as i32) * (self.texture_state.scale_t as i32))
                 >> 16) as i16;
 
-            if self.geometry_mode & RSP_GEOMETRY::G_LIGHTING as u32 > 0 {
+            if self.geometry_mode & RSP_GEOMETRY::G_LIGHTING > 0 {
                 if !self.lights_valid {
                     for i in 0..(self.num_lights + 1) {
                         let light: &Light = &self.lights[i as usize];
@@ -337,7 +352,7 @@ impl RSP {
                 staging_vertex.color.g = if g > 255.0 { 255.0 } else { g } / 255.0;
                 staging_vertex.color.b = if b > 255.0 { 255.0 } else { b } / 255.0;
 
-                if self.geometry_mode & RSP_GEOMETRY::G_TEXTURE_GEN as u32 > 0 {
+                if self.geometry_mode & RSP_GEOMETRY::G_TEXTURE_GEN > 0 {
                     let dotx = vertex_normal.normal[0] as f32 * self.lookat_coeffs[0][0]
                         + vertex_normal.normal[1] as f32 * self.lookat_coeffs[0][1]
                         + vertex_normal.normal[2] as f32 * self.lookat_coeffs[0][2];
@@ -414,7 +429,9 @@ impl RSP {
             }
         } else {
             // Modelview matrix
-            if params & self.constants.G_MTX_PUSH != 0 && self.matrix_stack_pointer < MATRIX_STACK_SIZE {
+            if params & self.constants.G_MTX_PUSH != 0
+                && self.matrix_stack_pointer < MATRIX_STACK_SIZE
+            {
                 // Push a copy of the current matrix onto the stack
                 self.matrix_stack_pointer += 1;
 

@@ -1,39 +1,15 @@
 use std::cmp::max;
-use std::slice;
 
-use glam::{Mat4, Vec2, Vec3A, Vec4};
-
-use log::trace;
-
-use super::defines::{Gfx, Light, Viewport, Vtx, G_FILLRECT, G_TEXRECT, G_TEXRECTFLIP};
-use super::utils::{
-    geometry_mode_uses_fog, get_cmd, get_cycle_type_from_other_mode_h,
-    get_textfilter_from_other_mode_h,
-};
+use super::defines::{Gfx, Viewport};
+use super::utils::get_cmd;
 use super::{
-    super::{
-        rdp::RDP,
-        rsp::{MATRIX_STACK_SIZE, RSP},
-    },
-    defines::{G_LOAD, G_MW, G_SET},
+    super::{rdp::RDP, rsp::RSP},
+    defines::G_MW,
 };
 use super::{GBIDefinition, GBIResult, GBI};
-use crate::gbi::defines::{G_RDPSETOTHERMODE, G_TX};
-use crate::output::RCPOutput;
-use crate::{
-    extensions::glam::{calculate_normal_dir, MatrixFrom},
-    models::{
-        color::R5G5B5A1,
-        color_combiner::{CombineParams, ACMUX, CCMUX},
-        texture::{ImageSize, TextFilt, TextureImageState, TextureState},
-    },
-    rdp::{
-        OtherModeHCycleType, OtherModeH_Layout, Rect, TMEMMapEntry, MAX_BUFFERED, SCREEN_HEIGHT,
-        SCREEN_WIDTH,
-    },
-    rsp::MAX_VERTICES,
-};
+use crate::gbi::defines::G_RDPSETOTHERMODE;
 use crate::gbi::f3d::F3D;
+use crate::output::RCPOutput;
 use crate::rsp::RSPConstants;
 
 pub struct RSP_GEOMETRY;
@@ -421,30 +397,43 @@ impl F3DEX2 {
 
 #[cfg(test)]
 mod tests {
+    use crate::gbi::defines::{GWords, Gfx};
+    use crate::gbi::f3dex2::F3DEX2;
+    use crate::output::RCPOutput;
+    use crate::rdp::RDP;
+    use crate::rsp::RSP;
 
     #[test]
     fn test_moveword() {
-        // // NUM_LIGHT
-        // let w0: usize = 3674341376;
-        // let w1: usize = 24;
+        // NUM_LIGHT
+        let w0: usize = 3674341376;
+        let w1: usize = 24;
 
-        // let mut rsp = RSP::new();
-        // let mut rdp = RDP::new();
+        let mut rsp = RSP::default();
+        let mut rdp = RDP::default();
+        let mut output = RCPOutput::default();
 
-        // let dummy_gfx_context = GraphicsContext::new(Box::new(DummyGraphicsDevice {}));
-        // F3DEX2::gsp_moveword(&mut rdp, &mut rsp, &dummy_gfx_context, w0, w1);
-        // assert!(rsp.num_lights == 2);
+        let mut command: *mut Gfx = Box::into_raw(Box::new(Gfx {
+            words: GWords { w0, w1 },
+        }));
 
-        // // FOG
-        // let w0: usize = 3674734592;
-        // let w1: usize = 279638102;
+        F3DEX2::gsp_moveword(&mut rdp, &mut rsp, &mut output, &mut command);
+        assert_eq!(rsp.num_lights, 1);
 
-        // let mut rsp = RSP::new();
-        // let mut rdp = RDP::new();
+        // FOG
+        let w0: usize = 3674734592;
+        let w1: usize = 279638102;
 
-        // let dummy_gfx_context = GraphicsContext::new(Box::new(DummyGraphicsDevice {}));
-        // F3DEX2::gsp_moveword(&mut rdp, &mut rsp, &dummy_gfx_context, w0, w1);
-        // assert!(rsp.fog_multiplier == 4266);
-        // assert!(rsp.fog_offset == -4010);
+        let mut rsp = RSP::default();
+        let mut rdp = RDP::default();
+        let mut output = RCPOutput::default();
+
+        let mut command: *mut Gfx = Box::into_raw(Box::new(Gfx {
+            words: GWords { w0, w1 },
+        }));
+
+        F3DEX2::gsp_moveword(&mut rdp, &mut rsp, &mut output, &mut command);
+        assert_eq!(rsp.fog_multiplier, 4266);
+        assert_eq!(rsp.fog_offset, -4010);
     }
 }

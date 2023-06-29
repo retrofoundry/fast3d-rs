@@ -1,10 +1,10 @@
-use self::defines::{Gfx, G_RDPFULLSYNC, G_RDPLOADSYNC, G_RDPPIPESYNC, G_RDPTILESYNC};
+use self::defines::Gfx;
 
 use super::{output::RCPOutput, rdp::RDP, rsp::RSP};
 use std::collections::HashMap;
 
-pub mod defines;
 mod common;
+pub mod defines;
 mod f3d;
 mod f3dex2;
 mod f3dex2e;

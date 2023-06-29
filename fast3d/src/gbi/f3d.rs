@@ -1,7 +1,7 @@
-use crate::gbi::{GBI, GBIDefinition, GBIResult};
-use crate::gbi::defines::{G_SET, Gfx};
+use crate::gbi::defines::Gfx;
 use crate::gbi::utils::get_cmd;
-use crate::models::texture::TextureImageState;
+use crate::gbi::{GBIDefinition, GBIResult, GBI};
+
 use crate::output::RCPOutput;
 use crate::rdp::RDP;
 use crate::rsp::RSP;
@@ -63,7 +63,7 @@ impl F3D {
 }
 
 impl GBIDefinition for F3D {
-    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
+    fn setup(gbi: &mut GBI, _rsp: &mut RSP) {
         gbi.register(F3D::G_SPNOOP as usize, Self::gsp_no_op);
         gbi.register(F3D::G_DL as usize, Self::sub_dl);
         gbi.register(F3D::G_ENDDL as usize, Self::end_dl);

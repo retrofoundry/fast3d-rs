@@ -1,19 +1,20 @@
-use glam::{Vec2, Vec4};
-use log::trace;
-use crate::gbi::{GBI, GBIDefinition, GBIResult};
-use crate::gbi::defines::{G_FILLRECT, G_LOAD, G_NOOP, G_RDPFULLSYNC, G_RDPLOADSYNC, G_RDPPIPESYNC, G_RDPSETOTHERMODE, G_RDPTILESYNC, G_SET, G_TEXRECT, G_TEXRECTFLIP, G_TX, Gfx};
-use crate::gbi::f3dex2::F3DEX2;
-use crate::gbi::utils::{get_cmd, get_cycle_type_from_other_mode_h};
-use crate::models::color::R5G5B5A1;
-use crate::models::color_combiner::{ACMUX, CCMUX, CombineParams};
-use crate::models::texture::{ImageSize, TextFilt, TextureImageState};
+use crate::gbi::defines::{
+    Gfx, G_FILLRECT, G_LOAD, G_NOOP, G_RDPFULLSYNC, G_RDPLOADSYNC, G_RDPPIPESYNC,
+    G_RDPSETOTHERMODE, G_RDPTILESYNC, G_SET, G_TEXRECT, G_TEXRECTFLIP,
+};
+
+use crate::gbi::utils::get_cmd;
+use crate::gbi::{GBIDefinition, GBIResult, GBI};
+
+use crate::models::color_combiner::CombineParams;
+use crate::models::texture::TextureImageState;
 use crate::output::RCPOutput;
-use crate::rdp::{OtherModeH_Layout, OtherModeHCycleType, RDP, Rect, SCREEN_HEIGHT, SCREEN_WIDTH, TMEMMapEntry};
-use crate::rsp::{MAX_VERTICES, RSP};
+use crate::rdp::{RDP, SCREEN_HEIGHT};
+use crate::rsp::RSP;
 
 pub struct Common;
 impl GBIDefinition for Common {
-    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
+    fn setup(gbi: &mut GBI, _rsp: &mut RSP) {
         gbi.register(G_NOOP as usize, |_, _, _, _| GBIResult::Continue);
         gbi.register(G_SET::COLORIMG as usize, Self::gdp_set_color_image);
         gbi.register(G_SET::DEPTHIMG as usize, Self::gdp_set_depth_image);
@@ -134,7 +135,9 @@ impl Common {
         let mask_s: u8 = get_cmd(w1, 4, 4) as u8;
         let shift_s: u8 = get_cmd(w1, 0, 4) as u8;
 
-        rdp.set_tile(tile, format, size, line, tmem, palette, cm_t, cm_s, mask_t, mask_s, shift_t, shift_s);
+        rdp.set_tile(
+            tile, format, size, line, tmem, palette, cm_t, cm_s, mask_t, mask_s, shift_t, shift_s,
+        );
 
         GBIResult::Continue
     }
