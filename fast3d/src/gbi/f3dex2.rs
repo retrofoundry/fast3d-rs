@@ -144,26 +144,21 @@ impl F3DEX2 {
 
 impl GBIDefinition for F3DEX2 {
     fn setup(gbi: &mut GBI, rsp: &mut RSP) {
-        gbi.register(F3DEX2::G_MTX as usize, F3DEX2::gsp_matrix);
-        gbi.register(F3DEX2::G_POPMTX as usize, F3DEX2::gsp_pop_matrix);
-        gbi.register(F3DEX2::G_MOVEMEM as usize, F3DEX2::gsp_movemem);
-        gbi.register(F3DEX2::G_MOVEWORD as usize, F3DEX2::gsp_moveword);
-        gbi.register(F3DEX2::G_TEXTURE as usize, F3DEX2::gsp_texture);
-        gbi.register(F3DEX2::G_VTX as usize, F3DEX2::gsp_vertex);
-        gbi.register(F3DEX2::G_DL as usize, F3DEX2::sub_dl);
-        gbi.register(F3DEX2::G_GEOMETRYMODE as usize, F3DEX2::gsp_geometry_mode);
-        gbi.register(F3DEX2::G_TRI1 as usize, F3DEX2::gsp_tri1);
-        gbi.register(F3DEX2::G_TRI2 as usize, F3DEX2::gsp_tri2);
-        gbi.register(F3DEX2::G_ENDDL as usize, |_, _, _, _| GBIResult::Return);
-
-        gbi.register(
-            F3DEX2::G_SETOTHERMODE_L as usize,
-            F3DEX2::gdp_set_other_mode_l,
-        );
-        gbi.register(
-            F3DEX2::G_SETOTHERMODE_H as usize,
-            F3DEX2::gdp_set_other_mode_h,
-        );
+        gbi.register(Self::G_MTX as usize, Self::gsp_matrix);
+        gbi.register(Self::G_POPMTX as usize, Self::gsp_pop_matrix);
+        gbi.register(Self::G_MOVEMEM as usize, Self::gsp_movemem);
+        gbi.register(Self::G_MOVEWORD as usize, Self::gsp_moveword);
+        gbi.register(Self::G_TEXTURE as usize, Self::gsp_texture);
+        gbi.register(Self::G_VTX as usize, Self::gsp_vertex);
+        gbi.register(Self::G_DL as usize, F3D::sub_dl);
+        gbi.register(Self::G_GEOMETRYMODE as usize, Self::gsp_geometry_mode);
+        gbi.register(Self::G_TRI1 as usize, Self::gsp_tri1);
+        gbi.register(Self::G_TRI2 as usize, Self::gsp_tri2);
+        gbi.register(Self::G_ENDDL as usize, F3D::end_dl);
+        gbi.register(Self::G_SPNOOP as usize, F3D::gsp_no_op);
+        gbi.register(Self::G_SETOTHERMODE_L as usize, Self::gdp_set_other_mode_l);
+        gbi.register(Self::G_SETOTHERMODE_H as usize, Self::gdp_set_other_mode_h);
+        gbi.register(G_RDPSETOTHERMODE as usize, Self::gdp_set_other_mode);
 
         rsp.setup_constants(RSPConstants {
             G_MTX_PUSH: G_MTX::PUSH,
@@ -375,29 +370,6 @@ impl F3DEX2 {
         GBIResult::Continue
     }
 
-    pub fn sub_dl(
-        _rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        if get_cmd(w0, 16, 1) == 0 {
-            // Push return address
-            let new_addr = rsp.from_segmented(w1);
-            GBIResult::Recurse(new_addr)
-        } else {
-            let new_addr = rsp.from_segmented(w1);
-            let cmd = new_addr as *mut Gfx;
-            unsafe {
-                *command = cmd.sub(1);
-            }
-            GBIResult::Continue
-        }
-    }
-
     pub fn gdp_set_other_mode_l(
         rdp: &mut RDP,
         rsp: &mut RSP,
@@ -426,6 +398,22 @@ impl F3DEX2 {
         let size = get_cmd(w0, 0, 8) + 1;
         let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
         rsp.set_other_mode_h(rdp, size, offset, w1 as u32);
+
+        GBIResult::Continue
+    }
+
+    pub fn gdp_set_other_mode(
+        rdp: &mut RDP,
+        rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        command: &mut *mut Gfx,
+    ) -> GBIResult {
+        let w0 = unsafe { (*(*command)).words.w0 };
+        let w1 = unsafe { (*(*command)).words.w1 };
+
+        let high = get_cmd(w0, 0, 24);
+        let low = w1;
+        rsp.set_other_mode(rdp, high as u32, low as u32);
 
         GBIResult::Continue
     }

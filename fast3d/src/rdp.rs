@@ -891,7 +891,7 @@ impl RDP {
 
     // MARK: - Helpers
 
-    pub fn draw_rectangle(
+    fn draw_rectangle(
         &mut self,
         rsp: &mut RSP,
         output: &mut RCPOutput,

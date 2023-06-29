@@ -6,11 +6,8 @@ use std::collections::HashMap;
 pub mod defines;
 mod common;
 mod f3d;
-#[cfg(feature = "f3dex2")]
 mod f3dex2;
-#[cfg(feature = "f3dex2e")]
 mod f3dex2e;
-#[cfg(feature = "f3dzex2")]
 mod f3dzex2;
 pub mod utils;
 

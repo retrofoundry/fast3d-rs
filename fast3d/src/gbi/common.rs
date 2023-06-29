@@ -281,7 +281,7 @@ impl Common {
 
     pub fn gdp_set_other_mode(
         rdp: &mut RDP,
-        rsp: &mut RSP,
+        _rsp: &mut RSP,
         _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
@@ -290,7 +290,7 @@ impl Common {
 
         let high = get_cmd(w0, 0, 24);
         let low = w1;
-        rsp.set_other_mode(rdp, high as u32, low as u32);
+        rdp.set_other_mode(high as u32, low as u32);
 
         GBIResult::Continue
     }

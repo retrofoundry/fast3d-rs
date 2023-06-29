@@ -54,8 +54,7 @@ impl F3DEX2E {
         let dsdx = get_cmd(w1, 16, 16);
         let dtdy = get_cmd(w1, 0, 16);
 
-        F3DEX2::gdp_texture_rectangle_raw(
-            rdp,
+        rdp.draw_texture_rectangle(
             rsp,
             output,
             ulx as i32,
@@ -68,7 +67,9 @@ impl F3DEX2E {
             dsdx as i16,
             dtdy as i16,
             opcode == G_TEXRECTFLIP as usize,
-        )
+        );
+
+        GBIResult::Continue
     }
 
     pub fn gdp_fill_rectangle(
@@ -92,8 +93,8 @@ impl F3DEX2E {
         let ulx = get_cmd(w0, 0, 24) << 8 >> 8;
         let uly = get_cmd(w1, 0, 24) << 8 >> 8;
 
-        F3DEX2::gdp_fill_rectangle_raw(
-            rdp, rsp, output, ulx as i32, uly as i32, lrx as i32, lry as i32,
-        )
+        rdp.fill_rect(rsp, output, ulx as i32, uly as i32, lrx as i32, lry as i32);
+
+        GBIResult::Continue
     }
 }

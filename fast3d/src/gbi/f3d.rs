@@ -64,9 +64,53 @@ impl F3D {
 
 impl GBIDefinition for F3D {
     fn setup(gbi: &mut GBI, rsp: &mut RSP) {
-        gbi.register(F3D::G_SPNOOP as usize, |_, _, _, _| GBIResult::Continue);
+        gbi.register(F3D::G_SPNOOP as usize, Self::gsp_no_op);
+        gbi.register(F3D::G_DL as usize, Self::sub_dl);
+        gbi.register(F3D::G_ENDDL as usize, Self::end_dl);
+
+        // TODO: Complete this
     }
 }
 
 impl F3D {
+    pub fn gsp_no_op(
+        _rdp: &mut RDP,
+        _rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        _command: &mut *mut Gfx,
+    ) -> GBIResult {
+        GBIResult::Continue
+    }
+
+    pub fn sub_dl(
+        _rdp: &mut RDP,
+        rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        command: &mut *mut Gfx,
+    ) -> GBIResult {
+        let w0 = unsafe { (*(*command)).words.w0 };
+        let w1 = unsafe { (*(*command)).words.w1 };
+
+        if get_cmd(w0, 16, 1) == 0 {
+            // Push return address
+            let new_addr = rsp.from_segmented(w1);
+            GBIResult::Recurse(new_addr)
+        } else {
+            let new_addr = rsp.from_segmented(w1);
+            let cmd = new_addr as *mut Gfx;
+            unsafe {
+                *command = cmd.sub(1);
+            }
+            GBIResult::Continue
+        }
+    }
+
+    pub fn end_dl(
+        _rdp: &mut RDP,
+        _rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        _command: &mut *mut Gfx,
+    ) -> GBIResult {
+        GBIResult::Return
+    }
 }
