@@ -418,7 +418,7 @@ impl RDP {
             // );
 
             for i in 0..2 {
-                if i == 0 || self.uses_texture1() {
+                if (i == 0 && self.combine.uses_texture0()) || self.uses_texture1() {
                     if self.textures_changed[i as usize] {
                         self.flush(output);
                         output.clear_textures(i as usize);
