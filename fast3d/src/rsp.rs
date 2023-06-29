@@ -90,6 +90,9 @@ pub struct RSP {
     pub lights: [Light; MAX_LIGHTS + 1],
     pub lookat: [Vec3A; 2], // lookat_x, lookat_y
 
+    pub other_mode_l: u32,
+    pub other_mode_h: u32,
+
     pub fog_multiplier: i16,
     pub fog_offset: i16,
     pub fog_changed: bool,
@@ -128,6 +131,9 @@ impl RSP {
             num_lights: 0,
             lights: [Light::ZERO; MAX_LIGHTS + 1],
             lookat: [Vec3A::ZERO; 2],
+
+            other_mode_l: 0,
+            other_mode_h: 0,
 
             fog_multiplier: 0,
             fog_offset: 0,
@@ -366,6 +372,24 @@ impl RSP {
 
             write_index += 1;
         }
+    }
+
+    pub fn set_other_mode_h(&mut self, rdp: &mut RDP, size: usize, offset: usize, data: u32) {
+        let mask = ((1 << size) - 1) << offset;
+        self.other_mode_h = (self.other_mode_h & !mask) | data;
+        rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
+    }
+
+    pub fn set_other_mode_l(&mut self, rdp: &mut RDP, size: usize, offset: usize, data: u32) {
+        let mask = ((1 << size) - 1) << offset;
+        self.other_mode_l = (self.other_mode_l & !mask) | data;
+        rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
+    }
+
+    pub fn set_other_mode(&mut self, rdp: &mut RDP, high: u32, low: u32) {
+        self.other_mode_h = high;
+        self.other_mode_l = low;
+        rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
     }
 
     pub fn matrix(&mut self, address: usize, params: u8) {

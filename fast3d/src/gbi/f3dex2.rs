@@ -1,3 +1,4 @@
+use std::cmp::max;
 use std::slice;
 
 use glam::{Mat4, Vec2, Vec3A, Vec4};
@@ -17,7 +18,7 @@ use super::{
     defines::{G_LOAD, G_MW, G_SET},
 };
 use super::{GBIDefinition, GBIResult, GBI};
-use crate::gbi::defines::G_TX;
+use crate::gbi::defines::{G_RDPSETOTHERMODE, G_TX};
 use crate::output::RCPOutput;
 use crate::{
     extensions::glam::{calculate_normal_dir, MatrixFrom},
@@ -161,6 +162,10 @@ impl GBIDefinition for F3DEX2 {
         gbi.register(
             F3DEX2::G_SETOTHERMODE_H as usize,
             F3DEX2::gdp_set_other_mode_h,
+        );
+        gbi.register(
+            G_RDPSETOTHERMODE as usize,
+            F3DEX2::gdp_set_other_mode,
         );
         gbi.register(G_SET::TEXIMG as usize, F3DEX2::gdp_set_texture_image);
         gbi.register(G_LOAD::BLOCK as usize, F3DEX2::gdp_load_block);
@@ -419,44 +424,48 @@ impl F3DEX2 {
 
     pub fn gdp_set_other_mode_l(
         rdp: &mut RDP,
-        _rsp: &mut RSP,
+        rsp: &mut RSP,
         _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
         let w1 = unsafe { (*(*command)).words.w1 };
 
-        let shift = 31 - get_cmd(w0, 8, 8) - get_cmd(w0, 0, 8);
-        let mask = get_cmd(w0, 0, 8) + 1;
-        let mode = w1;
+        let size = get_cmd(w0, 0, 8) + 1;
+        let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
+        rsp.set_other_mode_l(rdp, size, offset, w1 as u32);
 
-        F3DEX2::gdp_other_mode(rdp, shift, mask, mode as u64)
+        GBIResult::Continue
     }
 
     pub fn gdp_set_other_mode_h(
         rdp: &mut RDP,
-        _rsp: &mut RSP,
+        rsp: &mut RSP,
         _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
         let w1 = unsafe { (*(*command)).words.w1 };
 
-        let shift = 63 - get_cmd(w0, 8, 8) - get_cmd(w0, 0, 8);
-        let mask = get_cmd(w0, 0, 8) + 1;
-        let mode = (w1 as u64) << 32;
+        let size = get_cmd(w0, 0, 8) + 1;
+        let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
+        rsp.set_other_mode_h(rdp, size, offset, w1 as u32);
 
-        F3DEX2::gdp_other_mode(rdp, shift, mask, mode)
+        GBIResult::Continue
     }
 
-    pub fn gdp_other_mode(rdp: &mut RDP, shift: usize, mask: usize, mode: u64) -> GBIResult {
-        let mask = ((1_u64 << (mask as u64)) - 1) << shift as u64;
-        let mut om = rdp.other_mode_l as u64 | ((rdp.other_mode_h as u64) << 32);
-        om = (om & !mask) | mode;
+    pub fn gdp_set_other_mode(
+        rdp: &mut RDP,
+        rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        command: &mut *mut Gfx,
+    ) -> GBIResult {
+        let w0 = unsafe { (*(*command)).words.w0 };
+        let w1 = unsafe { (*(*command)).words.w1 };
 
-        rdp.other_mode_l = om as u32;
-        rdp.other_mode_h = (om >> 32) as u32;
-        rdp.shader_config_changed = true;
+        let high = get_cmd(w0, 0, 24);
+        let low = w1;
+        rsp.set_other_mode(rdp, high as u32, low as u32);
 
         GBIResult::Continue
     }

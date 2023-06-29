@@ -195,3 +195,5 @@ pub const G_RDPFULLSYNC: u8 = 0xe9;
 pub const G_RDPTILESYNC: u8 = 0xe8;
 pub const G_RDPPIPESYNC: u8 = 0xe7;
 pub const G_RDPLOADSYNC: u8 = 0xe6;
+
+pub const G_RDPSETOTHERMODE: u8 = 0xef;

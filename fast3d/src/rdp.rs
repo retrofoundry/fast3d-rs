@@ -553,6 +553,12 @@ impl RDP {
         self.key_scale.z = sb as f32 / 255.0;
     }
 
+    pub fn set_other_mode(&mut self, other_mode_h: u32, other_mode_l: u32) {
+        self.other_mode_h = other_mode_h;
+        self.other_mode_l = other_mode_l;
+        self.shader_config_changed = true;
+    }
+
     // MARK: - Drawing
 
     pub fn draw_triangles(&mut self, rsp: &mut RSP, output: &mut RCPOutput, vertex_id1: usize, vertex_id2: usize, vertex_id3: usize, is_drawing_rect: bool) {
