@@ -117,7 +117,7 @@ impl GBICommand for RDPSetColorImage {
         &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        output: &mut RCPOutput,
+        _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -198,8 +198,8 @@ impl GBICommand for RDPSetTile {
     fn process(
         &self,
         rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
+        _rsp: &mut RSP,
+        _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };

@@ -8,7 +8,7 @@ use super::{
 };
 use super::{GBICommandRegistry, GBIMicrocode, GBIResult};
 use crate::gbi::defines::G_RDPSETOTHERMODE;
-use crate::gbi::f3d::{F3DEndDL, F3DSpNoOp, F3DSubDL, F3D};
+use crate::gbi::f3d::{F3DEndDL, F3DSpNoOp, F3DSubDL};
 use crate::gbi::GBICommand;
 use crate::output::RCPOutput;
 use crate::rsp::RSPConstants;
@@ -322,7 +322,7 @@ impl GBICommand for F3DEX2GeometryMode {
         &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        output: &mut RCPOutput,
+        _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -408,7 +408,7 @@ impl GBICommand for F3DEX2SetOtherModeH {
         &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        output: &mut RCPOutput,
+        _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -428,7 +428,7 @@ impl GBICommand for F3DEX2SetOtherMode {
         &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        output: &mut RCPOutput,
+        _output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
