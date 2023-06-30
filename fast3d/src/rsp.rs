@@ -1,6 +1,12 @@
-use crate::gbi::defines::DirLight;
+use crate::gbi::defines::{DirLight, Vtx, RSP_GEOMETRY};
+use std::slice;
 
 use super::{gbi::defines::Light, models::color::Color};
+use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
+use crate::gbi::utils::geometry_mode_uses_fog;
+use crate::models::texture::TextureState;
+use crate::output::RCPOutput;
+use crate::rdp::RDP;
 use glam::{Mat4, Vec2, Vec3A};
 
 pub const MATRIX_STACK_SIZE: usize = 32;
@@ -42,28 +48,34 @@ impl StagingVertex {
     };
 }
 
-pub enum RSPGeometry {
-    G_ZBUFFER = 1 << 0,
-    G_SHADE = 1 << 2,
-    #[cfg(feature = "f3dex2")]
-    G_TEXTURE_ENABLE = 0,
-    #[cfg(feature = "f3dex2")]
-    G_SHADING_SMOOTH = 1 << 21,
-    #[cfg(feature = "f3dex2")]
-    G_CULL_FRONT = 1 << 9,
-    #[cfg(feature = "f3dex2")]
-    G_CULL_BACK = 1 << 10,
-    #[cfg(feature = "f3dex2")]
-    G_CULL_BOTH = Self::G_CULL_FRONT as isize | Self::G_CULL_BACK as isize,
-    G_FOG = 1 << 16,
-    G_LIGHTING = 1 << 17,
-    G_TEXTURE_GEN = 1 << 18,
-    G_TEXTURE_GEN_LINEAR = 1 << 19,
-    G_LOD = 1 << 20, /* NOT IMPLEMENTED */
-    G_CLIPPING = 1 << 23,
+pub struct RSPConstants {
+    pub G_MTX_PUSH: u8,
+    pub G_MTX_LOAD: u8,
+    pub G_MTX_PROJECTION: u8,
+
+    pub G_SHADING_SMOOTH: u32,
+    pub G_CULL_FRONT: u32,
+    pub G_CULL_BACK: u32,
+    pub G_CULL_BOTH: u32,
+}
+
+impl RSPConstants {
+    pub const EMPTY: Self = Self {
+        G_MTX_PUSH: 0,
+        G_MTX_LOAD: 0,
+        G_MTX_PROJECTION: 0,
+
+        G_SHADING_SMOOTH: 0,
+        G_CULL_FRONT: 0,
+        G_CULL_BACK: 0,
+        G_CULL_BOTH: 0,
+    };
 }
 
 pub struct RSP {
+    // constants set by each GBI
+    pub constants: RSPConstants,
+
     pub geometry_mode: u32,
     pub projection_matrix: Mat4,
 
@@ -78,6 +90,9 @@ pub struct RSP {
     pub lights: [Light; MAX_LIGHTS + 1],
     pub lookat: [Vec3A; 2], // lookat_x, lookat_y
 
+    pub other_mode_l: u32,
+    pub other_mode_h: u32,
+
     pub fog_multiplier: i16,
     pub fog_offset: i16,
     pub fog_changed: bool,
@@ -88,6 +103,8 @@ pub struct RSP {
     pub lookat_coeffs: [Vec3A; 2], // lookat_x, lookat_y
 
     pub segments: [usize; MAX_SEGMENTS],
+
+    pub texture_state: TextureState,
 }
 
 impl Default for RSP {
@@ -99,6 +116,8 @@ impl Default for RSP {
 impl RSP {
     pub fn new() -> Self {
         RSP {
+            constants: RSPConstants::EMPTY,
+
             geometry_mode: 0,
             projection_matrix: Mat4::ZERO,
 
@@ -113,6 +132,9 @@ impl RSP {
             lights: [Light::ZERO; MAX_LIGHTS + 1],
             lookat: [Vec3A::ZERO; 2],
 
+            other_mode_l: 0,
+            other_mode_h: 0,
+
             fog_multiplier: 0,
             fog_offset: 0,
             fog_changed: false,
@@ -123,7 +145,13 @@ impl RSP {
             lookat_coeffs: [Vec3A::ZERO; 2],
 
             segments: [0; MAX_SEGMENTS],
+
+            texture_state: TextureState::EMPTY,
         }
+    }
+
+    pub fn setup_constants(&mut self, constants: RSPConstants) {
+        self.constants = constants;
     }
 
     pub fn reset(&mut self) {
@@ -146,9 +174,21 @@ impl RSP {
         self.segments[segment] = address;
     }
 
+    pub fn from_segmented(&self, address: usize) -> usize {
+        let segment = (address >> 24) & 0x0F;
+        let offset = address & 0x00FFFFFF;
+
+        if self.segments[segment] != 0 {
+            self.segments[segment] + offset
+        } else {
+            address
+        }
+    }
+
     pub fn set_fog(&mut self, multiplier: i16, offset: i16) {
         self.fog_multiplier = multiplier;
         self.fog_offset = offset;
+        self.fog_changed = true;
     }
 
     pub fn set_light_color(&mut self, index: usize, value: u32) {
@@ -162,17 +202,6 @@ impl RSP {
             light.raw.words[1] = value;
         }
         self.lights_valid = false;
-    }
-
-    pub fn from_segmented(&self, address: usize) -> usize {
-        let segment = (address >> 24) & 0x0F;
-        let offset = address & 0x00FFFFFF;
-
-        if self.segments[segment] != 0 {
-            self.segments[segment] + offset
-        } else {
-            address
-        }
     }
 
     pub fn set_clip_ratio(&mut self, _ratio: usize) {
@@ -216,5 +245,233 @@ impl RSP {
         } else {
             *lookat = Vec3A::ZERO;
         }
+    }
+
+    pub fn set_texture(
+        &mut self,
+        rdp: &mut RDP,
+        tile: u8,
+        level: u8,
+        on: u8,
+        scale_s: u16,
+        scale_t: u16,
+    ) {
+        if self.texture_state.tile != tile {
+            rdp.textures_changed[0] = true;
+            rdp.textures_changed[1] = true;
+        }
+
+        self.texture_state = TextureState::new(on != 0, tile, level, scale_s, scale_t);
+    }
+
+    pub fn set_vertex(
+        &mut self,
+        rdp: &mut RDP,
+        output: &mut RCPOutput,
+        address: usize,
+        vertex_count: usize,
+        mut write_index: usize,
+    ) {
+        if self.modelview_projection_matrix_changed {
+            rdp.flush(output);
+            self.recompute_mvp_matrix();
+            output.set_projection_matrix(self.modelview_projection_matrix);
+            self.modelview_projection_matrix_changed = false;
+        }
+
+        let vertices = self.from_segmented(address) as *const Vtx;
+
+        for i in 0..vertex_count {
+            let vertex = unsafe { &(*vertices.add(i)).vertex };
+            let vertex_normal = unsafe { &(*vertices.add(i)).normal };
+            let staging_vertex = &mut self.vertex_table[write_index];
+
+            let mut U = (((vertex.texture_coords[0] as i32) * (self.texture_state.scale_s as i32))
+                >> 16) as i16;
+            let mut V = (((vertex.texture_coords[1] as i32) * (self.texture_state.scale_t as i32))
+                >> 16) as i16;
+
+            if self.geometry_mode & RSP_GEOMETRY::G_LIGHTING > 0 {
+                if !self.lights_valid {
+                    for i in 0..(self.num_lights + 1) {
+                        let light: &Light = &self.lights[i as usize];
+                        let normalized_light_vector = Vec3A::new(
+                            unsafe { light.dir.dir[0] as f32 / 127.0 },
+                            unsafe { light.dir.dir[1] as f32 / 127.0 },
+                            unsafe { light.dir.dir[2] as f32 / 127.0 },
+                        );
+
+                        calculate_normal_dir(
+                            &normalized_light_vector,
+                            &self.matrix_stack[self.matrix_stack_pointer - 1],
+                            &mut self.lights_coeffs[i as usize],
+                        );
+                    }
+
+                    calculate_normal_dir(
+                        &self.lookat[0],
+                        &self.matrix_stack[self.matrix_stack_pointer - 1],
+                        &mut self.lookat_coeffs[0],
+                    );
+
+                    calculate_normal_dir(
+                        &self.lookat[1],
+                        &self.matrix_stack[self.matrix_stack_pointer - 1],
+                        &mut self.lookat_coeffs[1],
+                    );
+
+                    self.lights_valid = true
+                }
+
+                let mut r = unsafe { self.lights[self.num_lights as usize].dir.col[0] as f32 };
+                let mut g = unsafe { self.lights[self.num_lights as usize].dir.col[1] as f32 };
+                let mut b = unsafe { self.lights[self.num_lights as usize].dir.col[2] as f32 };
+
+                for i in 0..self.num_lights {
+                    let mut intensity = vertex_normal.normal[0] as f32
+                        * self.lights_coeffs[i as usize][0]
+                        + vertex_normal.normal[1] as f32 * self.lights_coeffs[i as usize][1]
+                        + vertex_normal.normal[2] as f32 * self.lights_coeffs[i as usize][2];
+
+                    intensity /= 127.0;
+
+                    if intensity > 0.0 {
+                        unsafe {
+                            r += intensity * self.lights[i as usize].dir.col[0] as f32;
+                        }
+                        unsafe {
+                            g += intensity * self.lights[i as usize].dir.col[1] as f32;
+                        }
+                        unsafe {
+                            b += intensity * self.lights[i as usize].dir.col[2] as f32;
+                        }
+                    }
+                }
+
+                staging_vertex.color.r = if r > 255.0 { 255.0 } else { r } / 255.0;
+                staging_vertex.color.g = if g > 255.0 { 255.0 } else { g } / 255.0;
+                staging_vertex.color.b = if b > 255.0 { 255.0 } else { b } / 255.0;
+
+                if self.geometry_mode & RSP_GEOMETRY::G_TEXTURE_GEN > 0 {
+                    let dotx = vertex_normal.normal[0] as f32 * self.lookat_coeffs[0][0]
+                        + vertex_normal.normal[1] as f32 * self.lookat_coeffs[0][1]
+                        + vertex_normal.normal[2] as f32 * self.lookat_coeffs[0][2];
+
+                    let doty = vertex_normal.normal[0] as f32 * self.lookat_coeffs[1][0]
+                        + vertex_normal.normal[1] as f32 * self.lookat_coeffs[1][1]
+                        + vertex_normal.normal[2] as f32 * self.lookat_coeffs[1][2];
+
+                    U = ((dotx / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_s as i16;
+                    V = ((doty / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_t as i16;
+                }
+            } else {
+                staging_vertex.color.r = vertex.color.r as f32 / 255.0;
+                staging_vertex.color.g = vertex.color.g as f32 / 255.0;
+                staging_vertex.color.b = vertex.color.b as f32 / 255.0;
+            }
+
+            staging_vertex.uv[0] = U as f32;
+            staging_vertex.uv[1] = V as f32;
+
+            staging_vertex.position.x = vertex.position[0] as f32;
+            staging_vertex.position.y = vertex.position[1] as f32;
+            staging_vertex.position.z = vertex.position[2] as f32;
+            staging_vertex.position.w = 1.0;
+
+            if geometry_mode_uses_fog(self.geometry_mode) && self.fog_changed {
+                rdp.flush(output);
+                output.set_fog(self.fog_multiplier, self.fog_offset);
+            }
+
+            staging_vertex.color.a = vertex.color.a as f32 / 255.0;
+
+            write_index += 1;
+        }
+    }
+
+    pub fn set_other_mode_h(&mut self, rdp: &mut RDP, size: usize, offset: usize, data: u32) {
+        let mask = ((1 << size) - 1) << offset;
+        self.other_mode_h = (self.other_mode_h & !mask) | data;
+        rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
+    }
+
+    pub fn set_other_mode_l(&mut self, rdp: &mut RDP, size: usize, offset: usize, data: u32) {
+        let mask = ((1 << size) - 1) << offset;
+        self.other_mode_l = (self.other_mode_l & !mask) | data;
+        rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
+    }
+
+    pub fn set_other_mode(&mut self, rdp: &mut RDP, high: u32, low: u32) {
+        self.other_mode_h = high;
+        self.other_mode_l = low;
+        rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
+    }
+
+    pub fn matrix(&mut self, address: usize, params: u8) {
+        let matrix = if cfg!(feature = "gbifloats") {
+            let addr = self.from_segmented(address) as *const f32;
+            let slice = unsafe { slice::from_raw_parts(addr, 16) };
+            Mat4::from_floats(slice)
+        } else {
+            let addr = self.from_segmented(address) as *const i32;
+            let slice = unsafe { slice::from_raw_parts(addr, 16) };
+            Mat4::from_fixed_point(slice)
+        };
+
+        if params & self.constants.G_MTX_PROJECTION != 0 {
+            if (params & self.constants.G_MTX_LOAD) != 0 {
+                // Load the input matrix into the projection matrix
+                // rsp.projection_matrix.copy_from_slice(&matrix);
+                self.projection_matrix = matrix;
+            } else {
+                // Multiply the current projection matrix with the input matrix
+                self.projection_matrix = matrix * self.projection_matrix;
+            }
+        } else {
+            // Modelview matrix
+            if params & self.constants.G_MTX_PUSH != 0
+                && self.matrix_stack_pointer < MATRIX_STACK_SIZE
+            {
+                // Push a copy of the current matrix onto the stack
+                self.matrix_stack_pointer += 1;
+
+                let src_index = self.matrix_stack_pointer - 2;
+                let dst_index = self.matrix_stack_pointer - 1;
+                let (left, right) = self.matrix_stack.split_at_mut(dst_index);
+                right[0] = left[src_index];
+            }
+
+            if params & self.constants.G_MTX_LOAD != 0 {
+                // Load the input matrix into the current matrix
+                self.matrix_stack[self.matrix_stack_pointer - 1] = matrix;
+            } else {
+                // Multiply the current matrix with the input matrix
+                let result = matrix * self.matrix_stack[self.matrix_stack_pointer - 1];
+                self.matrix_stack[self.matrix_stack_pointer - 1] = result;
+            }
+
+            // Clear the lights_valid flag
+            self.lights_valid = false;
+        }
+
+        self.modelview_projection_matrix_changed = true;
+    }
+
+    pub fn pop_matrix(&mut self, mut count: usize) {
+        while count > 0 {
+            if self.matrix_stack_pointer > 0 {
+                self.matrix_stack_pointer -= 1;
+                self.modelview_projection_matrix_changed = true;
+            }
+
+            count -= 1;
+        }
+    }
+
+    pub fn update_geometry_mode(&mut self, rdp: &mut RDP, clear_bits: u32, set_bits: u32) {
+        self.geometry_mode &= clear_bits;
+        self.geometry_mode |= set_bits;
+
+        rdp.shader_config_changed = true;
     }
 }

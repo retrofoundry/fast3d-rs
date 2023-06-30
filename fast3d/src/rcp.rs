@@ -22,12 +22,13 @@ impl Default for RCP {
 impl RCP {
     pub fn new() -> Self {
         let mut gbi = GBI::default();
-        gbi.setup();
+        let mut rsp = RSP::default();
+        gbi.setup(&mut rsp);
 
         RCP {
             gbi,
             rdp: RDP::default(),
-            rsp: RSP::default(),
+            rsp,
         }
     }
 

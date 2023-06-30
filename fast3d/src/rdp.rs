@@ -25,13 +25,16 @@ use super::{
             translate_tile_ci4, translate_tile_ci8, translate_tile_i4, translate_tile_i8,
             translate_tile_ia16, translate_tile_ia4, translate_tile_ia8, translate_tile_rgba16,
             translate_tile_rgba32, translate_tlut, ImageFormat, ImageSize, TextFilt,
-            TextureImageState, TextureLUT, TextureState,
+            TextureImageState, TextureLUT,
         },
         tile_descriptor::TileDescriptor,
     },
-    rsp::RSPGeometry,
 };
 
+use crate::gbi::defines::{G_TX, RSP_GEOMETRY};
+use crate::models::color::R5G5B5A1;
+use crate::models::color_combiner::{ACMUX, CCMUX};
+use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
 use farbe::image::n64::ImageSize as FarbeImageSize;
 
 pub const SCREEN_WIDTH: f32 = 320.0;
@@ -182,7 +185,6 @@ impl TMEMMapEntry {
 pub struct RDP {
     pub output_dimensions: OutputDimensions,
 
-    pub texture_state: TextureState,
     pub texture_image_state: TextureImageState, // coming via GBI (texture to load)
     pub tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
     pub tmem_map: HashMap<u16, TMEMMapEntry>, // tmem address -> texture image state address
@@ -227,7 +229,6 @@ impl RDP {
         RDP {
             output_dimensions: OutputDimensions::ZERO,
 
-            texture_state: TextureState::EMPTY,
             texture_image_state: TextureImageState::EMPTY,
             tile_descriptors: [TileDescriptor::EMPTY; 8],
             tmem_map: HashMap::new(),
@@ -305,8 +306,72 @@ impl RDP {
 
     // Textures
 
-    pub fn import_tile_texture(&mut self, output: &mut RCPOutput, tmem_index: usize) {
-        let tile = self.tile_descriptors[self.texture_state.tile as usize + tmem_index];
+    pub fn load_tile(&mut self, tile: u8, ult: u16, uls: u16, lrt: u16, lrs: u16) {
+        // First, verify that we're loading the whole texture.
+        assert!(uls == 0 && ult == 0);
+        // Verify that we're loading into LOADTILE.
+        assert_eq!(tile, G_TX::LOADTILE);
+
+        let tile = &mut self.tile_descriptors[tile as usize];
+        self.tmem_map.insert(
+            tile.tmem,
+            TMEMMapEntry::new(self.texture_image_state.address),
+        );
+
+        tile.uls = uls;
+        tile.ult = ult;
+        tile.lrs = lrs;
+        tile.lrt = lrt;
+
+        trace!("texture {} is being marked as has changed", tile.tmem / 256);
+        let tmem_index = if tile.tmem != 0 { 1 } else { 0 };
+        self.textures_changed[tmem_index as usize] = true;
+    }
+
+    pub fn load_block(&mut self, tile: u8, ult: u16, uls: u16, dxt: u16, texels: u16) {
+        // First, verify that we're loading the whole texture.
+        assert!(uls == 0 && ult == 0);
+        // Verify that we're loading into LOADTILE.
+        assert_eq!(tile, G_TX::LOADTILE);
+
+        let tile = &mut self.tile_descriptors[tile as usize];
+        self.tmem_map.insert(
+            tile.tmem,
+            TMEMMapEntry::new(self.texture_image_state.address),
+        );
+
+        tile.uls = uls;
+        tile.ult = ult;
+        tile.lrs = texels;
+        tile.lrt = dxt;
+
+        let tmem_index = if tile.tmem != 0 { 1 } else { 0 };
+        self.textures_changed[tmem_index as usize] = true;
+    }
+
+    // TODO: Verify this method against a game that uses TLUTs
+    pub fn load_tlut(&mut self, tile: u8, high_index: u16) {
+        // Verify that we're loading into LOADTILE.
+        assert_eq!(tile, G_TX::LOADTILE);
+        assert_eq!(self.texture_image_state.size, ImageSize::G_IM_SIZ_16b as u8); // TLUTs are always 16-bit (so far)
+
+        assert!(
+            self.tile_descriptors[tile as usize].tmem == 256
+                && (high_index <= 127 || high_index == 255)
+                || self.tile_descriptors[tile as usize].tmem == 384 && high_index == 127
+        );
+
+        trace!("gdp_load_tlut(tile: {}, high_index: {})", tile, high_index);
+
+        let tile = &mut self.tile_descriptors[tile as usize];
+        self.tmem_map.insert(
+            tile.tmem,
+            TMEMMapEntry::new(self.texture_image_state.address),
+        );
+    }
+
+    pub fn import_tile_texture(&mut self, rsp: &RSP, output: &mut RCPOutput, tmem_index: usize) {
+        let tile = self.tile_descriptors[rsp.texture_state.tile as usize + tmem_index];
         let format = tile.format as u32;
         let size = tile.size as u32;
         let width = tile.get_width() as u32;
@@ -398,7 +463,7 @@ impl RDP {
             && self.combine.uses_texture1()
     }
 
-    pub fn flush_textures(&mut self, output: &mut RCPOutput) {
+    pub fn flush_textures(&mut self, rsp: &RSP, output: &mut RCPOutput) {
         // if textures are not on, then we have no textures to flush
         // if !self.texture_state.on {
         //     return;
@@ -423,12 +488,12 @@ impl RDP {
                         self.flush(output);
                         output.clear_textures(i as usize);
 
-                        self.import_tile_texture(output, i as usize);
+                        self.import_tile_texture(rsp, output, i as usize);
                         self.textures_changed[i as usize] = false;
                     }
 
                     let tile_descriptor =
-                        self.tile_descriptors[(self.texture_state.tile + i) as usize];
+                        self.tile_descriptors[(rsp.texture_state.tile + i) as usize];
                     let linear_filter =
                         get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT;
                     output.set_sampler_parameters(
@@ -467,7 +532,7 @@ impl RDP {
     // MARK: - Blend
 
     fn process_depth_params(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
-        let depth_test = geometry_mode & RSPGeometry::G_ZBUFFER as u32 != 0;
+        let depth_test = geometry_mode & RSP_GEOMETRY::G_ZBUFFER != 0;
 
         let zmode: u32 = self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03;
 
@@ -493,8 +558,13 @@ impl RDP {
         output.set_depth_stencil_params(depth_test, depth_write, depth_compare, polygon_offset);
     }
 
-    pub fn update_render_state(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
-        let cull_mode = translate_cull_mode(geometry_mode);
+    pub fn update_render_state(
+        &mut self,
+        output: &mut RCPOutput,
+        geometry_mode: u32,
+        rsp_constants: &RSPConstants,
+    ) {
+        let cull_mode = translate_cull_mode(geometry_mode, rsp_constants);
         output.set_cull_mode(cull_mode);
 
         self.process_depth_params(output, geometry_mode);
@@ -554,7 +624,400 @@ impl RDP {
         self.key_scale.z = sb as f32 / 255.0;
     }
 
+    pub fn set_other_mode(&mut self, other_mode_h: u32, other_mode_l: u32) {
+        self.other_mode_h = other_mode_h;
+        self.other_mode_l = other_mode_l;
+        self.shader_config_changed = true;
+    }
+
+    pub fn set_combine(&mut self, combine: CombineParams) {
+        self.combine = combine;
+        self.shader_config_changed = true;
+    }
+
+    pub fn set_tile(
+        &mut self,
+        tile: u8,
+        format: u8,
+        size: u8,
+        line: u16,
+        tmem: u16,
+        palette: u8,
+        cm_t: u8,
+        cm_s: u8,
+        mask_t: u8,
+        mask_s: u8,
+        shift_t: u8,
+        shift_s: u8,
+    ) {
+        assert!(tile < NUM_TILE_DESCRIPTORS as u8);
+        let tile = &mut self.tile_descriptors[tile as usize];
+        tile.set_format(format);
+        tile.set_size(size);
+        tile.line = line;
+        tile.tmem = tmem;
+        tile.palette = palette;
+        tile.cm_t = cm_t;
+        tile.mask_t = mask_t;
+        tile.shift_t = shift_t;
+        tile.cm_s = cm_s;
+        tile.mask_s = mask_s;
+        tile.shift_s = shift_s;
+
+        self.textures_changed[0] = true;
+        self.textures_changed[1] = true;
+    }
+
+    pub fn set_tile_size(&mut self, tile: u8, ult: u16, uls: u16, lrt: u16, lrs: u16) {
+        assert!(tile < NUM_TILE_DESCRIPTORS as u8);
+        let tile = &mut self.tile_descriptors[tile as usize];
+        tile.uls = uls;
+        tile.ult = ult;
+        tile.lrs = lrs;
+        tile.lrt = lrt;
+
+        self.textures_changed[0] = true;
+        self.textures_changed[1] = true;
+    }
+
+    pub fn set_env_color(&mut self, color: usize) {
+        self.env_color = Vec4::new(
+            ((color >> 24) & 0xFF) as f32 / 255.0,
+            ((color >> 16) & 0xFF) as f32 / 255.0,
+            ((color >> 8) & 0xFF) as f32 / 255.0,
+            (color & 0xFF) as f32 / 255.0,
+        );
+    }
+
+    pub fn set_prim_color(&mut self, lod_frac: u8, lod_min: u8, color: usize) {
+        self.prim_lod = Vec2::new(lod_frac as f32 / 256.0, lod_min as f32 / 32.0);
+        self.prim_color = Vec4::new(
+            ((color >> 24) & 0xFF) as f32 / 255.0,
+            ((color >> 16) & 0xFF) as f32 / 255.0,
+            ((color >> 8) & 0xFF) as f32 / 255.0,
+            (color & 0xFF) as f32 / 255.0,
+        );
+    }
+
+    pub fn set_blend_color(&mut self, color: usize) {
+        self.blend_color = Vec4::new(
+            ((color >> 24) & 0xFF) as f32 / 255.0,
+            ((color >> 16) & 0xFF) as f32 / 255.0,
+            ((color >> 8) & 0xFF) as f32 / 255.0,
+            (color & 0xFF) as f32 / 255.0,
+        );
+    }
+
+    pub fn set_fog_color(&mut self, color: usize) {
+        self.fog_color = Vec4::new(
+            ((color >> 24) & 0xFF) as f32 / 255.0,
+            ((color >> 16) & 0xFF) as f32 / 255.0,
+            ((color >> 8) & 0xFF) as f32 / 255.0,
+            (color & 0xFF) as f32 / 255.0,
+        );
+    }
+
+    pub fn set_fill_color(&mut self, color: usize) {
+        let packed_color = color as u16;
+        self.fill_color = R5G5B5A1::to_rgba(packed_color);
+    }
+
+    // MARK: - Drawing
+
+    pub fn draw_triangles(
+        &mut self,
+        rsp: &mut RSP,
+        output: &mut RCPOutput,
+        vertex_id1: usize,
+        vertex_id2: usize,
+        vertex_id3: usize,
+        is_drawing_rect: bool,
+    ) {
+        if self.shader_config_changed {
+            self.flush(output);
+            self.shader_config_changed = false;
+        }
+
+        let vertex1 = &rsp.vertex_table[vertex_id1];
+        let vertex2 = &rsp.vertex_table[vertex_id2];
+        let vertex3 = &rsp.vertex_table[vertex_id3];
+        let vertex_array = [vertex1, vertex2, vertex3];
+
+        // Don't draw anything if both tris are being culled.
+        if (rsp.geometry_mode & rsp.constants.G_CULL_BOTH) == rsp.constants.G_CULL_BOTH {
+            return;
+        }
+
+        self.update_render_state(output, rsp.geometry_mode, &rsp.constants);
+
+        output.set_program_params(
+            self.other_mode_h,
+            self.other_mode_l,
+            self.combine,
+            self.tile_descriptors,
+        );
+
+        self.flush_textures(rsp, output);
+
+        output.set_uniforms(
+            self.fog_color,
+            self.blend_color,
+            self.prim_color,
+            self.env_color,
+            self.key_center,
+            self.key_scale,
+            self.prim_lod,
+            self.convert_k,
+        );
+
+        let current_tile = self.tile_descriptors[rsp.texture_state.tile as usize];
+        let tex_width = current_tile.get_width();
+        let tex_height = current_tile.get_height();
+        let use_texture = self.combine.uses_texture0() || self.combine.uses_texture1();
+
+        for vertex in &vertex_array {
+            self.add_to_buf_vbo(vertex.position.x);
+            self.add_to_buf_vbo(vertex.position.y);
+            self.add_to_buf_vbo(vertex.position.z);
+            self.add_to_buf_vbo(if is_drawing_rect {
+                0.0
+            } else {
+                vertex.position.w
+            });
+
+            self.add_to_buf_vbo(vertex.color.r);
+            self.add_to_buf_vbo(vertex.color.g);
+            self.add_to_buf_vbo(vertex.color.b);
+            self.add_to_buf_vbo(vertex.color.a);
+
+            if use_texture {
+                let mut u = (vertex.uv[0] - (current_tile.uls as f32) * 8.0) / 32.0;
+                let mut v = (vertex.uv[1] - (current_tile.ult as f32) * 8.0) / 32.0;
+
+                if get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT {
+                    u += 0.5;
+                    v += 0.5;
+                }
+
+                self.add_to_buf_vbo(u / tex_width as f32);
+                self.add_to_buf_vbo(v / tex_height as f32);
+            }
+        }
+
+        self.buf_vbo_num_tris += 1;
+        if self.buf_vbo_num_tris == MAX_BUFFERED {
+            self.flush(output);
+        }
+    }
+
+    pub fn draw_texture_rectangle(
+        &mut self,
+        rsp: &mut RSP,
+        output: &mut RCPOutput,
+        ulx: i32,
+        uly: i32,
+        mut lrx: i32,
+        mut lry: i32,
+        _tile: u8,
+        uls: i16,
+        ult: i16,
+        mut dsdx: i16,
+        mut dtdy: i16,
+        flipped: bool,
+    ) {
+        let saved_combine_mode = self.combine;
+        if (self.other_mode_h >> OtherModeH_Layout::G_MDSFT_CYCLETYPE as u32) & 0x03
+            == OtherModeHCycleType::G_CYC_COPY as u32
+        {
+            // Per RDP Command Summary Set Tile's shift s and this dsdx should be set to 4 texels
+            // Divide by 4 to get 1 instead
+            dsdx >>= 2;
+
+            // Color combiner is turned off in copy mode
+            let rhs =
+                (CCMUX::TEXEL0 as usize & 0b111) << 15 | (ACMUX::TEXEL0 as usize & 0b111) << 9;
+            self.combine = CombineParams::decode(0, rhs);
+            self.shader_config_changed = true;
+
+            // Per documentation one extra pixel is added in this modes to each edge
+            lrx += 1 << 2;
+            lry += 1 << 2;
+        }
+
+        // uls and ult are S10.5
+        // dsdx and dtdy are S5.10
+        // lrx, lry, ulx, uly are U10.2
+        // lrs, lrt are S10.5
+        if flipped {
+            dsdx = -dsdx;
+            dtdy = -dtdy;
+        }
+
+        let width = if !flipped { lrx - ulx } else { lry - uly } as i64;
+        let height = if !flipped { lry - uly } else { lrx - ulx } as i64;
+        let lrs: i64 = ((uls << 7) as i64 + (dsdx as i64) * width) >> 7;
+        let lrt: i64 = ((ult << 7) as i64 + (dtdy as i64) * height) >> 7;
+
+        let ul = &mut rsp.vertex_table[MAX_VERTICES];
+        ul.uv[0] = uls as f32;
+        ul.uv[1] = ult as f32;
+
+        let lr = &mut rsp.vertex_table[MAX_VERTICES + 2];
+        lr.uv[0] = lrs as f32;
+        lr.uv[1] = lrt as f32;
+
+        let ll = &mut rsp.vertex_table[MAX_VERTICES + 1];
+        ll.uv[0] = if !flipped { uls as f32 } else { lrs as f32 };
+        ll.uv[1] = if !flipped { lrt as f32 } else { ult as f32 };
+
+        let ur = &mut rsp.vertex_table[MAX_VERTICES + 3];
+        ur.uv[0] = if !flipped { lrs as f32 } else { uls as f32 };
+        ur.uv[1] = if !flipped { ult as f32 } else { lrt as f32 };
+
+        self.draw_rectangle(rsp, output, ulx, uly, lrx, lry);
+        self.combine = saved_combine_mode;
+        self.shader_config_changed = true;
+    }
+
+    pub fn fill_rect(
+        &mut self,
+        rsp: &mut RSP,
+        output: &mut RCPOutput,
+        ulx: i32,
+        uly: i32,
+        mut lrx: i32,
+        mut lry: i32,
+    ) {
+        if self.color_image == self.depth_image {
+            // used to clear depth buffer, not necessary in modern pipelines
+            return;
+        }
+
+        let cycle_type = get_cycle_type_from_other_mode_h(self.other_mode_h);
+        if cycle_type == OtherModeHCycleType::G_CYC_COPY
+            || cycle_type == OtherModeHCycleType::G_CYC_FILL
+        {
+            // Per documentation one extra pixel is added in this modes to each edge
+            lrx += 1 << 2;
+            lry += 1 << 2;
+        }
+
+        for i in MAX_VERTICES..MAX_VERTICES + 4 {
+            let v = &mut rsp.vertex_table[i];
+            v.color = self.fill_color;
+        }
+
+        let saved_combine_mode = self.combine;
+        let rhs = (CCMUX::SHADE as usize & 0b111) << 15 | (ACMUX::SHADE as usize & 0b111) << 9;
+        self.combine = CombineParams::decode(0, rhs);
+        self.shader_config_changed = true;
+        self.draw_rectangle(rsp, output, ulx, uly, lrx, lry);
+        self.combine = saved_combine_mode;
+        self.shader_config_changed = true;
+    }
+
     // MARK: - Helpers
+
+    fn draw_rectangle(
+        &mut self,
+        rsp: &mut RSP,
+        output: &mut RCPOutput,
+        ulx: i32,
+        uly: i32,
+        lrx: i32,
+        lry: i32,
+    ) {
+        let saved_other_mode_h = self.other_mode_h;
+        let cycle_type = get_cycle_type_from_other_mode_h(self.other_mode_h);
+
+        if cycle_type == OtherModeHCycleType::G_CYC_COPY {
+            self.other_mode_h = (self.other_mode_h
+                & !(3 << OtherModeH_Layout::G_MDSFT_TEXTFILT as u32))
+                | (TextFilt::G_TF_POINT as u32);
+            self.shader_config_changed = true;
+        }
+
+        // U10.2 coordinates
+        let mut ulxf = ulx as f32 / (4.0 * (SCREEN_WIDTH / 2.0)) - 1.0;
+        let ulyf = -(uly as f32 / (4.0 * (SCREEN_HEIGHT / 2.0))) + 1.0;
+        let mut lrxf = lrx as f32 / (4.0 * (SCREEN_WIDTH / 2.0)) - 1.0;
+        let lryf = -(lry as f32 / (4.0 * (SCREEN_HEIGHT / 2.0))) + 1.0;
+
+        ulxf = self.adjust_x_for_viewport(ulxf);
+        lrxf = self.adjust_x_for_viewport(lrxf);
+
+        {
+            let ul = &mut rsp.vertex_table[MAX_VERTICES];
+            ul.position.x = ulxf;
+            ul.position.y = ulyf;
+            ul.position.z = -1.0;
+            ul.position.w = 1.0;
+        }
+
+        {
+            let ll = &mut rsp.vertex_table[MAX_VERTICES + 1];
+            ll.position.x = ulxf;
+            ll.position.y = lryf;
+            ll.position.z = -1.0;
+            ll.position.w = 1.0;
+        }
+
+        {
+            let lr = &mut rsp.vertex_table[MAX_VERTICES + 2];
+            lr.position.x = lrxf;
+            lr.position.y = lryf;
+            lr.position.z = -1.0;
+            lr.position.w = 1.0;
+        }
+
+        {
+            let ur = &mut rsp.vertex_table[MAX_VERTICES + 3];
+            ur.position.x = lrxf;
+            ur.position.y = ulyf;
+            ur.position.z = -1.0;
+            ur.position.w = 1.0;
+        }
+
+        // The coordinates for texture rectangle shall bypass the viewport setting
+        let default_viewport = Rect::new(
+            0,
+            0,
+            self.output_dimensions.width as u16,
+            self.output_dimensions.height as u16,
+        );
+        let viewport_saved = self.viewport;
+        let geometry_mode_saved = rsp.geometry_mode;
+
+        self.viewport = default_viewport;
+        rsp.geometry_mode = 0;
+        self.shader_config_changed = true;
+
+        self.draw_triangles(
+            rsp,
+            output,
+            MAX_VERTICES,
+            MAX_VERTICES + 1,
+            MAX_VERTICES + 3,
+            true,
+        );
+        self.draw_triangles(
+            rsp,
+            output,
+            MAX_VERTICES + 1,
+            MAX_VERTICES + 2,
+            MAX_VERTICES + 3,
+            true,
+        );
+
+        rsp.geometry_mode = geometry_mode_saved;
+        self.viewport = viewport_saved;
+        self.shader_config_changed = true;
+
+        if cycle_type == OtherModeHCycleType::G_CYC_COPY {
+            self.other_mode_h = saved_other_mode_h;
+            self.shader_config_changed = true;
+        }
+    }
 
     pub fn scaled_x(&self) -> f32 {
         self.output_dimensions.width as f32 / SCREEN_WIDTH

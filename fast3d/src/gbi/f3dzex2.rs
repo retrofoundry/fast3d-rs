@@ -1,9 +1,10 @@
 use super::{f3dex2::F3DEX2, GBIDefinition, GBI};
+use crate::rsp::RSP;
 
-pub enum F3DZEX2 {}
+pub struct F3DZEX2;
 
 impl GBIDefinition for F3DZEX2 {
-    fn setup(gbi: &mut GBI) {
-        F3DEX2::setup(gbi);
+    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
+        F3DEX2::setup(gbi, rsp);
     }
 }

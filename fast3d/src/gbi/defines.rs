@@ -119,18 +119,6 @@ pub struct Vtx_tn {
     pub alpha: u8,
 }
 
-#[cfg(feature = "f3dex2")]
-pub struct G_MTX;
-#[cfg(feature = "f3dex2")]
-impl G_MTX {
-    pub const NOPUSH: u8 = 0x00;
-    pub const PUSH: u8 = 0x01;
-    pub const MUL: u8 = 0x00;
-    pub const LOAD: u8 = 0x02;
-    pub const MODELVIEW: u8 = 0x00;
-    pub const PROJECTION: u8 = 0x04;
-}
-
 pub struct G_SET;
 impl G_SET {
     pub const COLORIMG: u8 = 0xff;
@@ -185,13 +173,28 @@ impl G_TX {
     pub const NOLOD: u8 = 0;
 }
 
+pub struct RSP_GEOMETRY;
+impl RSP_GEOMETRY {
+    pub const G_ZBUFFER: u32 = 1 << 0;
+    pub const G_SHADE: u32 = 1 << 2;
+    pub const G_FOG: u32 = 1 << 16;
+    pub const G_LIGHTING: u32 = 1 << 17;
+    pub const G_TEXTURE_GEN: u32 = 1 << 18;
+    pub const G_TEXTURE_GEN_LINEAR: u32 = 1 << 19;
+    pub const G_LOD: u32 = 1 << 20; /* NOT IMPLEMENTED */
+    pub const G_CLIPPING: u32 = 1 << 23;
+}
+
 // lose defines
 
 pub const G_TEXRECT: u8 = 0xe4;
 pub const G_TEXRECTFLIP: u8 = 0xe5;
 pub const G_FILLRECT: u8 = 0xf6;
 
+pub const G_NOOP: u8 = 0x00;
 pub const G_RDPFULLSYNC: u8 = 0xe9;
 pub const G_RDPTILESYNC: u8 = 0xe8;
 pub const G_RDPPIPESYNC: u8 = 0xe7;
 pub const G_RDPLOADSYNC: u8 = 0xe6;
+
+pub const G_RDPSETOTHERMODE: u8 = 0xef;
