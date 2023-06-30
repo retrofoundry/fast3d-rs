@@ -469,7 +469,7 @@ impl RSP {
     }
 
     pub fn update_geometry_mode(&mut self, rdp: &mut RDP, clear_bits: u32, set_bits: u32) {
-        self.geometry_mode &= !clear_bits;
+        self.geometry_mode &= clear_bits;
         self.geometry_mode |= set_bits;
 
         rdp.shader_config_changed = true;
