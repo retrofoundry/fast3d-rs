@@ -1,6 +1,6 @@
 use crate::gbi::defines::Gfx;
 use crate::gbi::utils::get_cmd;
-use crate::gbi::{GBIDefinition, GBIResult, GBI};
+use crate::gbi::{GBICommand, GBICommandRegistry, GBIMicrocode, GBIResult};
 
 use crate::output::RCPOutput;
 use crate::rdp::RDP;
@@ -62,18 +62,22 @@ impl F3D {
     pub const G_MV_MATRIX_4: u8 = 0x9c;
 }
 
-impl GBIDefinition for F3D {
-    fn setup(gbi: &mut GBI, _rsp: &mut RSP) {
-        gbi.register(F3D::G_SPNOOP as usize, Self::gsp_no_op);
-        gbi.register(F3D::G_DL as usize, Self::sub_dl);
-        gbi.register(F3D::G_ENDDL as usize, Self::end_dl);
+impl GBIMicrocode for F3D {
+    fn setup(gbi: &mut GBICommandRegistry, _rsp: &mut RSP) {
+        gbi.register(F3D::G_SPNOOP as usize, F3DSpNoOp);
+        gbi.register(F3D::G_DL as usize, F3DSubDL);
+        gbi.register(F3D::G_ENDDL as usize, F3DEndDL);
 
         // TODO: Complete this
     }
 }
 
-impl F3D {
-    pub fn gsp_no_op(
+// MARK: - Commands
+
+pub struct F3DSpNoOp;
+impl GBICommand for F3DSpNoOp {
+    fn process(
+        &self,
         _rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -81,8 +85,12 @@ impl F3D {
     ) -> GBIResult {
         GBIResult::Continue
     }
+}
 
-    pub fn sub_dl(
+pub struct F3DSubDL;
+impl GBICommand for F3DSubDL {
+    fn process(
+        &self,
         _rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -98,14 +106,16 @@ impl F3D {
         } else {
             let new_addr = rsp.from_segmented(w1);
             let cmd = new_addr as *mut Gfx;
-            unsafe {
-                *command = cmd.sub(1);
-            }
+            unsafe { *command = cmd.sub(1) };
             GBIResult::Continue
         }
     }
+}
 
-    pub fn end_dl(
+pub struct F3DEndDL;
+impl GBICommand for F3DEndDL {
+    fn process(
+        &self,
         _rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,

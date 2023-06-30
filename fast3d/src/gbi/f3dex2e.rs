@@ -1,25 +1,28 @@
+use crate::gbi::GBICommand;
 use crate::{output::RCPOutput, rdp::RDP, rsp::RSP};
 
 use super::{
     defines::{Gfx, G_FILLRECT, G_TEXRECT, G_TEXRECTFLIP},
     f3dex2::F3DEX2,
     utils::get_cmd,
-    GBIDefinition, GBIResult, GBI,
+    GBICommandRegistry, GBIMicrocode, GBIResult,
 };
 
 pub struct F3DEX2E;
 
-impl GBIDefinition for F3DEX2E {
-    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
+impl GBIMicrocode for F3DEX2E {
+    fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
         F3DEX2::setup(gbi, rsp);
-        gbi.register(G_TEXRECT as usize, F3DEX2E::gdp_texture_rectangle);
-        gbi.register(G_TEXRECTFLIP as usize, F3DEX2E::gdp_texture_rectangle);
-        gbi.register(G_FILLRECT as usize, F3DEX2E::gdp_fill_rectangle);
+        gbi.register(G_TEXRECT as usize, F3DEX2ETextureRectangle);
+        gbi.register(G_TEXRECTFLIP as usize, F3DEX2ETextureRectangle);
+        gbi.register(G_FILLRECT as usize, F3DEX2EFillRectangle);
     }
 }
 
-impl F3DEX2E {
-    pub fn gdp_texture_rectangle(
+struct F3DEX2ETextureRectangle;
+impl GBICommand for F3DEX2ETextureRectangle {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         output: &mut RCPOutput,
@@ -71,8 +74,12 @@ impl F3DEX2E {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_fill_rectangle(
+struct F3DEX2EFillRectangle;
+impl GBICommand for F3DEX2EFillRectangle {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         output: &mut RCPOutput,

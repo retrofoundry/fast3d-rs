@@ -4,7 +4,7 @@ use crate::gbi::defines::{
 };
 
 use crate::gbi::utils::get_cmd;
-use crate::gbi::{GBIDefinition, GBIResult, GBI};
+use crate::gbi::{GBICommand, GBICommandRegistry, GBIMicrocode, GBIResult};
 
 use crate::models::color_combiner::CombineParams;
 use crate::models::texture::TextureImageState;
@@ -13,44 +13,111 @@ use crate::rdp::{RDP, SCREEN_HEIGHT};
 use crate::rsp::RSP;
 
 pub struct Common;
-impl GBIDefinition for Common {
-    fn setup(gbi: &mut GBI, _rsp: &mut RSP) {
-        gbi.register(G_NOOP as usize, |_, _, _, _| GBIResult::Continue);
-        gbi.register(G_SET::COLORIMG as usize, Self::gdp_set_color_image);
-        gbi.register(G_SET::DEPTHIMG as usize, Self::gdp_set_depth_image);
-        gbi.register(G_SET::TEXIMG as usize, Self::gdp_set_texture_image);
-        gbi.register(G_SET::COMBINE as usize, Self::gdp_set_combine);
-        gbi.register(G_SET::TILE as usize, Self::gdp_set_tile);
-        gbi.register(G_SET::TILESIZE as usize, Self::gdp_set_tile_size);
-        gbi.register(G_LOAD::TILE as usize, Self::gdp_load_tile);
-        gbi.register(G_LOAD::BLOCK as usize, Self::gdp_load_block);
-        gbi.register(G_LOAD::TLUT as usize, Self::gdp_load_tlut);
-        gbi.register(G_SET::ENVCOLOR as usize, Self::gdp_set_env_color);
-        gbi.register(G_SET::PRIMCOLOR as usize, Self::gdp_set_prim_color);
-        gbi.register(G_SET::BLENDCOLOR as usize, Self::gdp_set_blend_color);
-        gbi.register(G_SET::FOGCOLOR as usize, Self::gdp_set_fog_color);
-        gbi.register(G_SET::FILLCOLOR as usize, Self::gdp_set_fill_color);
-        gbi.register(G_RDPSETOTHERMODE as usize, Self::gdp_set_other_mode);
+impl GBIMicrocode for Common {
+    fn setup(gbi: &mut GBICommandRegistry, _rsp: &mut RSP) {
+        gbi.register(G_NOOP as usize, RDPNoOp);
+        gbi.register(G_SET::COLORIMG as usize, RDPSetColorImage);
+        gbi.register(G_SET::DEPTHIMG as usize, RDPSetDepthImage);
+        gbi.register(G_SET::TEXIMG as usize, RDPSetTextureImage);
+        gbi.register(G_SET::COMBINE as usize, RDPSetCombine);
+        gbi.register(G_SET::TILE as usize, RDPSetTile);
+        gbi.register(G_SET::TILESIZE as usize, RDPSetTileSize);
+        gbi.register(G_LOAD::TILE as usize, RDPLoadTile);
+        gbi.register(G_LOAD::BLOCK as usize, RDPLoadBlock);
+        gbi.register(G_LOAD::TLUT as usize, RDPLoadTLUT);
+        gbi.register(G_SET::ENVCOLOR as usize, RDPSetEnvColor);
+        gbi.register(G_SET::PRIMCOLOR as usize, RDPSetPrimColor);
+        gbi.register(G_SET::BLENDCOLOR as usize, RDPSetBlendColor);
+        gbi.register(G_SET::FOGCOLOR as usize, RDPSetFogColor);
+        gbi.register(G_SET::FILLCOLOR as usize, RDPSetFillColor);
+        gbi.register(G_RDPSETOTHERMODE as usize, RDPSetOtherMode);
         // TODO: PRIM_DEPTH
-        gbi.register(G_SET::SCISSOR as usize, Self::gdp_set_scissor);
-        gbi.register(G_SET::CONVERT as usize, Self::gdp_set_convert);
-        gbi.register(G_SET::KEYR as usize, Self::gdp_set_key_r);
-        gbi.register(G_SET::KEYGB as usize, Self::gdp_set_key_gb);
-        gbi.register(G_TEXRECT as usize, Self::gdp_texture_rectangle);
-        gbi.register(G_TEXRECTFLIP as usize, Self::gdp_texture_rectangle);
-        gbi.register(G_FILLRECT as usize, Self::gdp_fill_rectangle);
-        gbi.register(G_RDPLOADSYNC as usize, |_, _, _, _| GBIResult::Continue);
-        gbi.register(G_RDPPIPESYNC as usize, |_, _, _, _| GBIResult::Continue);
-        gbi.register(G_RDPTILESYNC as usize, |_, _, _, _| GBIResult::Continue);
-        gbi.register(G_RDPFULLSYNC as usize, |_, _, _, _| GBIResult::Continue);
+        gbi.register(G_SET::SCISSOR as usize, RDPSetScissor);
+        gbi.register(G_SET::CONVERT as usize, RDPSetConvert);
+        gbi.register(G_SET::KEYR as usize, RDPSetKeyR);
+        gbi.register(G_SET::KEYGB as usize, RDPSetKeyGB);
+        gbi.register(G_TEXRECT as usize, RDPTextureRectangle);
+        gbi.register(G_TEXRECTFLIP as usize, RDPTextureRectangle);
+        gbi.register(G_FILLRECT as usize, RDPFillRectangle);
+        gbi.register(G_RDPLOADSYNC as usize, RDPLoadSync);
+        gbi.register(G_RDPPIPESYNC as usize, RDPPipeSync);
+        gbi.register(G_RDPTILESYNC as usize, RDPTileSync);
+        gbi.register(G_RDPFULLSYNC as usize, RDPFullSync);
     }
 }
 
-impl Common {
-    pub fn gdp_set_color_image(
+struct RDPNoOp;
+impl GBICommand for RDPNoOp {
+    fn process(
+        &self,
+        _rdp: &mut RDP,
+        _rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        _command: &mut *mut Gfx,
+    ) -> GBIResult {
+        GBIResult::Continue
+    }
+}
+
+struct RDPLoadSync;
+impl GBICommand for RDPLoadSync {
+    fn process(
+        &self,
+        _rdp: &mut RDP,
+        _rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        _command: &mut *mut Gfx,
+    ) -> GBIResult {
+        GBIResult::Continue
+    }
+}
+
+struct RDPPipeSync;
+impl GBICommand for RDPPipeSync {
+    fn process(
+        &self,
+        _rdp: &mut RDP,
+        _rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        _command: &mut *mut Gfx,
+    ) -> GBIResult {
+        GBIResult::Continue
+    }
+}
+
+struct RDPTileSync;
+impl GBICommand for RDPTileSync {
+    fn process(
+        &self,
+        _rdp: &mut RDP,
+        _rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        _command: &mut *mut Gfx,
+    ) -> GBIResult {
+        GBIResult::Continue
+    }
+}
+
+struct RDPFullSync;
+impl GBICommand for RDPFullSync {
+    fn process(
+        &self,
+        _rdp: &mut RDP,
+        _rsp: &mut RSP,
+        _output: &mut RCPOutput,
+        _command: &mut *mut Gfx,
+    ) -> GBIResult {
+        GBIResult::Continue
+    }
+}
+
+pub struct RDPSetColorImage;
+impl GBICommand for RDPSetColorImage {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        _output: &mut RCPOutput,
+        output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -63,8 +130,12 @@ impl Common {
         rdp.color_image = rsp.from_segmented(w1);
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_depth_image(
+pub struct RDPSetDepthImage;
+impl GBICommand for RDPSetDepthImage {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -75,8 +146,12 @@ impl Common {
         rdp.depth_image = rsp.from_segmented(w1);
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_texture_image(
+pub struct RDPSetTextureImage;
+impl GBICommand for RDPSetTextureImage {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -99,8 +174,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_combine(
+pub struct RDPSetCombine;
+impl GBICommand for RDPSetCombine {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -112,11 +191,15 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_tile(
+pub struct RDPSetTile;
+impl GBICommand for RDPSetTile {
+    fn process(
+        &self,
         rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
+        rsp: &mut RSP,
+        output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -141,8 +224,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_tile_size(
+pub struct RDPSetTileSize;
+impl GBICommand for RDPSetTileSize {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -161,8 +248,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_load_tile(
+pub struct RDPLoadTile;
+impl GBICommand for RDPLoadTile {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -181,8 +272,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_load_block(
+pub struct RDPLoadBlock;
+impl GBICommand for RDPLoadBlock {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -201,8 +296,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_load_tlut(
+pub struct RDPLoadTLUT;
+impl GBICommand for RDPLoadTLUT {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -217,8 +316,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_env_color(
+pub struct RDPSetEnvColor;
+impl GBICommand for RDPSetEnvColor {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -229,8 +332,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_prim_color(
+pub struct RDPSetPrimColor;
+impl GBICommand for RDPSetPrimColor {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -245,8 +352,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_blend_color(
+pub struct RDPSetBlendColor;
+impl GBICommand for RDPSetBlendColor {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -257,8 +368,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_fog_color(
+pub struct RDPSetFogColor;
+impl GBICommand for RDPSetFogColor {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -269,8 +384,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_fill_color(
+pub struct RDPSetFillColor;
+impl GBICommand for RDPSetFillColor {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -281,8 +400,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_other_mode(
+pub struct RDPSetOtherMode;
+impl GBICommand for RDPSetOtherMode {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -297,8 +420,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_scissor(
+pub struct RDPSetScissor;
+impl GBICommand for RDPSetScissor {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -326,8 +453,12 @@ impl Common {
         rdp.shader_config_changed = true;
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_convert(
+pub struct RDPSetConvert;
+impl GBICommand for RDPSetConvert {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -349,8 +480,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_key_r(
+pub struct RDPSetKeyR;
+impl GBICommand for RDPSetKeyR {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -366,8 +501,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_key_gb(
+pub struct RDPSetKeyGB;
+impl GBICommand for RDPSetKeyGB {
+    fn process(
+        &self,
         rdp: &mut RDP,
         _rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -389,8 +528,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_texture_rectangle(
+pub struct RDPTextureRectangle;
+impl GBICommand for RDPTextureRectangle {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         output: &mut RCPOutput,
@@ -440,8 +583,12 @@ impl Common {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_fill_rectangle(
+pub struct RDPFillRectangle;
+impl GBICommand for RDPFillRectangle {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         output: &mut RCPOutput,

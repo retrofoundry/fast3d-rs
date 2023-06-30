@@ -1,14 +1,14 @@
 use log::trace;
 
 use super::{
-    gbi::{defines::Gfx, GBIResult, GBI},
+    gbi::{defines::Gfx, GBICommandRegistry, GBIResult},
     output::RCPOutput,
     rdp::RDP,
     rsp::RSP,
 };
 
 pub struct RCP {
-    gbi: GBI,
+    gbi: GBICommandRegistry,
     pub rdp: RDP,
     pub rsp: RSP,
 }
@@ -21,7 +21,7 @@ impl Default for RCP {
 
 impl RCP {
     pub fn new() -> Self {
-        let mut gbi = GBI::default();
+        let mut gbi = GBICommandRegistry::default();
         let mut rsp = RSP::default();
         gbi.setup(&mut rsp);
 
@@ -50,14 +50,15 @@ impl RCP {
         let mut command = commands as *mut Gfx;
 
         loop {
-            match self
-                .gbi
-                .handle_command(&mut self.rdp, &mut self.rsp, output, &mut command)
-            {
-                GBIResult::Recurse(new_command) => self.run_dl(output, new_command),
-                GBIResult::Unknown(opcode) => trace!("Unknown GBI command: {:#x}", opcode),
-                GBIResult::Return => return,
-                GBIResult::Continue => {}
+            let opcode = unsafe { (*command).words.w0 } >> 24;
+            if let Some(handler) = self.gbi.handler_for_opcode(&opcode) {
+                match handler.process(&mut self.rdp, &mut self.rsp, output, &mut command) {
+                    GBIResult::Recurse(new_command) => self.run_dl(output, new_command),
+                    GBIResult::Return => return,
+                    GBIResult::Continue => {}
+                }
+            } else {
+                trace!("Unknown GBI command: {:#x}", opcode);
             }
 
             unsafe { command = command.add(1) };

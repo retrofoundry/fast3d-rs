@@ -6,9 +6,10 @@ use super::{
     super::{rdp::RDP, rsp::RSP},
     defines::G_MW,
 };
-use super::{GBIDefinition, GBIResult, GBI};
+use super::{GBICommandRegistry, GBIMicrocode, GBIResult};
 use crate::gbi::defines::G_RDPSETOTHERMODE;
-use crate::gbi::f3d::F3D;
+use crate::gbi::f3d::{F3DEndDL, F3DSpNoOp, F3DSubDL, F3D};
+use crate::gbi::GBICommand;
 use crate::output::RCPOutput;
 use crate::rsp::RSPConstants;
 
@@ -118,23 +119,23 @@ impl F3DEX2 {
     pub const G_MVO_L7: u8 = (9 * 24);
 }
 
-impl GBIDefinition for F3DEX2 {
-    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
-        gbi.register(Self::G_MTX as usize, Self::gsp_matrix);
-        gbi.register(Self::G_POPMTX as usize, Self::gsp_pop_matrix);
-        gbi.register(Self::G_MOVEMEM as usize, Self::gsp_movemem);
-        gbi.register(Self::G_MOVEWORD as usize, Self::gsp_moveword);
-        gbi.register(Self::G_TEXTURE as usize, Self::gsp_texture);
-        gbi.register(Self::G_VTX as usize, Self::gsp_vertex);
-        gbi.register(Self::G_DL as usize, F3D::sub_dl);
-        gbi.register(Self::G_GEOMETRYMODE as usize, Self::gsp_geometry_mode);
-        gbi.register(Self::G_TRI1 as usize, Self::gsp_tri1);
-        gbi.register(Self::G_TRI2 as usize, Self::gsp_tri2);
-        gbi.register(Self::G_ENDDL as usize, F3D::end_dl);
-        gbi.register(Self::G_SPNOOP as usize, F3D::gsp_no_op);
-        gbi.register(Self::G_SETOTHERMODE_L as usize, Self::gdp_set_other_mode_l);
-        gbi.register(Self::G_SETOTHERMODE_H as usize, Self::gdp_set_other_mode_h);
-        gbi.register(G_RDPSETOTHERMODE as usize, Self::gdp_set_other_mode);
+impl GBIMicrocode for F3DEX2 {
+    fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
+        gbi.register(Self::G_MTX as usize, F3DEX2Matrix);
+        gbi.register(Self::G_POPMTX as usize, F3DEX2PopMatrix);
+        gbi.register(Self::G_MOVEMEM as usize, F3DEX2MoveMem);
+        gbi.register(Self::G_MOVEWORD as usize, F3DEX2MoveWord);
+        gbi.register(Self::G_TEXTURE as usize, F3DEX2Texture);
+        gbi.register(Self::G_VTX as usize, F3DEX2Vertex);
+        gbi.register(Self::G_DL as usize, F3DSubDL);
+        gbi.register(Self::G_GEOMETRYMODE as usize, F3DEX2GeometryMode);
+        gbi.register(Self::G_TRI1 as usize, F3DEX2Tri1);
+        gbi.register(Self::G_TRI2 as usize, F3DEX2Tri2);
+        gbi.register(Self::G_ENDDL as usize, F3DEndDL);
+        gbi.register(Self::G_SPNOOP as usize, F3DSpNoOp);
+        gbi.register(Self::G_SETOTHERMODE_L as usize, F3DEX2SetOtherModeL);
+        gbi.register(Self::G_SETOTHERMODE_H as usize, F3DEX2SetOtherModeH);
+        gbi.register(G_RDPSETOTHERMODE as usize, F3DEX2SetOtherMode);
 
         rsp.setup_constants(RSPConstants {
             G_MTX_PUSH: G_MTX::PUSH,
@@ -149,8 +150,10 @@ impl GBIDefinition for F3DEX2 {
     }
 }
 
-impl F3DEX2 {
-    pub fn gsp_matrix(
+pub struct F3DEX2Matrix;
+impl GBICommand for F3DEX2Matrix {
+    fn process(
+        &self,
         _rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -164,8 +167,12 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gsp_pop_matrix(
+pub struct F3DEX2PopMatrix;
+impl GBICommand for F3DEX2PopMatrix {
+    fn process(
+        &self,
         _rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -176,8 +183,12 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gsp_movemem(
+pub struct F3DEX2MoveMem;
+impl GBICommand for F3DEX2MoveMem {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -213,8 +224,12 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gsp_moveword(
+pub struct F3DEX2MoveWord;
+impl GBICommand for F3DEX2MoveWord {
+    fn process(
+        &self,
         _rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -255,8 +270,12 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gsp_texture(
+pub struct F3DEX2Texture;
+impl GBICommand for F3DEX2Texture {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -275,8 +294,12 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gsp_vertex(
+pub struct F3DEX2Vertex;
+impl GBICommand for F3DEX2Vertex {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         output: &mut RCPOutput,
@@ -291,11 +314,15 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gsp_geometry_mode(
+pub struct F3DEX2GeometryMode;
+impl GBICommand for F3DEX2GeometryMode {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        _output: &mut RCPOutput,
+        output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -307,8 +334,12 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gsp_tri1(
+pub struct F3DEX2Tri1;
+impl GBICommand for F3DEX2Tri1 {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         output: &mut RCPOutput,
@@ -323,8 +354,12 @@ impl F3DEX2 {
         rdp.draw_triangles(rsp, output, vertex_id1, vertex_id2, vertex_id3, false);
         GBIResult::Continue
     }
+}
 
-    pub fn gsp_tri2(
+pub struct F3DEX2Tri2;
+impl GBICommand for F3DEX2Tri2 {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         output: &mut RCPOutput,
@@ -345,8 +380,12 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_other_mode_l(
+pub struct F3DEX2SetOtherModeL;
+impl GBICommand for F3DEX2SetOtherModeL {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
         _output: &mut RCPOutput,
@@ -361,11 +400,15 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_other_mode_h(
+pub struct F3DEX2SetOtherModeH;
+impl GBICommand for F3DEX2SetOtherModeH {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        _output: &mut RCPOutput,
+        output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -377,11 +420,15 @@ impl F3DEX2 {
 
         GBIResult::Continue
     }
+}
 
-    pub fn gdp_set_other_mode(
+pub struct F3DEX2SetOtherMode;
+impl GBICommand for F3DEX2SetOtherMode {
+    fn process(
+        &self,
         rdp: &mut RDP,
         rsp: &mut RSP,
-        _output: &mut RCPOutput,
+        output: &mut RCPOutput,
         command: &mut *mut Gfx,
     ) -> GBIResult {
         let w0 = unsafe { (*(*command)).words.w0 };
@@ -398,7 +445,8 @@ impl F3DEX2 {
 #[cfg(test)]
 mod tests {
     use crate::gbi::defines::{GWords, Gfx};
-    use crate::gbi::f3dex2::F3DEX2;
+    use crate::gbi::f3dex2::F3DEX2MoveWord;
+    use crate::gbi::GBICommand;
     use crate::output::RCPOutput;
     use crate::rdp::RDP;
     use crate::rsp::RSP;
@@ -417,7 +465,7 @@ mod tests {
             words: GWords { w0, w1 },
         }));
 
-        F3DEX2::gsp_moveword(&mut rdp, &mut rsp, &mut output, &mut command);
+        F3DEX2MoveWord {}.process(&mut rdp, &mut rsp, &mut output, &mut command);
         assert_eq!(rsp.num_lights, 1);
 
         // FOG
@@ -432,7 +480,7 @@ mod tests {
             words: GWords { w0, w1 },
         }));
 
-        F3DEX2::gsp_moveword(&mut rdp, &mut rsp, &mut output, &mut command);
+        F3DEX2MoveWord {}.process(&mut rdp, &mut rsp, &mut output, &mut command);
         assert_eq!(rsp.fog_multiplier, 4266);
         assert_eq!(rsp.fog_offset, -4010);
     }
