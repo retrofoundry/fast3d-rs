@@ -44,8 +44,9 @@ impl GBI {
 
     pub fn setup(&mut self, rsp: &mut RSP) {
         common::Common::setup(self, rsp);
-        // f3d::F3D::setup(self, rsp);
 
+        #[cfg(feature = "f3d")]
+        f3d::F3D::setup(self, rsp);
         #[cfg(feature = "f3dex2")]
         f3dex2::F3DEX2::setup(self, rsp);
         #[cfg(feature = "f3dex2e")]
