@@ -59,7 +59,7 @@ impl GBICommandRegistry {
         self.gbi_opcode_table.insert(opcode, cmd);
     }
 
-    pub fn handler_for_opcode(&self, opcode: &usize) -> Option<&Box<dyn GBICommand>> {
+    pub fn handler(&self, opcode: &usize) -> Option<&Box<dyn GBICommand>> {
         self.gbi_opcode_table.get(opcode)
     }
 }

@@ -37,9 +37,9 @@ impl RCP {
         self.rsp.reset();
     }
 
-    /// This funtion is called to process a work buffer.
+    /// This function is called to process a work buffer.
     /// It takes in a pointer to the start of the work buffer and will
-    /// process until it hits a `G_ENDDL` inidicating the end.
+    /// process until it hits a `G_ENDDL` indicating the end.
     pub fn run(&mut self, output: &mut RCPOutput, commands: usize) {
         self.reset();
         self.run_dl(output, commands);
@@ -51,7 +51,7 @@ impl RCP {
 
         loop {
             let opcode = unsafe { (*command).words.w0 } >> 24;
-            if let Some(handler) = self.gbi.handler_for_opcode(&opcode) {
+            if let Some(handler) = self.gbi.handler(&opcode) {
                 match handler.process(&mut self.rdp, &mut self.rsp, output, &mut command) {
                     GBIResult::Recurse(new_command) => self.run_dl(output, new_command),
                     GBIResult::Return => return,
