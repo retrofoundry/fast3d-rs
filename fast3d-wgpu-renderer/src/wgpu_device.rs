@@ -5,7 +5,7 @@ use bytemuck::{Pod, Zeroable};
 use wgpu::util::{align_to, DeviceExt};
 
 use fast3d::{
-    gbi::defines::G_TX,
+    gbi::defines::g,
     models::color_combiner::CombineParams,
     output::{
         gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
@@ -367,11 +367,11 @@ impl WgpuGraphicsDevice {
     }
 
     fn gfx_cm_to_wgpu(val: u32) -> wgpu::AddressMode {
-        if val & G_TX::CLAMP as u32 != 0 {
+        if val & g::tx::CLAMP as u32 != 0 {
             return wgpu::AddressMode::ClampToEdge;
         }
 
-        if val & G_TX::MIRROR as u32 != 0 {
+        if val & g::tx::MIRROR as u32 != 0 {
             return wgpu::AddressMode::MirrorRepeat;
         }
 

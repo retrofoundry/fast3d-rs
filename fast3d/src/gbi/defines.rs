@@ -119,82 +119,81 @@ pub struct Vtx_tn {
     pub alpha: u8,
 }
 
-pub struct G_SET;
-impl G_SET {
-    pub const COLORIMG: u8 = 0xff;
-    pub const DEPTHIMG: u8 = 0xfe;
-    pub const TEXIMG: u8 = 0xfd;
-    pub const COMBINE: u8 = 0xfc;
-    pub const ENVCOLOR: u8 = 0xfb;
-    pub const PRIMCOLOR: u8 = 0xfa;
-    pub const BLENDCOLOR: u8 = 0xf9;
-    pub const FOGCOLOR: u8 = 0xf8;
-    pub const FILLCOLOR: u8 = 0xf7;
-    pub const TILE: u8 = 0xf5;
-    pub const TILESIZE: u8 = 0xf2;
-    pub const PRIMDEPTH: u8 = 0xee;
-    pub const SCISSOR: u8 = 0xed;
-    pub const CONVERT: u8 = 0xec;
-    pub const KEYR: u8 = 0xeb;
-    pub const KEYGB: u8 = 0xea;
+pub mod g {
+    pub mod set {
+        pub const COLORIMG: u8 = 0xff;
+        pub const DEPTHIMG: u8 = 0xfe;
+        pub const TEXIMG: u8 = 0xfd;
+        pub const COMBINE: u8 = 0xfc;
+        pub const ENVCOLOR: u8 = 0xfb;
+        pub const PRIMCOLOR: u8 = 0xfa;
+        pub const BLENDCOLOR: u8 = 0xf9;
+        pub const FOGCOLOR: u8 = 0xf8;
+        pub const FILLCOLOR: u8 = 0xf7;
+        pub const TILE: u8 = 0xf5;
+        pub const TILESIZE: u8 = 0xf2;
+        pub const PRIMDEPTH: u8 = 0xee;
+        pub const SCISSOR: u8 = 0xed;
+        pub const CONVERT: u8 = 0xec;
+        pub const KEYR: u8 = 0xeb;
+        pub const KEYGB: u8 = 0xea;
+    }
+
+    pub mod load {
+        pub const BLOCK: u8 = 0xf3;
+        pub const TILE: u8 = 0xf4;
+        pub const TLUT: u8 = 0xf0;
+    }
+
+    pub mod mw {
+        pub const MATRIX: u8 = 0x00; /* NOTE: also used by movemem */
+        pub const NUMLIGHT: u8 = 0x02;
+        pub const CLIP: u8 = 0x04;
+        pub const SEGMENT: u8 = 0x06;
+        pub const FOG: u8 = 0x08;
+        pub const LIGHTCOL: u8 = 0x0A;
+        #[cfg(feature = "f3dex2")]
+        pub const FORCEMTX: u8 = 0x0C;
+        #[cfg(not(feature = "f3dex2"))]
+        pub const POINTS: u8 = 0x0C;
+        pub const PERSPNORM: u8 = 0x0E;
+    }
+
+    pub mod tx {
+        pub const LOADTILE: u8 = 7;
+        pub const RENDERTILE: u8 = 0;
+        pub const NOMIRROR: u8 = 0;
+        pub const WRAP: u8 = 0;
+        pub const MIRROR: u8 = 1;
+        pub const CLAMP: u8 = 2;
+        pub const NOMASK: u8 = 0;
+        pub const NOLOD: u8 = 0;
+    }
+
+    // lose defines
+
+    pub const TEXRECT: u8 = 0xe4;
+    pub const TEXRECTFLIP: u8 = 0xe5;
+    pub const FILLRECT: u8 = 0xf6;
+
+    pub const NOOP: u8 = 0x00;
+    pub const RDPFULLSYNC: u8 = 0xe9;
+    pub const RDPTILESYNC: u8 = 0xe8;
+    pub const RDPPIPESYNC: u8 = 0xe7;
+    pub const RDPLOADSYNC: u8 = 0xe6;
+
+    pub const RDPSETOTHERMODE: u8 = 0xef;
 }
 
-pub struct G_LOAD;
-impl G_LOAD {
-    pub const BLOCK: u8 = 0xf3;
-    pub const TILE: u8 = 0xf4;
-    pub const TLUT: u8 = 0xf0;
+pub mod rsp_geometry {
+    pub mod g {
+        pub const ZBUFFER: u32 = 1 << 0;
+        pub const SHADE: u32 = 1 << 2;
+        pub const FOG: u32 = 1 << 16;
+        pub const LIGHTING: u32 = 1 << 17;
+        pub const TEXTURE_GEN: u32 = 1 << 18;
+        pub const TEXTURE_GEN_LINEAR: u32 = 1 << 19;
+        pub const LOD: u32 = 1 << 20; /* NOT IMPLEMENTED */
+        pub const CLIPPING: u32 = 1 << 23;
+    }
 }
-
-pub struct G_MW;
-impl G_MW {
-    pub const MATRIX: u8 = 0x00; /* NOTE: also used by movemem */
-    pub const NUMLIGHT: u8 = 0x02;
-    pub const CLIP: u8 = 0x04;
-    pub const SEGMENT: u8 = 0x06;
-    pub const FOG: u8 = 0x08;
-    pub const LIGHTCOL: u8 = 0x0A;
-    #[cfg(feature = "f3dex2")]
-    pub const FORCEMTX: u8 = 0x0C;
-    #[cfg(not(feature = "f3dex2"))]
-    pub const POINTS: u8 = 0x0C;
-    pub const PERSPNORM: u8 = 0x0E;
-}
-
-pub struct G_TX;
-impl G_TX {
-    pub const LOADTILE: u8 = 7;
-    pub const RENDERTILE: u8 = 0;
-    pub const NOMIRROR: u8 = 0;
-    pub const WRAP: u8 = 0;
-    pub const MIRROR: u8 = 1;
-    pub const CLAMP: u8 = 2;
-    pub const NOMASK: u8 = 0;
-    pub const NOLOD: u8 = 0;
-}
-
-pub struct RSP_GEOMETRY;
-impl RSP_GEOMETRY {
-    pub const G_ZBUFFER: u32 = 1 << 0;
-    pub const G_SHADE: u32 = 1 << 2;
-    pub const G_FOG: u32 = 1 << 16;
-    pub const G_LIGHTING: u32 = 1 << 17;
-    pub const G_TEXTURE_GEN: u32 = 1 << 18;
-    pub const G_TEXTURE_GEN_LINEAR: u32 = 1 << 19;
-    pub const G_LOD: u32 = 1 << 20; /* NOT IMPLEMENTED */
-    pub const G_CLIPPING: u32 = 1 << 23;
-}
-
-// lose defines
-
-pub const G_TEXRECT: u8 = 0xe4;
-pub const G_TEXRECTFLIP: u8 = 0xe5;
-pub const G_FILLRECT: u8 = 0xf6;
-
-pub const G_NOOP: u8 = 0x00;
-pub const G_RDPFULLSYNC: u8 = 0xe9;
-pub const G_RDPTILESYNC: u8 = 0xe8;
-pub const G_RDPPIPESYNC: u8 = 0xe7;
-pub const G_RDPLOADSYNC: u8 = 0xe6;
-
-pub const G_RDPSETOTHERMODE: u8 = 0xef;

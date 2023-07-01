@@ -5,6 +5,8 @@ use std::hash::{Hash, Hasher};
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
+use crate::gbi::defines::g;
+
 use crate::output::{
     gfx::{BlendState, CompareFunction},
     RCPOutput,
@@ -31,7 +33,7 @@ use super::{
     },
 };
 
-use crate::gbi::defines::{G_TX, RSP_GEOMETRY};
+use crate::gbi::defines::rsp_geometry;
 use crate::models::color::R5G5B5A1;
 use crate::models::color_combiner::{ACMUX, CCMUX};
 use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
@@ -310,7 +312,7 @@ impl RDP {
         // First, verify that we're loading the whole texture.
         assert!(uls == 0 && ult == 0);
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, G_TX::LOADTILE);
+        assert_eq!(tile, g::tx::LOADTILE);
 
         let tile = &mut self.tile_descriptors[tile as usize];
         self.tmem_map.insert(
@@ -332,7 +334,7 @@ impl RDP {
         // First, verify that we're loading the whole texture.
         assert!(uls == 0 && ult == 0);
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, G_TX::LOADTILE);
+        assert_eq!(tile, g::tx::LOADTILE);
 
         let tile = &mut self.tile_descriptors[tile as usize];
         self.tmem_map.insert(
@@ -352,7 +354,7 @@ impl RDP {
     // TODO: Verify this method against a game that uses TLUTs
     pub fn load_tlut(&mut self, tile: u8, high_index: u16) {
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, G_TX::LOADTILE);
+        assert_eq!(tile, g::tx::LOADTILE);
         assert_eq!(self.texture_image_state.size, ImageSize::G_IM_SIZ_16b as u8); // TLUTs are always 16-bit (so far)
 
         assert!(
@@ -532,7 +534,7 @@ impl RDP {
     // MARK: - Blend
 
     fn process_depth_params(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
-        let depth_test = geometry_mode & RSP_GEOMETRY::G_ZBUFFER != 0;
+        let depth_test = geometry_mode & rsp_geometry::g::ZBUFFER != 0;
 
         let zmode: u32 = self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03;
 

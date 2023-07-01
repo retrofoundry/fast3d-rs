@@ -3,7 +3,7 @@ use crate::gbi::GBICommand;
 use crate::rsp::RSP;
 
 use super::{
-    defines::{G_FILLRECT, G_TEXRECT, G_TEXRECTFLIP},
+    defines::{g::FILLRECT, g::TEXRECT, g::TEXRECTFLIP},
     f3dex2::F3DEX2,
     utils::get_cmd,
     GBICommandParams, GBICommandRegistry, GBIMicrocode, GBIResult,
@@ -14,9 +14,9 @@ pub struct F3DEX2E;
 impl GBIMicrocode for F3DEX2E {
     fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
         F3DEX2::setup(gbi, rsp);
-        gbi.register(G_TEXRECT as usize, F3DEX2ETextureRectangle);
-        gbi.register(G_TEXRECTFLIP as usize, F3DEX2ETextureRectangle);
-        gbi.register(G_FILLRECT as usize, F3DEX2EFillRectangle);
+        gbi.register(TEXRECT as usize, F3DEX2ETextureRectangle);
+        gbi.register(TEXRECTFLIP as usize, F3DEX2ETextureRectangle);
+        gbi.register(FILLRECT as usize, F3DEX2EFillRectangle);
     }
 }
 
@@ -62,7 +62,7 @@ gbi_command!(F3DEX2ETextureRectangle, |params: &mut GBICommandParams| {
         ult as i16,
         dsdx as i16,
         dtdy as i16,
-        opcode == G_TEXRECTFLIP as usize,
+        opcode == TEXRECTFLIP as usize,
     );
 
     GBIResult::Continue

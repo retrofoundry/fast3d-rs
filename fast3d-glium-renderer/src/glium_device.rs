@@ -1,7 +1,7 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use fast3d::{
-    gbi::defines::G_TX,
+    gbi::defines::g,
     models::color_combiner::CombineParams,
     output::{
         gfx::{BlendComponent, BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
@@ -104,11 +104,11 @@ fn blend_factor_to_glium(factor: BlendFactor) -> LinearBlendingFactor {
 }
 
 fn clamp_to_glium(clamp: u32) -> SamplerWrapFunction {
-    if clamp & G_TX::CLAMP as u32 != 0 {
+    if clamp & g::tx::CLAMP as u32 != 0 {
         return SamplerWrapFunction::Clamp;
     }
 
-    if clamp & G_TX::MIRROR as u32 != 0 {
+    if clamp & g::tx::MIRROR as u32 != 0 {
         return SamplerWrapFunction::Mirror;
     }
 

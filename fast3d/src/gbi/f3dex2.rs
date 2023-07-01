@@ -2,10 +2,9 @@ use std::cmp::max;
 
 use super::defines::Viewport;
 use super::utils::get_cmd;
-use super::{super::rsp::RSP, defines::G_MW};
+use super::{super::rsp::RSP, defines::g};
 use super::{GBICommandRegistry, GBIMicrocode, GBIResult};
 use crate::gbi::{
-    defines::G_RDPSETOTHERMODE,
     f3d::{F3DEndDL, F3DSpNoOp, F3DSubDL},
     macros::gbi_command,
     GBICommand, GBICommandParams,
@@ -135,7 +134,7 @@ impl GBIMicrocode for F3DEX2 {
         gbi.register(Self::G_SPNOOP as usize, F3DSpNoOp);
         gbi.register(Self::G_SETOTHERMODE_L as usize, F3DEX2SetOtherModeL);
         gbi.register(Self::G_SETOTHERMODE_H as usize, F3DEX2SetOtherModeH);
-        gbi.register(G_RDPSETOTHERMODE as usize, F3DEX2SetOtherMode);
+        gbi.register(g::RDPSETOTHERMODE as usize, F3DEX2SetOtherMode);
 
         rsp.setup_constants(RSPConstants {
             G_MTX_PUSH: G_MTX::PUSH,
@@ -206,27 +205,27 @@ gbi_command!(F3DEX2MoveWord, |params: &mut GBICommandParams| {
     let m_type = get_cmd(w0, 16, 8) as u8;
 
     match m_type {
-        m_type if m_type == G_MW::FORCEMTX => {
+        m_type if m_type == g::mw::FORCEMTX => {
             params.rsp.modelview_projection_matrix_changed = w1 == 0
         }
-        m_type if m_type == G_MW::NUMLIGHT => params.rsp.set_num_lights(w1 as u8 / 24),
-        m_type if m_type == G_MW::CLIP => {
+        m_type if m_type == g::mw::NUMLIGHT => params.rsp.set_num_lights(w1 as u8 / 24),
+        m_type if m_type == g::mw::CLIP => {
             params.rsp.set_clip_ratio(w1);
         }
-        m_type if m_type == G_MW::SEGMENT => {
+        m_type if m_type == g::mw::SEGMENT => {
             let segment = get_cmd(w0, 2, 4);
             params.rsp.set_segment(segment, w1 & 0x00FFFFFF)
         }
-        m_type if m_type == G_MW::FOG => {
+        m_type if m_type == g::mw::FOG => {
             let multiplier = get_cmd(w1, 16, 16) as i16;
             let offset = get_cmd(w1, 0, 16) as i16;
             params.rsp.set_fog(multiplier, offset);
         }
-        m_type if m_type == G_MW::LIGHTCOL => {
+        m_type if m_type == g::mw::LIGHTCOL => {
             let index = get_cmd(w0, 0, 16) / 24;
             params.rsp.set_light_color(index, w1 as u32);
         }
-        m_type if m_type == G_MW::PERSPNORM => {
+        m_type if m_type == g::mw::PERSPNORM => {
             params.rsp.set_persp_norm(w1);
         }
         // TODO: G_MW_MATRIX
