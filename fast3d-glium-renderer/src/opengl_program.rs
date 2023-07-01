@@ -362,16 +362,16 @@ impl<T> OpenGLProgram<T> {
                     uniform vec3 uFogColor;
                 #endif
             }};
-
-            // combine parameters
-            // TODO: use a uniform block?
-            uniform vec4 uPrimColor;
-            uniform vec4 uEnvColor;
-            uniform vec3 uKeyCenter;
-            uniform vec3 uKeyScale;
-            uniform float uPrimLodFrac;
-            uniform float uK4;
-            uniform float uK5;
+moving
+            layout(std140) uniform CombineUniforms {{
+                uniform vec4 uPrimColor;
+                uniform vec4 uEnvColor;
+                uniform vec3 uKeyCenter;
+                uniform vec3 uKeyScale;
+                uniform float uPrimLodFrac;
+                uniform float uK4;
+                uniform float uK5;
+            }};
 
             #ifdef USE_TEXTURE0
                 uniform sampler2D uTex0;

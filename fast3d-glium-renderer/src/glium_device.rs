@@ -13,7 +13,7 @@ use glium::{draw_parameters::{DepthClamp, PolygonOffset}, index::{NoIndices, Pri
     MagnifySamplerFilter, MinifySamplerFilter, SamplerBehavior, SamplerWrapFunction,
     UniformValue, Uniforms,
 }, vertex::{AttributeType, VertexBufferAny}, BackfaceCullingMode, BlendingFunction, DepthTest, Display, DrawParameters, Frame, LinearBlendingFactor, Program, Surface, implement_uniform_block};
-use glium::buffer::{BufferAny, BufferMode, BufferType};
+use glium::buffer::{Buffer, BufferAny, BufferMode, BufferType};
 
 use super::opengl_program::OpenGLProgram;
 
@@ -66,6 +66,22 @@ struct BlendWithFogUniforms {
 }
 
 implement_uniform_block!(BlendWithFogUniforms, blend_color, fog_color);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CombineUniforms {
+    prim_color: [f32; 4],
+    env_color: [f32; 4],
+    key_center: [f32; 3],
+    _padding: f32,
+    key_scale: [f32; 3],
+    _padding2: f32,
+    prim_lod_frac: f32,
+    uk4: f32,
+    uk5: f32,
+}
+
+implement_uniform_block!(CombineUniforms, prim_color, env_color, key_center, key_scale, prim_lod_frac, uk4, uk5);
 
 #[derive(Default)]
 struct UniformVec<'a, 'b> {
@@ -439,6 +455,22 @@ impl<'draw> GliumGraphicsDevice<'draw> {
             BufferAny::new(display, &data, BufferType::UniformBuffer, BufferMode::Default, 4 * ::std::mem::size_of::<f32>()).unwrap()
         };
 
+        let combine_uniform_buf = {
+            let data = CombineUniforms {
+                prim_color: uniforms.combine.prim_color.to_array(),
+                env_color: uniforms.combine.env_color.to_array(),
+                _padding: 0.0,
+                key_center: uniforms.combine.key_center.to_array(),
+                key_scale: uniforms.combine.key_scale.to_array(),
+                _padding2: 0.0,
+                prim_lod_frac: uniforms.combine.prim_lod.x,
+                uk4: uniforms.combine.convert_k4,
+                uk5: uniforms.combine.convert_k5,
+            };
+
+            Buffer::new(display, &data, BufferType::UniformBuffer, BufferMode::Default).unwrap()
+        };
+
         // Setup uniforms
         let mut shader_uniforms = vec![
             (
@@ -450,24 +482,9 @@ impl<'draw> GliumGraphicsDevice<'draw> {
                 UniformValue::Block(blend_uniform_buf.as_slice_any(), |_block| { Ok(()) })
             ),
             (
-                "uPrimColor",
-                UniformValue::Vec4(uniforms.combine.prim_color.to_array()),
-            ),
-            (
-                "uEnvColor",
-                UniformValue::Vec4(uniforms.combine.env_color.to_array()),
-            ),
-            (
-                "uKeyCenter",
-                UniformValue::Vec3(uniforms.combine.key_center.to_array()),
-            ),
-            (
-                "uKeyScale",
-                UniformValue::Vec3(uniforms.combine.key_scale.to_array()),
-            ),
-            ("uPrimLOD", UniformValue::Float(uniforms.combine.prim_lod.x)),
-            ("uK4", UniformValue::Float(uniforms.combine.convert_k4)),
-            ("uK5", UniformValue::Float(uniforms.combine.convert_k5)),
+                "CombineUniforms",
+                UniformValue::Block(combine_uniform_buf.as_slice_any(), |_block| { Ok(()) })
+            )
         ];
 
         if program.get_define_bool("USE_TEXTURE0") {
