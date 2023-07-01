@@ -3,45 +3,43 @@ use self::defines::Gfx;
 use super::{output::RCPOutput, rdp::RDP, rsp::RSP};
 use std::collections::HashMap;
 
-mod common;
-pub mod defines;
 mod f3d;
 mod f3dex2;
 mod f3dex2e;
 mod f3dzex2;
+
+mod common;
+pub mod defines;
+pub mod macros;
 pub mod utils;
 
 pub enum GBIResult {
     Return,
     Recurse(usize),
-    Unknown(usize),
     Continue,
 }
 
-pub type GBICommand =
-    fn(dp: &mut RDP, rsp: &mut RSP, output: &mut RCPOutput, command: &mut *mut Gfx) -> GBIResult;
-
-trait GBIDefinition {
-    fn setup(gbi: &mut GBI, rsp: &mut RSP);
+pub struct GBICommandParams<'a> {
+    pub rdp: &'a mut RDP,
+    pub rsp: &'a mut RSP,
+    pub output: &'a mut RCPOutput,
+    pub command: &'a mut *mut Gfx,
 }
 
-pub struct GBI {
-    pub gbi_opcode_table: HashMap<usize, GBICommand>,
+pub trait GBICommand {
+    fn process(&self, params: &mut GBICommandParams) -> GBIResult;
 }
 
-impl Default for GBI {
-    fn default() -> Self {
-        Self::new()
-    }
+trait GBIMicrocode {
+    fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP);
 }
 
-impl GBI {
-    pub fn new() -> Self {
-        Self {
-            gbi_opcode_table: HashMap::new(),
-        }
-    }
+#[derive(Default)]
+pub struct GBICommandRegistry {
+    gbi_opcode_table: HashMap<usize, Box<dyn GBICommand>>,
+}
 
+impl GBICommandRegistry {
     pub fn setup(&mut self, rsp: &mut RSP) {
         common::Common::setup(self, rsp);
 
@@ -55,25 +53,15 @@ impl GBI {
         f3dzex2::F3DZEX2::setup(self, rsp);
     }
 
-    pub fn register(&mut self, opcode: usize, cmd: GBICommand) {
+    pub fn register<G: GBICommand>(&mut self, opcode: usize, cmd: G)
+    where
+        G: 'static,
+    {
+        let cmd = Box::new(cmd);
         self.gbi_opcode_table.insert(opcode, cmd);
     }
 
-    pub fn handle_command(
-        &self,
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-
-        let opcode = w0 >> 24;
-        let cmd = self.gbi_opcode_table.get(&opcode);
-
-        match cmd {
-            Some(cmd) => cmd(rdp, rsp, output, command),
-            None => GBIResult::Unknown(opcode),
-        }
+    pub fn handler(&self, opcode: &usize) -> Option<&Box<dyn GBICommand>> {
+        self.gbi_opcode_table.get(opcode)
     }
 }

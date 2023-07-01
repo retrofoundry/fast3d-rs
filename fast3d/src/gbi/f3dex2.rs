@@ -1,15 +1,16 @@
 use std::cmp::max;
 
-use super::defines::{Gfx, Viewport};
+use super::defines::Viewport;
 use super::utils::get_cmd;
-use super::{
-    super::{rdp::RDP, rsp::RSP},
-    defines::G_MW,
+use super::{super::rsp::RSP, defines::G_MW};
+use super::{GBICommandRegistry, GBIMicrocode, GBIResult};
+use crate::gbi::{
+    defines::G_RDPSETOTHERMODE,
+    f3d::{F3DEndDL, F3DSpNoOp, F3DSubDL},
+    macros::gbi_command,
+    GBICommand, GBICommandParams,
 };
-use super::{GBIDefinition, GBIResult, GBI};
-use crate::gbi::defines::G_RDPSETOTHERMODE;
-use crate::gbi::f3d::F3D;
-use crate::output::RCPOutput;
+
 use crate::rsp::RSPConstants;
 
 pub struct RSP_GEOMETRY;
@@ -118,23 +119,23 @@ impl F3DEX2 {
     pub const G_MVO_L7: u8 = (9 * 24);
 }
 
-impl GBIDefinition for F3DEX2 {
-    fn setup(gbi: &mut GBI, rsp: &mut RSP) {
-        gbi.register(Self::G_MTX as usize, Self::gsp_matrix);
-        gbi.register(Self::G_POPMTX as usize, Self::gsp_pop_matrix);
-        gbi.register(Self::G_MOVEMEM as usize, Self::gsp_movemem);
-        gbi.register(Self::G_MOVEWORD as usize, Self::gsp_moveword);
-        gbi.register(Self::G_TEXTURE as usize, Self::gsp_texture);
-        gbi.register(Self::G_VTX as usize, Self::gsp_vertex);
-        gbi.register(Self::G_DL as usize, F3D::sub_dl);
-        gbi.register(Self::G_GEOMETRYMODE as usize, Self::gsp_geometry_mode);
-        gbi.register(Self::G_TRI1 as usize, Self::gsp_tri1);
-        gbi.register(Self::G_TRI2 as usize, Self::gsp_tri2);
-        gbi.register(Self::G_ENDDL as usize, F3D::end_dl);
-        gbi.register(Self::G_SPNOOP as usize, F3D::gsp_no_op);
-        gbi.register(Self::G_SETOTHERMODE_L as usize, Self::gdp_set_other_mode_l);
-        gbi.register(Self::G_SETOTHERMODE_H as usize, Self::gdp_set_other_mode_h);
-        gbi.register(G_RDPSETOTHERMODE as usize, Self::gdp_set_other_mode);
+impl GBIMicrocode for F3DEX2 {
+    fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
+        gbi.register(Self::G_MTX as usize, F3DEX2Matrix);
+        gbi.register(Self::G_POPMTX as usize, F3DEX2PopMatrix);
+        gbi.register(Self::G_MOVEMEM as usize, F3DEX2MoveMem);
+        gbi.register(Self::G_MOVEWORD as usize, F3DEX2MoveWord);
+        gbi.register(Self::G_TEXTURE as usize, F3DEX2Texture);
+        gbi.register(Self::G_VTX as usize, F3DEX2Vertex);
+        gbi.register(Self::G_DL as usize, F3DSubDL);
+        gbi.register(Self::G_GEOMETRYMODE as usize, F3DEX2GeometryMode);
+        gbi.register(Self::G_TRI1 as usize, F3DEX2Tri1);
+        gbi.register(Self::G_TRI2 as usize, F3DEX2Tri2);
+        gbi.register(Self::G_ENDDL as usize, F3DEndDL);
+        gbi.register(Self::G_SPNOOP as usize, F3DSpNoOp);
+        gbi.register(Self::G_SETOTHERMODE_L as usize, F3DEX2SetOtherModeL);
+        gbi.register(Self::G_SETOTHERMODE_H as usize, F3DEX2SetOtherModeH);
+        gbi.register(G_RDPSETOTHERMODE as usize, F3DEX2SetOtherMode);
 
         rsp.setup_constants(RSPConstants {
             G_MTX_PUSH: G_MTX::PUSH,
@@ -149,256 +150,230 @@ impl GBIDefinition for F3DEX2 {
     }
 }
 
-impl F3DEX2 {
-    pub fn gsp_matrix(
-        _rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+gbi_command!(F3DEX2Matrix, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-        let params = get_cmd(w0, 0, 8) as u8 ^ rsp.constants.G_MTX_PUSH;
-        rsp.matrix(w1, params);
+    let mtx_params = get_cmd(w0, 0, 8) as u8 ^ params.rsp.constants.G_MTX_PUSH;
+    params.rsp.matrix(w1, mtx_params);
 
-        GBIResult::Continue
-    }
+    GBIResult::Continue
+});
 
-    pub fn gsp_pop_matrix(
-        _rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w1 = unsafe { (*(*command)).words.w1 };
-        rsp.pop_matrix(w1 >> 6);
+gbi_command!(F3DEX2PopMatrix, |params: &mut GBICommandParams| {
+    let w1 = unsafe { (*(*params.command)).words.w1 };
+    params.rsp.pop_matrix(w1 >> 6);
 
-        GBIResult::Continue
-    }
+    GBIResult::Continue
+});
 
-    pub fn gsp_movemem(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+gbi_command!(F3DEX2MoveMem, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-        let index: u8 = get_cmd(w0, 0, 8) as u8;
-        let offset = get_cmd(w0, 8, 8) * 8;
-        let data = rsp.from_segmented(w1);
+    let index: u8 = get_cmd(w0, 0, 8) as u8;
+    let offset = get_cmd(w0, 8, 8) * 8;
+    let data = params.rsp.from_segmented(w1);
 
-        match index {
-            index if index == F3DEX2::G_MV_VIEWPORT => {
-                let viewport_ptr = data as *const Viewport;
-                let viewport = unsafe { &*viewport_ptr };
-                rdp.calculate_and_set_viewport(*viewport);
-            }
-            index if index == F3DEX2::G_MV_MATRIX => {
-                panic!("Unimplemented move matrix");
-                // unsafe { *command = (*command).add(1) };
-            }
-            index if index == F3DEX2::G_MV_LIGHT => {
-                let index = offset / 24;
-                if index >= 2 {
-                    rsp.set_light(index - 2, w1);
-                } else {
-                    rsp.set_look_at(index, w1);
-                }
-            }
-            _ => panic!("Unimplemented move_mem command"),
+    match index {
+        index if index == F3DEX2::G_MV_VIEWPORT => {
+            let viewport_ptr = data as *const Viewport;
+            let viewport = unsafe { &*viewport_ptr };
+            params.rdp.calculate_and_set_viewport(*viewport);
         }
-
-        GBIResult::Continue
-    }
-
-    pub fn gsp_moveword(
-        _rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let m_type = get_cmd(w0, 16, 8) as u8;
-
-        match m_type {
-            m_type if m_type == G_MW::FORCEMTX => rsp.modelview_projection_matrix_changed = w1 == 0,
-            m_type if m_type == G_MW::NUMLIGHT => rsp.set_num_lights(w1 as u8 / 24),
-            m_type if m_type == G_MW::CLIP => {
-                rsp.set_clip_ratio(w1);
-            }
-            m_type if m_type == G_MW::SEGMENT => {
-                let segment = get_cmd(w0, 2, 4);
-                rsp.set_segment(segment, w1 & 0x00FFFFFF)
-            }
-            m_type if m_type == G_MW::FOG => {
-                let multiplier = get_cmd(w1, 16, 16) as i16;
-                let offset = get_cmd(w1, 0, 16) as i16;
-                rsp.set_fog(multiplier, offset);
-            }
-            m_type if m_type == G_MW::LIGHTCOL => {
-                let index = get_cmd(w0, 0, 16) / 24;
-                rsp.set_light_color(index, w1 as u32);
-            }
-            m_type if m_type == G_MW::PERSPNORM => {
-                rsp.set_persp_norm(w1);
-            }
-            // TODO: G_MW_MATRIX
-            _ => {
-                // panic!("Unknown moveword type: {}", m_type);
+        index if index == F3DEX2::G_MV_MATRIX => {
+            panic!("Unimplemented move matrix");
+            // unsafe { *command = (*command).add(1) };
+        }
+        index if index == F3DEX2::G_MV_LIGHT => {
+            let index = offset / 24;
+            if index >= 2 {
+                params.rsp.set_light(index - 2, w1);
+            } else {
+                params.rsp.set_look_at(index, w1);
             }
         }
-
-        GBIResult::Continue
+        _ => panic!("Unimplemented move_mem command"),
     }
 
-    pub fn gsp_texture(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+    GBIResult::Continue
+});
 
-        let scale_s = get_cmd(w1, 16, 16) as u16;
-        let scale_t = get_cmd(w1, 0, 16) as u16;
-        let level = get_cmd(w0, 11, 3) as u8;
-        let tile = get_cmd(w0, 8, 3) as u8;
-        let on = get_cmd(w0, 1, 7) as u8;
+gbi_command!(F3DEX2MoveWord, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-        rsp.set_texture(rdp, tile, level, on, scale_s, scale_t);
+    let m_type = get_cmd(w0, 16, 8) as u8;
 
-        GBIResult::Continue
+    match m_type {
+        m_type if m_type == G_MW::FORCEMTX => {
+            params.rsp.modelview_projection_matrix_changed = w1 == 0
+        }
+        m_type if m_type == G_MW::NUMLIGHT => params.rsp.set_num_lights(w1 as u8 / 24),
+        m_type if m_type == G_MW::CLIP => {
+            params.rsp.set_clip_ratio(w1);
+        }
+        m_type if m_type == G_MW::SEGMENT => {
+            let segment = get_cmd(w0, 2, 4);
+            params.rsp.set_segment(segment, w1 & 0x00FFFFFF)
+        }
+        m_type if m_type == G_MW::FOG => {
+            let multiplier = get_cmd(w1, 16, 16) as i16;
+            let offset = get_cmd(w1, 0, 16) as i16;
+            params.rsp.set_fog(multiplier, offset);
+        }
+        m_type if m_type == G_MW::LIGHTCOL => {
+            let index = get_cmd(w0, 0, 16) / 24;
+            params.rsp.set_light_color(index, w1 as u32);
+        }
+        m_type if m_type == G_MW::PERSPNORM => {
+            params.rsp.set_persp_norm(w1);
+        }
+        // TODO: G_MW_MATRIX
+        _ => {
+            // panic!("Unknown moveword type: {}", m_type);
+        }
     }
 
-    pub fn gsp_vertex(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+    GBIResult::Continue
+});
 
-        let vertex_count = get_cmd(w0, 12, 8);
-        let write_index = get_cmd(w0, 1, 7) - get_cmd(w0, 12, 8);
-        rsp.set_vertex(rdp, output, w1, vertex_count, write_index);
+gbi_command!(F3DEX2Texture, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-        GBIResult::Continue
-    }
+    let scale_s = get_cmd(w1, 16, 16) as u16;
+    let scale_t = get_cmd(w1, 0, 16) as u16;
+    let level = get_cmd(w0, 11, 3) as u8;
+    let tile = get_cmd(w0, 8, 3) as u8;
+    let on = get_cmd(w0, 1, 7) as u8;
 
-    pub fn gsp_geometry_mode(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+    params
+        .rsp
+        .set_texture(params.rdp, tile, level, on, scale_s, scale_t);
 
-        let clear_bits = get_cmd(w0, 0, 24) as u32;
-        let set_bits = w1 as u32;
-        rsp.update_geometry_mode(rdp, clear_bits, set_bits);
+    GBIResult::Continue
+});
 
-        GBIResult::Continue
-    }
+gbi_command!(F3DEX2Vertex, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    pub fn gsp_tri1(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
+    let vertex_count = get_cmd(w0, 12, 8);
+    let write_index = get_cmd(w0, 1, 7) - get_cmd(w0, 12, 8);
+    params
+        .rsp
+        .set_vertex(params.rdp, params.output, w1, vertex_count, write_index);
 
-        let vertex_id1 = get_cmd(w0, 16, 8) / 2;
-        let vertex_id2 = get_cmd(w0, 8, 8) / 2;
-        let vertex_id3 = get_cmd(w0, 0, 8) / 2;
+    GBIResult::Continue
+});
 
-        rdp.draw_triangles(rsp, output, vertex_id1, vertex_id2, vertex_id3, false);
-        GBIResult::Continue
-    }
+gbi_command!(F3DEX2GeometryMode, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    pub fn gsp_tri2(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+    let clear_bits = get_cmd(w0, 0, 24) as u32;
+    let set_bits = w1 as u32;
+    params
+        .rsp
+        .update_geometry_mode(params.rdp, clear_bits, set_bits);
 
-        let vertex_id1 = get_cmd(w0, 16, 8) / 2;
-        let vertex_id2 = get_cmd(w0, 8, 8) / 2;
-        let vertex_id3 = get_cmd(w0, 0, 8) / 2;
-        rdp.draw_triangles(rsp, output, vertex_id1, vertex_id2, vertex_id3, false);
+    GBIResult::Continue
+});
 
-        let vertex_id1 = get_cmd(w1, 16, 8) / 2;
-        let vertex_id2 = get_cmd(w1, 8, 8) / 2;
-        let vertex_id3 = get_cmd(w1, 0, 8) / 2;
-        rdp.draw_triangles(rsp, output, vertex_id1, vertex_id2, vertex_id3, false);
+gbi_command!(F3DEX2Tri1, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
 
-        GBIResult::Continue
-    }
+    let vertex_id1 = get_cmd(w0, 16, 8) / 2;
+    let vertex_id2 = get_cmd(w0, 8, 8) / 2;
+    let vertex_id3 = get_cmd(w0, 0, 8) / 2;
 
-    pub fn gdp_set_other_mode_l(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+    params.rdp.draw_triangles(
+        params.rsp,
+        params.output,
+        vertex_id1,
+        vertex_id2,
+        vertex_id3,
+        false,
+    );
+    GBIResult::Continue
+});
 
-        let size = get_cmd(w0, 0, 8) + 1;
-        let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
-        rsp.set_other_mode_l(rdp, size, offset, w1 as u32);
+gbi_command!(F3DEX2Tri2, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-        GBIResult::Continue
-    }
+    let vertex_id1 = get_cmd(w0, 16, 8) / 2;
+    let vertex_id2 = get_cmd(w0, 8, 8) / 2;
+    let vertex_id3 = get_cmd(w0, 0, 8) / 2;
+    params.rdp.draw_triangles(
+        params.rsp,
+        params.output,
+        vertex_id1,
+        vertex_id2,
+        vertex_id3,
+        false,
+    );
 
-    pub fn gdp_set_other_mode_h(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+    let vertex_id1 = get_cmd(w1, 16, 8) / 2;
+    let vertex_id2 = get_cmd(w1, 8, 8) / 2;
+    let vertex_id3 = get_cmd(w1, 0, 8) / 2;
+    params.rdp.draw_triangles(
+        params.rsp,
+        params.output,
+        vertex_id1,
+        vertex_id2,
+        vertex_id3,
+        false,
+    );
 
-        let size = get_cmd(w0, 0, 8) + 1;
-        let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
-        rsp.set_other_mode_h(rdp, size, offset, w1 as u32);
+    GBIResult::Continue
+});
 
-        GBIResult::Continue
-    }
+gbi_command!(F3DEX2SetOtherModeL, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    pub fn gdp_set_other_mode(
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+    let size = get_cmd(w0, 0, 8) + 1;
+    let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
+    params
+        .rsp
+        .set_other_mode_l(params.rdp, size, offset, w1 as u32);
 
-        let high = get_cmd(w0, 0, 24);
-        let low = w1;
-        rsp.set_other_mode(rdp, high as u32, low as u32);
+    GBIResult::Continue
+});
 
-        GBIResult::Continue
-    }
-}
+gbi_command!(F3DEX2SetOtherModeH, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
+
+    let size = get_cmd(w0, 0, 8) + 1;
+    let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
+    params
+        .rsp
+        .set_other_mode_h(params.rdp, size, offset, w1 as u32);
+
+    GBIResult::Continue
+});
+
+gbi_command!(F3DEX2SetOtherMode, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
+
+    let high = get_cmd(w0, 0, 24);
+    let low = w1;
+    params
+        .rsp
+        .set_other_mode(params.rdp, high as u32, low as u32);
+
+    GBIResult::Continue
+});
 
 #[cfg(test)]
 mod tests {
     use crate::gbi::defines::{GWords, Gfx};
-    use crate::gbi::f3dex2::F3DEX2;
+    use crate::gbi::f3dex2::F3DEX2MoveWord;
+    use crate::gbi::{GBICommand, GBICommandParams};
     use crate::output::RCPOutput;
     use crate::rdp::RDP;
     use crate::rsp::RSP;
@@ -417,7 +392,14 @@ mod tests {
             words: GWords { w0, w1 },
         }));
 
-        F3DEX2::gsp_moveword(&mut rdp, &mut rsp, &mut output, &mut command);
+        let mut params = GBICommandParams {
+            rdp: &mut rdp,
+            rsp: &mut rsp,
+            output: &mut output,
+            command: &mut command,
+        };
+
+        F3DEX2MoveWord {}.process(&mut params);
         assert_eq!(rsp.num_lights, 1);
 
         // FOG
@@ -432,7 +414,14 @@ mod tests {
             words: GWords { w0, w1 },
         }));
 
-        F3DEX2::gsp_moveword(&mut rdp, &mut rsp, &mut output, &mut command);
+        let mut params = GBICommandParams {
+            rdp: &mut rdp,
+            rsp: &mut rsp,
+            output: &mut output,
+            command: &mut command,
+        };
+
+        F3DEX2MoveWord {}.process(&mut params);
         assert_eq!(rsp.fog_multiplier, 4266);
         assert_eq!(rsp.fog_offset, -4010);
     }
