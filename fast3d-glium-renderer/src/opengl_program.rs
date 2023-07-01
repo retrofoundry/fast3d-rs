@@ -362,7 +362,7 @@ impl<T> OpenGLProgram<T> {
                     uniform vec3 uFogColor;
                 #endif
             }};
-moving
+
             layout(std140) uniform CombineUniforms {{
                 uniform vec4 uPrimColor;
                 uniform vec4 uEnvColor;
@@ -382,8 +382,10 @@ moving
 
             #if defined(USE_ALPHA)
                 #if defined(ALPHA_COMPARE_DITHER)
-                    uniform int uFrameCount;
-                    uniform int uFrameHeight;
+                    layout(std140) uniform FrameUniforms {{
+                        uniform int uFrameCount;
+                        uniform int uFrameHeight;
+                    }};
 
                     float random(in vec3 value) {{
                         float random = dot(sin(value), vec3(12.9898, 78.233, 37.719));

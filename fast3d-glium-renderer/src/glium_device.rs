@@ -9,11 +9,21 @@ use fast3d::{
     },
 };
 use glam::Vec4Swizzles;
-use glium::{draw_parameters::{DepthClamp, PolygonOffset}, index::{NoIndices, PrimitiveType}, program::ProgramCreationInput, texture::{RawImage2d, Texture2d}, uniforms::{
-    MagnifySamplerFilter, MinifySamplerFilter, SamplerBehavior, SamplerWrapFunction,
-    UniformValue, Uniforms,
-}, vertex::{AttributeType, VertexBufferAny}, BackfaceCullingMode, BlendingFunction, DepthTest, Display, DrawParameters, Frame, LinearBlendingFactor, Program, Surface, implement_uniform_block};
 use glium::buffer::{Buffer, BufferAny, BufferMode, BufferType};
+use glium::{
+    draw_parameters::{DepthClamp, PolygonOffset},
+    implement_uniform_block,
+    index::{NoIndices, PrimitiveType},
+    program::ProgramCreationInput,
+    texture::{RawImage2d, Texture2d},
+    uniforms::{
+        MagnifySamplerFilter, MinifySamplerFilter, SamplerBehavior, SamplerWrapFunction,
+        UniformValue, Uniforms,
+    },
+    vertex::{AttributeType, VertexBufferAny},
+    BackfaceCullingMode, BlendingFunction, DepthTest, Display, DrawParameters, Frame,
+    LinearBlendingFactor, Program, Surface,
+};
 
 use super::opengl_program::OpenGLProgram;
 
@@ -47,7 +57,12 @@ struct VertexWithFogUniforms {
     fog_offset: f32,
 }
 
-implement_uniform_block!(VertexWithFogUniforms, projection, fog_multiplier, fog_offset);
+implement_uniform_block!(
+    VertexWithFogUniforms,
+    projection,
+    fog_multiplier,
+    fog_offset
+);
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -81,7 +96,25 @@ struct CombineUniforms {
     uk5: f32,
 }
 
-implement_uniform_block!(CombineUniforms, prim_color, env_color, key_center, key_scale, prim_lod_frac, uk4, uk5);
+implement_uniform_block!(
+    CombineUniforms,
+    prim_color,
+    env_color,
+    key_center,
+    key_scale,
+    prim_lod_frac,
+    uk4,
+    uk5
+);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct FrameUniforms {
+    frame_count: i32,
+    frame_height: i32,
+}
+
+implement_uniform_block!(FrameUniforms, frame_count, frame_height);
 
 #[derive(Default)]
 struct UniformVec<'a, 'b> {
@@ -430,13 +463,27 @@ impl<'draw> GliumGraphicsDevice<'draw> {
                 fog_offset: fog.offset as f32,
             };
 
-            BufferAny::new(display, &data, BufferType::UniformBuffer, BufferMode::Default, 18 * ::std::mem::size_of::<f32>()).unwrap()
+            BufferAny::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+                18 * ::std::mem::size_of::<f32>(),
+            )
+            .unwrap()
         } else {
             let data = VertexUniforms {
                 projection: projection_matrix.to_cols_array_2d(),
             };
 
-            BufferAny::new(display, &data, BufferType::UniformBuffer, BufferMode::Default, 16 * ::std::mem::size_of::<f32>()).unwrap()
+            BufferAny::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+                16 * ::std::mem::size_of::<f32>(),
+            )
+            .unwrap()
         };
 
         let blend_uniform_buf = if program.get_define_bool("USE_FOG") {
@@ -446,13 +493,27 @@ impl<'draw> GliumGraphicsDevice<'draw> {
                 _padding: 0.0,
             };
 
-            BufferAny::new(display, &data, BufferType::UniformBuffer, BufferMode::Default, 8 * ::std::mem::size_of::<f32>()).unwrap()
+            BufferAny::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+                8 * ::std::mem::size_of::<f32>(),
+            )
+            .unwrap()
         } else {
             let data = BlendUniforms {
                 blend_color: uniforms.blend.blend_color.to_array(),
             };
 
-            BufferAny::new(display, &data, BufferType::UniformBuffer, BufferMode::Default, 4 * ::std::mem::size_of::<f32>()).unwrap()
+            BufferAny::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+                4 * ::std::mem::size_of::<f32>(),
+            )
+            .unwrap()
         };
 
         let combine_uniform_buf = {
@@ -468,23 +529,50 @@ impl<'draw> GliumGraphicsDevice<'draw> {
                 uk5: uniforms.combine.convert_k5,
             };
 
-            Buffer::new(display, &data, BufferType::UniformBuffer, BufferMode::Default).unwrap()
+            Buffer::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+            )
+            .unwrap()
+        };
+
+        let frame_uniform_buf = if program.get_define_bool("USE_ALPHA")
+            && program.get_define_bool("ALPHA_COMPARE_DITHER")
+        {
+            let data = FrameUniforms {
+                frame_count: self.frame_count,
+                frame_height: self.current_height,
+            };
+
+            Some(
+                Buffer::new(
+                    display,
+                    &data,
+                    BufferType::UniformBuffer,
+                    BufferMode::Default,
+                )
+                .unwrap(),
+            )
+        } else {
+            None
         };
 
         // Setup uniforms
         let mut shader_uniforms = vec![
             (
                 "Uniforms",
-                UniformValue::Block(vtx_uniform_buf.as_slice_any(), |_block| { Ok(()) })
+                UniformValue::Block(vtx_uniform_buf.as_slice_any(), |_block| Ok(())),
             ),
             (
                 "BlendUniforms",
-                UniformValue::Block(blend_uniform_buf.as_slice_any(), |_block| { Ok(()) })
+                UniformValue::Block(blend_uniform_buf.as_slice_any(), |_block| Ok(())),
             ),
             (
                 "CombineUniforms",
-                UniformValue::Block(combine_uniform_buf.as_slice_any(), |_block| { Ok(()) })
-            )
+                UniformValue::Block(combine_uniform_buf.as_slice_any(), |_block| Ok(())),
+            ),
         ];
 
         if program.get_define_bool("USE_TEXTURE0") {
@@ -504,8 +592,11 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         }
 
         if program.get_define_bool("USE_ALPHA") && program.get_define_bool("ALPHA_COMPARE_DITHER") {
-            shader_uniforms.push(("uFrameCount", UniformValue::SignedInt(self.frame_count)));
-            shader_uniforms.push(("uFrameHeight", UniformValue::SignedInt(self.current_height)));
+            let frame_uniform_buf = frame_uniform_buf.as_ref();
+            shader_uniforms.push((
+                "FrameUniforms",
+                UniformValue::Block(frame_uniform_buf.unwrap().as_slice_any(), |_block| Ok(())),
+            ));
         }
 
         // Draw triangles
