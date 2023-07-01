@@ -1,6 +1,6 @@
 use crate::gbi::macros::gbi_command;
 use crate::gbi::utils::get_cmd;
-use crate::gbi::{GBICommand, GBICommandParams, GBICommandRegistry, GBIMicrocode, GBIResult};
+use crate::gbi::{GBICommand, GBICommandParams, GBICommandRegistry, GBIResult};
 
 use crate::models::color_combiner::CombineParams;
 use crate::models::texture::TextureImageState;
@@ -11,8 +11,8 @@ use crate::rsp::RSP;
 use super::defines::g;
 
 pub struct Common;
-impl GBIMicrocode for Common {
-    fn setup(gbi: &mut GBICommandRegistry, _rsp: &mut RSP) {
+impl Common {
+    pub fn setup(gbi: &mut GBICommandRegistry, _rsp: &mut RSP) {
         gbi.register(g::NOOP as usize, RDPNoOp);
         gbi.register(g::set::COLORIMG as usize, RDPSetColorImage);
         gbi.register(g::set::DEPTHIMG as usize, RDPSetDepthImage);

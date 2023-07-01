@@ -30,10 +30,6 @@ pub trait GBICommand {
     fn process(&self, params: &mut GBICommandParams) -> GBIResult;
 }
 
-trait GBIMicrocode {
-    fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP);
-}
-
 #[derive(Default)]
 pub struct GBICommandRegistry {
     gbi_opcode_table: HashMap<usize, Box<dyn GBICommand>>,
@@ -44,13 +40,13 @@ impl GBICommandRegistry {
         common::Common::setup(self, rsp);
 
         #[cfg(feature = "f3d")]
-        f3d::F3D::setup(self, rsp);
+        f3d::setup(self, rsp);
         #[cfg(feature = "f3dex2")]
-        f3dex2::F3DEX2::setup(self, rsp);
+        f3dex2::setup(self, rsp);
         #[cfg(feature = "f3dex2e")]
-        f3dex2e::F3DEX2E::setup(self, rsp);
+        f3dex2e::setup(self, rsp);
         #[cfg(feature = "f3dzex2")]
-        f3dzex2::F3DZEX2::setup(self, rsp);
+        f3dzex2::setup(self, rsp);
     }
 
     pub fn register<G: GBICommand>(&mut self, opcode: usize, cmd: G)

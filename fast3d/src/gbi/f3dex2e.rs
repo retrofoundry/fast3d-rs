@@ -2,25 +2,16 @@ use crate::gbi::macros::gbi_command;
 use crate::gbi::GBICommand;
 use crate::rsp::RSP;
 
-use super::{
-    defines::{g::FILLRECT, g::TEXRECT, g::TEXRECTFLIP},
-    f3dex2::F3DEX2,
-    utils::get_cmd,
-    GBICommandParams, GBICommandRegistry, GBIMicrocode, GBIResult,
-};
+use super::{defines::g, f3dex2, utils::get_cmd, GBICommandParams, GBICommandRegistry, GBIResult};
 
-pub struct F3DEX2E;
-
-impl GBIMicrocode for F3DEX2E {
-    fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
-        F3DEX2::setup(gbi, rsp);
-        gbi.register(TEXRECT as usize, F3DEX2ETextureRectangle);
-        gbi.register(TEXRECTFLIP as usize, F3DEX2ETextureRectangle);
-        gbi.register(FILLRECT as usize, F3DEX2EFillRectangle);
-    }
+pub fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
+    f3dex2::setup(gbi, rsp);
+    gbi.register(g::TEXRECT as usize, TextureRectangle);
+    gbi.register(g::TEXRECTFLIP as usize, TextureRectangle);
+    gbi.register(g::FILLRECT as usize, FillRectangle);
 }
 
-gbi_command!(F3DEX2ETextureRectangle, |params: &mut GBICommandParams| {
+gbi_command!(TextureRectangle, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
@@ -62,13 +53,13 @@ gbi_command!(F3DEX2ETextureRectangle, |params: &mut GBICommandParams| {
         ult as i16,
         dsdx as i16,
         dtdy as i16,
-        opcode == TEXRECTFLIP as usize,
+        opcode == g::TEXRECTFLIP as usize,
     );
 
     GBIResult::Continue
 });
 
-gbi_command!(F3DEX2EFillRectangle, |params: &mut GBICommandParams| {
+gbi_command!(FillRectangle, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
