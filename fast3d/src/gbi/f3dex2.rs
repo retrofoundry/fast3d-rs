@@ -1,11 +1,8 @@
 use std::cmp::max;
 
-use super::defines::{Gfx, Viewport};
+use super::defines::Viewport;
 use super::utils::get_cmd;
-use super::{
-    super::{rdp::RDP, rsp::RSP},
-    defines::G_MW,
-};
+use super::{super::rsp::RSP, defines::G_MW};
 use super::{GBICommandRegistry, GBIMicrocode, GBIResult};
 use crate::gbi::{
     defines::G_RDPSETOTHERMODE,
@@ -13,7 +10,7 @@ use crate::gbi::{
     macros::gbi_command,
     GBICommand, GBICommandParams,
 };
-use crate::output::RCPOutput;
+
 use crate::rsp::RSPConstants;
 
 pub struct RSP_GEOMETRY;

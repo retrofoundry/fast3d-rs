@@ -1,9 +1,9 @@
 use crate::gbi::macros::gbi_command;
 use crate::gbi::GBICommand;
-use crate::{output::RCPOutput, rdp::RDP, rsp::RSP};
+use crate::rsp::RSP;
 
 use super::{
-    defines::{Gfx, G_FILLRECT, G_TEXRECT, G_TEXRECTFLIP},
+    defines::{G_FILLRECT, G_TEXRECT, G_TEXRECTFLIP},
     f3dex2::F3DEX2,
     utils::get_cmd,
     GBICommandParams, GBICommandRegistry, GBIMicrocode, GBIResult,

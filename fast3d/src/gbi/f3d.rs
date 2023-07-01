@@ -4,8 +4,6 @@ use crate::gbi::{
     macros::gbi_command, GBICommand, GBICommandParams, GBICommandRegistry, GBIMicrocode, GBIResult,
 };
 
-use crate::output::RCPOutput;
-use crate::rdp::RDP;
 use crate::rsp::RSP;
 
 pub struct F3D;

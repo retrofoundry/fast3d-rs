@@ -1,6 +1,6 @@
 use crate::gbi::defines::{
-    Gfx, G_FILLRECT, G_LOAD, G_NOOP, G_RDPFULLSYNC, G_RDPLOADSYNC, G_RDPPIPESYNC,
-    G_RDPSETOTHERMODE, G_RDPTILESYNC, G_SET, G_TEXRECT, G_TEXRECTFLIP,
+    G_FILLRECT, G_LOAD, G_NOOP, G_RDPFULLSYNC, G_RDPLOADSYNC, G_RDPPIPESYNC, G_RDPSETOTHERMODE,
+    G_RDPTILESYNC, G_SET, G_TEXRECT, G_TEXRECTFLIP,
 };
 
 use crate::gbi::macros::gbi_command;
@@ -9,8 +9,8 @@ use crate::gbi::{GBICommand, GBICommandParams, GBICommandRegistry, GBIMicrocode,
 
 use crate::models::color_combiner::CombineParams;
 use crate::models::texture::TextureImageState;
-use crate::output::RCPOutput;
-use crate::rdp::{RDP, SCREEN_HEIGHT};
+
+use crate::rdp::SCREEN_HEIGHT;
 use crate::rsp::RSP;
 
 pub struct Common;
