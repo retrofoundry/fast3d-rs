@@ -108,7 +108,7 @@ impl<T> OpenGLProgram<T> {
 
         format!(
             r#"
-            #version 140
+            #version 410
             {}
             {}
             "#,
@@ -201,21 +201,23 @@ impl<T> OpenGLProgram<T> {
         .to_string();
 
         self.vertex = r#"
-            in vec4 aVtxPos;
+            layout(location = 0) in vec4 aVtxPos;
+            layout(location = 1) in vec4 aVtxColor;
 
-            in vec4 aVtxColor;
-            out vec4 vVtxColor;
+            layout(location = 0) out vec4 vVtxColor;
 
             #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
-                in vec2 aTexCoord;
-                out vec2 vTexCoord;
+                layout(location = 2) in vec2 aTexCoord;
+                layout(location = 1) out vec2 vTexCoord;
             #endif
 
-            uniform mat4 uProjection;
-            #ifdef USE_FOG
-                uniform float uFogMultiplier;
-                uniform float uFogOffset;
-            #endif
+            layout(std140) uniform Uniforms {
+                mat4 uProjection;
+                #ifdef USE_FOG
+                    uniform float uFogMultiplier;
+                    uniform float uFogOffset;
+                #endif
+            };
 
             void main() {
                 if (aVtxPos.w == DRAWING_RECT) {
@@ -348,18 +350,18 @@ impl<T> OpenGLProgram<T> {
 
         format!(
             r#"
-            in vec4 vVtxColor;
+            layout(location = 0) in vec4 vVtxColor;
 
             #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
-                in vec2 vTexCoord;
+                layout(location = 1) in vec2 vTexCoord;
             #endif
 
-            #ifdef USE_FOG
-                uniform vec3 uFogColor;
-            #endif
-
-            // blend parameters
-            uniform vec4 uBlendColor;
+            layout(std140) uniform BlendUniforms {{
+                uniform vec4 uBlendColor;
+                #ifdef USE_FOG
+                    uniform vec3 uFogColor;
+                #endif
+            }};
 
             // combine parameters
             // TODO: use a uniform block?
