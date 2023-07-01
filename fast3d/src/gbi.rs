@@ -19,11 +19,11 @@ pub enum GBIResult {
     Continue,
 }
 
-pub struct GBICommandParams {
-    pub rdp: &'static mut RDP,
-    pub rsp: &'static mut RSP,
-    pub output: &'static mut RCPOutput,
-    pub command: &'static mut *mut Gfx,
+pub struct GBICommandParams<'a> {
+    pub rdp: &'a mut RDP,
+    pub rsp: &'a mut RSP,
+    pub output: &'a mut RCPOutput,
+    pub command: &'a mut *mut Gfx,
 }
 
 pub trait GBICommand {

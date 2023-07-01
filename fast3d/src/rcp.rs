@@ -53,7 +53,13 @@ impl RCP {
         loop {
             let opcode = unsafe { (*command).words.w0 } >> 24;
             if let Some(handler) = self.gbi.handler(&opcode) {
-                match handler.process(&mut self.rdp, &mut self.rsp, output, &mut command) {
+                let handler_input = &mut GBICommandParams {
+                    rdp: &mut self.rdp,
+                    rsp: &mut self.rsp,
+                    output,
+                    command: &mut command,
+                };
+                match handler.process(handler_input) {
                     GBIResult::Recurse(new_command) => self.run_dl(output, new_command),
                     GBIResult::Return => return,
                     GBIResult::Continue => {}
