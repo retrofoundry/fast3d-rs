@@ -1,6 +1,8 @@
 use crate::gbi::defines::Gfx;
 use crate::gbi::utils::get_cmd;
-use crate::gbi::{GBICommand, GBICommandRegistry, GBIMicrocode, GBIResult};
+use crate::gbi::{
+    macros::gbi_command, GBICommand, GBICommandParams, GBICommandRegistry, GBIMicrocode, GBIResult,
+};
 
 use crate::output::RCPOutput;
 use crate::rdp::RDP;
@@ -74,53 +76,25 @@ impl GBIMicrocode for F3D {
 
 // MARK: - Commands
 
-pub struct F3DSpNoOp;
-impl GBICommand for F3DSpNoOp {
-    fn process(
-        &self,
-        _rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        _command: &mut *mut Gfx,
-    ) -> GBIResult {
+gbi_command!(F3DSpNoOp, |_| {
+    // Use rdp, rsp, output, command parameters here
+    GBIResult::Continue
+});
+
+gbi_command!(F3DSubDL, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
+
+    if get_cmd(w0, 16, 1) == 0 {
+        // Push return address
+        let new_addr = params.rsp.from_segmented(w1);
+        GBIResult::Recurse(new_addr)
+    } else {
+        let new_addr = params.rsp.from_segmented(w1);
+        let cmd = new_addr as *mut Gfx;
+        unsafe { *params.command = cmd.sub(1) };
         GBIResult::Continue
     }
-}
+});
 
-pub struct F3DSubDL;
-impl GBICommand for F3DSubDL {
-    fn process(
-        &self,
-        _rdp: &mut RDP,
-        rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        if get_cmd(w0, 16, 1) == 0 {
-            // Push return address
-            let new_addr = rsp.from_segmented(w1);
-            GBIResult::Recurse(new_addr)
-        } else {
-            let new_addr = rsp.from_segmented(w1);
-            let cmd = new_addr as *mut Gfx;
-            unsafe { *command = cmd.sub(1) };
-            GBIResult::Continue
-        }
-    }
-}
-
-pub struct F3DEndDL;
-impl GBICommand for F3DEndDL {
-    fn process(
-        &self,
-        _rdp: &mut RDP,
-        _rsp: &mut RSP,
-        _output: &mut RCPOutput,
-        _command: &mut *mut Gfx,
-    ) -> GBIResult {
-        GBIResult::Return
-    }
-}
+gbi_command!(F3DEndDL, |_| { GBIResult::Return });

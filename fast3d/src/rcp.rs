@@ -1,3 +1,4 @@
+use crate::gbi::GBICommandParams;
 use log::trace;
 
 use super::{

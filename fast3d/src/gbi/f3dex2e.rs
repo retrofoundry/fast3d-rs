@@ -1,3 +1,4 @@
+use crate::gbi::macros::gbi_command;
 use crate::gbi::GBICommand;
 use crate::{output::RCPOutput, rdp::RDP, rsp::RSP};
 
@@ -5,7 +6,7 @@ use super::{
     defines::{Gfx, G_FILLRECT, G_TEXRECT, G_TEXRECTFLIP},
     f3dex2::F3DEX2,
     utils::get_cmd,
-    GBICommandRegistry, GBIMicrocode, GBIResult,
+    GBICommandParams, GBICommandRegistry, GBIMicrocode, GBIResult,
 };
 
 pub struct F3DEX2E;
@@ -19,89 +20,78 @@ impl GBIMicrocode for F3DEX2E {
     }
 }
 
-struct F3DEX2ETextureRectangle;
-impl GBICommand for F3DEX2ETextureRectangle {
-    fn process(
-        &self,
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+gbi_command!(F3DEX2ETextureRectangle, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-        let opcode = w0 >> 24;
+    let opcode = w0 >> 24;
 
-        let lrx = get_cmd(w0, 0, 24) << 8 >> 8;
-        let lry = get_cmd(w1, 0, 24) << 8 >> 8;
-        let tile = get_cmd(w1, 24, 3);
+    let lrx = get_cmd(w0, 0, 24) << 8 >> 8;
+    let lry = get_cmd(w1, 0, 24) << 8 >> 8;
+    let tile = get_cmd(w1, 24, 3);
 
-        unsafe {
-            *command = (*command).add(1);
-        }
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let ulx = get_cmd(w0, 0, 24) << 8 >> 8;
-        let uls = get_cmd(w1, 16, 16);
-        let ult = get_cmd(w1, 0, 16);
-
-        unsafe {
-            *command = (*command).add(1);
-        }
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let uly = get_cmd(w0, 0, 24) << 8 >> 8;
-        let dsdx = get_cmd(w1, 16, 16);
-        let dtdy = get_cmd(w1, 0, 16);
-
-        rdp.draw_texture_rectangle(
-            rsp,
-            output,
-            ulx as i32,
-            uly as i32,
-            lrx as i32,
-            lry as i32,
-            tile as u8,
-            uls as i16,
-            ult as i16,
-            dsdx as i16,
-            dtdy as i16,
-            opcode == G_TEXRECTFLIP as usize,
-        );
-
-        GBIResult::Continue
+    unsafe {
+        *params.command = (*params.command).add(1);
     }
-}
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
 
-struct F3DEX2EFillRectangle;
-impl GBICommand for F3DEX2EFillRectangle {
-    fn process(
-        &self,
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult {
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
+    let ulx = get_cmd(w0, 0, 24) << 8 >> 8;
+    let uls = get_cmd(w1, 16, 16);
+    let ult = get_cmd(w1, 0, 16);
 
-        let lrx = get_cmd(w0, 0, 24) << 8 >> 8;
-        let lry = get_cmd(w1, 0, 24) << 8 >> 8;
-
-        unsafe {
-            *command = (*command).add(1);
-        }
-        let w0 = unsafe { (*(*command)).words.w0 };
-        let w1 = unsafe { (*(*command)).words.w1 };
-
-        let ulx = get_cmd(w0, 0, 24) << 8 >> 8;
-        let uly = get_cmd(w1, 0, 24) << 8 >> 8;
-
-        rdp.fill_rect(rsp, output, ulx as i32, uly as i32, lrx as i32, lry as i32);
-
-        GBIResult::Continue
+    unsafe {
+        *params.command = (*params.command).add(1);
     }
-}
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
+
+    let uly = get_cmd(w0, 0, 24) << 8 >> 8;
+    let dsdx = get_cmd(w1, 16, 16);
+    let dtdy = get_cmd(w1, 0, 16);
+
+    params.rdp.draw_texture_rectangle(
+        params.rsp,
+        params.output,
+        ulx as i32,
+        uly as i32,
+        lrx as i32,
+        lry as i32,
+        tile as u8,
+        uls as i16,
+        ult as i16,
+        dsdx as i16,
+        dtdy as i16,
+        opcode == G_TEXRECTFLIP as usize,
+    );
+
+    GBIResult::Continue
+});
+
+gbi_command!(F3DEX2EFillRectangle, |params: &mut GBICommandParams| {
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
+
+    let lrx = get_cmd(w0, 0, 24) << 8 >> 8;
+    let lry = get_cmd(w1, 0, 24) << 8 >> 8;
+
+    unsafe {
+        *params.command = (*params.command).add(1);
+    }
+    let w0 = unsafe { (*(*params.command)).words.w0 };
+    let w1 = unsafe { (*(*params.command)).words.w1 };
+
+    let ulx = get_cmd(w0, 0, 24) << 8 >> 8;
+    let uly = get_cmd(w1, 0, 24) << 8 >> 8;
+
+    params.rdp.fill_rect(
+        params.rsp,
+        params.output,
+        ulx as i32,
+        uly as i32,
+        lrx as i32,
+        lry as i32,
+    );
+
+    GBIResult::Continue
+});

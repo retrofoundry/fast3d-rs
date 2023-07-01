@@ -10,6 +10,7 @@ mod f3dzex2;
 
 mod common;
 pub mod defines;
+pub mod macros;
 pub mod utils;
 
 pub enum GBIResult {
@@ -18,14 +19,15 @@ pub enum GBIResult {
     Continue,
 }
 
+pub struct GBICommandParams {
+    pub rdp: &'static mut RDP,
+    pub rsp: &'static mut RSP,
+    pub output: &'static mut RCPOutput,
+    pub command: &'static mut *mut Gfx,
+}
+
 pub trait GBICommand {
-    fn process(
-        &self,
-        rdp: &mut RDP,
-        rsp: &mut RSP,
-        output: &mut RCPOutput,
-        command: &mut *mut Gfx,
-    ) -> GBIResult;
+    fn process(&self, params: &mut GBICommandParams) -> GBIResult;
 }
 
 trait GBIMicrocode {
