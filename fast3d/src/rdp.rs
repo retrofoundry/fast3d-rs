@@ -89,55 +89,67 @@ impl OutputDimensions {
     };
 }
 
-pub enum OtherModeLayoutL {
-    // non-render-mode fields
-    G_MDSFT_ALPHACOMPARE = 0,
-    G_MDSFT_ZSRCSEL = 2,
-    // cycle-independent render-mode bits
-    AA_EN = 3,
-    Z_CMP = 4,
-    Z_UPD = 5,
-    IM_RD = 6,
-    CLR_ON_CVG = 7,
-    CVG_DST = 8,
-    ZMODE = 10,
-    CVG_X_ALPHA = 12,
-    ALPHA_CVG_SEL = 13,
-    FORCE_BL = 14,
-    // bit 15 unused, was "TEX_EDGE"
-    // cycle-dependent render-mode bits
-    B_2 = 16,
-    B_1 = 18,
-    M_2 = 20,
-    M_1 = 22,
-    A_2 = 24,
-    A_1 = 26,
-    P_2 = 28,
-    P_1 = 30,
-}
+#[allow(dead_code)]
+pub mod OtherMode {
+    pub mod Layout {
+        pub mod L {
+            pub mod Shift {
+                pub const ALPHACOMPARE: u8 = 0;
+                pub const ZSRCSEL: u8 = 2;
+                pub const RENDERMODE: u8 = 3;
+                pub const BLENDER: u8 = 16;
+            }
 
-pub enum OtherModeH_Layout {
-    G_MDSFT_BLENDMASK = 0,
-    G_MDSFT_ALPHADITHER = 4,
-    G_MDSFT_RGBDITHER = 6,
-    G_MDSFT_COMBKEY = 8,
-    G_MDSFT_TEXTCONV = 9,
-    G_MDSFT_TEXTFILT = 12,
-    G_MDSFT_TEXTLUT = 14,
-    G_MDSFT_TEXTLOD = 16,
-    G_MDSFT_TEXTDETAIL = 17,
-    G_MDSFT_TEXTPERSP = 19,
-    G_MDSFT_CYCLETYPE = 20,
-    G_MDSFT_COLORDITHER = 22,
-    G_MDSFT_PIPELINE = 23,
-}
+            // cycle-independent render-mode bits
+            pub const AA_EN: u8 = 0x8;
+            pub const Z_CMP: u8 = 0x10;
+            pub const Z_UPD: u8 = 0x20;
+            pub const IM_RD: u8 = 0x40;
+            pub const CLR_ON_CVG: u8 = 0x80;
+            pub const CVG_DST_CLAMP: u8 = 0;
+            pub const CVG_DST_WRAP: u8 = 0x100;
+            pub const CVG_DST_FULL: u8 = 0x200;
+            pub const CVG_DST_SAVE: u8 = 0x300;
+            pub const ZMODE_OPA: u8 = 0;
+            pub const ZMODE_INTER: u8 = 0x400;
+            pub const ZMODE_XLU: u8 = 0x800;
+            pub const ZMODE_DEC: u8 = 0xc00;
+            pub const CVG_X_ALPHA: u8 = 0x1000;
+            pub const ALPHA_CVG_SEL: u8 = 0x2000;
+            pub const FORCE_BL: u8 = 0x4000;
+            pub const TEX_EDGE: u8 = 0x0000; /* used to be 0x8000 */
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OtherModeHCycleType {
-    G_CYC_1CYCLE = 0,
-    G_CYC_2CYCLE = 1,
-    G_CYC_COPY = 2,
-    G_CYC_FILL = 3,
+            // cycle-dependent render-mode bits
+
+        }
+
+        pub mod H {
+            pub mod Shift {
+                pub const BLENDMASK: u8 = 0;
+                pub const ALPHADITHER: u8 = 4;
+                pub const RGBDITHER: u8 = 6;
+                pub const COMBKEY: u8 = 8;
+                pub const TEXTCONV: u8 = 9;
+                pub const TEXTFILT: u8 = 12;
+                pub const TEXTLUT: u8 = 14;
+                pub const TEXTLOD: u8 = 16;
+                pub const TEXTDETAIL: u8 = 17;
+                pub const TEXTPERSP: u8 = 19;
+                pub const CYCLETYPE: u8 = 20;
+                pub const COLORDITHER: u8 = 22;
+                pub const PIPELINE: u8 = 23;
+            }
+        }
+    }
+
+    pub mod CycleType {
+        pub mod H {
+            pub const G_CYC_1CYCLE: u8 = 0;
+            pub const G_CYC_2CYCLE: u8 = 1;
+            pub const G_CYC_COPY: u8 = 2;
+            pub const G_CYC_FILL: u8 = 3;
+        }
+    }
 }
 
 enum ZMode {
