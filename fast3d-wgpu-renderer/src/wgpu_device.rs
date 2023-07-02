@@ -596,7 +596,7 @@ impl WgpuGraphicsDevice {
         // Update the vertex uniforms
         if program.get_define_bool("USE_FOG") {
             let uniform = VertexWithFogUniforms {
-                projection_matrix: projection_matrix.transpose().to_cols_array_2d(),
+                projection_matrix: projection_matrix.to_cols_array_2d(),
                 fog_multiplier: fog.multiplier as f32,
                 fog_offset: fog.offset as f32,
                 _pad: [0.0; 2],
@@ -605,7 +605,7 @@ impl WgpuGraphicsDevice {
             queue.write_buffer(&self.vertex_uniform_buf, 0, bytemuck::bytes_of(&uniform));
         } else {
             let uniform = VertexUniforms {
-                projection_matrix: projection_matrix.transpose().to_cols_array_2d(),
+                projection_matrix: projection_matrix.to_cols_array_2d(),
                 _pad: [0.0; 4],
             };
 

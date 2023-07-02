@@ -266,6 +266,9 @@ impl<T> WgpuProgram<T> {
                     gl_Position = aVtxPos * uProjection;
                 }
 
+                 // map z to [0, 1] - necessary for WGPU
+                 gl_Position.z = (gl_Position.z + gl_Position.w) / (2.0 * gl_Position.w);
+
                 #ifdef USE_FOG
                     float fogValue = (max(gl_Position.z, 0.0) / gl_Position.w) * uFogMultiplier + uFogOffset;
                     fogValue = clamp(fogValue, 0.0, 255.0);
