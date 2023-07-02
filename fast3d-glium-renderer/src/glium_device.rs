@@ -1,5 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
+use crate::opengl_program::ShaderVersion;
 use fast3d::{
     gbi::defines::g,
     models::color_combiner::CombineParams,
@@ -337,7 +338,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         // create the shader and add it to the cache
         let mut program = OpenGLProgram::new(other_mode_h, other_mode_l, geometry_mode, combine);
         program.init();
-        program.preprocess();
+        program.preprocess(&ShaderVersion::GLSL410); // 410 is latest version supported by macOS
 
         let source = ProgramCreationInput::SourceCode {
             vertex_shader: &program.preprocessed_vertex,
