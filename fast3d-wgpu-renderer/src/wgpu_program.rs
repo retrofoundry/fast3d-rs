@@ -27,7 +27,7 @@ pub enum ShaderVersion {
     GLSL440, // version supported by naga to use in WGPU
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WgpuProgram<T> {
     // Compiled program.
     pub preprocessed_vertex: String,
@@ -600,37 +600,35 @@ impl<T> WgpuProgram<T> {
     }
 
     pub fn create_texture_bind_group_layout(&self, device: &wgpu::Device) -> BindGroupLayout {
-        {
-            let mut group_layout_entries: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
+        let mut group_layout_entries: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
 
-            for i in 0..2 {
-                let texture_index = format!("USE_TEXTURE{}", i);
-                if self.get_define_bool(&texture_index) {
-                    group_layout_entries.push(wgpu::BindGroupLayoutEntry {
-                        binding: i * 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    });
+        for i in 0..2 {
+            let texture_index = format!("USE_TEXTURE{}", i);
+            if self.get_define_bool(&texture_index) {
+                group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+                    binding: i * 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                });
 
-                    group_layout_entries.push(wgpu::BindGroupLayoutEntry {
-                        binding: (i * 2 + 1),
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        // TODO: Is this the appropriate setting?
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    });
-                }
+                group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+                    binding: (i * 2 + 1),
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    // TODO: Is this the appropriate setting?
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                });
             }
-
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Textures/Samplers Group Layout"),
-                entries: &group_layout_entries,
-            })
         }
+
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Textures/Samplers Group Layout"),
+            entries: &group_layout_entries,
+        })
     }
 }
