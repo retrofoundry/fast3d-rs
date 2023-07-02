@@ -106,6 +106,12 @@ impl<T> OpenGLProgram<T> {
             .collect::<Vec<String>>()
             .join("");
 
+        // check if being used for naga conversion
+        let shader = shader.replace(", set = 0, binding = 0", "")
+            .replace(", set = 1, binding = 0", "")
+            .replace(", set = 1, binding = 1", "")
+            .replace(", set = 1, binding = 2", "");
+
         format!(
             r#"
             #version 410
@@ -211,11 +217,11 @@ impl<T> OpenGLProgram<T> {
                 layout(location = 1) out vec2 vTexCoord;
             #endif
 
-            layout(std140) uniform Uniforms {
+            layout(std140, set = 0, binding = 0) uniform Uniforms {
                 mat4 uProjection;
                 #ifdef USE_FOG
-                    uniform float uFogMultiplier;
-                    uniform float uFogOffset;
+                    float uFogMultiplier;
+                    float uFogOffset;
                 #endif
             };
 
@@ -356,21 +362,23 @@ impl<T> OpenGLProgram<T> {
                 layout(location = 1) in vec2 vTexCoord;
             #endif
 
-            layout(std140) uniform BlendUniforms {{
-                uniform vec4 uBlendColor;
+            layout(location = 0) out vec4 outColor;
+
+            layout(std140, set = 1, binding = 0) uniform BlendUniforms {{
+                vec4 uBlendColor;
                 #ifdef USE_FOG
-                    uniform vec3 uFogColor;
+                    vec3 uFogColor;
                 #endif
             }};
 
-            layout(std140) uniform CombineUniforms {{
-                uniform vec4 uPrimColor;
-                uniform vec4 uEnvColor;
-                uniform vec3 uKeyCenter;
-                uniform vec3 uKeyScale;
-                uniform float uPrimLodFrac;
-                uniform float uK4;
-                uniform float uK5;
+            layout(std140, set = 1, binding = 1) uniform CombineUniforms {{
+                vec4 uPrimColor;
+                vec4 uEnvColor;
+                vec3 uKeyCenter;
+                vec3 uKeyScale;
+                float uPrimLodFrac;
+                float uK4;
+                float uK5;
             }};
 
             #ifdef USE_TEXTURE0
@@ -382,9 +390,9 @@ impl<T> OpenGLProgram<T> {
 
             #if defined(USE_ALPHA)
                 #if defined(ALPHA_COMPARE_DITHER)
-                    layout(std140) uniform FrameUniforms {{
-                        uniform int uFrameCount;
-                        uniform int uFrameHeight;
+                    layout(std140, set = 1, binding = 2) uniform FrameUniforms {{
+                        int uFrameCount;
+                        int uFrameHeight;
                     }};
 
                     float random(in vec3 value) {{
@@ -394,10 +402,13 @@ impl<T> OpenGLProgram<T> {
                 #endif
             #endif
 
-            out vec4 outColor;
-
             #define TEX_OFFSET(offset) texture(tex, texCoord - (offset) / texSize)
-            #define RAND_NOISE "((random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0)"
+
+            #if defined(USE_ALPHA)
+                #if defined(ALPHA_COMPARE_DITHER)
+                    #define RAND_NOISE "((random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0)"
+                #endif
+            #endif
 
             vec4 Texture2D_N64_Point(in sampler2D tex, in vec2 texCoord) {{
                 return texture(tex, texCoord);
