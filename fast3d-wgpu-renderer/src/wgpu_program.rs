@@ -1,33 +1,44 @@
-use std::collections::HashMap;
-
-use wgpu::{
-    BindGroupLayout, ShaderModule, VertexAttribute, VertexBufferLayout, VertexFormat,
-    VertexStepMode,
+use fast3d::gbi::utils::{
+    geometry_mode_uses_lighting, get_cycle_type_from_other_mode_h,
+    get_textfilter_from_other_mode_h, other_mode_l_alpha_compare_dither,
+    other_mode_l_alpha_compare_threshold, other_mode_l_uses_alpha, other_mode_l_uses_fog,
+    other_mode_l_uses_texture_edge,
 };
 
-use fast3d::{
-    gbi::utils::{
-        get_cycle_type_from_other_mode_h, get_textfilter_from_other_mode_h,
-        other_mode_l_alpha_compare_dither, other_mode_l_alpha_compare_threshold,
-        other_mode_l_uses_alpha, other_mode_l_uses_fog, other_mode_l_uses_texture_edge,
-    },
-    models::{
-        color_combiner::{CombineParams, ACMUX, CCMUX},
-        texture::TextFilt,
-    },
-    rdp::OtherModeHCycleType,
+use fast3d::models::{
+    color_combiner::{CombineParams, ACMUX, CCMUX},
+    texture::TextFilt,
 };
 
-pub struct WgpuProgram {
+use fast3d::rdp::OtherModeHCycleType;
+use naga::FastHashMap;
+use wgpu::{BindGroupLayout, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
+
+#[derive(PartialEq, Eq)]
+pub enum ShaderType {
+    Vertex,
+    Fragment,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum ShaderVersion {
+    GLSL410,
+    GLSL440, // version supported by naga to use in WGPU
+}
+
+#[derive(Debug, Clone)]
+pub struct WgpuProgram<T> {
     // Compiled program.
-    pub processed_shader: String,
-    pub compiled_program: Option<ShaderModule>,
+    pub preprocessed_vertex: String,
+    pub preprocessed_frag: String,
+    pub compiled_vertex_program: Option<T>,
+    pub compiled_fragment_program: Option<T>,
 
     // inputs
     pub both: String,
     pub vertex: String,
     pub fragment: String,
-    pub defines: HashMap<String, String>,
+    pub defines: naga::FastHashMap<String, String>,
 
     // configurators
     other_mode_h: u32,
@@ -38,10 +49,11 @@ pub struct WgpuProgram {
     pub num_floats: usize,
 }
 
-impl WgpuProgram {
+impl<T> WgpuProgram<T> {
     // MARK: - Defines
     pub fn defines_changed(&mut self) {
-        self.processed_shader = "".to_string();
+        self.preprocessed_vertex = "".to_string();
+        self.preprocessed_frag = "".to_string();
     }
 
     pub fn set_define_string(&mut self, name: String, v: Option<String>) -> bool {
@@ -81,17 +93,66 @@ impl WgpuProgram {
 
     // MARK: - Preprocessing
 
-    pub fn preprocess(&mut self) {
-        if !self.processed_shader.is_empty() {
+    pub fn preprocess(&mut self, shader_version: &ShaderVersion) {
+        if !self.preprocessed_vertex.is_empty() {
             return;
         }
 
-        self.processed_shader = format!(
-            "{both}{vertex}{fragment}",
-            both = self.both,
-            vertex = self.vertex,
-            fragment = self.fragment,
+        self.preprocessed_vertex = self.preprocess_shader(
+            ShaderType::Vertex,
+            shader_version,
+            &format!("{}{}", self.both, self.vertex),
         );
+        self.preprocessed_frag = self.preprocess_shader(
+            ShaderType::Fragment,
+            shader_version,
+            &format!("{}{}", self.both, self.fragment),
+        );
+    }
+
+    pub fn preprocess_shader(
+        &mut self,
+        _shader_type: ShaderType,
+        shader_version: &ShaderVersion,
+        shader: &str,
+    ) -> String {
+        let defines_string = self
+            .defines
+            .iter()
+            .map(|(k, v)| format!("#define {} {}\n", k, v))
+            .collect::<Vec<String>>()
+            .join("");
+
+        // make appropriate replacements for the shader version
+        let shader = match shader_version {
+            ShaderVersion::GLSL410 => {
+                shader.replace(", set = 0, binding = 0", "")
+                    .replace(", set = 1, binding = 0", "")
+                    .replace(", set = 1, binding = 1", "")
+                    .replace(", set = 1, binding = 2", "")
+            }
+            ShaderVersion::GLSL440 => {
+                shader.replace("uniform sampler2D uTex0;", "layout(set = 2, binding = 0) uniform texture2D uTex0;\nlayout(set = 2, binding = 1) uniform sampler uTex0Sampler;")
+                    .replace("uniform sampler2D uTex1;", "layout(set = 2, binding = 2) uniform texture2D uTex1;\nlayout(set = 2, binding = 3) uniform sampler uTex1Sampler;")
+                    .replace("in sampler2D tex,", "in texture2D tex, in sampler smplr,")
+                    .replace("texture(tex,", "texture(sampler2D(tex, smplr),")
+                    .replace("Texture2D_N64(uTex0, vTexCoord);", "Texture2D_N64(uTex0, uTex0Sampler, vTexCoord);")
+                    .replace("Texture2D_N64(uTex1, vTexCoord);", "Texture2D_N64(uTex1, uTex1Sampler, vTexCoord);")
+            }
+        };
+
+        let version = match shader_version {
+            ShaderVersion::GLSL410 => "#version 410",
+            ShaderVersion::GLSL440 => "", // we omit the version for naga
+        };
+
+        format!(
+            r#"
+            {version}
+            {defines_string}
+            {shader}
+            "#,
+        )
     }
 
     // MARK: - Defaults
@@ -103,13 +164,15 @@ impl WgpuProgram {
         combine: CombineParams,
     ) -> Self {
         Self {
-            processed_shader: "".to_string(),
-            compiled_program: None,
+            preprocessed_vertex: "".to_string(),
+            preprocessed_frag: "".to_string(),
+            compiled_vertex_program: None,
+            compiled_fragment_program: None,
 
             both: "".to_string(),
             vertex: "".to_string(),
             fragment: "".to_string(),
-            defines: HashMap::new(),
+            defines: FastHashMap::default(),
 
             other_mode_h,
             other_mode_l,
@@ -129,6 +192,10 @@ impl WgpuProgram {
             "TWO_CYCLE".to_string(),
             get_cycle_type_from_other_mode_h(self.other_mode_h)
                 == OtherModeHCycleType::G_CYC_2CYCLE,
+        );
+        self.set_define_bool(
+            "LIGHTING".to_string(),
+            geometry_mode_uses_lighting(self.geometry_mode),
         );
         self.set_define_bool("USE_TEXTURE0".to_string(), self.combine.uses_texture0());
         self.set_define_bool("USE_TEXTURE1".to_string(), self.combine.uses_texture1());
@@ -164,104 +231,63 @@ impl WgpuProgram {
             self.num_floats += 2;
         }
 
-        self.both = format!(
-            r#"
-            const tZero = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-            const tHalf = vec4<f32>(0.5 ,0.5, 0.5, 0.5);
-            const tOne = vec4<f32>(1.0 ,1.0, 1.0, 1.0);
+        self.both = r#"
+            const vec4 tZero = vec4(0.0);
+            const vec4 tHalf = vec4(0.5);
+            const vec4 tOne = vec4(1.0);
 
-            const DRAWING_RECT: f32 = 0.0;
+            const int DRAWING_RECT = 0;
+            "#
+        .to_string();
 
-            struct VertexInput {{
-                @location(0) position: vec4<f32>,
-                @location(1) color: vec4<f32>,
-                {uv_input}
-            }};
-            
-            struct VertexOutput {{
-                @location(0) color: vec4<f32>,
-                {uv_output}
-                @builtin(position) position: vec4<f32>,
-            }};
+        self.vertex = r#"
+            layout(location = 0) in vec4 aVtxPos;
+            layout(location = 1) in vec4 aVtxColor;
 
-            "#,
-            uv_input = self.on_defined(
-                &["USE_TEXTURE0", "USE_TEXTURE1"],
-                "@location(2) uv: vec2<f32>,"
-            ),
-            uv_output = self.on_defined(
-                &["USE_TEXTURE0", "USE_TEXTURE1"],
-                "@location(1) uv: vec2<f32>,"
-            ),
-        );
+            layout(location = 0) out vec4 vVtxColor;
 
-        self.vertex = self.generate_vertex();
+            #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
+                layout(location = 2) in vec2 aTexCoord;
+                layout(location = 1) out vec2 vTexCoord;
+            #endif
 
-        self.fragment = self.generate_fragment();
+            layout(std140, set = 0, binding = 0) uniform Uniforms {
+                mat4 uProjection;
+                #ifdef USE_FOG
+                    float uFogMultiplier;
+                    float uFogOffset;
+                #endif
+            };
+
+            void main() {
+                if (aVtxPos.w == DRAWING_RECT) {
+                    gl_Position = vec4(aVtxPos.xyz, 1.0);
+                } else {
+                    gl_Position = aVtxPos * uProjection;
+                }
+
+                 // map z to [0, 1] - necessary for WGPU
+                 gl_Position.z = (gl_Position.z + gl_Position.w) / (2.0 * gl_Position.w);
+
+                #ifdef USE_FOG
+                    float fogValue = (max(gl_Position.z, 0.0) / gl_Position.w) * uFogMultiplier + uFogOffset;
+                    fogValue = clamp(fogValue, 0.0, 255.0);
+                    vVtxColor = vec4(aVtxColor.rgb, fogValue / 255.0);
+                #else
+                    vVtxColor = aVtxColor;
+                #endif
+
+                #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
+                    vTexCoord = aTexCoord;
+                #endif
+            }
+        "#
+            .to_string();
+
+        self.fragment = self.generate_frag();
     }
 
-    fn generate_vertex(&mut self) -> String {
-        let compute_uniform_fields = || {
-            if self.get_define_bool("USE_FOG") {
-                return r#"
-                    fog_multiplier: f32,
-                    fog_offset: f32,
-                    "#
-                .to_string();
-            }
-
-            "_pad: vec2<f32>,".to_string()
-        };
-
-        let compute_color = || {
-            if self.get_define_bool("USE_FOG") {
-                return r#"
-                    var fog_value = (max(0.0, out.position.z) - out.position.w) * uniforms.fog_multiplier + uniforms.fog_offset;
-                    fog_value = clamp(fog_value, 0.0, 255.0);
-                    out.color = vec4<f32>(in.color.xyz, fog_value);
-                    "#.to_string();
-            }
-
-            "out.color = in.color;".to_string()
-        };
-
-        format!(
-            r#"
-            struct Uniforms {{
-                projection_matrix: mat4x4<f32>,
-                {fog_params}
-            }}
-
-            @group(0) @binding(0)
-            var<uniform> uniforms: Uniforms;
-
-            @vertex
-            fn vs_main(in: VertexInput) -> VertexOutput {{
-                var out: VertexOutput;
-
-                if (in.position.w == DRAWING_RECT) {{
-                    out.position = uniforms.projection_matrix * vec4<f32>(in.position.xyz, 1.0);
-                }} else {{
-                    out.position = uniforms.projection_matrix * in.position;
-                }}
-
-                // map z to [0, 1]
-                out.position.z = (out.position.z + out.position.w) / (2.0 * out.position.w);
-
-                {color}
-
-                {uv}
-
-                return out;
-            }}
-            "#,
-            uv = self.on_defined(&["USE_TEXTURE0", "USE_TEXTURE1"], "out.uv = in.uv;"),
-            fog_params = compute_uniform_fields(),
-            color = compute_color(),
-        )
-    }
-
-    fn generate_fragment(&mut self) -> String {
+    fn generate_frag(&mut self) -> String {
         let tex_filter = match get_textfilter_from_other_mode_h(self.other_mode_h) {
             TextFilt::G_TF_POINT => "Point",
             TextFilt::G_TF_AVERAGE => "Average",
@@ -269,12 +295,12 @@ impl WgpuProgram {
         };
 
         let color_input_common = |input| match input {
-            CCMUX::COMBINED => "comb_color.rgb",
-            CCMUX::TEXEL0 => "tex0.rgb",
-            CCMUX::TEXEL1 => "tex1.rgb",
-            CCMUX::PRIMITIVE => "combine_uniforms.prim_color.rgb",
-            CCMUX::SHADE => "shade_color.rgb",
-            CCMUX::ENVIRONMENT => "combine_uniforms.env_color.rgb",
+            CCMUX::COMBINED => "tCombColor.rgb",
+            CCMUX::TEXEL0 => "texVal0.rgb",
+            CCMUX::TEXEL1 => "texVal1.rgb",
+            CCMUX::PRIMITIVE => "uPrimColor.rgb",
+            CCMUX::SHADE => "vVtxColor.rgb",
+            CCMUX::ENVIRONMENT => "uEnvColor.rgb",
             _ => panic!("Should be unreachable"),
         };
 
@@ -284,7 +310,9 @@ impl WgpuProgram {
             } else {
                 match input {
                     CCMUX::CENTER__SCALE__ONE => "tOne.rgb", // matching against ONE
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(noise, noise, noise)", // matching against NOISE
+                    CCMUX::COMBINED_ALPHA__NOISE__K4 => {
+                        "vec3(randomNoise, randomNoise, randomNoise)"
+                    } // matching against NOISE
                     _ => "tZero.rgb",
                 }
             }
@@ -295,8 +323,8 @@ impl WgpuProgram {
                 color_input_common(input)
             } else {
                 match input {
-                    CCMUX::CENTER__SCALE__ONE => "combine_uniforms.key_center", // matching against CENTER
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(combine_uniforms.convert_k4, combine_uniforms.convert_k4, combine_uniforms.convert_k4)", // matching against K4
+                    CCMUX::CENTER__SCALE__ONE => "uKeyCenter", // matching against CENTER
+                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(uK4, uK4, uK4)", // matching against K4
                     _ => "tZero.rgb",
                 }
             }
@@ -307,16 +335,16 @@ impl WgpuProgram {
                 color_input_common(input)
             } else {
                 match input {
-                    CCMUX::CENTER__SCALE__ONE => "combine_uniforms.key_scale", // matching against SCALE
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "comb_color.aaa", // matching against COMBINED_ALPHA
-                    CCMUX::TEXEL0_ALPHA => "tex0.aaa",
-                    CCMUX::TEXEL1_ALPHA => "tex1.aaa",
-                    CCMUX::PRIMITIVE_ALPHA => "combine_uniforms.prim_color.aaa",
-                    CCMUX::SHADE_ALPHA => "shade_color.aaa",
-                    CCMUX::ENV_ALPHA => "combine_uniforms.env_color.aaa",
+                    CCMUX::CENTER__SCALE__ONE => "uKeyScale", // matching against SCALE
+                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "tCombColor.aaa", // matching against COMBINED_ALPHA
+                    CCMUX::TEXEL0_ALPHA => "texVal0.aaa",
+                    CCMUX::TEXEL1_ALPHA => "texVal1.aaa",
+                    CCMUX::PRIMITIVE_ALPHA => "uPrimColor.aaa",
+                    CCMUX::SHADE_ALPHA => "vVtxColor.aaa",
+                    CCMUX::ENV_ALPHA => "uEnvColor.aaa",
                     CCMUX::LOD_FRACTION => "tZero.rgb", // TODO: LOD FRACTION
-                    CCMUX::PRIM_LOD_FRACTION => "vec3(combine_uniforms.prim_lod_frac, combine_uniforms.prim_lod_frac, combine_uniforms.prim_lod_frac)",
-                    CCMUX::K5 => "vec3(combine_uniforms.convert_k5, combine_uniforms.convert_k5, combine_uniforms.convert_k5)",
+                    CCMUX::PRIM_LOD_FRACTION => "vec3(uPrimLodFrac, uPrimLodFrac, uPrimLodFrac)",
+                    CCMUX::K5 => "vec3(uK5, uK5, uK5)",
                     _ => "tZero.rgb",
                 }
             }
@@ -335,18 +363,18 @@ impl WgpuProgram {
 
         let alpha_input_abd = |input| {
             match input {
-                ACMUX::COMBINED__LOD_FRAC => "comb_color.a", // matching against COMBINED
-                ACMUX::TEXEL0 => "tex0.a",
-                ACMUX::TEXEL1 => "tex1.a",
-                ACMUX::PRIMITIVE => "combine_uniforms.prim_color.a",
+                ACMUX::COMBINED__LOD_FRAC => "tCombColor.a", // matching against COMBINED
+                ACMUX::TEXEL0 => "texVal0.a",
+                ACMUX::TEXEL1 => "texVal1.a",
+                ACMUX::PRIMITIVE => "uPrimColor.a",
                 ACMUX::SHADE => {
                     if self.get_define_bool("USE_FOG") {
                         "tOne.a"
                     } else {
-                        "shade_color.a"
+                        "vVtxColor.a"
                     }
                 }
-                ACMUX::ENVIRONMENT => "combine_uniforms.env_color.a",
+                ACMUX::ENVIRONMENT => "uEnvColor.a",
                 ACMUX::PRIM_LOD_FRAC__ONE => "tOne.a", // matching against ONE
                 _ => "tZero.a",
             }
@@ -355,197 +383,179 @@ impl WgpuProgram {
         let alpha_input_c = |input| {
             match input {
                 ACMUX::COMBINED__LOD_FRAC => "tZero.a", // TODO: LOD_FRAC
-                ACMUX::TEXEL0 => "tex0.a",
-                ACMUX::TEXEL1 => "tex1.a",
-                ACMUX::PRIMITIVE => "combine_uniforms.prim_color.a",
-                ACMUX::SHADE => "shade_color.a",
-                ACMUX::ENVIRONMENT => "combine_uniforms.env_color.a",
-                ACMUX::PRIM_LOD_FRAC__ONE => "combine_uniforms.prim_lod_frac",
+                ACMUX::TEXEL0 => "texVal0.a",
+                ACMUX::TEXEL1 => "texVal1.a",
+                ACMUX::PRIMITIVE => "uPrimColor.a",
+                ACMUX::SHADE => "vVtxColor.a",
+                ACMUX::ENVIRONMENT => "uEnvColor.a",
+                ACMUX::PRIM_LOD_FRAC__ONE => "uPrimLodFrac",
                 _ => "tZero.a",
             }
         };
 
         format!(
             r#"
-            struct BlendParamsUniforms {{
-                blend_color: vec4<f32>,
-                fog_color: vec4<f32>,
-            }};
-            
-            struct CombineParamsUniforms {{
-                prim_color: vec4<f32>,
-                env_color: vec4<f32>,
-                key_center: vec3<f32>,
-                key_scale: vec3<f32>,
-                prim_lod_frac: f32,
-                convert_k4: f32,
-                convert_k5: f32,
-            }};
-            
-            struct FrameUniforms {{
-                count: u32,
-                height: u32,
+            layout(location = 0) in vec4 vVtxColor;
+
+            #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
+                layout(location = 1) in vec2 vTexCoord;
+            #endif
+
+            layout(location = 0) out vec4 outColor;
+
+            layout(std140, set = 1, binding = 0) uniform BlendUniforms {{
+                vec4 uBlendColor;
+                #ifdef USE_FOG
+                    vec3 uFogColor;
+                #endif
             }};
 
-            @group(1) @binding(0)
-            var<uniform> blend_uniforms: BlendParamsUniforms;
-            @group(1) @binding(1)
-            var<uniform> combine_uniforms: CombineParamsUniforms;
-            @group(1) @binding(2)
-            var<uniform> frame_uniforms: FrameUniforms;
+            layout(std140, set = 1, binding = 1) uniform CombineUniforms {{
+                vec4 uPrimColor;
+                vec4 uEnvColor;
+                vec3 uKeyCenter;
+                vec3 uKeyScale;
+                float uPrimLodFrac;
+                float uK4;
+                float uK5;
+            }};
 
-            {tex0_bindings}
+            #ifdef USE_TEXTURE0
+                uniform sampler2D uTex0;
+            #endif
+            #ifdef USE_TEXTURE1
+                uniform sampler2D uTex1;
+            #endif
 
-            {tex1_bindings}
-            
-            fn random(value: vec3<f32>) -> f32 {{
-                var random = dot(sin(value), vec3<f32>(12.9898, 78.233, 37.719));
-                return fract(sin(random) * 143758.5453);
+            #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
+                layout(std140, set = 1, binding = 2) uniform FrameUniforms {{
+                    int uFrameCount;
+                    int uFrameHeight;
+                }};
+
+                float random(in vec3 value) {{
+                    float random = dot(sin(value), vec3(12.9898, 78.233, 37.719));
+                    return fract(sin(random) * 143758.5453);
+                }}
+            #endif
+
+            #define TEX_OFFSET(offset) texture(tex, texCoord - (offset) / texSize)
+
+            vec4 Texture2D_N64_Point(in sampler2D tex, in vec2 texCoord) {{
+                return texture(tex, texCoord);
             }}
 
-            fn textureSampleN64Point(tex: texture_2d<f32>, samplr: sampler, uv: vec2<f32>) -> vec4<f32> {{
-                return textureSample(tex, samplr, uv);
-            }}
-
-            fn textureSampleN64Average(tex: texture_2d<f32>, samplr: sampler, uv: vec2<f32>) -> vec4<f32> {{
+            vec4 Texture2D_N64_Average(in sampler2D tex, in vec2 texCoord) {{
                 // Unimplemented.
-                return textureSample(tex, samplr, uv);
+                return texture(tex, texCoord);
             }}
 
-            fn textureSampleN64Bilerp(tex: texture_2d<f32>, samplr: sampler, uv: vec2<f32>) -> vec4<f32> {{
-                var tex_size = vec2<f32>(textureDimensions(tex, 0));
-                var offset = fract(uv * tex_size - 0.5);
-            
-                var offset_sign = sign(offset);
-                var offset_abs = abs(offset);
-
-                var s0 = textureSample(tex, samplr, uv - offset / tex_size);
-                var s1 = textureSample(tex, samplr, uv - offset_sign * vec2<f32>(1.0, 0.0) / tex_size);
-                var s2 = textureSample(tex, samplr, uv - offset_sign * vec2<f32>(0.0, 1.0) / tex_size);
-            
-                return s0 + offset_abs.x * (s1 - s0) + offset_abs.y * (s2 - s0);
+            // Implements N64-style "triangle bilienar filtering" with three taps.
+            // Based on ArthurCarvalho's implementation, modified for use here.
+            vec4 Texture2D_N64_Bilerp(in sampler2D tex, in vec2 texCoord) {{
+                vec2 texSize = vec2(textureSize(tex, 0));
+                vec2 offset = fract(texCoord * texSize - vec2(0.5));
+                offset -= step(1.0, offset.x + offset.y);
+                vec4 s0 = TEX_OFFSET(offset);
+                vec4 s1 = TEX_OFFSET(vec2(offset.x - sign(offset.x), offset.y));
+                vec4 s2 = TEX_OFFSET(vec2(offset.x, offset.y - sign(offset.y)));
+                return s0 + abs(offset.x) * (s1 - s0) + abs(offset.y) * (s2 - s0);
             }}
 
-            fn combineColorCycle0(comb_color: vec4<f32>, shade_color: vec4<f32>, tex0: vec4<f32>, tex1: vec4<f32>, noise: f32) -> vec3<f32> {{
-                return ({c0a} - {c0b}) * {c0c} + {c0d};
+            #define Texture2D_N64 Texture2D_N64_{}
+
+            vec3 CombineColorCycle0(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
+                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
+                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
+                #endif
+                return ({} - {}) * {} + {};
             }}
 
-            fn combineAlphaCycle0(comb_color: vec4<f32>, shade_color: vec4<f32>, tex0: vec4<f32>, tex1: vec4<f32>, noise: f32) -> f32 {{
-                return ({a0a} - {a0b}) * {a0c} + {a0d};
+            float CombineAlphaCycle0(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
+                return ({} - {}) * {} + {};
             }}
 
-            fn combineColorCycle1(comb_color: vec4<f32>, shade_color: vec4<f32>, tex0: vec4<f32>, tex1: vec4<f32>, noise: f32) -> vec3<f32> {{
-                return ({c1a} - {c1b}) * {c1c} + {c1d};
+            vec3 CombineColorCycle1(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
+                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
+                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
+                #endif
+                return ({} - {}) * {} + {};
             }}
-            
-            fn combineAlphaCycle1(comb_color: vec4<f32>, shade_color: vec4<f32>, tex0: vec4<f32>, tex1: vec4<f32>, noise: f32) -> f32 {{
-                return ({a1a} - {a1b}) * {a1c} + {a1d};
+
+            float CombineAlphaCycle1(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
+                return ({} - {}) * {} + {};
             }}
 
-            @fragment
-            fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {{
-                var tex_val0 = tOne;
-                var tex_val1 = tOne;
+            void main() {{
+                vec4 texVal0 = tOne, texVal1 = tOne;
 
-                {sample_texture0}
-                {sample_texture1}
-                
-                var noise = (random(vec3(floor(in.position.xy * (240.0 / f32(frame_uniforms.height))), f32(frame_uniforms.count))) + 1.0) / 2.0;
+                #ifdef USE_TEXTURE0
+                    texVal0 = Texture2D_N64(uTex0, vTexCoord);
+                #endif
+                #ifdef USE_TEXTURE1
+                    texVal1 = Texture2D_N64(uTex1, vTexCoord);
+                #endif
 
-                var texel = vec4<f32>(
-                    combineColorCycle0(tHalf, in.color, tex_val0, tex_val1, noise),
-                    combineAlphaCycle0(tHalf, in.color, tex_val0, tex_val1, noise)
-                );
+                #ifdef ONLY_VERTEX_COLOR
+                    vec4 texel = vVtxColor;
+                #else
+                    vec4 texel = vec4(
+                        CombineColorCycle0(tHalf, texVal0, texVal1),
+                        CombineAlphaCycle0(tHalf, texVal0, texVal1)
+                    );
 
-                {second_pass_combine}
+                    #ifdef TWO_CYCLE
+                        // Note that in the second cycle, Tex0 and Tex1 are swapped
+                        texel = vec4(
+                            CombineColorCycle1(texel, texVal1, texVal0),
+                            CombineAlphaCycle1(texel, texVal1, texVal0)
+                        );
+                    #endif
+                #endif
 
-                {alpha_compare_dither}
-                {alpha_compare_threshold}
+                #if defined(USE_ALPHA)
+                    #if defined(ALPHA_COMPARE_DITHER)
+                        if (texel.a < floor(random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight))), float(uFrameCount))) + 0.5)) discard;
+                    #endif
 
-                {texture_edge}
+                    #if defined(ALPHA_COMPARE_THRESHOLD)
+                        if (texel.a < uBlendColor.a) discard;
+                    #endif
 
-                {alpha_visualizer}
+                    #if defined(TEXTURE_EDGE)
+                        if (texel.a < 0.125) discard;
+                    #endif
 
-                {blend_fog}
+                    #if defined(USE_ALPHA_VISUALIZER)
+                        texel = mix(texel, vec4(1.0f, 0.0f, 1.0f, 1.0f), 0.5f);
+                    #endif
+                #endif
 
-                return texel;
+                // TODO: Blender
+                #ifdef USE_FOG
+                    texel = vec4(mix(texel.rgb, uFogColor.rgb, vVtxColor.a), texel.a);
+                #endif
+
+                outColor = texel;
             }}
-            "#,
-            tex0_bindings = self.on_defined(
-                &["USE_TEXTURE0"],
-                r#"
-                @group(2) @binding(0)
-                var texture0: texture_2d<f32>;
-                @group(2) @binding(1)
-                var sampler0: sampler;
-                "#
-            ),
-            tex1_bindings = self.on_defined(
-                &["USE_TEXTURE1"],
-                r#"
-                @group(2) @binding(2)
-                var texture1: texture_2d<f32>;
-                @group(2) @binding(3)
-                var sampler1: sampler;
-            "#
-            ),
-            c0a = color_input_a(self.combine.c0.a),
-            c0b = color_input_b(self.combine.c0.b),
-            c0c = color_input_c(self.combine.c0.c),
-            c0d = color_input_d(self.combine.c0.d),
-            a0a = alpha_input_abd(self.combine.a0.a),
-            a0b = alpha_input_abd(self.combine.a0.b),
-            a0c = alpha_input_c(self.combine.a0.c),
-            a0d = alpha_input_abd(self.combine.a0.d),
-            c1a = color_input_a(self.combine.c1.a),
-            c1b = color_input_b(self.combine.c1.b),
-            c1c = color_input_c(self.combine.c1.c),
-            c1d = color_input_d(self.combine.c1.d),
-            a1a = alpha_input_abd(self.combine.a1.a),
-            a1b = alpha_input_abd(self.combine.a1.b),
-            a1c = alpha_input_c(self.combine.a1.c),
-            a1d = alpha_input_abd(self.combine.a1.d),
-            sample_texture0 = self.on_defined_str(
-                &["USE_TEXTURE0"],
-                format!("tex_val0 = textureSampleN64{tex_filter}(texture0, sampler0, in.uv);")
-            ),
-            sample_texture1 = self.on_defined_str(
-                &["USE_TEXTURE1"],
-                format!("tex_val1 = textureSampleN64{tex_filter}(texture1, sampler1, in.uv);")
-            ),
-            second_pass_combine =  self.on_defined(
-                &["TWO_CYCLE"],
-                r#"
-                // Note that in the second cycle, Tex0 and Tex1 are swapped
-                texel = vec4<f32>(
-                     combineColorCycle1(texel, in.color tex_val1, tex_val0, noise),
-                     combineAlphaCycle1(texel, in.color, tex_val1, tex_val0, noise)
-                 );
-                "#,
-            ),
-            alpha_compare_dither = self.on_defined(
-                &["USE_ALPHA", "ALPHA_COMPARE_DITHER"],
-                r#"
-                var random_alpha = floor(random(vec3(floor(in.position.xy * (240.0 / f32(frame_uniforms.height))), f32(frame_uniforms.count))) + 0.5);
-                if texel.a < random_alpha { discard; }
-                "#,
-            ),
-            alpha_compare_threshold = self.on_defined(
-                &["USE_ALPHA", "ALPHA_COMPARE_THRESHOLD"],
-                "if texel.a < blend_uniforms.blend_color.a { discard; }"
-            ),
-            texture_edge = self.on_defined(
-                &["USE_ALPHA", "TEXTURE_EDGE"],
-                "if texel.a < 0.125 { discard; }"
-            ),
-            alpha_visualizer = self.on_defined(
-                &["USE_ALPHA", "USE_ALPHA_VISUALIZER"],
-                "texel = mix(texel, vec4<f32>(1.0, 0.0, 1.0, 1.0), 0.5);"
-            ),
-            blend_fog = self.on_defined(
-                &["USE_FOG"],
-                "texel = vec4<f32>(mix(texel.rgb, blend_uniforms.fog_color.rgb, in.color.a), texel.a);"
-            ),
+        "#,
+            tex_filter,
+            color_input_a(self.combine.c0.a),
+            color_input_b(self.combine.c0.b),
+            color_input_c(self.combine.c0.c),
+            color_input_d(self.combine.c0.d),
+            alpha_input_abd(self.combine.a0.a),
+            alpha_input_abd(self.combine.a0.b),
+            alpha_input_c(self.combine.a0.c),
+            alpha_input_abd(self.combine.a0.d),
+            color_input_a(self.combine.c1.a),
+            color_input_b(self.combine.c1.b),
+            color_input_c(self.combine.c1.c),
+            color_input_d(self.combine.c1.d),
+            alpha_input_abd(self.combine.a1.a),
+            alpha_input_abd(self.combine.a1.b),
+            alpha_input_c(self.combine.a1.c),
+            alpha_input_abd(self.combine.a1.d),
         )
     }
 
@@ -570,7 +580,7 @@ impl WgpuProgram {
                         offset: std::mem::size_of::<[f32; 4]>() as u64, // color
                         shader_location: 1,
                     },
-                    wgpu::VertexAttribute {
+                    VertexAttribute {
                         format: VertexFormat::Float32x2,
                         offset: std::mem::size_of::<[f32; 8]>() as u64, // texcoord
                         shader_location: 2,
@@ -626,27 +636,5 @@ impl WgpuProgram {
                 entries: &group_layout_entries,
             })
         }
-    }
-
-    // MARK: - Helpers
-
-    fn on_defined(&self, def: &[&str], output: &'static str) -> &str {
-        if let Some(d) = def.iter().next() {
-            if self.get_define_bool(d) {
-                return output;
-            }
-        }
-
-        ""
-    }
-
-    fn on_defined_str(&self, def: &[&str], output: String) -> String {
-        if let Some(d) = def.iter().next() {
-            if self.get_define_bool(d) {
-                return output;
-            }
-        }
-
-        "".to_string()
     }
 }

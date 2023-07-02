@@ -1,5 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
+use crate::opengl_program::ShaderVersion;
 use fast3d::{
     gbi::defines::g,
     models::color_combiner::CombineParams,
@@ -9,8 +10,10 @@ use fast3d::{
     },
 };
 use glam::Vec4Swizzles;
+use glium::buffer::{Buffer, BufferAny, BufferMode, BufferType};
 use glium::{
     draw_parameters::{DepthClamp, PolygonOffset},
+    implement_uniform_block,
     index::{NoIndices, PrimitiveType},
     program::ProgramCreationInput,
     texture::{RawImage2d, Texture2d},
@@ -38,6 +41,81 @@ impl TextureData {
         }
     }
 }
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct VertexUniforms {
+    projection: [[f32; 4]; 4],
+}
+
+implement_uniform_block!(VertexUniforms, projection);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct VertexWithFogUniforms {
+    projection: [[f32; 4]; 4],
+    fog_multiplier: f32,
+    fog_offset: f32,
+}
+
+implement_uniform_block!(
+    VertexWithFogUniforms,
+    projection,
+    fog_multiplier,
+    fog_offset
+);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct BlendUniforms {
+    blend_color: [f32; 4],
+}
+
+implement_uniform_block!(BlendUniforms, blend_color);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct BlendWithFogUniforms {
+    blend_color: [f32; 4],
+    fog_color: [f32; 3],
+    _padding: f32,
+}
+
+implement_uniform_block!(BlendWithFogUniforms, blend_color, fog_color);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CombineUniforms {
+    prim_color: [f32; 4],
+    env_color: [f32; 4],
+    key_center: [f32; 3],
+    _padding: f32,
+    key_scale: [f32; 3],
+    _padding2: f32,
+    prim_lod_frac: f32,
+    uk4: f32,
+    uk5: f32,
+}
+
+implement_uniform_block!(
+    CombineUniforms,
+    prim_color,
+    env_color,
+    key_center,
+    key_scale,
+    prim_lod_frac,
+    uk4,
+    uk5
+);
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct FrameUniforms {
+    frame_count: i32,
+    frame_height: i32,
+}
+
+implement_uniform_block!(FrameUniforms, frame_count, frame_height);
 
 #[derive(Default)]
 struct UniformVec<'a, 'b> {
@@ -260,7 +338,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         // create the shader and add it to the cache
         let mut program = OpenGLProgram::new(other_mode_h, other_mode_l, geometry_mode, combine);
         program.init();
-        program.preprocess();
+        program.preprocess(&ShaderVersion::GLSL410); // 410 is latest version supported by macOS
 
         let source = ProgramCreationInput::SourceCode {
             vertex_shader: &program.preprocessed_vertex,
@@ -378,45 +456,125 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         .unwrap();
 
         // Setup uniforms
+
+        let vtx_uniform_buf = if program.get_define_bool("USE_FOG") {
+            let data = VertexWithFogUniforms {
+                projection: projection_matrix.to_cols_array_2d(),
+                fog_multiplier: fog.multiplier as f32,
+                fog_offset: fog.offset as f32,
+            };
+
+            BufferAny::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+                18 * ::std::mem::size_of::<f32>(),
+            )
+            .unwrap()
+        } else {
+            let data = VertexUniforms {
+                projection: projection_matrix.to_cols_array_2d(),
+            };
+
+            BufferAny::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+                16 * ::std::mem::size_of::<f32>(),
+            )
+            .unwrap()
+        };
+
+        let blend_uniform_buf = if program.get_define_bool("USE_FOG") {
+            let data = BlendWithFogUniforms {
+                blend_color: uniforms.blend.blend_color.to_array(),
+                fog_color: uniforms.blend.fog_color.xyz().to_array(),
+                _padding: 0.0,
+            };
+
+            BufferAny::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+                8 * ::std::mem::size_of::<f32>(),
+            )
+            .unwrap()
+        } else {
+            let data = BlendUniforms {
+                blend_color: uniforms.blend.blend_color.to_array(),
+            };
+
+            BufferAny::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+                4 * ::std::mem::size_of::<f32>(),
+            )
+            .unwrap()
+        };
+
+        let combine_uniform_buf = {
+            let data = CombineUniforms {
+                prim_color: uniforms.combine.prim_color.to_array(),
+                env_color: uniforms.combine.env_color.to_array(),
+                _padding: 0.0,
+                key_center: uniforms.combine.key_center.to_array(),
+                key_scale: uniforms.combine.key_scale.to_array(),
+                _padding2: 0.0,
+                prim_lod_frac: uniforms.combine.prim_lod.x,
+                uk4: uniforms.combine.convert_k4,
+                uk5: uniforms.combine.convert_k5,
+            };
+
+            Buffer::new(
+                display,
+                &data,
+                BufferType::UniformBuffer,
+                BufferMode::Default,
+            )
+            .unwrap()
+        };
+
+        let frame_uniform_buf = if program.get_define_bool("USE_ALPHA")
+            && program.get_define_bool("ALPHA_COMPARE_DITHER")
+        {
+            let data = FrameUniforms {
+                frame_count: self.frame_count,
+                frame_height: self.current_height,
+            };
+
+            Some(
+                Buffer::new(
+                    display,
+                    &data,
+                    BufferType::UniformBuffer,
+                    BufferMode::Default,
+                )
+                .unwrap(),
+            )
+        } else {
+            None
+        };
+
+        // Setup uniforms
         let mut shader_uniforms = vec![
             (
-                "uProjection",
-                UniformValue::Mat4(projection_matrix.to_cols_array_2d()),
+                "Uniforms",
+                UniformValue::Block(vtx_uniform_buf.as_slice_any(), |_block| Ok(())),
             ),
             (
-                "uBlendColor",
-                UniformValue::Vec4(uniforms.blend.blend_color.to_array()),
+                "BlendUniforms",
+                UniformValue::Block(blend_uniform_buf.as_slice_any(), |_block| Ok(())),
             ),
             (
-                "uPrimColor",
-                UniformValue::Vec4(uniforms.combine.prim_color.to_array()),
+                "CombineUniforms",
+                UniformValue::Block(combine_uniform_buf.as_slice_any(), |_block| Ok(())),
             ),
-            (
-                "uEnvColor",
-                UniformValue::Vec4(uniforms.combine.env_color.to_array()),
-            ),
-            (
-                "uKeyCenter",
-                UniformValue::Vec3(uniforms.combine.key_center.to_array()),
-            ),
-            (
-                "uKeyScale",
-                UniformValue::Vec3(uniforms.combine.key_scale.to_array()),
-            ),
-            ("uPrimLOD", UniformValue::Float(uniforms.combine.prim_lod.x)),
-            ("uK4", UniformValue::Float(uniforms.combine.convert_k4)),
-            ("uK5", UniformValue::Float(uniforms.combine.convert_k5)),
         ];
-
-        if program.get_define_bool("USE_FOG") {
-            shader_uniforms.push((
-                "uFogColor",
-                UniformValue::Vec3(uniforms.blend.fog_color.xyz().to_array()),
-            ));
-
-            shader_uniforms.push(("uFogMultiplier", UniformValue::Float(fog.multiplier as f32)));
-            shader_uniforms.push(("uFogOffset", UniformValue::Float(fog.offset as f32)));
-        }
 
         if program.get_define_bool("USE_TEXTURE0") {
             let texture = self.textures.get(self.current_texture_ids[0]).unwrap();
@@ -435,8 +593,11 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         }
 
         if program.get_define_bool("USE_ALPHA") && program.get_define_bool("ALPHA_COMPARE_DITHER") {
-            shader_uniforms.push(("uFrameCount", UniformValue::SignedInt(self.frame_count)));
-            shader_uniforms.push(("uFrameHeight", UniformValue::SignedInt(self.current_height)));
+            let frame_uniform_buf = frame_uniform_buf.as_ref();
+            shader_uniforms.push((
+                "FrameUniforms",
+                UniformValue::Block(frame_uniform_buf.unwrap().as_slice_any(), |_block| Ok(())),
+            ));
         }
 
         // Draw triangles

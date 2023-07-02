@@ -19,6 +19,12 @@ pub enum ShaderType {
     Fragment,
 }
 
+#[derive(PartialEq, Eq)]
+pub enum ShaderVersion {
+    GLSL410,
+    GLSL440, // version supported by naga to use in WGPU
+}
+
 #[derive(Debug, Clone)]
 pub struct OpenGLProgram<T> {
     // Compiled program.
@@ -85,20 +91,29 @@ impl<T> OpenGLProgram<T> {
 
     // MARK: - Preprocessing
 
-    pub fn preprocess(&mut self) {
+    pub fn preprocess(&mut self, shader_version: &ShaderVersion) {
         if !self.preprocessed_vertex.is_empty() {
             return;
         }
 
-        self.preprocessed_vertex =
-            self.preprocess_shader(ShaderType::Vertex, &format!("{}{}", self.both, self.vertex));
+        self.preprocessed_vertex = self.preprocess_shader(
+            ShaderType::Vertex,
+            shader_version,
+            &format!("{}{}", self.both, self.vertex),
+        );
         self.preprocessed_frag = self.preprocess_shader(
             ShaderType::Fragment,
+            shader_version,
             &format!("{}{}", self.both, self.fragment),
         );
     }
 
-    pub fn preprocess_shader(&mut self, _shader_type: ShaderType, shader: &str) -> String {
+    pub fn preprocess_shader(
+        &mut self,
+        _shader_type: ShaderType,
+        shader_version: &ShaderVersion,
+        shader: &str,
+    ) -> String {
         let defines_string = self
             .defines
             .iter()
@@ -106,13 +121,35 @@ impl<T> OpenGLProgram<T> {
             .collect::<Vec<String>>()
             .join("");
 
+        // make appropriate replacements for the shader version
+        let shader = match shader_version {
+            ShaderVersion::GLSL410 => {
+                shader.replace(", set = 0, binding = 0", "")
+                    .replace(", set = 1, binding = 0", "")
+                    .replace(", set = 1, binding = 1", "")
+                    .replace(", set = 1, binding = 2", "")
+            }
+            ShaderVersion::GLSL440 => {
+                shader.replace("uniform sampler2D uTex0;", "layout(set = 2, binding = 0) uniform texture2D uTex0;\nlayout(set = 2, binding = 1) uniform sampler uTex0Sampler;")
+                    .replace("uniform sampler2D uTex1;", "layout(set = 2, binding = 2) uniform texture2D uTex1;\nlayout(set = 2, binding = 3) uniform sampler uTex1Sampler;")
+                    .replace("in sampler2D tex,", "in texture2D tex, in sampler smplr,")
+                    .replace("texture(tex,", "texture(sampler2D(tex, smplr),")
+                    .replace("Texture2D_N64(uTex0, vTexCoord);", "Texture2D_N64(uTex0, uTex0Sampler, vTexCoord);")
+                    .replace("Texture2D_N64(uTex1, vTexCoord);", "Texture2D_N64(uTex1, uTex1Sampler, vTexCoord);")
+            }
+        };
+
+        let version = match shader_version {
+            ShaderVersion::GLSL410 => "#version 410",
+            ShaderVersion::GLSL440 => "", // we omit the version for naga
+        };
+
         format!(
             r#"
-            #version 140
-            {}
-            {}
+            {version}
+            {defines_string}
+            {shader}
             "#,
-            defines_string, shader
         )
     }
 
@@ -201,21 +238,23 @@ impl<T> OpenGLProgram<T> {
         .to_string();
 
         self.vertex = r#"
-            in vec4 aVtxPos;
+            layout(location = 0) in vec4 aVtxPos;
+            layout(location = 1) in vec4 aVtxColor;
 
-            in vec4 aVtxColor;
-            out vec4 vVtxColor;
+            layout(location = 0) out vec4 vVtxColor;
 
             #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
-                in vec2 aTexCoord;
-                out vec2 vTexCoord;
+                layout(location = 2) in vec2 aTexCoord;
+                layout(location = 1) out vec2 vTexCoord;
             #endif
 
-            uniform mat4 uProjection;
-            #ifdef USE_FOG
-                uniform float uFogMultiplier;
-                uniform float uFogOffset;
-            #endif
+            layout(std140, set = 0, binding = 0) uniform Uniforms {
+                mat4 uProjection;
+                #ifdef USE_FOG
+                    float uFogMultiplier;
+                    float uFogOffset;
+                #endif
+            };
 
             void main() {
                 if (aVtxPos.w == DRAWING_RECT) {
@@ -265,7 +304,9 @@ impl<T> OpenGLProgram<T> {
             } else {
                 match input {
                     CCMUX::CENTER__SCALE__ONE => "tOne.rgb", // matching against ONE
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(RAND_NOISE, RAND_NOISE, RAND_NOISE)", // matching against NOISE
+                    CCMUX::COMBINED_ALPHA__NOISE__K4 => {
+                        "vec3(randomNoise, randomNoise, randomNoise)"
+                    } // matching against NOISE
                     _ => "tZero.rgb",
                 }
             }
@@ -348,28 +389,30 @@ impl<T> OpenGLProgram<T> {
 
         format!(
             r#"
-            in vec4 vVtxColor;
+            layout(location = 0) in vec4 vVtxColor;
 
             #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
-                in vec2 vTexCoord;
+                layout(location = 1) in vec2 vTexCoord;
             #endif
 
-            #ifdef USE_FOG
-                uniform vec3 uFogColor;
-            #endif
+            layout(location = 0) out vec4 outColor;
 
-            // blend parameters
-            uniform vec4 uBlendColor;
+            layout(std140, set = 1, binding = 0) uniform BlendUniforms {{
+                vec4 uBlendColor;
+                #ifdef USE_FOG
+                    vec3 uFogColor;
+                #endif
+            }};
 
-            // combine parameters
-            // TODO: use a uniform block?
-            uniform vec4 uPrimColor;
-            uniform vec4 uEnvColor;
-            uniform vec3 uKeyCenter;
-            uniform vec3 uKeyScale;
-            uniform float uPrimLodFrac;
-            uniform float uK4;
-            uniform float uK5;
+            layout(std140, set = 1, binding = 1) uniform CombineUniforms {{
+                vec4 uPrimColor;
+                vec4 uEnvColor;
+                vec3 uKeyCenter;
+                vec3 uKeyScale;
+                float uPrimLodFrac;
+                float uK4;
+                float uK5;
+            }};
 
             #ifdef USE_TEXTURE0
                 uniform sampler2D uTex0;
@@ -378,22 +421,19 @@ impl<T> OpenGLProgram<T> {
                 uniform sampler2D uTex1;
             #endif
 
-            #if defined(USE_ALPHA)
-                #if defined(ALPHA_COMPARE_DITHER)
-                    uniform int uFrameCount;
-                    uniform int uFrameHeight;
+            #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
+                layout(std140, set = 1, binding = 2) uniform FrameUniforms {{
+                    int uFrameCount;
+                    int uFrameHeight;
+                }};
 
-                    float random(in vec3 value) {{
-                        float random = dot(sin(value), vec3(12.9898, 78.233, 37.719));
-                        return fract(sin(random) * 143758.5453);
-                    }}
-                #endif
+                float random(in vec3 value) {{
+                    float random = dot(sin(value), vec3(12.9898, 78.233, 37.719));
+                    return fract(sin(random) * 143758.5453);
+                }}
             #endif
 
-            out vec4 outColor;
-
             #define TEX_OFFSET(offset) texture(tex, texCoord - (offset) / texSize)
-            #define RAND_NOISE "((random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0)"
 
             vec4 Texture2D_N64_Point(in sampler2D tex, in vec2 texCoord) {{
                 return texture(tex, texCoord);
@@ -419,6 +459,9 @@ impl<T> OpenGLProgram<T> {
             #define Texture2D_N64 Texture2D_N64_{}
 
             vec3 CombineColorCycle0(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
+                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
+                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
+                #endif
                 return ({} - {}) * {} + {};
             }} 
             
@@ -427,6 +470,9 @@ impl<T> OpenGLProgram<T> {
             }}
             
             vec3 CombineColorCycle1(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
+                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
+                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
+                #endif
                 return ({} - {}) * {} + {};
             }}
             
