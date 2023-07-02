@@ -98,12 +98,12 @@ impl<T> OpenGLProgram<T> {
 
         self.preprocessed_vertex = self.preprocess_shader(
             ShaderType::Vertex,
-            &shader_version,
+            shader_version,
             &format!("{}{}", self.both, self.vertex),
         );
         self.preprocessed_frag = self.preprocess_shader(
             ShaderType::Fragment,
-            &shader_version,
+            shader_version,
             &format!("{}{}", self.both, self.fragment),
         );
     }
@@ -132,6 +132,10 @@ impl<T> OpenGLProgram<T> {
             ShaderVersion::GLSL440 => {
                 shader.replace("uniform sampler2D uTex0;", "layout(set = 2, binding = 0) uniform texture2D uTex0;\nlayout(set = 2, binding = 1) uniform sampler uTex0Sampler;")
                     .replace("uniform sampler2D uTex1;", "layout(set = 2, binding = 2) uniform texture2D uTex1;\nlayout(set = 2, binding = 3) uniform sampler uTex1Sampler;")
+                    .replace("in sampler2D tex,", "in texture2D tex, in sampler smplr,")
+                    .replace("texture(tex,", "texture(sampler2D(tex, smplr),")
+                    .replace("Texture2D_N64(uTex0, vTexCoord);", "Texture2D_N64(uTex0, uTex0Sampler, vTexCoord);")
+                    .replace("Texture2D_N64(uTex1, vTexCoord);", "Texture2D_N64(uTex1, uTex1Sampler, vTexCoord);")
             }
         };
 

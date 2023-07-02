@@ -1,9 +1,11 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use bytemuck::{Pod, Zeroable};
+use wgpu::ShaderModule;
 
 use wgpu::util::{align_to, DeviceExt};
 
+use crate::wgpu_program::ShaderVersion;
 use fast3d::{
     gbi::defines::g,
     models::color_combiner::CombineParams,
@@ -91,7 +93,7 @@ pub struct WgpuGraphicsDevice {
     fragment_uniform_bind_group_layout: wgpu::BindGroupLayout,
     fragment_uniform_bind_group: wgpu::BindGroup,
 
-    pub shader_cache: HashMap<u64, WgpuProgram>,
+    pub shader_cache: HashMap<u64, WgpuProgram<ShaderModule>>,
     current_shader: u64,
 
     textures: Vec<TextureData>,
@@ -332,7 +334,7 @@ impl WgpuGraphicsDevice {
     fn create_textures_bind_group(
         &self,
         device: &wgpu::Device,
-        program: &WgpuProgram,
+        program: &WgpuProgram<ShaderModule>,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> wgpu::BindGroup {
         let mut texture_bind_group_entries: Vec<wgpu::BindGroupEntry> = Vec::new();
@@ -475,12 +477,26 @@ impl WgpuGraphicsDevice {
         // create the shader and add it to the cache
         let mut program = WgpuProgram::new(other_mode_h, other_mode_l, geometry_mode, combine);
         program.init();
-        program.preprocess();
+        program.preprocess(&ShaderVersion::GLSL440);
 
-        program.compiled_program =
+        program.compiled_vertex_program =
             Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: None,
-                source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(&program.processed_shader)),
+                source: wgpu::ShaderSource::Glsl {
+                    shader: Cow::Borrowed(&program.preprocessed_vertex),
+                    stage: naga::ShaderStage::Vertex,
+                    defines: program.defines.clone(),
+                },
+            }));
+
+        program.compiled_fragment_program =
+            Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Glsl {
+                    shader: Cow::Borrowed(&program.preprocessed_frag),
+                    stage: naga::ShaderStage::Fragment,
+                    defines: program.defines.clone(),
+                },
             }));
 
         self.current_shader = shader_hash;
@@ -679,13 +695,13 @@ impl WgpuGraphicsDevice {
             label: Some("Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: program.compiled_program.as_ref().unwrap(),
-                entry_point: "vs_main",
+                module: program.compiled_vertex_program.as_ref().unwrap(),
+                entry_point: "main",
                 buffers: &[program.vertex_description()],
             },
             fragment: Some(wgpu::FragmentState {
-                module: program.compiled_program.as_ref().unwrap(),
-                entry_point: "fs_main",
+                module: program.compiled_fragment_program.as_ref().unwrap(),
+                entry_point: "main",
                 targets: &[Some(color_target_states)],
             }),
             primitive: wgpu::PrimitiveState {
