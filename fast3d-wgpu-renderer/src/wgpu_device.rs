@@ -6,16 +6,15 @@ use wgpu::{RenderPipeline, ShaderModule};
 use wgpu::util::{align_to, DeviceExt};
 
 use crate::wgpu_program::ShaderVersion;
-use fast3d::output::{ShaderConfig, ShaderId};
 use fast3d::{
     gbi::defines::g,
-    models::color_combiner::CombineParams,
+    rdp::OutputDimensions,
     output::{
+        ShaderConfig, ShaderId,
         gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
         models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
     },
 };
-use fast3d::rdp::OutputDimensions;
 
 use super::wgpu_program::WgpuProgram;
 
@@ -91,7 +90,6 @@ pub struct PipelineConfig {
     pub depth_stencil: Option<OutputStencil>,
 }
 
-
 pub struct WgpuGraphicsDevice {
     depth_texture: wgpu::TextureView,
 
@@ -106,6 +104,7 @@ pub struct WgpuGraphicsDevice {
     frame_uniform_buf: wgpu::Buffer,
     fragment_uniform_bind_group_layout: wgpu::BindGroupLayout,
     fragment_uniform_bind_group: wgpu::BindGroup,
+    texture_bind_group_layout: Option<wgpu::BindGroupLayout>,
 
     pub shader_cache: rustc_hash::FxHashMap<ShaderId, WgpuProgram<ShaderModule>>,
     current_shader: Option<ShaderId>,
@@ -354,7 +353,6 @@ impl WgpuGraphicsDevice {
         program: &WgpuProgram<ShaderModule>,
     ) -> wgpu::BindGroup {
         let mut texture_bind_group_entries: Vec<wgpu::BindGroupEntry> = Vec::new();
-        let texture_bind_group_layout = program.create_texture_bind_group_layout(device);
 
         for i in 0..2 {
             let texture_index = format!("USE_TEXTURE{}", i);
@@ -379,7 +377,7 @@ impl WgpuGraphicsDevice {
         }
 
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
+            layout: &self.texture_bind_group_layout.as_ref().unwrap(),
             entries: &texture_bind_group_entries,
             label: None,
         })
@@ -441,6 +439,7 @@ impl WgpuGraphicsDevice {
             frame_uniform_buf,
             fragment_uniform_bind_group_layout,
             fragment_uniform_bind_group,
+            texture_bind_group_layout: None,
 
             shader_cache: rustc_hash::FxHashMap::default(),
             current_shader: None,
@@ -674,11 +673,6 @@ impl WgpuGraphicsDevice {
         cull_mode: Option<Face>,
         depth_stencil: Option<OutputStencil>,
     ) {
-        // Check if we have a cached pipeline
-        if self.pipeline_cache.contains_key(&pipeline_id) {
-            return;
-        }
-
         // Grab current program
         let program = self
             .shader_cache
@@ -686,7 +680,12 @@ impl WgpuGraphicsDevice {
             .unwrap();
 
         // Create the texture bind group layout
-        let texture_bind_group_layout = program.create_texture_bind_group_layout(device);
+        self.texture_bind_group_layout = Some(program.create_texture_bind_group_layout(device));
+
+        // Check if we have a cached pipeline
+        if self.pipeline_cache.contains_key(&pipeline_id) {
+            return;
+        }
 
         // Create the pipeline layout
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -694,7 +693,7 @@ impl WgpuGraphicsDevice {
             bind_group_layouts: &[
                 &self.vertex_bind_group_layout,
                 &self.fragment_uniform_bind_group_layout,
-                &texture_bind_group_layout,
+                &self.texture_bind_group_layout.as_ref().unwrap(),
             ],
             push_constant_ranges: &[],
         });
@@ -814,8 +813,8 @@ impl WgpuGraphicsDevice {
             // When we manage to use one rpass for all draw calls, we can add this check
             // if pipeline_id != self.current_pipeline {
             //     self.current_pipeline = pipeline_id;
-                let pipeline = self.pipeline_cache.get(&pipeline_id).unwrap();
-                pass.set_pipeline(pipeline);
+            let pipeline = self.pipeline_cache.get(&pipeline_id).unwrap();
+            pass.set_pipeline(pipeline);
             // }
 
             pass.set_bind_group(0, &self.vertex_bind_group, &[]);
@@ -828,7 +827,6 @@ impl WgpuGraphicsDevice {
 
             let wgpu_y = output_size.height - scissor[1] - scissor[3];
             pass.set_scissor_rect(scissor[0], wgpu_y, scissor[2], scissor[3]);
-
 
             pass.pop_debug_group();
             pass.insert_debug_marker("Draw!");
