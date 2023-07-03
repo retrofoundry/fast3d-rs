@@ -1,6 +1,6 @@
 use crate::models::texture::{ImageFormat, ImageSize};
 
-#[derive(Debug, Clone, Copy, Hash)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct TileDescriptor {
     pub uls: u16,
     pub ult: u16,

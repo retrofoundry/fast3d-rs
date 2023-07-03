@@ -16,5 +16,6 @@ crate-type = ["lib", "cdylib"]
 glam.workspace = true
 log.workspace = true
 fast3d.workspace = true
+rustc-hash.workspace = true
 glium = "0.32.1"
 

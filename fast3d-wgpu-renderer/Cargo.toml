@@ -17,5 +17,6 @@ bytemuck.workspace = true
 glam.workspace = true
 log.workspace = true
 fast3d.workspace = true
+rustc-hash.workspace = true
 wgpu = { version = "0.16", features = ["glsl"] }
 naga = "0.12.2"

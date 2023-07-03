@@ -34,6 +34,7 @@ bytemuck = { version = "1.13.1", features = ["derive"] }
 glam = { version = "0.24.1", features = ["approx", "bytemuck"] }
 log = "0.4"
 fast3d = { version = "0.3.0", path = "./fast3d" }
+rustc-hash = "1.1"
 
 [patch.crates-io]
 glium = { git = "https://github.com/retrofoundry/glium", branch = "helix" }

@@ -2,10 +2,7 @@ use crate::output::models::{
     OutputFogParams, OutputSampler, OutputStencil, OutputUniforms, OutputUniformsBlend,
     OutputUniformsCombine, OutputVBO,
 };
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-};
+use std::hash::Hash;
 use texture_cache::TextureCache;
 
 use self::gfx::{BlendState, CompareFunction, Face};
@@ -21,15 +18,35 @@ pub mod texture_cache;
 
 const TEXTURE_CACHE_MAX_SIZE: usize = 500;
 
-#[derive(Debug, Clone)]
-pub struct IntermediateDrawCall {
-    // Shader Configuration
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShaderId(pub ShaderConfig);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ShaderConfig {
     pub other_mode_h: u32,
     pub other_mode_l: u32,
     pub geometry_mode: u32,
     pub combine: CombineParams,
     pub tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
-    pub shader_hash: u64,
+}
+
+impl ShaderConfig {
+    pub const EMPTY: Self = {
+        Self {
+            other_mode_h: 0,
+            other_mode_l: 0,
+            geometry_mode: 0,
+            combine: CombineParams::ZERO,
+            tile_descriptors: [TileDescriptor::EMPTY; NUM_TILE_DESCRIPTORS],
+        }
+    };
+}
+
+#[derive(Debug, Clone)]
+pub struct IntermediateDrawCall {
+    // Shader Configuration
+    pub shader_id: ShaderId,
+    pub shader_config: ShaderConfig,
 
     // Textures
     pub texture_indices: [Option<u64>; 2],
@@ -67,12 +84,8 @@ pub struct IntermediateDrawCall {
 
 impl IntermediateDrawCall {
     pub const EMPTY: Self = IntermediateDrawCall {
-        other_mode_h: 0,
-        other_mode_l: 0,
-        geometry_mode: 0,
-        combine: CombineParams::ZERO,
-        tile_descriptors: [TileDescriptor::EMPTY; NUM_TILE_DESCRIPTORS],
-        shader_hash: 0,
+        shader_id: ShaderId(ShaderConfig::EMPTY),
+        shader_config: ShaderConfig::EMPTY,
         texture_indices: [None; 2],
         samplers: [None; 2],
         stencil: None,
@@ -85,18 +98,6 @@ impl IntermediateDrawCall {
         projection_matrix: glam::Mat4::ZERO,
         fog: OutputFogParams::EMPTY,
     };
-
-    pub fn finalize(&mut self) {
-        // compute the shader hash and store it
-        let mut hasher = DefaultHasher::new();
-
-        self.other_mode_h.hash(&mut hasher);
-        self.other_mode_l.hash(&mut hasher);
-        self.geometry_mode.hash(&mut hasher);
-        self.combine.hash(&mut hasher);
-
-        self.shader_hash = hasher.finish();
-    }
 }
 
 pub struct RCPOutput {
@@ -150,10 +151,16 @@ impl RCPOutput {
         tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
     ) {
         let draw_call = self.current_draw_call();
-        draw_call.other_mode_h = other_mode_h;
-        draw_call.other_mode_l = other_mode_l;
-        draw_call.combine = combine;
-        draw_call.tile_descriptors = tile_descriptors;
+        let shader_config = ShaderConfig {
+            other_mode_h,
+            other_mode_l,
+            geometry_mode: 0,
+            combine,
+            tile_descriptors,
+        };
+
+        draw_call.shader_id = ShaderId(shader_config);
+        draw_call.shader_config = shader_config;
     }
 
     pub fn set_texture(&mut self, tile: usize, hash: u64) {
@@ -254,7 +261,6 @@ impl RCPOutput {
     pub fn set_vbo(&mut self, vbo: Vec<u8>, num_tris: usize) {
         let draw_call = self.current_draw_call();
         draw_call.vbo = OutputVBO { vbo, num_tris };
-        draw_call.finalize();
 
         // start a new draw call that's a copy of the current one
         // we do this cause atm we only set properties on changes

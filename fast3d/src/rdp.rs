@@ -189,7 +189,7 @@ pub struct RDP {
 
     pub texture_image_state: TextureImageState, // coming via GBI (texture to load)
     pub tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
-    pub tmem_map: HashMap<u16, TMEMMapEntry>, // tmem address -> texture image state address
+    pub tmem_map: rustc_hash::FxHashMap<u16, TMEMMapEntry>, // tmem address -> texture image state address
     pub textures_changed: [bool; 2],
 
     pub viewport: Rect,
@@ -233,7 +233,7 @@ impl RDP {
 
             texture_image_state: TextureImageState::EMPTY,
             tile_descriptors: [TileDescriptor::EMPTY; 8],
-            tmem_map: HashMap::new(),
+            tmem_map: rustc_hash::FxHashMap::default(),
             textures_changed: [false; 2],
 
             viewport: Rect::ZERO,
@@ -516,19 +516,6 @@ impl RDP {
             self.buf_vbo_len = 0;
             self.buf_vbo_num_tris = 0;
         }
-    }
-
-    // MARK: - Shader Programs
-
-    pub fn shader_program_hash(&mut self, geometry_mode: u32) -> u64 {
-        let mut hasher = DefaultHasher::new();
-
-        self.other_mode_h.hash(&mut hasher);
-        self.other_mode_l.hash(&mut hasher);
-        geometry_mode.hash(&mut hasher);
-        self.combine.hash(&mut hasher);
-
-        hasher.finish()
     }
 
     // MARK: - Blend
