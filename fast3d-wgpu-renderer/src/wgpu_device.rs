@@ -6,6 +6,7 @@ use wgpu::ShaderModule;
 use wgpu::util::{align_to, DeviceExt};
 
 use crate::wgpu_program::ShaderVersion;
+use fast3d::output::{ShaderConfig, ShaderId};
 use fast3d::{
     gbi::defines::g,
     models::color_combiner::CombineParams,
@@ -93,8 +94,8 @@ pub struct WgpuGraphicsDevice {
     fragment_uniform_bind_group_layout: wgpu::BindGroupLayout,
     fragment_uniform_bind_group: wgpu::BindGroup,
 
-    pub shader_cache: HashMap<u64, WgpuProgram<ShaderModule>>,
-    current_shader: u64,
+    pub shader_cache: rustc_hash::FxHashMap<ShaderId, WgpuProgram<ShaderModule>>,
+    current_shader: Option<ShaderId>,
 
     textures: Vec<TextureData>,
     active_texture: usize,
@@ -425,8 +426,8 @@ impl WgpuGraphicsDevice {
             fragment_uniform_bind_group_layout,
             fragment_uniform_bind_group,
 
-            shader_cache: HashMap::new(),
-            current_shader: 0,
+            shader_cache: rustc_hash::FxHashMap::default(),
+            current_shader: None,
 
             textures: Vec::new(),
             active_texture: 0,
@@ -452,30 +453,27 @@ impl WgpuGraphicsDevice {
     pub fn select_program(
         &mut self,
         device: &wgpu::Device,
-        shader_hash: u64,
-        other_mode_h: u32,
-        other_mode_l: u32,
-        geometry_mode: u32,
-        combine: CombineParams,
+        shader_id: ShaderId,
+        shader_config: ShaderConfig,
     ) {
         // check if the shader is already loaded
-        if self.current_shader == shader_hash {
+        if self.current_shader == Some(shader_id) {
             return;
         }
 
         // unload the current shader
-        if self.current_shader != 0 {
-            self.current_shader = 0;
+        if self.current_shader != None {
+            self.current_shader = None;
         }
 
         // check if the shader is in the cache
-        if self.shader_cache.contains_key(&shader_hash) {
-            self.current_shader = shader_hash;
+        if self.shader_cache.contains_key(&shader_id) {
+            self.current_shader = Some(shader_id);
             return;
         }
 
         // create the shader and add it to the cache
-        let mut program = WgpuProgram::new(other_mode_h, other_mode_l, geometry_mode, combine);
+        let mut program = WgpuProgram::new(shader_config);
         program.init();
         program.preprocess(&ShaderVersion::GLSL440);
 
@@ -499,8 +497,8 @@ impl WgpuGraphicsDevice {
                 },
             }));
 
-        self.current_shader = shader_hash;
-        self.shader_cache.insert(shader_hash, program);
+        self.current_shader = Some(shader_id);
+        self.shader_cache.insert(shader_id, program);
     }
 
     pub fn bind_texture(
@@ -591,7 +589,10 @@ impl WgpuGraphicsDevice {
         uniforms: &OutputUniforms,
     ) {
         // Grab current program
-        let program = self.shader_cache.get_mut(&self.current_shader).unwrap();
+        let program = self
+            .shader_cache
+            .get_mut(&self.current_shader.unwrap())
+            .unwrap();
 
         // Update the vertex uniforms
         if program.get_define_bool("USE_FOG") {
@@ -654,7 +655,10 @@ impl WgpuGraphicsDevice {
         depth_stencil: Option<OutputStencil>,
     ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
         // Grab current program
-        let program = self.shader_cache.get_mut(&self.current_shader).unwrap();
+        let program = self
+            .shader_cache
+            .get_mut(&self.current_shader.unwrap())
+            .unwrap();
 
         // Create the texture bind group layout
         let texture_bind_group_layout = program.create_texture_bind_group_layout(device);
@@ -731,7 +735,10 @@ impl WgpuGraphicsDevice {
         num_tris: usize,
     ) {
         // Grab current program
-        let program = self.shader_cache.get(&self.current_shader).unwrap();
+        let program = self
+            .shader_cache
+            .get(&self.current_shader.unwrap())
+            .unwrap();
 
         // Render the triangles
         encoder.push_debug_group(&format!("draw triangle pass: {}", draw_call_index));

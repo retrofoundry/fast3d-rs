@@ -1,9 +1,9 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::borrow::Cow;
 
 use crate::opengl_program::ShaderVersion;
+use fast3d::output::{ShaderConfig, ShaderId};
 use fast3d::{
     gbi::defines::g,
-    models::color_combiner::CombineParams,
     output::{
         gfx::{BlendComponent, BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
         models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
@@ -150,8 +150,8 @@ impl Uniforms for UniformVec<'_, '_> {
 }
 
 pub struct GliumGraphicsDevice<'draw> {
-    pub shader_cache: HashMap<u64, OpenGLProgram<Program>>,
-    current_shader: u64,
+    pub shader_cache: rustc_hash::FxHashMap<ShaderId, OpenGLProgram<Program>>,
+    current_shader: Option<ShaderId>,
 
     textures: Vec<TextureData>,
     active_texture: usize,
@@ -221,8 +221,8 @@ impl<'draw> Default for GliumGraphicsDevice<'draw> {
 impl<'draw> GliumGraphicsDevice<'draw> {
     pub fn new() -> Self {
         Self {
-            shader_cache: HashMap::new(),
-            current_shader: 0,
+            shader_cache: rustc_hash::FxHashMap::default(),
+            current_shader: None,
 
             textures: Vec::new(),
             active_texture: 0,
@@ -329,33 +329,30 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         });
     }
 
-    pub fn load_program(
+    pub fn select_program(
         &mut self,
         display: &Display,
-        shader_hash: u64,
-        other_mode_h: u32,
-        other_mode_l: u32,
-        geometry_mode: u32,
-        combine: CombineParams,
+        shader_id: ShaderId,
+        shader_config: ShaderConfig,
     ) {
         // check if the shader is already loaded
-        if self.current_shader == shader_hash {
+        if self.current_shader == Some(shader_id) {
             return;
         }
 
         // unload the current shader
-        if self.current_shader != 0 {
-            self.current_shader = 0;
+        if self.current_shader.is_some() {
+            self.current_shader = None;
         }
 
         // check if the shader is in the cache
-        if self.shader_cache.contains_key(&shader_hash) {
-            self.current_shader = shader_hash;
+        if self.shader_cache.contains_key(&shader_id) {
+            self.current_shader = Some(shader_id);
             return;
         }
 
         // create the shader and add it to the cache
-        let mut program = OpenGLProgram::new(other_mode_h, other_mode_l, geometry_mode, combine);
+        let mut program = OpenGLProgram::new(shader_config);
         program.init();
         program.preprocess(&ShaderVersion::GLSL410); // 410 is latest version supported by macOS
 
@@ -372,8 +369,8 @@ impl<'draw> GliumGraphicsDevice<'draw> {
 
         program.compiled_program = Some(Program::new(display, source).unwrap());
 
-        self.current_shader = shader_hash;
-        self.shader_cache.insert(shader_hash, program);
+        self.current_shader = Some(shader_id);
+        self.shader_cache.insert(shader_id, program);
     }
 
     pub fn bind_texture(&mut self, display: &Display, tile: usize, texture: &mut OutputTexture) {
@@ -433,7 +430,10 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         uniforms: &OutputUniforms,
     ) {
         // Grab current program
-        let program = self.shader_cache.get(&self.current_shader).unwrap();
+        let program = self
+            .shader_cache
+            .get(&self.current_shader.unwrap())
+            .unwrap();
 
         // Setup vertex buffer
         let mut vertex_format_data = vec![

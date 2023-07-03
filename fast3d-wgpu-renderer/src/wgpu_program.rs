@@ -10,6 +10,7 @@ use fast3d::models::{
     texture::TextFilt,
 };
 
+use fast3d::output::ShaderConfig;
 use fast3d::rdp::OtherModeHCycleType;
 use naga::FastHashMap;
 use wgpu::{BindGroupLayout, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
@@ -38,7 +39,7 @@ pub struct WgpuProgram<T> {
     pub both: String,
     pub vertex: String,
     pub fragment: String,
-    pub defines: naga::FastHashMap<String, String>,
+    pub defines: FastHashMap<String, String>,
 
     // configurators
     other_mode_h: u32,
@@ -157,12 +158,7 @@ impl<T> WgpuProgram<T> {
 
     // MARK: - Defaults
 
-    pub fn new(
-        other_mode_h: u32,
-        other_mode_l: u32,
-        geometry_mode: u32,
-        combine: CombineParams,
-    ) -> Self {
+    pub fn new(shader_config: ShaderConfig) -> Self {
         Self {
             preprocessed_vertex: "".to_string(),
             preprocessed_frag: "".to_string(),
@@ -174,10 +170,10 @@ impl<T> WgpuProgram<T> {
             fragment: "".to_string(),
             defines: FastHashMap::default(),
 
-            other_mode_h,
-            other_mode_l,
-            geometry_mode,
-            combine,
+            other_mode_h: shader_config.other_mode_h,
+            other_mode_l: shader_config.other_mode_l,
+            geometry_mode: shader_config.geometry_mode,
+            combine: shader_config.combine,
 
             num_floats: 0,
         }

@@ -1,6 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
@@ -189,7 +187,7 @@ pub struct RDP {
 
     pub texture_image_state: TextureImageState, // coming via GBI (texture to load)
     pub tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
-    pub tmem_map: HashMap<u16, TMEMMapEntry>, // tmem address -> texture image state address
+    pub tmem_map: rustc_hash::FxHashMap<u16, TMEMMapEntry>, // tmem address -> texture image state address
     pub textures_changed: [bool; 2],
 
     pub viewport: Rect,
@@ -233,7 +231,7 @@ impl RDP {
 
             texture_image_state: TextureImageState::EMPTY,
             tile_descriptors: [TileDescriptor::EMPTY; 8],
-            tmem_map: HashMap::new(),
+            tmem_map: rustc_hash::FxHashMap::default(),
             textures_changed: [false; 2],
 
             viewport: Rect::ZERO,
@@ -518,19 +516,6 @@ impl RDP {
         }
     }
 
-    // MARK: - Shader Programs
-
-    pub fn shader_program_hash(&mut self, geometry_mode: u32) -> u64 {
-        let mut hasher = DefaultHasher::new();
-
-        self.other_mode_h.hash(&mut hasher);
-        self.other_mode_l.hash(&mut hasher);
-        geometry_mode.hash(&mut hasher);
-        self.combine.hash(&mut hasher);
-
-        hasher.finish()
-    }
-
     // MARK: - Blend
 
     fn process_depth_params(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
@@ -755,6 +740,7 @@ impl RDP {
         output.set_program_params(
             self.other_mode_h,
             self.other_mode_l,
+            rsp.geometry_mode,
             self.combine,
             self.tile_descriptors,
         );
