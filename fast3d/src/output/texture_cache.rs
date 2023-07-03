@@ -1,5 +1,6 @@
+use std::num::NonZeroUsize;
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, VecDeque},
+    collections::VecDeque,
     hash::{Hash, Hasher},
 };
 
@@ -7,53 +8,56 @@ use crate::output::models::OutputTexture;
 
 use crate::models::texture::{ImageFormat, ImageSize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureCacheId(pub TextureConfig);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureConfig {
+    pub game_address: usize,
+    pub format: ImageFormat,
+    pub size: ImageSize,
+}
+
 pub struct TextureCache {
-    pub map: HashMap<u64, OutputTexture>,
-    pub lru: VecDeque<u64>,
-    pub capacity: usize,
+    cache: lru::LruCache<TextureCacheId, OutputTexture>,
 }
 
 impl TextureCache {
     pub fn new(capacity: usize) -> Self {
         Self {
-            map: HashMap::new(),
-            lru: VecDeque::new(),
-            capacity,
+            cache: lru::LruCache::new(NonZeroUsize::new(capacity).unwrap()),
         }
     }
 
     pub fn contains(
-        &self,
+        &mut self,
         game_address: usize,
         format: ImageFormat,
         size: ImageSize,
-    ) -> Option<u64> {
-        let mut hasher = DefaultHasher::new();
-        game_address.hash(&mut hasher);
-        format.hash(&mut hasher);
-        size.hash(&mut hasher);
-        let hash = hasher.finish();
+    ) -> Option<TextureCacheId> {
+        let texture_cache_id = TextureCacheId(TextureConfig {
+            game_address,
+            format,
+            size,
+        });
 
-        if self.map.contains_key(&hash) {
-            // trace!("Texture found in decoding cache");
-            return Some(hash);
+        if let Some(_texture) = self.cache.get(&texture_cache_id) {
+            return Some(texture_cache_id);
         }
 
         None
     }
 
-    pub fn get(&mut self, hash: u64) -> Option<&OutputTexture> {
-        if let Some(texture) = self.map.get(&hash) {
-            self.lru.push_back(hash);
+    pub fn get(&mut self, texture_cache_id: TextureCacheId) -> Option<&OutputTexture> {
+        if let Some(texture) = self.cache.get(&texture_cache_id) {
             return Some(texture);
         }
 
         None
     }
 
-    pub fn get_mut(&mut self, hash: u64) -> Option<&mut OutputTexture> {
-        if let Some(texture) = self.map.get_mut(&hash) {
-            self.lru.push_back(hash);
+    pub fn get_mut(&mut self, texture_cache_id: TextureCacheId) -> Option<&mut OutputTexture> {
+        if let Some(texture) = self.cache.get_mut(&texture_cache_id) {
             return Some(texture);
         }
 
@@ -70,24 +74,18 @@ impl TextureCache {
         uls: u16,
         ult: u16,
         data: Vec<u8>,
-    ) -> u64 {
-        if self.map.len() >= self.capacity {
-            if let Some(key) = self.lru.pop_front() {
-                self.map.remove(&key);
-                // TODO: Keep track of removed textures so they can be deleted from the GPU
-            }
+    ) -> TextureCacheId {
+        let texture = OutputTexture::new(game_address, format, size, width, height, uls, ult, data);
+        let tex_cache_id = TextureCacheId(TextureConfig {
+            game_address,
+            format,
+            size,
+        });
+
+        if let Some(_evicted_item) = self.cache.push(tex_cache_id, texture) {
+            // TODO: handle evicted item by removing it from the GPU
         }
 
-        let texture = OutputTexture::new(game_address, format, size, width, height, uls, ult, data);
-
-        let mut hasher = DefaultHasher::new();
-        game_address.hash(&mut hasher);
-        format.hash(&mut hasher);
-        size.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        self.map.insert(hash, texture);
-
-        hash
+        tex_cache_id
     }
 }

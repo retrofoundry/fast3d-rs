@@ -10,10 +10,10 @@ use fast3d::models::{
     texture::TextFilt,
 };
 
+use fast3d::output::ShaderConfig;
 use fast3d::rdp::OtherModeHCycleType;
 use naga::FastHashMap;
 use wgpu::{BindGroupLayout, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
-use fast3d::output::ShaderConfig;
 
 #[derive(PartialEq, Eq)]
 pub enum ShaderType {

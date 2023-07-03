@@ -6,6 +6,7 @@ use wgpu::ShaderModule;
 use wgpu::util::{align_to, DeviceExt};
 
 use crate::wgpu_program::ShaderVersion;
+use fast3d::output::{ShaderConfig, ShaderId};
 use fast3d::{
     gbi::defines::g,
     models::color_combiner::CombineParams,
@@ -14,7 +15,6 @@ use fast3d::{
         models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
     },
 };
-use fast3d::output::{ShaderConfig, ShaderId};
 
 use super::wgpu_program::WgpuProgram;
 
@@ -589,7 +589,10 @@ impl WgpuGraphicsDevice {
         uniforms: &OutputUniforms,
     ) {
         // Grab current program
-        let program = self.shader_cache.get_mut(&self.current_shader.unwrap()).unwrap();
+        let program = self
+            .shader_cache
+            .get_mut(&self.current_shader.unwrap())
+            .unwrap();
 
         // Update the vertex uniforms
         if program.get_define_bool("USE_FOG") {
@@ -652,7 +655,10 @@ impl WgpuGraphicsDevice {
         depth_stencil: Option<OutputStencil>,
     ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
         // Grab current program
-        let program = self.shader_cache.get_mut(&self.current_shader.unwrap()).unwrap();
+        let program = self
+            .shader_cache
+            .get_mut(&self.current_shader.unwrap())
+            .unwrap();
 
         // Create the texture bind group layout
         let texture_bind_group_layout = program.create_texture_bind_group_layout(device);
@@ -729,7 +735,10 @@ impl WgpuGraphicsDevice {
         num_tris: usize,
     ) {
         // Grab current program
-        let program = self.shader_cache.get(&self.current_shader.unwrap()).unwrap();
+        let program = self
+            .shader_cache
+            .get(&self.current_shader.unwrap())
+            .unwrap();
 
         // Render the triangles
         encoder.push_debug_group(&format!("draw triangle pass: {}", draw_call_index));

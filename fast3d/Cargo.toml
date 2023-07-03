@@ -28,3 +28,4 @@ farbe = "0.2.0"
 glam.workspace = true
 log.workspace = true
 rustc-hash.workspace = true
+lru = "0.10.1"

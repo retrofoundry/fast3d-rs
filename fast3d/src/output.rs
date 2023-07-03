@@ -2,6 +2,7 @@ use crate::output::models::{
     OutputFogParams, OutputSampler, OutputStencil, OutputUniforms, OutputUniformsBlend,
     OutputUniformsCombine, OutputVBO,
 };
+use crate::output::texture_cache::TextureCacheId;
 use std::hash::Hash;
 use texture_cache::TextureCache;
 
@@ -49,7 +50,7 @@ pub struct IntermediateDrawCall {
     pub shader_config: ShaderConfig,
 
     // Textures
-    pub texture_indices: [Option<u64>; 2],
+    pub texture_indices: [Option<TextureCacheId>; 2],
 
     // Samplers
     pub samplers: [Option<OutputSampler>; 2],
@@ -163,9 +164,9 @@ impl RCPOutput {
         draw_call.shader_config = shader_config;
     }
 
-    pub fn set_texture(&mut self, tile: usize, hash: u64) {
+    pub fn set_texture(&mut self, tile: usize, cache_id: TextureCacheId) {
         let draw_call = self.current_draw_call();
-        draw_call.texture_indices[tile] = Some(hash);
+        draw_call.texture_indices[tile] = Some(cache_id);
     }
 
     pub fn set_sampler_parameters(
