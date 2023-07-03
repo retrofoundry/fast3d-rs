@@ -8,12 +8,12 @@ use wgpu::util::{align_to, DeviceExt};
 use crate::wgpu_program::ShaderVersion;
 use fast3d::{
     gbi::defines::g,
-    rdp::OutputDimensions,
     output::{
-        ShaderConfig, ShaderId,
         gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
         models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
+        ShaderConfig, ShaderId,
     },
+    rdp::OutputDimensions,
 };
 
 use super::wgpu_program::WgpuProgram;
@@ -84,7 +84,7 @@ pub struct PipelineId(pub PipelineConfig);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PipelineConfig {
-    pub shader: u64,
+    pub shader: ShaderId,
     pub blend_state: Option<BlendState>,
     pub cull_mode: Option<Face>,
     pub depth_stencil: Option<OutputStencil>,
