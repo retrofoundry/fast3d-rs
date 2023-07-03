@@ -262,8 +262,11 @@ impl<T> WgpuProgram<T> {
                     gl_Position = aVtxPos * uProjection;
                 }
 
-                 // map z to [0, 1] - necessary for WGPU
-                 gl_Position.z = (gl_Position.z + gl_Position.w) / (2.0 * gl_Position.w);
+                // map z to [0, 1] - necessary for WGPU
+                gl_Position.z = (gl_Position.z + gl_Position.w) / (2.0 * gl_Position.w);
+
+                // simulate depth clamping
+                gl_Position.z = clamp(gl_Position.z, 0.0, 1.0);
 
                 #ifdef USE_FOG
                     float fogValue = (max(gl_Position.z, 0.0) / gl_Position.w) * uFogMultiplier + uFogOffset;
@@ -553,82 +556,5 @@ impl<T> WgpuProgram<T> {
             alpha_input_c(self.combine.a1.c),
             alpha_input_abd(self.combine.a1.d),
         )
-    }
-
-    // MARK: - Pipeline Helpers
-
-    pub fn vertex_description(&self) -> VertexBufferLayout<'static> {
-        VertexBufferLayout {
-            array_stride: (self.num_floats * ::std::mem::size_of::<f32>()) as u64,
-            step_mode: VertexStepMode::Vertex,
-            // TODO: Is there a better way to construct this?
-            attributes: if self.get_define_bool("USE_TEXTURE0")
-                || self.get_define_bool("USE_TEXTURE1")
-            {
-                &[
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: 0, // position
-                        shader_location: 0,
-                    },
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: std::mem::size_of::<[f32; 4]>() as u64, // color
-                        shader_location: 1,
-                    },
-                    VertexAttribute {
-                        format: VertexFormat::Float32x2,
-                        offset: std::mem::size_of::<[f32; 8]>() as u64, // texcoord
-                        shader_location: 2,
-                    },
-                ]
-            } else {
-                &[
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: 0, // position
-                        shader_location: 0,
-                    },
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: std::mem::size_of::<[f32; 4]>() as u64, // color
-                        shader_location: 1,
-                    },
-                ]
-            },
-        }
-    }
-
-    pub fn create_texture_bind_group_layout(&self, device: &wgpu::Device) -> BindGroupLayout {
-        let mut group_layout_entries: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
-
-        for i in 0..2 {
-            let texture_index = format!("USE_TEXTURE{}", i);
-            if self.get_define_bool(&texture_index) {
-                group_layout_entries.push(wgpu::BindGroupLayoutEntry {
-                    binding: i * 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                });
-
-                group_layout_entries.push(wgpu::BindGroupLayoutEntry {
-                    binding: (i * 2 + 1),
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    // TODO: Is this the appropriate setting?
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                });
-            }
-        }
-
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Textures/Samplers Group Layout"),
-            entries: &group_layout_entries,
-        })
     }
 }
