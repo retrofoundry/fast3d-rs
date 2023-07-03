@@ -740,6 +740,7 @@ impl RDP {
         output.set_program_params(
             self.other_mode_h,
             self.other_mode_l,
+            rsp.geometry_mode,
             self.combine,
             self.tile_descriptors,
         );

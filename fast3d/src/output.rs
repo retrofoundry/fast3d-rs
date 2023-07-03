@@ -148,6 +148,7 @@ impl RCPOutput {
         &mut self,
         other_mode_h: u32,
         other_mode_l: u32,
+        geometry_mode: u32,
         combine: CombineParams,
         tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
     ) {
@@ -155,7 +156,7 @@ impl RCPOutput {
         let shader_config = ShaderConfig {
             other_mode_h,
             other_mode_l,
-            geometry_mode: 0,
+            geometry_mode,
             combine,
             tile_descriptors,
         };
