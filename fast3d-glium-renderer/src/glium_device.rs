@@ -341,7 +341,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         }
 
         // unload the current shader
-        if self.current_shader != None {
+        if self.current_shader.is_some() {
             self.current_shader = None;
         }
 

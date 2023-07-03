@@ -1,8 +1,5 @@
+use std::hash::Hash;
 use std::num::NonZeroUsize;
-use std::{
-    collections::VecDeque,
-    hash::{Hash, Hasher},
-};
 
 use crate::output::models::OutputTexture;
 

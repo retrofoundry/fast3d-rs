@@ -1,6 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
