@@ -133,61 +133,42 @@ pub struct PipelineConfig {
 pub struct ShaderEntry<'a> {
     pub program: WgpuProgram<ShaderModule>,
 
-    pub vertex_buf: wgpu::Buffer,
     pub vertex_buf_layout: wgpu::VertexBufferLayout<'a>,
 
-    pub vertex_uniform_buf: wgpu::Buffer,
-    pub vertex_bind_group_layout: wgpu::BindGroupLayout,
-    pub vertex_bind_group: wgpu::BindGroup,
+    pub vertex_uniform_size: wgpu::BufferAddress,
+    pub vertex_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
-    pub blend_uniform_buf: wgpu::Buffer,
-    pub combine_uniform_buf: wgpu::Buffer,
-    pub frame_uniform_buf: Option<wgpu::Buffer>,
+    pub blend_uniform_size: wgpu::BufferAddress,
+    pub combine_uniform_size: wgpu::BufferAddress,
+    pub frame_uniform_size: wgpu::BufferAddress,
     pub fragment_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    pub fragment_uniform_bind_group: wgpu::BindGroup,
-
-    pub texture_bind_group_layout: Option<wgpu::BindGroupLayout>,
 }
 
 impl<'a> ShaderEntry<'a> {
     pub fn new(program: WgpuProgram<ShaderModule>, device: &wgpu::Device) -> Self {
-        let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Vertex Buffer"),
-            size: 256 * 32 * 3 * ::std::mem::size_of::<f32>() as u64 * 50,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let vertex_buf_layout = Self::create_vertex_buf_layout(&program);
 
-        let (vertex_uniform_buf, vertex_bind_group_layout, vertex_bind_group) =
+        let (vertex_uniform_size, vertex_uniform_bind_group_layout) =
             Self::create_vertex_uniforms_resources(&program, device);
         let (
-            blend_uniform_buf,
-            combine_uniform_buf,
-            frame_uniform_buf,
+            blend_uniform_size,
+            combine_uniform_size,
+            frame_uniform_size,
             fragment_uniform_bind_group_layout,
-            fragment_uniform_bind_group,
         ) = Self::create_fragment_uniforms_resources(&program, device);
-
-        let texture_bind_group_layout = Self::create_texture_resources(&program, device);
 
         Self {
             program,
 
-            vertex_buf,
             vertex_buf_layout,
 
-            vertex_uniform_buf,
-            vertex_bind_group_layout,
-            vertex_bind_group,
+            vertex_uniform_size,
+            vertex_uniform_bind_group_layout,
 
-            blend_uniform_buf,
-            combine_uniform_buf,
-            frame_uniform_buf,
+            blend_uniform_size,
+            combine_uniform_size,
+            frame_uniform_size,
             fragment_uniform_bind_group_layout,
-            fragment_uniform_bind_group,
-
-            texture_bind_group_layout,
         }
     }
 
@@ -198,9 +179,7 @@ impl<'a> ShaderEntry<'a> {
             array_stride: (program.num_floats * ::std::mem::size_of::<f32>()) as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             // TODO: Is there a better way to construct this?
-            attributes: if program.get_define_bool("USE_TEXTURE0")
-                || program.get_define_bool("USE_TEXTURE1")
-            {
+            attributes: if program.uses_texture_0() || program.uses_texture_1() {
                 &[
                     wgpu::VertexAttribute {
                         format: wgpu::VertexFormat::Float32x4,
@@ -238,25 +217,12 @@ impl<'a> ShaderEntry<'a> {
     fn create_vertex_uniforms_resources(
         program: &WgpuProgram<ShaderModule>,
         device: &wgpu::Device,
-    ) -> (wgpu::Buffer, wgpu::BindGroupLayout, wgpu::BindGroup) {
-        let vertex_uniform_size = if program.get_define_bool("USE_FOG") {
-            std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress
-        } else {
+    ) -> (wgpu::BufferAddress, wgpu::BindGroupLayout) {
+        let vertex_uniform_size = if program.uses_fog() {
             std::mem::size_of::<VertexWithFogUniforms>() as wgpu::BufferAddress
+        } else {
+            std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress
         };
-
-        let vertex_uniform_alignment = {
-            let alignment =
-                device.limits().min_uniform_buffer_offset_alignment as wgpu::BufferAddress;
-            align_to(vertex_uniform_size, alignment)
-        };
-
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Vertex Uniform Buffer"),
-            size: vertex_uniform_alignment,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Vertex Bind Group Layout"),
@@ -272,74 +238,32 @@ impl<'a> ShaderEntry<'a> {
             }],
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Vertex Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &buffer,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(vertex_uniform_size),
-                }),
-            }],
-        });
-
-        (buffer, bind_group_layout, bind_group)
+        (vertex_uniform_size, bind_group_layout)
     }
 
     fn create_fragment_uniforms_resources(
         program: &WgpuProgram<ShaderModule>,
         device: &wgpu::Device,
     ) -> (
-        wgpu::Buffer,
-        wgpu::Buffer,
-        Option<wgpu::Buffer>,
+        wgpu::BufferAddress,
+        wgpu::BufferAddress,
+        wgpu::BufferAddress,
         wgpu::BindGroupLayout,
-        wgpu::BindGroup,
     ) {
         // Handle blend uniforms
-        let blend_uniform_size = if program.get_define_bool("USE_FOG") {
-            std::mem::size_of::<FragmentBlendUniforms>() as wgpu::BufferAddress
-        } else {
+        let blend_uniform_size = if program.uses_fog() {
             std::mem::size_of::<FragmentBlendWithFogUniforms>() as wgpu::BufferAddress
+        } else {
+            std::mem::size_of::<FragmentBlendUniforms>() as wgpu::BufferAddress
         };
-
-        let blend_uniform_alignment = {
-            let alignment =
-                device.limits().min_uniform_buffer_offset_alignment as wgpu::BufferAddress;
-            align_to(blend_uniform_size, alignment)
-        };
-
-        let blend_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Blend Uniform Buffer"),
-            size: blend_uniform_alignment,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
 
         // Handle combine uniforms
         let combine_uniform_size =
             std::mem::size_of::<FragmentCombineUniforms>() as wgpu::BufferAddress;
 
-        let combine_uniform_alignment = {
-            let alignment =
-                device.limits().min_uniform_buffer_offset_alignment as wgpu::BufferAddress;
-            align_to(combine_uniform_size, alignment)
-        };
-
-        let combine_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Combine Uniform Buffer"),
-            size: combine_uniform_alignment,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         // Handle frame uniforms
         let frame_uniform_buf = {
-            if program.get_define_bool("USE_ALPHA")
-                && program.get_define_bool("ALPHA_COMPARE_DITHER")
-            {
+            if program.uses_alpha() && program.uses_alpha_compare_dither() {
                 let frame_uniform_size =
                     std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress;
 
@@ -404,94 +328,14 @@ impl<'a> ShaderEntry<'a> {
             entries: &bind_group_layout_entries,
         });
 
-        // Create bind group
-        let mut bind_group_entries = vec![
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &blend_uniform_buf,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(blend_uniform_size),
-                }),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &combine_uniform_buf,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(combine_uniform_size),
-                }),
-            },
-        ];
-
-        if let Some(_) = frame_uniform_buf {
-            bind_group_entries.push(wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: frame_uniform_buf.as_ref().unwrap(),
-                    offset: 0,
-                    size: wgpu::BufferSize::new(
-                        std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress
-                    ),
-                }),
-            });
-        }
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Fragment Uniform Group"),
-            layout: &bind_group_layout,
-            entries: &bind_group_entries,
-        });
+        let frame_uniform_size =
+            std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress;
 
         (
-            blend_uniform_buf,
-            combine_uniform_buf,
-            frame_uniform_buf,
+            blend_uniform_size,
+            combine_uniform_size,
+            frame_uniform_size,
             bind_group_layout,
-            bind_group,
         )
-    }
-
-    fn create_texture_resources(
-        program: &WgpuProgram<ShaderModule>,
-        device: &wgpu::Device,
-    ) -> Option<wgpu::BindGroupLayout> {
-        let mut bind_group_layout_entries = Vec::new();
-
-        for i in 0..2 {
-            let texture_index = format!("USE_TEXTURE{}", i);
-            if program.get_define_bool(&texture_index) {
-                bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
-                    binding: i * 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                });
-
-                bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
-                    binding: (i * 2 + 1),
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    // TODO: Is this the appropriate setting?
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                });
-            }
-        }
-
-        if !bind_group_layout_entries.is_empty() {
-            let bind_group_layout =
-                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Textures/Samplers Group Layout"),
-                    entries: &bind_group_layout_entries,
-                });
-
-            Some(bind_group_layout)
-        } else {
-            None
-        }
     }
 }

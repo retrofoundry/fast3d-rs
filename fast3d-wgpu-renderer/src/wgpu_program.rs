@@ -13,7 +13,6 @@ use fast3d::models::{
 use fast3d::output::ShaderConfig;
 use fast3d::rdp::OtherModeHCycleType;
 use naga::FastHashMap;
-use wgpu::{BindGroupLayout, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
 
 #[derive(PartialEq, Eq)]
 pub enum ShaderType {
@@ -134,7 +133,7 @@ impl<T> WgpuProgram<T> {
             }
             ShaderVersion::GLSL440 => {
                 shader.replace("uniform sampler2D uTex0;", "layout(set = 2, binding = 0) uniform texture2D uTex0;\nlayout(set = 2, binding = 1) uniform sampler uTex0Sampler;")
-                    .replace("uniform sampler2D uTex1;", "layout(set = 2, binding = 2) uniform texture2D uTex1;\nlayout(set = 2, binding = 3) uniform sampler uTex1Sampler;")
+                    .replace("uniform sampler2D uTex1;", "layout(set = 3, binding = 0) uniform texture2D uTex1;\nlayout(set = 2, binding = 1) uniform sampler uTex1Sampler;")
                     .replace("in sampler2D tex,", "in texture2D tex, in sampler smplr,")
                     .replace("texture(tex,", "texture(sampler2D(tex, smplr),")
                     .replace("Texture2D_N64(uTex0, vTexCoord);", "Texture2D_N64(uTex0, uTex0Sampler, vTexCoord);")
@@ -263,10 +262,10 @@ impl<T> WgpuProgram<T> {
                 }
 
                 // map z to [0, 1] - necessary for WGPU
-                gl_Position.z = (gl_Position.z + gl_Position.w) / (2.0 * gl_Position.w);
+                // gl_Position.z = (gl_Position.z + gl_Position.w) / (2.0 * gl_Position.w);
 
                 // simulate depth clamping
-                gl_Position.z = clamp(gl_Position.z, 0.0, 1.0);
+                // gl_Position.z = clamp(gl_Position.z, 0.0, 1.0);
 
                 #ifdef USE_FOG
                     float fogValue = (max(gl_Position.z, 0.0) / gl_Position.w) * uFogMultiplier + uFogOffset;
@@ -556,5 +555,28 @@ impl<T> WgpuProgram<T> {
             alpha_input_c(self.combine.a1.c),
             alpha_input_abd(self.combine.a1.d),
         )
+    }
+
+    // MARK: - Helpers
+
+    pub fn uses_texture_0(&self) -> bool {
+        self.combine.uses_texture0()
+    }
+
+    pub fn uses_texture_1(&self) -> bool {
+        self.combine.uses_texture1()
+    }
+
+    pub fn uses_fog(&self) -> bool {
+        other_mode_l_uses_fog(self.other_mode_l)
+    }
+
+    pub fn uses_alpha(&self) -> bool {
+        other_mode_l_uses_alpha(self.other_mode_l)
+            || other_mode_l_uses_texture_edge(self.other_mode_l)
+    }
+
+    pub fn uses_alpha_compare_dither(&self) -> bool {
+        other_mode_l_alpha_compare_dither(self.other_mode_l)
     }
 }

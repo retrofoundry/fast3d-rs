@@ -742,7 +742,6 @@ impl RDP {
             self.other_mode_l,
             rsp.geometry_mode,
             self.combine,
-            self.tile_descriptors,
         );
 
         self.flush_textures(rsp, output);

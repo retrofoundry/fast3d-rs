@@ -247,8 +247,6 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         };
     }
 
-    pub fn end_frame(&self) {}
-
     pub fn set_cull_mode(&mut self, cull_mode: Option<Face>) {
         self.draw_params.backface_culling = match cull_mode {
             Some(Face::Front) => BackfaceCullingMode::CullCounterClockwise,
