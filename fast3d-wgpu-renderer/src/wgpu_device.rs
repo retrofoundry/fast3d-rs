@@ -1,6 +1,6 @@
 use glam::Vec4Swizzles;
 use std::borrow::Cow;
-use wgpu::util::{align_to, DeviceExt};
+use wgpu::util::align_to;
 
 use crate::defines::{
     FragmentBlendUniforms, FragmentBlendWithFogUniforms, FragmentCombineUniforms,
@@ -217,34 +217,33 @@ impl<'a> WgpuGraphicsDevice<'a> {
             );
 
             // Configure uniforms
-            let (vertex_uniform_buffer_size, blend_uniform_buffer_size, combine_uniform_buffer_size, frame_uniform_buffer_size) =
-                self.configure_uniforms(
-                    device,
-                    queue,
-                    &draw_call.shader_id,
-                    draw_call.projection_matrix,
-                    &draw_call.fog,
-                    &draw_call.uniforms,
-                    vertex_uniform_buffer_offset,
-                    blend_uniform_buffer_offset,
-                    combine_uniform_buffer_offset,
-                    frame_uniform_buffer_offset,
-                );
+            let (
+                vertex_uniform_buffer_size,
+                blend_uniform_buffer_size,
+                combine_uniform_buffer_size,
+                frame_uniform_buffer_size,
+            ) = self.configure_uniforms(
+                queue,
+                &draw_call.shader_id,
+                draw_call.projection_matrix,
+                &draw_call.fog,
+                &draw_call.uniforms,
+                vertex_uniform_buffer_offset,
+                blend_uniform_buffer_offset,
+                combine_uniform_buffer_offset,
+                frame_uniform_buffer_offset,
+            );
 
             let (vertex_uniform_bind_group, fragment_uniform_bind_group) = self
                 .configure_uniform_bind_groups(
                     device,
                     &draw_call.shader_id,
-
                     vertex_uniform_buffer_offset,
                     vertex_uniform_buffer_size,
-
                     blend_uniform_buffer_offset,
                     blend_uniform_buffer_size,
-
                     combine_uniform_buffer_offset,
                     combine_uniform_buffer_size,
-
                     frame_uniform_buffer_offset,
                     frame_uniform_buffer_size,
                 );
@@ -507,7 +506,6 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
     pub fn configure_uniforms(
         &self,
-        device: &wgpu::Device,
         queue: &wgpu::Queue,
         shader_id: &ShaderId,
         projection_matrix: glam::Mat4,

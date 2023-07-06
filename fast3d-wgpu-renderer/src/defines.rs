@@ -132,15 +132,8 @@ pub struct PipelineConfig {
 
 pub struct ShaderEntry<'a> {
     pub program: WgpuProgram<ShaderModule>,
-
     pub vertex_buf_layout: wgpu::VertexBufferLayout<'a>,
-
-    pub vertex_uniform_size: wgpu::BufferAddress,
     pub vertex_uniform_bind_group_layout: wgpu::BindGroupLayout,
-
-    pub blend_uniform_size: wgpu::BufferAddress,
-    pub combine_uniform_size: wgpu::BufferAddress,
-    pub frame_uniform_size: wgpu::BufferAddress,
     pub fragment_uniform_bind_group_layout: wgpu::BindGroupLayout,
 }
 
@@ -148,26 +141,16 @@ impl<'a> ShaderEntry<'a> {
     pub fn new(program: WgpuProgram<ShaderModule>, device: &wgpu::Device) -> Self {
         let vertex_buf_layout = Self::create_vertex_buf_layout(&program);
 
-        let (vertex_uniform_size, vertex_uniform_bind_group_layout) =
+        let vertex_uniform_bind_group_layout =
             Self::create_vertex_uniforms_resources(&program, device);
-        let (
-            blend_uniform_size,
-            combine_uniform_size,
-            frame_uniform_size,
-            fragment_uniform_bind_group_layout,
-        ) = Self::create_fragment_uniforms_resources(&program, device);
+        let fragment_uniform_bind_group_layout =
+            Self::create_fragment_uniforms_resources(&program, device);
 
         Self {
             program,
 
             vertex_buf_layout,
-
-            vertex_uniform_size,
             vertex_uniform_bind_group_layout,
-
-            blend_uniform_size,
-            combine_uniform_size,
-            frame_uniform_size,
             fragment_uniform_bind_group_layout,
         }
     }
@@ -217,14 +200,14 @@ impl<'a> ShaderEntry<'a> {
     fn create_vertex_uniforms_resources(
         program: &WgpuProgram<ShaderModule>,
         device: &wgpu::Device,
-    ) -> (wgpu::BufferAddress, wgpu::BindGroupLayout) {
+    ) -> wgpu::BindGroupLayout {
         let vertex_uniform_size = if program.uses_fog() {
             std::mem::size_of::<VertexWithFogUniforms>() as wgpu::BufferAddress
         } else {
             std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress
         };
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Vertex Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -236,20 +219,13 @@ impl<'a> ShaderEntry<'a> {
                 },
                 count: None,
             }],
-        });
-
-        (vertex_uniform_size, bind_group_layout)
+        })
     }
 
     fn create_fragment_uniforms_resources(
         program: &WgpuProgram<ShaderModule>,
         device: &wgpu::Device,
-    ) -> (
-        wgpu::BufferAddress,
-        wgpu::BufferAddress,
-        wgpu::BufferAddress,
-        wgpu::BindGroupLayout,
-    ) {
+    ) -> wgpu::BindGroupLayout {
         // Handle blend uniforms
         let blend_uniform_size = if program.uses_fog() {
             std::mem::size_of::<FragmentBlendWithFogUniforms>() as wgpu::BufferAddress
@@ -323,19 +299,9 @@ impl<'a> ShaderEntry<'a> {
             });
         }
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Fragment Uniform Group Layout"),
             entries: &bind_group_layout_entries,
-        });
-
-        let frame_uniform_size =
-            std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress;
-
-        (
-            blend_uniform_size,
-            combine_uniform_size,
-            frame_uniform_size,
-            bind_group_layout,
-        )
+        })
     }
 }
