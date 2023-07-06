@@ -8,7 +8,7 @@ use crate::defines::{
     VertexWithFogUniforms,
 };
 use crate::wgpu_program::ShaderVersion;
-use fast3d::output::{IntermediateDrawCall, RCPOutput};
+use fast3d::output::{RCPOutput};
 use fast3d::{
     gbi::defines::g,
     output::{
@@ -563,7 +563,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &vertex_uniform_buffer,
+                    buffer: vertex_uniform_buffer,
                     offset: 0,
                     size: wgpu::BufferSize::new(shader_entry.vertex_uniform_size),
                 }),
@@ -574,7 +574,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &blend_uniform_buf,
+                    buffer: blend_uniform_buf,
                     offset: 0,
                     size: wgpu::BufferSize::new(shader_entry.blend_uniform_size),
                 }),
@@ -582,7 +582,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &combine_uniform_buf,
+                    buffer: combine_uniform_buf,
                     offset: 0,
                     size: wgpu::BufferSize::new(shader_entry.combine_uniform_size),
                 }),

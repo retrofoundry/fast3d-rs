@@ -305,9 +305,7 @@ impl<T> WgpuProgram<T> {
             } else {
                 match input {
                     CCMUX::CENTER__SCALE__ONE => "tOne.rgb", // matching against ONE
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => {
-                        "vec3(RAND_NOISE, RAND_NOISE, RAND_NOISE)"
-                    } // matching against NOISE
+                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(RAND_NOISE, RAND_NOISE, RAND_NOISE)", // matching against NOISE
                     _ => "tZero.rgb",
                 }
             }
