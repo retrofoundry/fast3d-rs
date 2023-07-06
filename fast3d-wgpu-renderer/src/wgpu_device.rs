@@ -27,7 +27,7 @@ pub struct WgpuDrawCall {
     pub pipeline_id: PipelineId,
     pub textures: [Option<usize>; 2],
 
-    pub vertex_buffer: wgpu::Buffer,
+    pub vertex_buffer_offset: wgpu::BufferAddress,
     pub vertex_count: usize,
 
     pub vertex_uniform_buf: wgpu::Buffer,
@@ -46,7 +46,8 @@ impl WgpuDrawCall {
     fn new(
         shader_id: ShaderId,
         pipeline_id: PipelineId,
-        vertex_buffer: wgpu::Buffer,
+        vertex_buffer_offset: wgpu::BufferAddress,
+        vertex_count: usize,
         vertex_uniform_buf: wgpu::Buffer,
         vertex_uniform_bind_group: wgpu::BindGroup,
         blend_uniform_buf: wgpu::Buffer,
@@ -61,8 +62,8 @@ impl WgpuDrawCall {
             pipeline_id,
             textures: [None; 2],
 
-            vertex_buffer,
-            vertex_count: 0,
+            vertex_buffer_offset,
+            vertex_count,
 
             vertex_uniform_buf,
             vertex_uniform_bind_group,
@@ -85,6 +86,8 @@ pub struct WgpuGraphicsDevice<'a> {
     texture_cache: Vec<TextureData>,
     shader_cache: rustc_hash::FxHashMap<ShaderId, ShaderEntry<'a>>,
     pipeline_cache: rustc_hash::FxHashMap<PipelineId, wgpu::RenderPipeline>,
+
+    vertex_buffer: wgpu::Buffer,
 
     texture_bind_group_layout: wgpu::BindGroupLayout,
     texture_bind_groups: rustc_hash::FxHashMap<usize, wgpu::BindGroup>,
@@ -119,6 +122,13 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 ],
             });
 
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Vertex Buffer"),
+            size: 600000, // 600kb should be enough
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             frame_count: 0,
             current_height: 0,
@@ -127,6 +137,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
             texture_cache: Vec::new(),
             shader_cache: rustc_hash::FxHashMap::default(),
             pipeline_cache: rustc_hash::FxHashMap::default(),
+
+            vertex_buffer,
 
             texture_bind_group_layout,
             texture_bind_groups: rustc_hash::FxHashMap::default(),
@@ -147,18 +159,12 @@ impl<'a> WgpuGraphicsDevice<'a> {
         self.draw_calls.clear();
         self.last_pipeline_id = None;
 
+        let mut current_vbo_offset = 0;
+
         // omit the last draw call, because we know we that's an extra from the last flush
         // for draw_call in &self.rcp_output.draw_calls[..self.rcp_output.draw_calls.len() - 1] {
         for draw_call in output.draw_calls.iter().take(output.draw_calls.len() - 1) {
             assert!(!draw_call.vbo.vbo.is_empty());
-
-            // Create Vertex Buffer
-            // TODO: Perhaps use a single buffer that we write to?
-            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: &draw_call.vbo.vbo,
-                usage: wgpu::BufferUsages::VERTEX,
-            });
 
             // Create Shader
             self.prepare_shader(device, draw_call.shader_id, draw_call.shader_config);
@@ -206,7 +212,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
             let mut wgpu_draw_call = WgpuDrawCall::new(
                 draw_call.shader_id,
                 pipeline_id,
-                vertex_buffer,
+                current_vbo_offset,
+                draw_call.vbo.num_tris * 3,
                 vertex_uniform_buf,
                 vertex_uniform_bind_group,
                 blend_uniform_buf,
@@ -216,7 +223,10 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 draw_call.viewport,
                 draw_call.scissor,
             );
-            wgpu_draw_call.vertex_count = draw_call.vbo.num_tris * 3;
+
+            // Copy contents of vbo to buffer
+            queue.write_buffer(&self.vertex_buffer, current_vbo_offset, &draw_call.vbo.vbo);
+            current_vbo_offset += draw_call.vbo.vbo.len() as u64;
 
             // Process textures
             for (index, tex_cache_id) in draw_call.texture_indices.iter().enumerate() {
@@ -243,7 +253,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
     }
 
     pub fn draw<'r>(&'r mut self, rpass: &mut wgpu::RenderPass<'r>) {
-        for draw_call in &self.draw_calls {
+        for (index, draw_call) in self.draw_calls.iter().enumerate() {
             let pipeline = self.pipeline_cache.get(&draw_call.pipeline_id).unwrap();
 
             if self.last_pipeline_id != Some(draw_call.pipeline_id) {
@@ -265,7 +275,22 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 }
             }
 
-            rpass.set_vertex_buffer(0, draw_call.vertex_buffer.slice(..));
+            // check if there's another draw_call after this one, if so let's set the vertex buffer from our current offset to the next draw_call's offset
+            // if there's no other, then we set the vertex buffer from our current offset to the end of the buffer
+            if index < self.draw_calls.len() - 1 {
+                let next_draw_call = &self.draw_calls[index + 1];
+                rpass.set_vertex_buffer(
+                    0,
+                    self.vertex_buffer
+                        .slice(draw_call.vertex_buffer_offset..next_draw_call.vertex_buffer_offset),
+                );
+            } else {
+                log::error!("last draw call: {:?}", draw_call.vertex_buffer_offset);
+                rpass.set_vertex_buffer(
+                    0,
+                    self.vertex_buffer.slice(draw_call.vertex_buffer_offset..),
+                );
+            }
 
             rpass.set_viewport(
                 draw_call.viewport.x,
