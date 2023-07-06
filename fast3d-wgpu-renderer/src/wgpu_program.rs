@@ -309,7 +309,7 @@ impl<T> WgpuProgram<T> {
                 match input {
                     CCMUX::CENTER__SCALE__ONE => "tOne.rgb", // matching against ONE
                     CCMUX::COMBINED_ALPHA__NOISE__K4 => {
-                        "vec3(randomNoise, randomNoise, randomNoise)"
+                        "vec3(RAND_NOISE, RAND_NOISE, RAND_NOISE)"
                     } // matching against NOISE
                     _ => "tZero.rgb",
                 }
@@ -461,11 +461,9 @@ impl<T> WgpuProgram<T> {
             }}
 
             #define Texture2D_N64 Texture2D_N64_{}
+            #define RAND_NOISE floor(random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight))), float(uFrameCount))) + 0.5)
 
             vec3 CombineColorCycle0(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
-                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
-                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
-                #endif
                 return ({} - {}) * {} + {};
             }}
 
@@ -474,9 +472,6 @@ impl<T> WgpuProgram<T> {
             }}
 
             vec3 CombineColorCycle1(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
-                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
-                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
-                #endif
                 return ({} - {}) * {} + {};
             }}
 
@@ -513,7 +508,7 @@ impl<T> WgpuProgram<T> {
 
                 #if defined(USE_ALPHA)
                     #if defined(ALPHA_COMPARE_DITHER)
-                        if (texel.a < floor(random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight))), float(uFrameCount))) + 0.5)) discard;
+                        if (texel.a < RAND_NOISE) discard;
                     #endif
 
                     #if defined(ALPHA_COMPARE_THRESHOLD)
