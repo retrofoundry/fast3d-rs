@@ -31,8 +31,6 @@ pub struct WgpuDrawCall {
     pub vertex_count: usize,
 
     pub vertex_uniform_bind_group: wgpu::BindGroup,
-    pub combine_uniform_buf: wgpu::Buffer,
-    pub frame_uniform_buf: Option<wgpu::Buffer>,
     pub fragment_uniform_bind_group: wgpu::BindGroup,
 
     pub viewport: glam::Vec4,
@@ -47,8 +45,6 @@ impl WgpuDrawCall {
         vertex_buffer_offset: wgpu::BufferAddress,
         vertex_count: usize,
         vertex_uniform_bind_group: wgpu::BindGroup,
-        combine_uniform_buf: wgpu::Buffer,
-        frame_uniform_buf: Option<wgpu::Buffer>,
         fragment_uniform_bind_group: wgpu::BindGroup,
         viewport: glam::Vec4,
         scissor: [u32; 4],
@@ -62,8 +58,6 @@ impl WgpuDrawCall {
             vertex_count,
 
             vertex_uniform_bind_group,
-            combine_uniform_buf,
-            frame_uniform_buf,
             fragment_uniform_bind_group,
 
             viewport,
@@ -84,6 +78,8 @@ pub struct WgpuGraphicsDevice<'a> {
     vertex_buffer: wgpu::Buffer,
     vertex_uniform_buffer: wgpu::Buffer,
     blend_uniform_buffer: wgpu::Buffer,
+    combine_uniform_buffer: wgpu::Buffer,
+    frame_uniform_buffer: wgpu::Buffer,
 
     texture_bind_group_layout: wgpu::BindGroupLayout,
     texture_bind_groups: rustc_hash::FxHashMap<usize, wgpu::BindGroup>,
@@ -139,6 +135,20 @@ impl<'a> WgpuGraphicsDevice<'a> {
             mapped_at_creation: false,
         });
 
+        let combine_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Combine Uniform Buffer"),
+            size: 600000, // 600kb should be enough
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let frame_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Frame Uniform Buffer"),
+            size: 600000, // 600kb should be enough
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             frame_count: 0,
             current_height: 0,
@@ -151,6 +161,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
             vertex_buffer,
             vertex_uniform_buffer,
             blend_uniform_buffer,
+            combine_uniform_buffer,
+            frame_uniform_buffer,
 
             texture_bind_group_layout,
             texture_bind_groups: rustc_hash::FxHashMap::default(),
@@ -174,6 +186,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
         let mut current_vbo_offset = 0;
         let mut vertex_uniform_buffer_offset = 0;
         let mut blend_uniform_buffer_offset = 0;
+        let mut combine_uniform_buffer_offset = 0;
+        let mut frame_uniform_buffer_offset = 0;
 
         // omit the last draw call, because we know we that's an extra from the last flush
         // for draw_call in &self.rcp_output.draw_calls[..self.rcp_output.draw_calls.len() - 1] {
@@ -203,7 +217,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             );
 
             // Configure uniforms
-            let (vertex_uniform_buffer_size, blend_uniform_buffer_size, combine_uniform_buf, frame_uniform_buf) =
+            let (vertex_uniform_buffer_size, blend_uniform_buffer_size, combine_uniform_buffer_size, frame_uniform_buffer_size) =
                 self.configure_uniforms(
                     device,
                     queue,
@@ -213,24 +227,32 @@ impl<'a> WgpuGraphicsDevice<'a> {
                     &draw_call.uniforms,
                     vertex_uniform_buffer_offset,
                     blend_uniform_buffer_offset,
+                    combine_uniform_buffer_offset,
+                    frame_uniform_buffer_offset,
                 );
 
             let (vertex_uniform_bind_group, fragment_uniform_bind_group) = self
                 .configure_uniform_bind_groups(
                     device,
                     &draw_call.shader_id,
-                    &combine_uniform_buf,
-                    &frame_uniform_buf,
 
                     vertex_uniform_buffer_offset,
                     vertex_uniform_buffer_size,
 
                     blend_uniform_buffer_offset,
                     blend_uniform_buffer_size,
+
+                    combine_uniform_buffer_offset,
+                    combine_uniform_buffer_size,
+
+                    frame_uniform_buffer_offset,
+                    frame_uniform_buffer_size,
                 );
 
             vertex_uniform_buffer_offset += vertex_uniform_buffer_size;
             blend_uniform_buffer_offset += blend_uniform_buffer_size;
+            combine_uniform_buffer_offset += combine_uniform_buffer_size;
+            frame_uniform_buffer_offset += frame_uniform_buffer_size;
 
             // Create mutable draw_call
             let mut wgpu_draw_call = WgpuDrawCall::new(
@@ -239,8 +261,6 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 current_vbo_offset,
                 draw_call.vbo.num_tris * 3,
                 vertex_uniform_bind_group,
-                combine_uniform_buf,
-                frame_uniform_buf,
                 fragment_uniform_bind_group,
                 draw_call.viewport,
                 draw_call.scissor,
@@ -495,11 +515,13 @@ impl<'a> WgpuGraphicsDevice<'a> {
         uniforms: &OutputUniforms,
         vertex_uniform_buffer_offset: wgpu::BufferAddress,
         blend_uniform_buffer_offset: wgpu::BufferAddress,
+        combine_uniform_buffer_offset: wgpu::BufferAddress,
+        frame_uniform_buffer_offset: wgpu::BufferAddress,
     ) -> (
         wgpu::BufferAddress,
         wgpu::BufferAddress,
-        wgpu::Buffer,
-        Option<wgpu::Buffer>,
+        wgpu::BufferAddress,
+        wgpu::BufferAddress,
     ) {
         // Grab the shader entry
         let shader_entry = self.shader_cache.get(shader_id).unwrap();
@@ -584,14 +606,19 @@ impl<'a> WgpuGraphicsDevice<'a> {
             uniforms.combine.convert_k5,
         );
 
-        let combine_uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Combine Uniform Buffer"),
-            contents: bytemuck::bytes_of(&uniform),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        queue.write_buffer(
+            &self.combine_uniform_buffer,
+            combine_uniform_buffer_offset,
+            bytemuck::bytes_of(&uniform),
+        );
+
+        let combine_uniform_buf_size = align_to(
+            std::mem::size_of::<FragmentCombineUniforms>() as wgpu::BufferAddress,
+            256,
+        );
 
         // Update the frame uniforms
-        let frame_uniform_buf = if shader_entry.program.uses_alpha()
+        let frame_uniform_buf_size = if shader_entry.program.uses_alpha()
             && shader_entry.program.uses_alpha_compare_dither()
         {
             let uniform = FragmentFrameUniforms {
@@ -599,22 +626,25 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 height: self.current_height as u32,
             };
 
-            Some(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Frame Uniform Buffer"),
-                    contents: bytemuck::bytes_of(&uniform),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                }),
+            queue.write_buffer(
+                &self.frame_uniform_buffer,
+                frame_uniform_buffer_offset,
+                bytemuck::bytes_of(&uniform),
+            );
+
+            align_to(
+                std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress,
+                256,
             )
         } else {
-            None
+            0
         };
 
         (
             vertex_uniform_buf_size,
             blend_uniform_buf_size,
-            combine_uniform_buf,
-            frame_uniform_buf,
+            combine_uniform_buf_size,
+            frame_uniform_buf_size,
         )
     }
 
@@ -622,14 +652,18 @@ impl<'a> WgpuGraphicsDevice<'a> {
         &self,
         device: &wgpu::Device,
         shader_id: &ShaderId,
-        combine_uniform_buf: &wgpu::Buffer,
-        frame_uniform_buf: &Option<wgpu::Buffer>,
 
         vertex_uniform_buffer_offset: wgpu::BufferAddress,
         vertex_uniform_buf_size: wgpu::BufferAddress,
 
         blend_uniform_buffer_offset: wgpu::BufferAddress,
         blend_uniform_buf_size: wgpu::BufferAddress,
+
+        combine_uniform_buffer_offset: wgpu::BufferAddress,
+        combine_uniform_buf_size: wgpu::BufferAddress,
+
+        frame_uniform_buffer_offset: wgpu::BufferAddress,
+        frame_uniform_buf_size: wgpu::BufferAddress,
     ) -> (wgpu::BindGroup, wgpu::BindGroup) {
         let shader_entry = self.shader_cache.get(shader_id).unwrap();
 
@@ -658,20 +692,20 @@ impl<'a> WgpuGraphicsDevice<'a> {
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: combine_uniform_buf,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(shader_entry.combine_uniform_size),
+                    buffer: &self.combine_uniform_buffer,
+                    offset: combine_uniform_buffer_offset,
+                    size: wgpu::BufferSize::new(combine_uniform_buf_size),
                 }),
             },
         ];
 
-        if let Some(frame_uniform_buf) = frame_uniform_buf {
+        if frame_uniform_buf_size > 0 {
             bind_group_entries.push(wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: frame_uniform_buf,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(shader_entry.frame_uniform_size),
+                    buffer: &self.frame_uniform_buffer,
+                    offset: frame_uniform_buffer_offset,
+                    size: wgpu::BufferSize::new(frame_uniform_buf_size),
                 }),
             });
         }
