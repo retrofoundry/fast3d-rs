@@ -261,12 +261,6 @@ impl<T> WgpuProgram<T> {
                     gl_Position = aVtxPos * uProjection;
                 }
 
-                // map z to [0, 1] - necessary for WGPU
-                // gl_Position.z = (gl_Position.z + gl_Position.w) / (2.0 * gl_Position.w);
-
-                // simulate depth clamping
-                // gl_Position.z = clamp(gl_Position.z, 0.0, 1.0);
-
                 #ifdef USE_FOG
                     float fogValue = (max(gl_Position.z, 0.0) / gl_Position.w) * uFogMultiplier + uFogOffset;
                     fogValue = clamp(fogValue, 0.0, 255.0);
@@ -274,6 +268,9 @@ impl<T> WgpuProgram<T> {
                 #else
                     vVtxColor = aVtxColor;
                 #endif
+
+                // GL's z range is -1 to 1, but WGPU's is 0 to 1, remap it
+                gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
 
                 #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
                     vTexCoord = aTexCoord;
