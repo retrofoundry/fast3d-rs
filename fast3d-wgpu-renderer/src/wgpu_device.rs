@@ -8,7 +8,7 @@ use crate::defines::{
     VertexWithFogUniforms,
 };
 use crate::wgpu_program::ShaderVersion;
-use fast3d::output::{RCPOutput};
+use fast3d::output::RCPOutput;
 use fast3d::{
     gbi::defines::g,
     output::{
@@ -16,7 +16,6 @@ use fast3d::{
         models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
         ShaderConfig, ShaderId,
     },
-    rdp::OutputDimensions,
 };
 
 use super::wgpu_program::WgpuProgram;
@@ -81,6 +80,7 @@ impl WgpuDrawCall {
 pub struct WgpuGraphicsDevice<'a> {
     frame_count: i32,
     current_height: i32,
+    screen_size: [u32; 2],
 
     texture_cache: Vec<TextureData>,
     shader_cache: rustc_hash::FxHashMap<ShaderId, ShaderEntry<'a>>,
@@ -122,6 +122,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         Self {
             frame_count: 0,
             current_height: 0,
+            screen_size: [0; 2],
 
             texture_cache: Vec::new(),
             shader_cache: rustc_hash::FxHashMap::default(),
@@ -241,11 +242,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         }
     }
 
-    pub fn draw<'r>(
-        &'r mut self,
-        output_size: &OutputDimensions,
-        rpass: &mut wgpu::RenderPass<'r>,
-    ) {
+    pub fn draw<'r>(&'r mut self, rpass: &mut wgpu::RenderPass<'r>) {
         for draw_call in &self.draw_calls {
             let pipeline = self.pipeline_cache.get(&draw_call.pipeline_id).unwrap();
 
@@ -270,29 +267,35 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
             rpass.set_vertex_buffer(0, draw_call.vertex_buffer.slice(..));
 
-            let wgpu_y = output_size.height as f32 - draw_call.viewport.y - draw_call.viewport.w;
             rpass.set_viewport(
                 draw_call.viewport.x,
-                wgpu_y,
+                draw_call.viewport.y,
                 draw_call.viewport.z,
                 draw_call.viewport.w,
                 0.0,
                 1.0,
             );
 
-            let wgpu_y = output_size.height - draw_call.scissor[1] - draw_call.scissor[3];
-            rpass.set_scissor_rect(
-                draw_call.scissor[0],
-                wgpu_y,
-                draw_call.scissor[2],
-                draw_call.scissor[3],
-            );
+            // clamp scissors to the screen size
+            let x0 = draw_call.scissor[0].clamp(0, self.screen_size[0]);
+            let y0 = draw_call.scissor[1].clamp(0, self.screen_size[1]);
+            let x1 = (draw_call.scissor[0] + draw_call.scissor[2]).clamp(0, self.screen_size[0]);
+            let y1 = (draw_call.scissor[1] + draw_call.scissor[3]).clamp(0, self.screen_size[1]);
+            let width = x1 - x0;
+            let height = y1 - y0;
+            if width == 0 || height == 0 {
+                continue;
+            }
+
+            rpass.set_scissor_rect(draw_call.scissor[0], draw_call.scissor[1], width, height);
 
             rpass.draw(0..draw_call.vertex_count as u32, 0..1);
         }
     }
 
-    pub fn resize(&mut self, _config: &wgpu::SurfaceConfiguration, _device: &wgpu::Device) {}
+    pub fn resize(&mut self, screen_size: [u32; 2]) {
+        self.screen_size = screen_size;
+    }
 
     pub fn update_frame_count(&mut self) {
         self.frame_count += 1;
