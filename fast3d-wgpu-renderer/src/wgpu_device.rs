@@ -1,5 +1,8 @@
 use glam::Vec4Swizzles;
 use std::borrow::Cow;
+use std::sync::{Arc, RwLock};
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use wgpu::util::align_to;
 
 use crate::defines::{
@@ -72,8 +75,8 @@ pub struct WgpuGraphicsDevice<'a> {
     screen_size: [u32; 2],
 
     texture_cache: Vec<TextureData>,
-    shader_cache: rustc_hash::FxHashMap<ShaderId, ShaderEntry<'a>>,
-    pipeline_cache: rustc_hash::FxHashMap<PipelineId, wgpu::RenderPipeline>,
+    shader_cache: Arc<RwLock<FxHashMap<ShaderId, ShaderEntry<'a>>>>,
+    pipeline_cache: FxHashMap<PipelineId, wgpu::RenderPipeline>,
 
     vertex_buffer: wgpu::Buffer,
     vertex_uniform_buffer: wgpu::Buffer,
@@ -82,7 +85,7 @@ pub struct WgpuGraphicsDevice<'a> {
     frame_uniform_buffer: wgpu::Buffer,
 
     texture_bind_group_layout: wgpu::BindGroupLayout,
-    texture_bind_groups: rustc_hash::FxHashMap<usize, wgpu::BindGroup>,
+    texture_bind_groups: FxHashMap<usize, wgpu::BindGroup>,
 
     draw_calls: Vec<WgpuDrawCall>,
 
@@ -155,8 +158,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
             screen_size: [0; 2],
 
             texture_cache: Vec::new(),
-            shader_cache: rustc_hash::FxHashMap::default(),
-            pipeline_cache: rustc_hash::FxHashMap::default(),
+            shader_cache: Arc::new(RwLock::new(FxHashMap::default())),
+            pipeline_cache: FxHashMap::default(),
 
             vertex_buffer,
             vertex_uniform_buffer,
@@ -165,7 +168,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             frame_uniform_buffer,
 
             texture_bind_group_layout,
-            texture_bind_groups: rustc_hash::FxHashMap::default(),
+            texture_bind_groups: FxHashMap::default(),
 
             draw_calls: Vec::new(),
 
@@ -189,13 +192,19 @@ impl<'a> WgpuGraphicsDevice<'a> {
         let mut combine_uniform_buffer_offset = 0;
         let mut frame_uniform_buffer_offset = 0;
 
+        // create shaders in parallel
+        output.draw_calls.par_iter().for_each(|draw_call| {
+            let shared_map = Arc::clone(&self.shader_cache);
+            Self::prepare_shader(device, draw_call.shader_id, draw_call.shader_config, &shared_map);
+        });
+
         // omit the last draw call, because we know we that's an extra from the last flush
         // for draw_call in &self.rcp_output.draw_calls[..self.rcp_output.draw_calls.len() - 1] {
         for draw_call in output.draw_calls.iter().take(output.draw_calls.len() - 1) {
             assert!(!draw_call.vbo.vbo.is_empty());
 
             // Create Shader
-            self.prepare_shader(device, draw_call.shader_id, draw_call.shader_config);
+            // self.prepare_shader(device, draw_call.shader_id, draw_call.shader_config);
 
             // Create Pipeline
             let pipeline_config = PipelineConfig {
@@ -464,13 +473,13 @@ impl<'a> WgpuGraphicsDevice<'a> {
     }
 
     fn prepare_shader(
-        &mut self,
         device: &wgpu::Device,
         shader_id: ShaderId,
         shader_config: ShaderConfig,
+        shader_cache: &Arc<RwLock<FxHashMap<ShaderId, ShaderEntry<'a>>>>,
     ) {
         // check if the shader is in the cache
-        if self.shader_cache.contains_key(&shader_id) {
+        if shader_cache.read().unwrap().contains_key(&shader_id) {
             return;
         }
 
@@ -501,7 +510,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
         // create the shader entry
         let shader_entry = ShaderEntry::new(program, device);
-        self.shader_cache.insert(shader_id, shader_entry);
+        shader_cache.write().unwrap().insert(shader_id, shader_entry);
     }
 
     pub fn configure_uniforms(
@@ -522,7 +531,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
         wgpu::BufferAddress,
     ) {
         // Grab the shader entry
-        let shader_entry = self.shader_cache.get(shader_id).unwrap();
+        let shader_cache = self.shader_cache.read().unwrap();
+        let shader_entry = shader_cache.get(shader_id).unwrap();
 
         // Update the vertex uniforms
         let vertex_uniform_buf_size = if shader_entry.program.uses_fog() {
@@ -663,7 +673,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
         frame_uniform_buffer_offset: wgpu::BufferAddress,
         frame_uniform_buf_size: wgpu::BufferAddress,
     ) -> (wgpu::BindGroup, wgpu::BindGroup) {
-        let shader_entry = self.shader_cache.get(shader_id).unwrap();
+        let shader_cache = self.shader_cache.read().unwrap();
+        let shader_entry = shader_cache.get(shader_id).unwrap();
 
         let vertex_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Vertex Uniform Bind Group"),
@@ -728,7 +739,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
         depth_stencil: Option<OutputStencil>,
     ) {
         // Grab current program
-        let program = self.shader_cache.get_mut(shader_id).unwrap();
+        let shader_cache = self.shader_cache.read().unwrap();
+        let program = shader_cache.get(shader_id).unwrap();
 
         // Check if we have a cached pipeline
         if self.pipeline_cache.contains_key(&pipeline_id) {
