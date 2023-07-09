@@ -1,8 +1,11 @@
+use dashmap::DashMap;
 use glam::Vec4Swizzles;
-use std::borrow::Cow;
-use std::sync::{Arc, RwLock};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
+use std::collections::HashSet;
+
+use std::sync::Arc;
 use wgpu::util::align_to;
 
 use crate::defines::{
@@ -75,7 +78,7 @@ pub struct WgpuGraphicsDevice<'a> {
     screen_size: [u32; 2],
 
     texture_cache: Vec<TextureData>,
-    shader_cache: Arc<RwLock<FxHashMap<ShaderId, ShaderEntry<'a>>>>,
+    shader_cache: Arc<DashMap<ShaderId, ShaderEntry<'a>>>,
     pipeline_cache: FxHashMap<PipelineId, wgpu::RenderPipeline>,
 
     vertex_buffer: wgpu::Buffer,
@@ -158,7 +161,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             screen_size,
 
             texture_cache: Vec::new(),
-            shader_cache: Arc::new(RwLock::new(FxHashMap::default())),
+            shader_cache: Arc::new(DashMap::new()),
             pipeline_cache: FxHashMap::default(),
 
             vertex_buffer,
@@ -192,19 +195,25 @@ impl<'a> WgpuGraphicsDevice<'a> {
         let mut combine_uniform_buffer_offset = 0;
         let mut frame_uniform_buffer_offset = 0;
 
-        // create shaders in parallel
-        output.draw_calls.par_iter().for_each(|draw_call| {
-            let shared_map = Arc::clone(&self.shader_cache);
-            Self::prepare_shader(device, draw_call.shader_id, draw_call.shader_config, &shared_map);
-        });
+        // create shaders in parallel, but first, reduce to unique shader id's
+        output
+            .draw_calls
+            .par_iter()
+            .map(|draw_call| (draw_call.shader_id, draw_call.shader_config))
+            .collect::<HashSet<_>>()
+            .into_par_iter()
+            .flat_map(|(shader_id, shader_config)| {
+                Self::prepare_shader(device, &shader_id, &shader_config, &self.shader_cache)
+                    .map(|shader| (shader_id, shader))
+            })
+            .for_each(|(shader_id, shader)| {
+                self.shader_cache.insert(shader_id, shader);
+            });
 
         // omit the last draw call, because we know we that's an extra from the last flush
         // for draw_call in &self.rcp_output.draw_calls[..self.rcp_output.draw_calls.len() - 1] {
         for draw_call in output.draw_calls.iter().take(output.draw_calls.len() - 1) {
             assert!(!draw_call.vbo.vbo.is_empty());
-
-            // Create Shader
-            // self.prepare_shader(device, draw_call.shader_id, draw_call.shader_config);
 
             // Create Pipeline
             let pipeline_config = PipelineConfig {
@@ -351,7 +360,12 @@ impl<'a> WgpuGraphicsDevice<'a> {
             );
 
             let y = self.screen_size[1] - draw_call.scissor[1] - draw_call.scissor[3];
-            rpass.set_scissor_rect(draw_call.scissor[0], y, draw_call.scissor[2], draw_call.scissor[3]);
+            rpass.set_scissor_rect(
+                draw_call.scissor[0],
+                y,
+                draw_call.scissor[2],
+                draw_call.scissor[3],
+            );
 
             rpass.draw(0..draw_call.vertex_count as u32, 0..1);
         }
@@ -464,13 +478,13 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
     fn prepare_shader(
         device: &wgpu::Device,
-        shader_id: ShaderId,
-        shader_config: ShaderConfig,
-        shader_cache: &Arc<RwLock<FxHashMap<ShaderId, ShaderEntry<'a>>>>,
-    ) {
+        shader_id: &ShaderId,
+        shader_config: &ShaderConfig,
+        shader_cache: &Arc<DashMap<ShaderId, ShaderEntry<'a>>>,
+    ) -> Option<ShaderEntry<'a>> {
         // check if the shader is in the cache
-        if shader_cache.read().unwrap().contains_key(&shader_id) {
-            return;
+        if shader_cache.contains_key(shader_id) {
+            return None;
         }
 
         // create the shader and add it to the cache
@@ -499,8 +513,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             }));
 
         // create the shader entry
-        let shader_entry = ShaderEntry::new(program, device);
-        shader_cache.write().unwrap().insert(shader_id, shader_entry);
+        return Some(ShaderEntry::new(program, device));
     }
 
     pub fn configure_uniforms(
@@ -521,8 +534,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         wgpu::BufferAddress,
     ) {
         // Grab the shader entry
-        let shader_cache = self.shader_cache.read().unwrap();
-        let shader_entry = shader_cache.get(shader_id).unwrap();
+        let shader_entry = self.shader_cache.get(shader_id).unwrap();
 
         // Update the vertex uniforms
         let vertex_uniform_buf_size = if shader_entry.program.uses_fog() {
@@ -663,8 +675,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         frame_uniform_buffer_offset: wgpu::BufferAddress,
         frame_uniform_buf_size: wgpu::BufferAddress,
     ) -> (wgpu::BindGroup, wgpu::BindGroup) {
-        let shader_cache = self.shader_cache.read().unwrap();
-        let shader_entry = shader_cache.get(shader_id).unwrap();
+        let shader_entry = self.shader_cache.get(shader_id).unwrap();
 
         let vertex_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Vertex Uniform Bind Group"),
@@ -729,8 +740,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         depth_stencil: Option<OutputStencil>,
     ) {
         // Grab current program
-        let shader_cache = self.shader_cache.read().unwrap();
-        let program = shader_cache.get(shader_id).unwrap();
+        let program = self.shader_cache.get(shader_id).unwrap();
 
         // Check if we have a cached pipeline
         if self.pipeline_cache.contains_key(&pipeline_id) {
