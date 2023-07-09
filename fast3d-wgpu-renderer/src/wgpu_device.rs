@@ -93,7 +93,7 @@ pub struct WgpuGraphicsDevice<'a> {
 }
 
 impl<'a> WgpuGraphicsDevice<'a> {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, screen_size: [u32; 2]) -> Self {
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: None,
@@ -155,7 +155,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         Self {
             frame_count: 0,
             current_height: 0,
-            screen_size: [0; 2],
+            screen_size,
 
             texture_cache: Vec::new(),
             shader_cache: Arc::new(RwLock::new(FxHashMap::default())),
