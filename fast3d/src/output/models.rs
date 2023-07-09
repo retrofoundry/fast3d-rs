@@ -121,7 +121,7 @@ impl OutputVBO {
     };
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct OutputFogParams {
     pub multiplier: i16,
     pub offset: i16,
