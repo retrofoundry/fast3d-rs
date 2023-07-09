@@ -350,18 +350,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 1.0,
             );
 
-            // clamp scissors to the screen size
-            let x0 = draw_call.scissor[0].clamp(0, self.screen_size[0]);
-            let y0 = draw_call.scissor[1].clamp(0, self.screen_size[1]);
-            let x1 = (draw_call.scissor[0] + draw_call.scissor[2]).clamp(0, self.screen_size[0]);
-            let y1 = (draw_call.scissor[1] + draw_call.scissor[3]).clamp(0, self.screen_size[1]);
-            let width = x1 - x0;
-            let height = y1 - y0;
-            if width == 0 || height == 0 {
-                continue;
-            }
-
-            rpass.set_scissor_rect(draw_call.scissor[0], draw_call.scissor[1], width, height);
+            let y = self.screen_size[1] - draw_call.scissor[1] - draw_call.scissor[3];
+            rpass.set_scissor_rect(draw_call.scissor[0], y, draw_call.scissor[2], draw_call.scissor[3]);
 
             rpass.draw(0..draw_call.vertex_count as u32, 0..1);
         }
