@@ -201,7 +201,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         let mut combine_uniform_buffer_offset = 0;
         let mut frame_uniform_buffer_offset = 0;
 
-        // create shaders in parallel, but first, reduce to unique shader id's
+        // prepare shaders in parallel, but first, reduce to unique shader id's
         output
             .draw_calls
             .iter()
@@ -215,6 +215,20 @@ impl<'a> WgpuGraphicsDevice<'a> {
             .for_each(|(shader_id, shader)| {
                 self.shader_cache.insert(shader_id, shader);
             });
+
+        // do aggregation of data that will be written to buffer - to write once
+        let mut vertex_buffer_content: Vec<u8> = Vec::new();
+        let mut vertex_buffer_offsets: Vec<u64> = Vec::new();
+
+        for (_index, draw_call) in output.draw_calls.iter().take(output.draw_calls.len() - 1).enumerate() {
+            // Handle vertex buffer data
+            vertex_buffer_content.extend_from_slice(&draw_call.vbo.vbo);
+            vertex_buffer_offsets.push(current_vbo_offset);
+            current_vbo_offset += draw_call.vbo.vbo.len() as u64;
+        }
+
+        // write vertex buffer data
+        queue.write_buffer(&self.vertex_buffer, 0, &vertex_buffer_content);
 
         // omit the last draw call, because we know we that's an extra from the last flush
         // for draw_call in &self.rcp_output.draw_calls[..self.rcp_output.draw_calls.len() - 1] {
@@ -274,7 +288,6 @@ impl<'a> WgpuGraphicsDevice<'a> {
                     frame_uniform_buffer_size,
                 );
 
-            // vertex_uniform_buffer_offset += vertex_uniform_buffer_size;
             blend_uniform_buffer_offset += blend_uniform_buffer_size;
             combine_uniform_buffer_offset += combine_uniform_buffer_size;
             frame_uniform_buffer_offset += frame_uniform_buffer_size;
@@ -283,17 +296,13 @@ impl<'a> WgpuGraphicsDevice<'a> {
             let mut wgpu_draw_call = WgpuDrawCall::new(
                 draw_call.shader_id,
                 pipeline_id,
-                current_vbo_offset,
+                vertex_buffer_offsets[index],
                 draw_call.vbo.num_tris * 3,
                 vertex_uniform_bind_group_index,
                 fragment_uniform_bind_group,
                 draw_call.viewport,
                 draw_call.scissor,
             );
-
-            // Copy contents of vbo to buffer
-            queue.write_buffer(&self.vertex_buffer, current_vbo_offset, &draw_call.vbo.vbo);
-            current_vbo_offset += draw_call.vbo.vbo.len() as u64;
 
             // Process textures
             for (index, tex_cache_id) in draw_call.texture_indices.iter().enumerate() {
