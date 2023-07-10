@@ -157,7 +157,7 @@ impl<T> WgpuProgram<T> {
 
     // MARK: - Defaults
 
-    pub fn new(shader_config: ShaderConfig) -> Self {
+    pub fn new(shader_config: &ShaderConfig) -> Self {
         Self {
             preprocessed_vertex: "".to_string(),
             preprocessed_frag: "".to_string(),
