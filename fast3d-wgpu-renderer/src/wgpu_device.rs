@@ -43,7 +43,6 @@ pub struct WgpuDrawCall {
     pub scissor: [u32; 4],
 }
 
-// create a from to convert from RCPOutput to WgpuDrawCall
 impl WgpuDrawCall {
     fn new(
         shader_id: ShaderId,
@@ -313,9 +312,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
     pub fn draw<'r>(&'r mut self, rpass: &mut wgpu::RenderPass<'r>) {
         for (index, draw_call) in self.draw_calls.iter().enumerate() {
-            let pipeline = self.pipeline_cache.get(&draw_call.pipeline_id).unwrap();
-
             if self.last_pipeline_id != Some(draw_call.pipeline_id) {
+                let pipeline = self.pipeline_cache.get(&draw_call.pipeline_id).unwrap();
                 rpass.set_pipeline(pipeline);
                 self.last_pipeline_id = Some(draw_call.pipeline_id);
             }
@@ -352,17 +350,17 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
             rpass.set_viewport(
                 draw_call.viewport.x,
-                draw_call.viewport.y,
+                self.screen_size[1] as f32 - draw_call.viewport.y - draw_call.viewport.w,
                 draw_call.viewport.z,
                 draw_call.viewport.w,
                 0.0,
                 1.0,
             );
 
-            let y = self.screen_size[1] - draw_call.scissor[1] - draw_call.scissor[3];
+            // Let's clamp the scissor rect to the viewport
             rpass.set_scissor_rect(
                 draw_call.scissor[0],
-                y,
+                self.screen_size[1] - draw_call.scissor[1] - draw_call.scissor[3],
                 draw_call.scissor[2],
                 draw_call.scissor[3],
             );
