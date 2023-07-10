@@ -9,25 +9,41 @@ use wgpu::ShaderModule;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct VertexUniforms {
+    pub screen_size: [f32; 2],
+    _padding: [f32; 2],
     pub projection_matrix: [[f32; 4]; 4],
+}
+
+impl VertexUniforms {
+    pub fn new(screen_size: [f32; 2], projection_matrix: [[f32; 4]; 4]) -> Self {
+        Self {
+            screen_size,
+            _padding: [0.0; 2],
+            projection_matrix,
+        }
+    }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
 pub struct VertexWithFogUniforms {
+    pub screen_size: [f32; 2],
+    _padding: [f32; 2],
     pub projection_matrix: [[f32; 4]; 4],
     pub fog_multiplier: f32,
     pub fog_offset: f32,
-    _padding: [f32; 2],
+    _padding2: [f32; 2],
 }
 
 impl VertexWithFogUniforms {
-    pub fn new(projection_matrix: [[f32; 4]; 4], fog_multiplier: f32, fog_offset: f32) -> Self {
+    pub fn new(screen_size: [f32; 2], projection_matrix: [[f32; 4]; 4], fog_multiplier: f32, fog_offset: f32) -> Self {
         Self {
+            screen_size,
+            _padding: [0.0; 2],
             projection_matrix,
             fog_multiplier,
             fog_offset,
-            _padding: [0.0; 2],
+            _padding2: [0.0; 2],
         }
     }
 }
@@ -159,9 +175,8 @@ impl<'a> ShaderEntry<'a> {
         program: &WgpuProgram<ShaderModule>,
     ) -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
-            array_stride: (program.num_floats * ::std::mem::size_of::<f32>()) as u64,
+            array_stride: (program.num_floats * std::mem::size_of::<f32>()) as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            // TODO: Is there a better way to construct this?
             attributes: if program.uses_texture_0() || program.uses_texture_1() {
                 &[
                     wgpu::VertexAttribute {

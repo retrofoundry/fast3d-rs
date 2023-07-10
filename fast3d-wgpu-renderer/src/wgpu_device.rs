@@ -529,6 +529,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             {
                 if shader_entry.program.uses_fog() {
                     let uniform = VertexWithFogUniforms::new(
+                        [self.screen_size[0] as f32, self.screen_size[1] as f32],
                         draw_call.projection_matrix.to_cols_array_2d(),
                         draw_call.fog.multiplier as f32,
                         draw_call.fog.offset as f32,
@@ -557,9 +558,10 @@ impl<'a> WgpuGraphicsDevice<'a> {
                     ));
                     current_vertex_uniform_offset += uniform_size;
                 } else {
-                    let uniform = VertexUniforms {
-                        projection_matrix: draw_call.projection_matrix.to_cols_array_2d(),
-                    };
+                    let uniform = VertexUniforms::new(
+                        [self.screen_size[0] as f32, self.screen_size[1] as f32],
+                        draw_call.projection_matrix.to_cols_array_2d(),
+                    );
 
                     let uniform_size = align_to(
                         std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress,

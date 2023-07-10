@@ -247,6 +247,7 @@ impl<T> WgpuProgram<T> {
             #endif
 
             layout(std140, set = 0, binding = 0) uniform Uniforms {
+                vec2 screenSize;
                 mat4 uProjection;
                 #ifdef USE_FOG
                     float uFogMultiplier;
@@ -259,6 +260,7 @@ impl<T> WgpuProgram<T> {
                     gl_Position = vec4(aVtxPos.xyz, 1.0);
                 } else {
                     gl_Position = aVtxPos * uProjection;
+                    gl_Position.x = gl_Position.x * (4.0 / 3.0) / (screenSize.x / screenSize.y);
                 }
 
                 #ifdef USE_FOG

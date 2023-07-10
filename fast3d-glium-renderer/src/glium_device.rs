@@ -45,21 +45,48 @@ impl TextureData {
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct VertexUniforms {
+    screen_size: [f32; 2],
+    _padding: [f32; 2],
     projection: [[f32; 4]; 4],
 }
 
-implement_uniform_block!(VertexUniforms, projection);
+impl VertexUniforms {
+    pub fn new(screen_size: [f32; 2], projection: [[f32; 4]; 4]) -> Self {
+        Self {
+            screen_size,
+            _padding: [0.0; 2],
+            projection,
+        }
+    }
+}
+
+implement_uniform_block!(VertexUniforms, screen_size, projection);
 
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct VertexWithFogUniforms {
+    screen_size: [f32; 2],
+    _padding: [f32; 2],
     projection: [[f32; 4]; 4],
     fog_multiplier: f32,
     fog_offset: f32,
 }
 
+impl VertexWithFogUniforms {
+    pub fn new(screen_size: [f32; 2], projection: [[f32; 4]; 4], fog_multiplier: f32, fog_offset: f32) -> Self {
+        Self {
+            screen_size,
+            _padding: [0.0; 2],
+            projection,
+            fog_multiplier,
+            fog_offset,
+        }
+    }
+}
+
 implement_uniform_block!(
     VertexWithFogUniforms,
+    screen_size,
     projection,
     fog_multiplier,
     fog_offset
@@ -159,6 +186,7 @@ pub struct GliumGraphicsDevice<'draw> {
 
     frame_count: i32,
     current_height: i32,
+    screen_size: [u32; 2],
 
     draw_params: DrawParameters<'draw>,
 }
@@ -212,14 +240,8 @@ fn clamp_to_glium(clamp: u32) -> SamplerWrapFunction {
     SamplerWrapFunction::Repeat
 }
 
-impl<'draw> Default for GliumGraphicsDevice<'draw> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<'draw> GliumGraphicsDevice<'draw> {
-    pub fn new() -> Self {
+    pub fn new(screen_size: [u32; 2]) -> Self {
         Self {
             shader_cache: rustc_hash::FxHashMap::default(),
             current_shader: None,
@@ -230,6 +252,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
 
             frame_count: 0,
             current_height: 0,
+            screen_size,
 
             draw_params: DrawParameters {
                 ..Default::default()
@@ -245,6 +268,10 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         self.draw_params = DrawParameters {
             ..Default::default()
         };
+    }
+
+    pub fn resize(&mut self, screen_size: [u32; 2]) {
+        self.screen_size = screen_size;
     }
 
     pub fn set_cull_mode(&mut self, cull_mode: Option<Face>) {
@@ -479,11 +506,12 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         // Setup uniforms
 
         let vtx_uniform_buf = if program.get_define_bool("USE_FOG") {
-            let data = VertexWithFogUniforms {
-                projection: projection_matrix.to_cols_array_2d(),
-                fog_multiplier: fog.multiplier as f32,
-                fog_offset: fog.offset as f32,
-            };
+            let data = VertexWithFogUniforms::new(
+                [self.screen_size[0] as f32, self.screen_size[1] as f32],
+                projection_matrix.to_cols_array_2d(),
+                fog.multiplier as f32,
+                fog.offset as f32,
+            );
 
             let buffer = Buffer::new(
                 display,
@@ -494,9 +522,10 @@ impl<'draw> GliumGraphicsDevice<'draw> {
             .unwrap();
             BufferAny::from(buffer)
         } else {
-            let data = VertexUniforms {
-                projection: projection_matrix.to_cols_array_2d(),
-            };
+            let data = VertexUniforms::new(
+                [self.screen_size[0] as f32, self.screen_size[1] as f32],
+                projection_matrix.to_cols_array_2d(),
+            );
 
             let buffer = Buffer::new(
                 display,
