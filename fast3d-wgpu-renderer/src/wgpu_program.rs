@@ -1,17 +1,14 @@
 use fast3d::gbi::utils::{
     geometry_mode_uses_lighting, get_cycle_type_from_other_mode_h,
-    get_textfilter_from_other_mode_h, other_mode_l_alpha_compare_dither,
+    get_texture_filter_from_other_mode_h, other_mode_l_alpha_compare_dither,
     other_mode_l_alpha_compare_threshold, other_mode_l_uses_alpha, other_mode_l_uses_fog,
     other_mode_l_uses_texture_edge,
 };
 
-use fast3d::models::{
-    color_combiner::{CombineParams, ACMUX, CCMUX},
-    texture::TextFilt,
-};
+use fast3d::models::color_combiner::{CombineParams, ACMUX, CCMUX};
 
+use fast3d::gbi::defines::{CycleType, TextureFilter};
 use fast3d::output::ShaderConfig;
-use fast3d::rdp::OtherModeHCycleType;
 use naga::FastHashMap;
 
 #[derive(PartialEq, Eq)]
@@ -185,8 +182,7 @@ impl<T> WgpuProgram<T> {
 
         self.set_define_bool(
             "TWO_CYCLE".to_string(),
-            get_cycle_type_from_other_mode_h(self.other_mode_h)
-                == OtherModeHCycleType::G_CYC_2CYCLE,
+            get_cycle_type_from_other_mode_h(self.other_mode_h) == CycleType::TwoCycle,
         );
         self.set_define_bool(
             "LIGHTING".to_string(),
@@ -285,10 +281,10 @@ impl<T> WgpuProgram<T> {
     }
 
     fn generate_frag(&mut self) -> String {
-        let tex_filter = match get_textfilter_from_other_mode_h(self.other_mode_h) {
-            TextFilt::G_TF_POINT => "Point",
-            TextFilt::G_TF_AVERAGE => "Average",
-            TextFilt::G_TF_BILERP => "Bilerp",
+        let tex_filter = match get_texture_filter_from_other_mode_h(self.other_mode_h) {
+            TextureFilter::Point => "Point",
+            TextureFilter::Average => "Average",
+            TextureFilter::Bilerp => "Bilerp",
         };
 
         let color_input_common = |input| match input {

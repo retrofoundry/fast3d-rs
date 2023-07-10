@@ -1,6 +1,6 @@
 use fast3d::gbi::utils::{
     geometry_mode_uses_lighting, get_cycle_type_from_other_mode_h,
-    get_textfilter_from_other_mode_h, other_mode_l_alpha_compare_dither,
+    get_texture_filter_from_other_mode_h, other_mode_l_alpha_compare_dither,
     other_mode_l_alpha_compare_threshold, other_mode_l_uses_alpha, other_mode_l_uses_fog,
     other_mode_l_uses_texture_edge,
 };
@@ -280,7 +280,7 @@ impl<T> OpenGLProgram<T> {
     }
 
     fn generate_frag(&mut self) -> String {
-        let tex_filter = match get_textfilter_from_other_mode_h(self.other_mode_h) {
+        let tex_filter = match get_texture_filter_from_other_mode_h(self.other_mode_h) {
             TextFilt::G_TF_POINT => "Point",
             TextFilt::G_TF_AVERAGE => "Average",
             TextFilt::G_TF_BILERP => "Bilerp",

@@ -1,10 +1,10 @@
-use crate::models::texture::{ImageFormat, ImageSize};
+use crate::gbi::defines::{ComponentSize, ImageFormat};
 use crate::output::gfx::CompareFunction;
 
 pub struct OutputTexture {
     pub game_address: usize,
     pub format: ImageFormat,
-    pub size: ImageSize,
+    pub size: ComponentSize,
 
     // properties from tile descriptor
     pub width: u32,
@@ -23,7 +23,7 @@ impl OutputTexture {
     pub fn new(
         game_address: usize,
         format: ImageFormat,
-        size: ImageSize,
+        size: ComponentSize,
         width: u32,
         height: u32,
         uls: u16,

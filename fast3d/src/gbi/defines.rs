@@ -1,3 +1,5 @@
+use num_enum::TryFromPrimitive;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct GWords {
@@ -117,6 +119,98 @@ pub struct Vtx_tn {
     pub texture_coords: [i16; 2],
     pub normal: [i8; 3],
     pub alpha: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
+#[repr(u8)]
+pub enum TextureFilter {
+    Point = 0,
+    Average = 3,
+    Bilerp = 2,
+}
+
+impl Default for TextureFilter {
+    fn default() -> Self {
+        Self::Point
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
+#[repr(u8)]
+pub enum TextureLUT {
+    None = 0,
+    Rgba16 = 2,
+    Ia16 = 3,
+}
+
+impl Default for TextureLUT {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
+#[repr(u8)]
+pub enum ImageFormat {
+    Rgba = 0,
+    Yuv = 1,
+    Ci = 2,
+    Ia = 3,
+    I = 4,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
+#[repr(u8)]
+pub enum ComponentSize {
+    Bits4 = 0,
+    Bits8 = 1,
+    Bits16 = 2,
+    Bits32 = 3,
+    DD = 5,
+}
+
+impl Default for ComponentSize {
+    fn default() -> Self {
+        Self::Bits4
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
+#[repr(u8)]
+pub enum ZMode {
+    Opaque = 0,
+    Interpenetrating = 1,
+    Translucent = 2,
+    Decal = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
+#[repr(u8)]
+pub enum CycleType {
+    OneCycle = 0,
+    TwoCycle = 1,
+    Copy = 2,
+    Fill = 3,
+}
+
+impl Default for CycleType {
+    fn default() -> Self {
+        Self::OneCycle
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
+#[repr(u8)]
+pub enum AlphaCompare {
+    None = 0,
+    Threshold = 1,
+    Dither = 3,
+}
+
+impl Default for AlphaCompare {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 pub mod g {

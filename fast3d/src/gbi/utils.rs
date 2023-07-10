@@ -1,12 +1,8 @@
-use crate::gbi::defines::rsp_geometry;
+use crate::gbi::defines::{rsp_geometry, AlphaCompare, CycleType, TextureFilter};
 use crate::rsp::RSPConstants;
 use crate::{
-    models::texture::TextFilt,
     output::gfx::{BlendFactor, Face},
-    rdp::{
-        AlphaCompare, BlendParamB, BlendParamPMColor, OtherModeHCycleType, OtherModeH_Layout,
-        OtherModeLayoutL,
-    },
+    rdp::{BlendParamB, BlendParamPMColor, OtherModeH_Layout, OtherModeLayoutL},
 };
 
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
@@ -30,7 +26,7 @@ pub fn other_mode_l_uses_alpha(other_mode_l: u32) -> bool {
 }
 
 pub fn other_mode_l_alpha_compare_threshold(other_mode_l: u32) -> bool {
-    other_mode_l & AlphaCompare::G_AC_THRESHOLD as u32 == AlphaCompare::G_AC_THRESHOLD as u32
+    other_mode_l & AlphaCompare::Threshold as u32 == AlphaCompare::Threshold as u32
 }
 
 pub fn other_mode_l_uses_fog(other_mode_l: u32) -> bool {
@@ -38,26 +34,19 @@ pub fn other_mode_l_uses_fog(other_mode_l: u32) -> bool {
 }
 
 pub fn other_mode_l_alpha_compare_dither(other_mode_l: u32) -> bool {
-    other_mode_l & AlphaCompare::G_AC_DITHER as u32 == AlphaCompare::G_AC_DITHER as u32
+    other_mode_l & AlphaCompare::Dither as u32 == AlphaCompare::Dither as u32
 }
 
-pub fn get_cycle_type_from_other_mode_h(mode_h: u32) -> OtherModeHCycleType {
-    match (mode_h >> OtherModeH_Layout::G_MDSFT_CYCLETYPE as u32) & 0x03 {
-        x if x == OtherModeHCycleType::G_CYC_1CYCLE as u32 => OtherModeHCycleType::G_CYC_1CYCLE,
-        x if x == OtherModeHCycleType::G_CYC_2CYCLE as u32 => OtherModeHCycleType::G_CYC_2CYCLE,
-        x if x == OtherModeHCycleType::G_CYC_COPY as u32 => OtherModeHCycleType::G_CYC_COPY,
-        x if x == OtherModeHCycleType::G_CYC_FILL as u32 => OtherModeHCycleType::G_CYC_FILL,
-        _ => panic!("Invalid cycle type"),
-    }
+pub fn get_cycle_type_from_other_mode_h(mode_h: u32) -> CycleType {
+    (((mode_h >> OtherModeH_Layout::G_MDSFT_CYCLETYPE as u32) & 0x03) as u8)
+        .try_into()
+        .unwrap()
 }
 
-pub fn get_textfilter_from_other_mode_h(mode_h: u32) -> TextFilt {
-    match (mode_h >> OtherModeH_Layout::G_MDSFT_TEXTFILT as u32) & 0x3 {
-        x if x == TextFilt::G_TF_POINT as u32 => TextFilt::G_TF_POINT,
-        x if x == TextFilt::G_TF_AVERAGE as u32 => TextFilt::G_TF_AVERAGE,
-        x if x == TextFilt::G_TF_BILERP as u32 => TextFilt::G_TF_BILERP,
-        _ => panic!("Invalid text filter"),
-    }
+pub fn get_texture_filter_from_other_mode_h(mode_h: u32) -> TextureFilter {
+    (((mode_h >> OtherModeH_Layout::G_MDSFT_TEXTFILT as u32) & 0x3) as u8)
+        .try_into()
+        .unwrap()
 }
 
 pub fn translate_blend_param_b(param: u32, src: BlendFactor) -> BlendFactor {

@@ -1,3 +1,4 @@
+use crate::gbi::defines::TextureLUT;
 use farbe::image::n64::{
     ImageFormat as FarbeImageFormat, ImageSize as FarbeImageSize, NativeImage, TLUT,
 };
@@ -100,7 +101,7 @@ pub fn translate_tlut(
     texlut: &TextureLUT,
 ) -> Vec<u8> {
     // TODO: handle non-rgba16 palettes
-    assert!(texlut == &TextureLUT::G_TT_RGBA16);
+    assert_eq!(texlut, &TextureLUT::Rgba16);
 
     let tlut_size = image_size.tlut_size_in_bytes();
     let palette_data = unsafe { std::slice::from_raw_parts(pal_dram_addr as *const u8, tlut_size) };
@@ -111,55 +112,6 @@ pub fn translate_tlut(
     trace!("Decoded TLUT");
 
     decoded
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-pub enum ImageFormat {
-    G_IM_FMT_RGBA = 0x00,
-    G_IM_FMT_YUV = 0x01,
-    G_IM_FMT_CI = 0x02,
-    G_IM_FMT_IA = 0x03,
-    G_IM_FMT_I = 0x04,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
-pub enum ImageSize {
-    G_IM_SIZ_4b = 0x00,
-    G_IM_SIZ_8b = 0x01,
-    G_IM_SIZ_16b = 0x02,
-    G_IM_SIZ_32b = 0x03,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum TextureLUT {
-    G_TT_NONE = 0x00,
-    G_TT_RGBA16 = 0x02,
-    G_TT_IA16 = 0x03,
-}
-
-impl TextureLUT {
-    pub fn from_u32(value: u32) -> Self {
-        match value {
-            x if x == TextureLUT::G_TT_NONE as u32 => TextureLUT::G_TT_NONE,
-            x if x == TextureLUT::G_TT_RGBA16 as u32 => TextureLUT::G_TT_RGBA16,
-            x if x == TextureLUT::G_TT_IA16 as u32 => TextureLUT::G_TT_IA16,
-            _ => panic!("Invalid TextureLUT"),
-        }
-    }
-}
-
-pub enum TexCM {
-    WRAP = 0x00,
-    MIRROR = 0x01,
-    CLAMP = 0x02,
-    MIRROR_CLAMP = 0x03,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextFilt {
-    G_TF_POINT = 0x00,
-    G_TF_AVERAGE = 0x03,
-    G_TF_BILERP = 0x02,
 }
 
 pub struct TextureState {
