@@ -198,7 +198,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         // create shaders in parallel, but first, reduce to unique shader id's
         output
             .draw_calls
-            .par_iter()
+            .iter()
             .map(|draw_call| (draw_call.shader_id, draw_call.shader_config))
             .collect::<HashSet<_>>()
             .into_par_iter()
