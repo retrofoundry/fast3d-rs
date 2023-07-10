@@ -37,7 +37,6 @@ pub struct WgpuDrawCall {
     pub vertex_count: usize,
 
     pub vertex_uniform_bind_group_index: usize,
-    // pub vertex_uniform_bind_group: wgpu::BindGroup,
     pub fragment_uniform_bind_group: wgpu::BindGroup,
 
     pub viewport: glam::Vec4,
@@ -253,7 +252,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 &draw_call.shader_id,
                 &draw_call,
                 if index > 0 {
-                    Some(&output.draw_calls[index - 1])
+                    output.draw_calls.get(index - 1)
                 } else {
                     None
                 },
@@ -267,8 +266,6 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 .configure_uniform_bind_groups(
                     device,
                     &draw_call.shader_id,
-                    // vertex_uniform_buffer_offset,
-                    // vertex_uniform_buffer_size,
                     blend_uniform_buffer_offset,
                     blend_uniform_buffer_size,
                     combine_uniform_buffer_offset,
@@ -700,9 +697,6 @@ impl<'a> WgpuGraphicsDevice<'a> {
         device: &wgpu::Device,
         shader_id: &ShaderId,
 
-        // vertex_uniform_buffer_offset: wgpu::BufferAddress,
-        // vertex_uniform_buf_size: wgpu::BufferAddress,
-
         blend_uniform_buffer_offset: wgpu::BufferAddress,
         blend_uniform_buf_size: wgpu::BufferAddress,
 
@@ -711,21 +705,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
         frame_uniform_buffer_offset: wgpu::BufferAddress,
         frame_uniform_buf_size: wgpu::BufferAddress,
-    ) -> (wgpu::BindGroup, wgpu::BindGroup) {
+    ) -> wgpu::BindGroup {
         let shader_entry = self.shader_cache.get(shader_id).unwrap();
-
-        // let vertex_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        //     label: Some("Vertex Uniform Bind Group"),
-        //     layout: &shader_entry.vertex_uniform_bind_group_layout,
-        //     entries: &[wgpu::BindGroupEntry {
-        //         binding: 0,
-        //         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-        //             buffer: &self.vertex_uniform_buffer,
-        //             offset: vertex_uniform_buffer_offset,
-        //             size: wgpu::BufferSize::new(vertex_uniform_buf_size),
-        //         }),
-        //     }],
-        // });
 
         let mut bind_group_entries = vec![
             wgpu::BindGroupEntry {
