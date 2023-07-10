@@ -118,21 +118,21 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
         let vertex_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Uniform Buffer"),
-            size: 100000, // 100kb should be enough
+            size: 400000, // 400kb should be enough
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let blend_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Blend Uniform Buffer"),
-            size: 100000, // 100kb should be enough
+            size: 400000, // 400kb should be enough
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let combine_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Combine Uniform Buffer"),
-            size: 100000, // 100kb should be enough
+            size: 400000, // 400kb should be enough
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
