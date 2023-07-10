@@ -395,9 +395,9 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
         // Create the sampler
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: None,
-            address_mode_u: gfx_cm_to_wgpu(sampler.clamp_s),
-            address_mode_v: gfx_cm_to_wgpu(sampler.clamp_t),
+            label: Some("Texture Sampler"),
+            address_mode_u: clamp_to_wgpu(sampler.clamp_s),
+            address_mode_v: clamp_to_wgpu(sampler.clamp_t),
             address_mode_w: wgpu::AddressMode::Repeat,
             mag_filter: if sampler.linear_filter {
                 wgpu::FilterMode::Linear
@@ -903,7 +903,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
     }
 }
 
-fn gfx_cm_to_wgpu(val: u32) -> wgpu::AddressMode {
+fn clamp_to_wgpu(val: u32) -> wgpu::AddressMode {
     if val & g::tx::CLAMP as u32 != 0 {
         return wgpu::AddressMode::ClampToEdge;
     }

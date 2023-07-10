@@ -469,42 +469,41 @@ impl RDP {
         //     return;
         // }
 
-        let lod_en = (self.other_mode_h >> 16 & 0x1) != 0;
-        if lod_en {
-            // TODO: Support mip-mapping
-            trace!("Mip-mapping is enabled, but not supported yet");
-            assert!(false);
-        } else {
-            // we're in TILE mode. Let's check if we're in two-cycle mode.
-            // let cycle_type = RDP::get_cycle_type_from_other_mode_h(self.other_mode_h);
-            // assert!(
-            //     cycle_type == OtherModeHCycleType::G_CYC_1CYCLE
-            //         || cycle_type == OtherModeHCycleType::G_CYC_2CYCLE
-            // );
+        // let lod_en = (self.other_mode_h >> 16 & 0x1) != 0;
+        // if lod_en {
+        //     // TODO: Support mip-mapping
+        //     trace!("Mip-mapping is enabled, but not supported yet");
+        //     assert!(false);
+        // } else {
+        // we're in TILE mode. Let's check if we're in two-cycle mode.
+        // let cycle_type = RDP::get_cycle_type_from_other_mode_h(self.other_mode_h);
+        // assert!(
+        //     cycle_type == OtherModeHCycleType::G_CYC_1CYCLE
+        //         || cycle_type == OtherModeHCycleType::G_CYC_2CYCLE
+        // );
 
-            for i in 0..2 {
-                if (i == 0 && self.combine.uses_texture0()) || self.uses_texture1() {
-                    if self.textures_changed[i as usize] {
-                        self.flush(output);
-                        output.clear_textures(i as usize);
+        for i in 0..2 {
+            if (i == 0 && self.combine.uses_texture0()) || self.uses_texture1() {
+                if self.textures_changed[i as usize] {
+                    self.flush(output);
+                    output.clear_textures(i as usize);
 
-                        self.import_tile_texture(rsp, output, i as usize);
-                        self.textures_changed[i as usize] = false;
-                    }
-
-                    let tile_descriptor =
-                        self.tile_descriptors[(rsp.texture_state.tile + i) as usize];
-                    let linear_filter =
-                        get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT;
-                    output.set_sampler_parameters(
-                        i as usize,
-                        linear_filter,
-                        tile_descriptor.cm_s as u32,
-                        tile_descriptor.cm_t as u32,
-                    );
+                    self.import_tile_texture(rsp, output, i as usize);
+                    self.textures_changed[i as usize] = false;
                 }
+
+                let tile_descriptor = self.tile_descriptors[(rsp.texture_state.tile + i) as usize];
+                let linear_filter =
+                    get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT;
+                output.set_sampler_parameters(
+                    i as usize,
+                    linear_filter,
+                    tile_descriptor.cm_s as u32,
+                    tile_descriptor.cm_t as u32,
+                );
             }
         }
+        // }
     }
 
     pub fn flush(&mut self, output: &mut RCPOutput) {

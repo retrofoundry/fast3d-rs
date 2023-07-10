@@ -133,7 +133,7 @@ impl<T> WgpuProgram<T> {
             }
             ShaderVersion::GLSL440 => {
                 shader.replace("uniform sampler2D uTex0;", "layout(set = 2, binding = 0) uniform texture2D uTex0;\nlayout(set = 2, binding = 1) uniform sampler uTex0Sampler;")
-                    .replace("uniform sampler2D uTex1;", "layout(set = 3, binding = 0) uniform texture2D uTex1;\nlayout(set = 2, binding = 1) uniform sampler uTex1Sampler;")
+                    .replace("uniform sampler2D uTex1;", "layout(set = 3, binding = 0) uniform texture2D uTex1;\nlayout(set = 3, binding = 1) uniform sampler uTex1Sampler;")
                     .replace("in sampler2D tex,", "in texture2D tex, in sampler smplr,")
                     .replace("texture(tex,", "texture(sampler2D(tex, smplr),")
                     .replace("Texture2D_N64(uTex0, vTexCoord);", "Texture2D_N64(uTex0, uTex0Sampler, vTexCoord);")
