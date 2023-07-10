@@ -13,7 +13,6 @@ use fast3d::models::{
 use fast3d::output::ShaderConfig;
 use fast3d::rdp::OtherModeHCycleType;
 use naga::FastHashMap;
-use wgpu::{BindGroupLayout, VertexAttribute, VertexBufferLayout, VertexFormat, VertexStepMode};
 
 #[derive(PartialEq, Eq)]
 pub enum ShaderType {
@@ -27,7 +26,7 @@ pub enum ShaderVersion {
     GLSL440, // version supported by naga to use in WGPU
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WgpuProgram<T> {
     // Compiled program.
     pub preprocessed_vertex: String,
@@ -134,7 +133,7 @@ impl<T> WgpuProgram<T> {
             }
             ShaderVersion::GLSL440 => {
                 shader.replace("uniform sampler2D uTex0;", "layout(set = 2, binding = 0) uniform texture2D uTex0;\nlayout(set = 2, binding = 1) uniform sampler uTex0Sampler;")
-                    .replace("uniform sampler2D uTex1;", "layout(set = 2, binding = 2) uniform texture2D uTex1;\nlayout(set = 2, binding = 3) uniform sampler uTex1Sampler;")
+                    .replace("uniform sampler2D uTex1;", "layout(set = 3, binding = 0) uniform texture2D uTex1;\nlayout(set = 3, binding = 1) uniform sampler uTex1Sampler;")
                     .replace("in sampler2D tex,", "in texture2D tex, in sampler smplr,")
                     .replace("texture(tex,", "texture(sampler2D(tex, smplr),")
                     .replace("Texture2D_N64(uTex0, vTexCoord);", "Texture2D_N64(uTex0, uTex0Sampler, vTexCoord);")
@@ -158,7 +157,7 @@ impl<T> WgpuProgram<T> {
 
     // MARK: - Defaults
 
-    pub fn new(shader_config: ShaderConfig) -> Self {
+    pub fn new(shader_config: &ShaderConfig) -> Self {
         Self {
             preprocessed_vertex: "".to_string(),
             preprocessed_frag: "".to_string(),
@@ -248,6 +247,7 @@ impl<T> WgpuProgram<T> {
             #endif
 
             layout(std140, set = 0, binding = 0) uniform Uniforms {
+                vec2 screenSize;
                 mat4 uProjection;
                 #ifdef USE_FOG
                     float uFogMultiplier;
@@ -260,10 +260,8 @@ impl<T> WgpuProgram<T> {
                     gl_Position = vec4(aVtxPos.xyz, 1.0);
                 } else {
                     gl_Position = aVtxPos * uProjection;
+                    gl_Position.x = gl_Position.x * (4.0 / 3.0) / (screenSize.x / screenSize.y);
                 }
-
-                 // map z to [0, 1] - necessary for WGPU
-                 gl_Position.z = (gl_Position.z + gl_Position.w) / (2.0 * gl_Position.w);
 
                 #ifdef USE_FOG
                     float fogValue = (max(gl_Position.z, 0.0) / gl_Position.w) * uFogMultiplier + uFogOffset;
@@ -272,6 +270,9 @@ impl<T> WgpuProgram<T> {
                 #else
                     vVtxColor = aVtxColor;
                 #endif
+
+                // GL's z range is -1 to 1, but WGPU's is 0 to 1, remap it
+                gl_Position.z = (gl_Position.z + gl_Position.w) / 2.0;
 
                 #if defined(USE_TEXTURE0) || defined(USE_TEXTURE1)
                     vTexCoord = aTexCoord;
@@ -306,9 +307,7 @@ impl<T> WgpuProgram<T> {
             } else {
                 match input {
                     CCMUX::CENTER__SCALE__ONE => "tOne.rgb", // matching against ONE
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => {
-                        "vec3(randomNoise, randomNoise, randomNoise)"
-                    } // matching against NOISE
+                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(RAND_NOISE, RAND_NOISE, RAND_NOISE)", // matching against NOISE
                     _ => "tZero.rgb",
                 }
             }
@@ -459,11 +458,9 @@ impl<T> WgpuProgram<T> {
             }}
 
             #define Texture2D_N64 Texture2D_N64_{}
+            #define RAND_NOISE floor(random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight))), float(uFrameCount))) + 0.5)
 
             vec3 CombineColorCycle0(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
-                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
-                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
-                #endif
                 return ({} - {}) * {} + {};
             }}
 
@@ -472,9 +469,6 @@ impl<T> WgpuProgram<T> {
             }}
 
             vec3 CombineColorCycle1(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
-                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
-                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
-                #endif
                 return ({} - {}) * {} + {};
             }}
 
@@ -511,7 +505,7 @@ impl<T> WgpuProgram<T> {
 
                 #if defined(USE_ALPHA)
                     #if defined(ALPHA_COMPARE_DITHER)
-                        if (texel.a < floor(random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight))), float(uFrameCount))) + 0.5)) discard;
+                        if (texel.a < RAND_NOISE) discard;
                     #endif
 
                     #if defined(ALPHA_COMPARE_THRESHOLD)
@@ -555,82 +549,26 @@ impl<T> WgpuProgram<T> {
         )
     }
 
-    // MARK: - Pipeline Helpers
+    // MARK: - Helpers
 
-    pub fn vertex_description(&self) -> VertexBufferLayout<'static> {
-        VertexBufferLayout {
-            array_stride: (self.num_floats * ::std::mem::size_of::<f32>()) as u64,
-            step_mode: VertexStepMode::Vertex,
-            // TODO: Is there a better way to construct this?
-            attributes: if self.get_define_bool("USE_TEXTURE0")
-                || self.get_define_bool("USE_TEXTURE1")
-            {
-                &[
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: 0, // position
-                        shader_location: 0,
-                    },
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: std::mem::size_of::<[f32; 4]>() as u64, // color
-                        shader_location: 1,
-                    },
-                    VertexAttribute {
-                        format: VertexFormat::Float32x2,
-                        offset: std::mem::size_of::<[f32; 8]>() as u64, // texcoord
-                        shader_location: 2,
-                    },
-                ]
-            } else {
-                &[
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: 0, // position
-                        shader_location: 0,
-                    },
-                    VertexAttribute {
-                        format: VertexFormat::Float32x4,
-                        offset: std::mem::size_of::<[f32; 4]>() as u64, // color
-                        shader_location: 1,
-                    },
-                ]
-            },
-        }
+    pub fn uses_texture_0(&self) -> bool {
+        self.combine.uses_texture0()
     }
 
-    pub fn create_texture_bind_group_layout(&self, device: &wgpu::Device) -> BindGroupLayout {
-        {
-            let mut group_layout_entries: Vec<wgpu::BindGroupLayoutEntry> = Vec::new();
+    pub fn uses_texture_1(&self) -> bool {
+        self.combine.uses_texture1()
+    }
 
-            for i in 0..2 {
-                let texture_index = format!("USE_TEXTURE{}", i);
-                if self.get_define_bool(&texture_index) {
-                    group_layout_entries.push(wgpu::BindGroupLayoutEntry {
-                        binding: i * 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    });
+    pub fn uses_fog(&self) -> bool {
+        other_mode_l_uses_fog(self.other_mode_l)
+    }
 
-                    group_layout_entries.push(wgpu::BindGroupLayoutEntry {
-                        binding: (i * 2 + 1),
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        // TODO: Is this the appropriate setting?
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    });
-                }
-            }
+    pub fn uses_alpha(&self) -> bool {
+        other_mode_l_uses_alpha(self.other_mode_l)
+            || other_mode_l_uses_texture_edge(self.other_mode_l)
+    }
 
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Textures/Samplers Group Layout"),
-                entries: &group_layout_entries,
-            })
-        }
+    pub fn uses_alpha_compare_dither(&self) -> bool {
+        other_mode_l_alpha_compare_dither(self.other_mode_l)
     }
 }

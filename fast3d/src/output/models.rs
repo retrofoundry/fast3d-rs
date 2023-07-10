@@ -52,7 +52,7 @@ pub struct OutputSampler {
     pub clamp_t: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputStencil {
     pub depth_write_enabled: bool,
     pub depth_compare: CompareFunction,
@@ -121,7 +121,7 @@ impl OutputVBO {
     };
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct OutputFogParams {
     pub multiplier: i16,
     pub offset: i16,

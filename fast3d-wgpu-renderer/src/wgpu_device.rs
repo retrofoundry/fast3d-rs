@@ -1,518 +1,356 @@
-use std::{borrow::Cow, collections::HashMap};
+use glam::Vec4Swizzles;
+use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 
-use bytemuck::{Pod, Zeroable};
-use wgpu::ShaderModule;
+use wgpu::util::align_to;
 
-use wgpu::util::{align_to, DeviceExt};
-
+use crate::defines::{
+    FragmentBlendUniforms, FragmentBlendWithFogUniforms, FragmentCombineUniforms,
+    FragmentFrameUniforms, PipelineConfig, PipelineId, ShaderEntry, TextureData, VertexUniforms,
+    VertexWithFogUniforms,
+};
 use crate::wgpu_program::ShaderVersion;
-use fast3d::output::{ShaderConfig, ShaderId};
+use fast3d::output::{IntermediateDrawCall, RCPOutput};
 use fast3d::{
     gbi::defines::g,
-    models::color_combiner::CombineParams,
     output::{
         gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
-        models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
+        models::{OutputSampler, OutputStencil, OutputTexture},
+        ShaderConfig, ShaderId,
     },
 };
 
 use super::wgpu_program::WgpuProgram;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-struct VertexUniforms {
-    projection_matrix: [[f32; 4]; 4],
-    _pad: [f32; 4],
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+pub struct WgpuDrawCall {
+    pub shader_id: ShaderId,
+    pub pipeline_id: PipelineId,
+    pub textures: [Option<usize>; 2],
+
+    pub vertex_buffer_offset: wgpu::BufferAddress,
+    pub vertex_count: usize,
+
+    pub viewport: glam::Vec4,
+    pub scissor: [u32; 4],
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-struct VertexWithFogUniforms {
-    projection_matrix: [[f32; 4]; 4],
-    fog_multiplier: f32,
-    fog_offset: f32,
-    _pad: [f32; 2],
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-struct FragmentBlendUniforms {
-    blend_color: [f32; 4],
-    fog_color: [f32; 4],
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-struct FragmentCombineUniforms {
-    prim_color: [f32; 4],
-    env_color: [f32; 4],
-    key_center: [f32; 3],
-    // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
-    _pad: u32,
-    key_scale: [f32; 3],
-    // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
-    __pad: u32,
-    prim_lod_frac: f32,
-    convert_k4: f32,
-    convert_k5: f32,
-    ___pad: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
-struct FragmentFrameUniforms {
-    count: u32,
-    height: u32,
-}
-
-struct TextureData {
-    texture_view: wgpu::TextureView,
-    sampler: Option<wgpu::Sampler>,
-}
-
-impl TextureData {
-    pub fn new(texture_view: wgpu::TextureView) -> Self {
+impl WgpuDrawCall {
+    fn new(
+        shader_id: ShaderId,
+        pipeline_id: PipelineId,
+        vertex_buffer_offset: wgpu::BufferAddress,
+        vertex_count: usize,
+        viewport: glam::Vec4,
+        scissor: [u32; 4],
+    ) -> Self {
         Self {
-            texture_view,
-            sampler: None,
+            shader_id,
+            pipeline_id,
+            textures: [None; 2],
+
+            vertex_buffer_offset,
+            vertex_count,
+
+            viewport,
+            scissor,
         }
     }
 }
 
-pub struct WgpuGraphicsDevice {
-    depth_texture: wgpu::TextureView,
-
-    vertex_buf: wgpu::Buffer,
-
-    vertex_uniform_buf: wgpu::Buffer,
-    vertex_bind_group_layout: wgpu::BindGroupLayout,
-    vertex_bind_group: wgpu::BindGroup,
-
-    blend_uniform_buf: wgpu::Buffer,
-    combine_uniform_buf: wgpu::Buffer,
-    frame_uniform_buf: wgpu::Buffer,
-    fragment_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    fragment_uniform_bind_group: wgpu::BindGroup,
-
-    pub shader_cache: rustc_hash::FxHashMap<ShaderId, WgpuProgram<ShaderModule>>,
-    current_shader: Option<ShaderId>,
-
-    textures: Vec<TextureData>,
-    active_texture: usize,
-    current_texture_ids: [usize; 2],
-
+pub struct WgpuGraphicsDevice<'a> {
     frame_count: i32,
     current_height: i32,
+    screen_size: [u32; 2],
+
+    texture_cache: Vec<TextureData>,
+    shader_cache: FxHashMap<ShaderId, ShaderEntry<'a>>,
+    pipeline_cache: FxHashMap<PipelineId, wgpu::RenderPipeline>,
+
+    vertex_buffer: wgpu::Buffer,
+    vertex_uniform_buffer: wgpu::Buffer,
+    blend_uniform_buffer: wgpu::Buffer,
+    combine_uniform_buffer: wgpu::Buffer,
+    frame_uniform_buffer: wgpu::Buffer,
+    vertex_uniform_bind_groups: Vec<wgpu::BindGroup>,
+    fragment_uniform_bind_groups: Vec<wgpu::BindGroup>,
+
+    texture_bind_group_layout: wgpu::BindGroupLayout,
+    texture_bind_groups: FxHashMap<usize, wgpu::BindGroup>,
+
+    draw_calls: Vec<WgpuDrawCall>,
+
+    last_pipeline_id: Option<PipelineId>,
 }
 
-impl WgpuGraphicsDevice {
-    const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-
-    fn create_depth_texture(
-        config: &wgpu::SurfaceConfiguration,
-        device: &wgpu::Device,
-    ) -> wgpu::TextureView {
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: config.width,
-                height: config.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: Self::DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: None,
-            view_formats: &[],
-        });
-
-        depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-
-    fn create_vertex_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
-        // Handle vertex uniform size ohne fog
-        let vertex_uniform_size = std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress;
-        let vertex_uniform_alignment = {
-            let alignment =
-                device.limits().min_uniform_buffer_offset_alignment as wgpu::BufferAddress;
-            align_to(vertex_uniform_size, alignment)
-        };
-
-        device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Vertex Uniform Buffer"),
-            size: vertex_uniform_alignment,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        })
-    }
-
-    fn create_fragment_uniforms(
-        device: &wgpu::Device,
-    ) -> (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer) {
-        // Handle blend uniform
-        let blend_uniform_size =
-            std::mem::size_of::<FragmentBlendUniforms>() as wgpu::BufferAddress;
-        let blend_uniform_alignment = {
-            let alignment =
-                device.limits().min_uniform_buffer_offset_alignment as wgpu::BufferAddress;
-            align_to(blend_uniform_size, alignment)
-        };
-        let blend_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Blend Uniform Buffer"),
-            size: blend_uniform_alignment,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Handle combine uniform
-        let combine_uniform_size =
-            std::mem::size_of::<FragmentCombineUniforms>() as wgpu::BufferAddress;
-        let combine_uniform_alignment = {
-            let alignment =
-                device.limits().min_uniform_buffer_offset_alignment as wgpu::BufferAddress;
-            align_to(combine_uniform_size, alignment)
-        };
-        let combine_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Combine Uniform Buffer"),
-            size: combine_uniform_alignment,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Handle frame uniform
-        let frame_uniform_size =
-            std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress;
-        let frame_uniform_alignment = {
-            let alignment =
-                device.limits().min_uniform_buffer_offset_alignment as wgpu::BufferAddress;
-            align_to(frame_uniform_size, alignment)
-        };
-        let frame_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Frame Uniform Buffer"),
-            size: frame_uniform_alignment,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        (blend_uniform_buf, combine_uniform_buf, frame_uniform_buf)
-    }
-
-    fn create_vertex_bind_groups(
-        device: &wgpu::Device,
-        vertex_uniform_buf: &wgpu::Buffer,
-    ) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
-        let vertex_bind_group_layout =
+impl<'a> WgpuGraphicsDevice<'a> {
+    pub fn new(device: &wgpu::Device, screen_size: [u32; 2]) -> Self {
+        let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Vertex Bind Group Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress,
-                        ),
-                    },
-                    count: None,
-                }],
-            });
-
-        let vertex_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Vertex Bind Group"),
-            layout: &vertex_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: vertex_uniform_buf,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(
-                        std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress
-                    ),
-                }),
-            }],
-        });
-
-        (vertex_bind_group_layout, vertex_bind_group)
-    }
-
-    fn create_fragment_bind_groups(
-        device: &wgpu::Device,
-        blend_uniform_buf: &wgpu::Buffer,
-        combine_uniform_buf: &wgpu::Buffer,
-        frame_uniform_buf: &wgpu::Buffer,
-    ) -> (wgpu::BindGroupLayout, wgpu::BindGroup) {
-        let fragment_uniform_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Fragment Uniform Group Layout"),
+                label: None,
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<
-                                FragmentBlendUniforms,
-                            >()
-                                as wgpu::BufferAddress),
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
                         },
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<
-                                FragmentCombineUniforms,
-                            >()
-                                as wgpu::BufferAddress),
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<
-                                FragmentFrameUniforms,
-                            >()
-                                as wgpu::BufferAddress),
-                        },
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
             });
 
-        let fragment_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Fragment Uniform Group"),
-            layout: &fragment_uniform_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: blend_uniform_buf,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(
-                            std::mem::size_of::<FragmentBlendUniforms>() as wgpu::BufferAddress
-                        ),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: combine_uniform_buf,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(
-                            std::mem::size_of::<FragmentCombineUniforms>() as wgpu::BufferAddress
-                        ),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: frame_uniform_buf,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(
-                            std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress
-                        ),
-                    }),
-                },
-            ],
-        });
-
-        (
-            fragment_uniform_bind_group_layout,
-            fragment_uniform_bind_group,
-        )
-    }
-
-    fn create_textures_bind_group(
-        &self,
-        device: &wgpu::Device,
-        program: &WgpuProgram<ShaderModule>,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-    ) -> wgpu::BindGroup {
-        let mut texture_bind_group_entries: Vec<wgpu::BindGroupEntry> = Vec::new();
-
-        for i in 0..2 {
-            let texture_index = format!("USE_TEXTURE{}", i);
-            if program.get_define_bool(&texture_index) {
-                texture_bind_group_entries.push(wgpu::BindGroupEntry {
-                    binding: i * 2,
-                    resource: wgpu::BindingResource::TextureView(
-                        &self.textures[self.current_texture_ids[i as usize]].texture_view,
-                    ),
-                });
-
-                texture_bind_group_entries.push(wgpu::BindGroupEntry {
-                    binding: (i * 2 + 1),
-                    resource: wgpu::BindingResource::Sampler(
-                        self.textures[self.current_texture_ids[i as usize]]
-                            .sampler
-                            .as_ref()
-                            .unwrap(),
-                    ),
-                });
-            }
-        }
-
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: texture_bind_group_layout,
-            entries: &texture_bind_group_entries,
-            label: None,
-        })
-    }
-
-    fn gfx_cm_to_wgpu(val: u32) -> wgpu::AddressMode {
-        if val & g::tx::CLAMP as u32 != 0 {
-            return wgpu::AddressMode::ClampToEdge;
-        }
-
-        if val & g::tx::MIRROR as u32 != 0 {
-            return wgpu::AddressMode::MirrorRepeat;
-        }
-
-        wgpu::AddressMode::Repeat
-    }
-}
-
-impl WgpuGraphicsDevice {
-    pub fn new(config: &wgpu::SurfaceConfiguration, device: &wgpu::Device) -> Self {
-        // Create the depth texture
-        let depth_texture = Self::create_depth_texture(config, device);
-
-        // Create vertex buffer
-        let vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Vertex Buffer"),
-            size: 256 * 32 * 3 * ::std::mem::size_of::<f32>() as u64 * 50,
+            size: 600000, // 600kb should be enough
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        // Create the uniform buffers
-        let vertex_uniform_buf = Self::create_vertex_uniforms(device);
-        let (blend_uniform_buf, combine_uniform_buf, frame_uniform_buf) =
-            Self::create_fragment_uniforms(device);
+        let vertex_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Vertex Uniform Buffer"),
+            size: 400000, // 400kb should be enough
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
-        // Create the bind groups
-        let (vertex_bind_group_layout, vertex_bind_group) =
-            Self::create_vertex_bind_groups(device, &vertex_uniform_buf);
-        let (fragment_uniform_bind_group_layout, fragment_uniform_bind_group) =
-            Self::create_fragment_bind_groups(
-                device,
-                &blend_uniform_buf,
-                &combine_uniform_buf,
-                &frame_uniform_buf,
-            );
+        let blend_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Blend Uniform Buffer"),
+            size: 400000, // 400kb should be enough
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let combine_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Combine Uniform Buffer"),
+            size: 400000, // 400kb should be enough
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let frame_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Frame Uniform Buffer"),
+            size: 100000, // 100kb should be enough
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Self {
-            depth_texture,
-
-            vertex_buf,
-
-            vertex_uniform_buf,
-            vertex_bind_group_layout,
-            vertex_bind_group,
-
-            blend_uniform_buf,
-            combine_uniform_buf,
-            frame_uniform_buf,
-            fragment_uniform_bind_group_layout,
-            fragment_uniform_bind_group,
-
-            shader_cache: rustc_hash::FxHashMap::default(),
-            current_shader: None,
-
-            textures: Vec::new(),
-            active_texture: 0,
-            current_texture_ids: [0; 2],
-
             frame_count: 0,
             current_height: 0,
+            screen_size,
+
+            texture_cache: Vec::new(),
+            shader_cache: FxHashMap::default(),
+            pipeline_cache: FxHashMap::default(),
+
+            vertex_buffer,
+            vertex_uniform_buffer,
+            blend_uniform_buffer,
+            combine_uniform_buffer,
+            frame_uniform_buffer,
+            vertex_uniform_bind_groups: Vec::new(),
+            fragment_uniform_bind_groups: Vec::new(),
+
+            texture_bind_group_layout,
+            texture_bind_groups: FxHashMap::default(),
+
+            draw_calls: Vec::new(),
+
+            last_pipeline_id: None,
         }
     }
 
-    pub fn resize(&mut self, config: &wgpu::SurfaceConfiguration, device: &wgpu::Device) {
-        self.depth_texture = Self::create_depth_texture(config, device);
+    fn clear_state(&mut self) {
+        self.draw_calls.clear();
+        self.last_pipeline_id = None;
+        self.vertex_uniform_bind_groups.clear();
+        self.fragment_uniform_bind_groups.clear();
+    }
+
+    pub fn process_rcp_output(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+        output: &mut RCPOutput,
+    ) {
+        self.clear_state();
+
+        let usable_draw_calls = &output.draw_calls[0..output.draw_calls.len() - 1];
+
+        // prepare shaders in parallel, but first, reduce to unique shader id's
+        usable_draw_calls.iter().for_each(|draw_call| {
+            self.prepare_shader(device, &draw_call.shader_id, &draw_call.shader_config);
+        });
+
+        // configure buffers
+        let (
+            vertex_buffer_offsets,
+            vertex_uniform_buffer_configs,
+            blend_uniform_buffer_configs,
+            combine_uniform_buffer_configs,
+            frame_uniform_buffer_configs,
+        ) = self.configure_buffers(queue, usable_draw_calls);
+
+        // configure bind groups
+        self.configure_uniform_bind_groups(
+            device,
+            &vertex_uniform_buffer_configs,
+            &blend_uniform_buffer_configs,
+            &combine_uniform_buffer_configs,
+            &frame_uniform_buffer_configs,
+        );
+
+        // configure pipeline and textures
+        for (index, draw_call) in usable_draw_calls.iter().enumerate() {
+            assert!(!draw_call.vbo.vbo.is_empty());
+
+            // Create Pipeline
+            let pipeline_config = PipelineConfig {
+                shader: draw_call.shader_id,
+                blend_state: draw_call.blend_state,
+                cull_mode: draw_call.cull_mode,
+                depth_stencil: draw_call.stencil,
+            };
+            let pipeline_id = PipelineId(pipeline_config);
+
+            self.configure_pipeline(
+                device,
+                surface_format,
+                &draw_call.shader_id,
+                pipeline_id,
+                draw_call.blend_state,
+                draw_call.cull_mode,
+                draw_call.stencil,
+            );
+
+            // Create mutable draw_call
+            let mut wgpu_draw_call = WgpuDrawCall::new(
+                draw_call.shader_id,
+                pipeline_id,
+                vertex_buffer_offsets[index],
+                draw_call.vbo.num_tris * 3,
+                draw_call.viewport,
+                draw_call.scissor,
+            );
+
+            // Process textures
+            for (index, tex_cache_id) in draw_call.texture_indices.iter().enumerate() {
+                let sampler = draw_call.samplers[index];
+                assert_eq!(tex_cache_id.is_none(), sampler.is_none());
+
+                if let Some(tex_cache_id) = tex_cache_id {
+                    let texture = output.texture_cache.get_mut(*tex_cache_id).unwrap();
+                    let sampler = sampler.unwrap();
+
+                    self.configure_textures(
+                        device,
+                        queue,
+                        index,
+                        texture,
+                        &sampler,
+                        &mut wgpu_draw_call,
+                    );
+                }
+            }
+
+            self.draw_calls.push(wgpu_draw_call);
+        }
+    }
+
+    pub fn draw<'r>(&'r mut self, rpass: &mut wgpu::RenderPass<'r>) {
+        for (index, draw_call) in self.draw_calls.iter().enumerate() {
+            if self.last_pipeline_id != Some(draw_call.pipeline_id) {
+                let pipeline = self.pipeline_cache.get(&draw_call.pipeline_id).unwrap();
+                rpass.set_pipeline(pipeline);
+                self.last_pipeline_id = Some(draw_call.pipeline_id);
+            }
+
+            let vertex_uniform_bind_group = self.vertex_uniform_bind_groups.get(index).unwrap();
+            rpass.set_bind_group(0, vertex_uniform_bind_group, &[]);
+            let fragment_uniform_bind_group = self.fragment_uniform_bind_groups.get(index).unwrap();
+            rpass.set_bind_group(1, fragment_uniform_bind_group, &[]);
+
+            for i in 0..2 {
+                if let Some(texture_id) = draw_call.textures[i] {
+                    let texture_bind_group = self
+                        .texture_bind_groups
+                        .get(&texture_id)
+                        .expect("Texture bind group not found");
+
+                    rpass.set_bind_group(2 + i as u32, texture_bind_group, &[]);
+                }
+            }
+
+            // check if there's another draw_call after this one, if so let's set the vertex buffer from our current offset to the next draw_call's offset
+            // if there's no other, then we set the vertex buffer from our current offset to the end of the buffer
+            if index < self.draw_calls.len() - 1 {
+                let next_draw_call = &self.draw_calls[index + 1];
+                rpass.set_vertex_buffer(
+                    0,
+                    self.vertex_buffer
+                        .slice(draw_call.vertex_buffer_offset..next_draw_call.vertex_buffer_offset),
+                );
+            } else {
+                rpass.set_vertex_buffer(
+                    0,
+                    self.vertex_buffer.slice(draw_call.vertex_buffer_offset..),
+                );
+            }
+
+            rpass.set_viewport(
+                draw_call.viewport.x,
+                self.screen_size[1] as f32 - draw_call.viewport.y - draw_call.viewport.w,
+                draw_call.viewport.z,
+                draw_call.viewport.w,
+                0.0,
+                1.0,
+            );
+
+            // Let's clamp the scissor rect to the viewport
+            rpass.set_scissor_rect(
+                draw_call.scissor[0],
+                self.screen_size[1] - draw_call.scissor[1] - draw_call.scissor[3],
+                draw_call.scissor[2],
+                draw_call.scissor[3],
+            );
+
+            rpass.draw(0..draw_call.vertex_count as u32, 0..1);
+        }
+    }
+
+    pub fn resize(&mut self, screen_size: [u32; 2]) {
+        self.screen_size = screen_size;
     }
 
     pub fn update_frame_count(&mut self) {
         self.frame_count += 1;
     }
 
-    pub fn update_current_height(&mut self, height: i32) {
-        self.current_height = height;
-    }
+    // MARK: - Helpers
 
-    pub fn select_program(
-        &mut self,
-        device: &wgpu::Device,
-        shader_id: ShaderId,
-        shader_config: ShaderConfig,
-    ) {
-        // check if the shader is already loaded
-        if self.current_shader == Some(shader_id) {
-            return;
-        }
-
-        // unload the current shader
-        if self.current_shader != None {
-            self.current_shader = None;
-        }
-
-        // check if the shader is in the cache
-        if self.shader_cache.contains_key(&shader_id) {
-            self.current_shader = Some(shader_id);
-            return;
-        }
-
-        // create the shader and add it to the cache
-        let mut program = WgpuProgram::new(shader_config);
-        program.init();
-        program.preprocess(&ShaderVersion::GLSL440);
-
-        program.compiled_vertex_program =
-            Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: None,
-                source: wgpu::ShaderSource::Glsl {
-                    shader: Cow::Borrowed(&program.preprocessed_vertex),
-                    stage: naga::ShaderStage::Vertex,
-                    defines: program.defines.clone(),
-                },
-            }));
-
-        program.compiled_fragment_program =
-            Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: None,
-                source: wgpu::ShaderSource::Glsl {
-                    shader: Cow::Borrowed(&program.preprocessed_frag),
-                    stage: naga::ShaderStage::Fragment,
-                    defines: program.defines.clone(),
-                },
-            }));
-
-        self.current_shader = Some(shader_id);
-        self.shader_cache.insert(shader_id, program);
-    }
-
-    pub fn bind_texture(
+    pub fn configure_textures(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         tile: usize,
         texture: &mut OutputTexture,
+        sampler: &OutputSampler,
+        output_draw_call: &mut WgpuDrawCall,
     ) {
         // check if we've already uploaded this texture to the GPU
         if let Some(texture_id) = texture.device_id {
-            self.active_texture = tile;
-            self.current_texture_ids[tile] = texture_id as usize;
-
+            output_draw_call.textures[tile] = Some(texture_id as usize);
             return;
         }
 
@@ -552,125 +390,471 @@ impl WgpuGraphicsDevice {
         // Create the texture
         let texture_view = device_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.active_texture = tile;
-        self.current_texture_ids[tile] = self.textures.len();
-        texture.device_id = Some(self.textures.len() as u32);
+        output_draw_call.textures[tile] = Some(self.texture_cache.len());
+        texture.device_id = Some(self.texture_cache.len() as u32);
 
-        self.textures.push(TextureData::new(texture_view));
+        // Create the sampler
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Texture Sampler"),
+            address_mode_u: clamp_to_wgpu(sampler.clamp_s),
+            address_mode_v: clamp_to_wgpu(sampler.clamp_t),
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: if sampler.linear_filter {
+                wgpu::FilterMode::Linear
+            } else {
+                wgpu::FilterMode::Nearest
+            },
+            min_filter: if sampler.linear_filter {
+                wgpu::FilterMode::Linear
+            } else {
+                wgpu::FilterMode::Nearest
+            },
+            ..Default::default()
+        });
+
+        // Create the bind group
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Texture Bind Group"),
+            layout: &self.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+
+        self.texture_bind_groups
+            .insert(self.texture_cache.len(), bind_group);
+        self.texture_cache
+            .push(TextureData::new(texture_view, sampler));
     }
 
-    pub fn bind_sampler(&mut self, device: &wgpu::Device, tile: usize, sampler: &OutputSampler) {
-        if let Some(texture_data) = self.textures.get_mut(self.current_texture_ids[tile]) {
-            texture_data.sampler = Some(device.create_sampler(&wgpu::SamplerDescriptor {
-                label: None,
-                address_mode_u: Self::gfx_cm_to_wgpu(sampler.clamp_s),
-                address_mode_v: Self::gfx_cm_to_wgpu(sampler.clamp_t),
-                address_mode_w: wgpu::AddressMode::Repeat,
-                mag_filter: if sampler.linear_filter {
-                    wgpu::FilterMode::Linear
-                } else {
-                    wgpu::FilterMode::Nearest
-                },
-                min_filter: if sampler.linear_filter {
-                    wgpu::FilterMode::Linear
-                } else {
-                    wgpu::FilterMode::Nearest
-                },
-                ..Default::default()
-            }));
+    fn prepare_shader(
+        &mut self,
+        device: &wgpu::Device,
+        shader_id: &ShaderId,
+        shader_config: &ShaderConfig,
+    ) {
+        // check if the shader is in the cache
+        if self.shader_cache.contains_key(shader_id) {
+            return;
         }
+
+        // create the shader and add it to the cache
+        let mut program = WgpuProgram::new(shader_config);
+        program.init();
+        program.preprocess(&ShaderVersion::GLSL440);
+
+        program.compiled_vertex_program =
+            Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Glsl {
+                    shader: Cow::Borrowed(&program.preprocessed_vertex),
+                    stage: naga::ShaderStage::Vertex,
+                    defines: program.defines.clone(),
+                },
+            }));
+
+        program.compiled_fragment_program =
+            Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Glsl {
+                    shader: Cow::Borrowed(&program.preprocessed_frag),
+                    stage: naga::ShaderStage::Fragment,
+                    defines: program.defines.clone(),
+                },
+            }));
+
+        // create the shader entry
+        self.shader_cache
+            .insert(*shader_id, ShaderEntry::new(program, device));
     }
 
-    pub fn update_uniforms(
+    pub fn configure_buffers(
         &mut self,
         queue: &wgpu::Queue,
-        projection_matrix: glam::Mat4,
-        fog: &OutputFogParams,
-        uniforms: &OutputUniforms,
+        draw_calls: &[IntermediateDrawCall],
+    ) -> (
+        Vec<u64>,
+        Vec<(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)>,
+        Vec<(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)>,
+        Vec<(wgpu::BufferAddress, wgpu::BufferAddress)>,
+        Vec<Option<(wgpu::BufferAddress, wgpu::BufferAddress)>>,
     ) {
-        // Grab current program
-        let program = self
-            .shader_cache
-            .get_mut(&self.current_shader.unwrap())
-            .unwrap();
+        let mut current_vbo_offset = 0;
+        let mut vertex_buffer_content: Vec<u8> = Vec::new();
+        let mut vertex_buffer_offsets: Vec<u64> = Vec::new();
 
-        // Update the vertex uniforms
-        if program.get_define_bool("USE_FOG") {
-            let uniform = VertexWithFogUniforms {
-                projection_matrix: projection_matrix.to_cols_array_2d(),
-                fog_multiplier: fog.multiplier as f32,
-                fog_offset: fog.offset as f32,
-                _pad: [0.0; 2],
-            };
+        let mut current_vertex_uniform_offset = 0;
+        let mut vertex_uniform_buffer_content: Vec<u8> = Vec::new();
+        let mut vertex_uniform_buffer_configs: Vec<(
+            ShaderId,
+            wgpu::BufferAddress,
+            wgpu::BufferAddress,
+        )> = Vec::new();
 
-            queue.write_buffer(&self.vertex_uniform_buf, 0, bytemuck::bytes_of(&uniform));
-        } else {
-            let uniform = VertexUniforms {
-                projection_matrix: projection_matrix.to_cols_array_2d(),
-                _pad: [0.0; 4],
-            };
+        let mut current_blend_uniform_offset = 0;
+        let mut blend_uniform_buffer_content: Vec<u8> = Vec::new();
+        let mut blend_uniform_buffer_configs: Vec<(
+            ShaderId,
+            wgpu::BufferAddress,
+            wgpu::BufferAddress,
+        )> = Vec::new();
 
-            queue.write_buffer(&self.vertex_uniform_buf, 0, bytemuck::bytes_of(&uniform));
+        let mut current_combine_uniform_offset = 0;
+        let mut combine_uniform_buffer_content: Vec<u8> = Vec::new();
+        let mut combine_uniform_buffer_configs: Vec<(wgpu::BufferAddress, wgpu::BufferAddress)> =
+            Vec::new();
+
+        let mut current_frame_uniform_offset = 0;
+        let mut frame_uniform_buffer_content: Vec<u8> = Vec::new();
+        let mut frame_uniform_buffer_configs: Vec<
+            Option<(wgpu::BufferAddress, wgpu::BufferAddress)>,
+        > = Vec::new();
+
+        for draw_call in draw_calls {
+            let shader_entry = self.shader_cache.get(&draw_call.shader_id).unwrap();
+
+            // Handle vertex buffer data
+            vertex_buffer_content.extend_from_slice(&draw_call.vbo.vbo);
+            vertex_buffer_offsets.push(current_vbo_offset);
+            current_vbo_offset += draw_call.vbo.vbo.len() as u64;
+
+            // Handle vertex uniform buffer data
+            {
+                if shader_entry.program.uses_fog() {
+                    let uniform = VertexWithFogUniforms::new(
+                        [self.screen_size[0] as f32, self.screen_size[1] as f32],
+                        draw_call.projection_matrix.to_cols_array_2d(),
+                        draw_call.fog.multiplier as f32,
+                        draw_call.fog.offset as f32,
+                    );
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<VertexWithFogUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    vertex_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    vertex_uniform_buffer_content.extend_from_slice(&vec![
+                        0;
+                        uniform_size as usize
+                            - std::mem::size_of::<
+                                VertexWithFogUniforms,
+                            >(
+                            )
+                    ]);
+
+                    vertex_uniform_buffer_configs.push((
+                        draw_call.shader_id,
+                        current_vertex_uniform_offset,
+                        uniform_size,
+                    ));
+                    current_vertex_uniform_offset += uniform_size;
+                } else {
+                    let uniform = VertexUniforms::new(
+                        [self.screen_size[0] as f32, self.screen_size[1] as f32],
+                        draw_call.projection_matrix.to_cols_array_2d(),
+                    );
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    vertex_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    vertex_uniform_buffer_content.extend_from_slice(&vec![
+                        0;
+                        uniform_size as usize
+                            - std::mem::size_of::<
+                                VertexUniforms,
+                            >(
+                            )
+                    ]);
+
+                    vertex_uniform_buffer_configs.push((
+                        draw_call.shader_id,
+                        current_vertex_uniform_offset,
+                        uniform_size,
+                    ));
+                    current_vertex_uniform_offset += uniform_size;
+                }
+            }
+
+            // Handle blend uniform buffer data
+            {
+                if shader_entry.program.uses_fog() {
+                    let uniform = FragmentBlendWithFogUniforms::new(
+                        draw_call.uniforms.blend.blend_color.to_array(),
+                        draw_call.uniforms.blend.fog_color.xyz().to_array(),
+                    );
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<FragmentBlendWithFogUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    blend_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    blend_uniform_buffer_content.extend_from_slice(&vec![
+                        0;
+                        uniform_size as usize
+                            - std::mem::size_of::<
+                                FragmentBlendWithFogUniforms,
+                            >(
+                            )
+                    ]);
+
+                    blend_uniform_buffer_configs.push((
+                        draw_call.shader_id,
+                        current_blend_uniform_offset,
+                        uniform_size,
+                    ));
+                    current_blend_uniform_offset += uniform_size;
+                } else {
+                    let uniform = FragmentBlendUniforms {
+                        blend_color: draw_call.uniforms.blend.blend_color.to_array(),
+                    };
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<FragmentBlendUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    blend_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    blend_uniform_buffer_content.extend_from_slice(&vec![
+                        0;
+                        uniform_size as usize
+                            - std::mem::size_of::<
+                                FragmentBlendUniforms,
+                            >(
+                            )
+                    ]);
+
+                    blend_uniform_buffer_configs.push((
+                        draw_call.shader_id,
+                        current_blend_uniform_offset,
+                        uniform_size,
+                    ));
+                    current_blend_uniform_offset += uniform_size;
+                }
+            }
+
+            // Handle combine uniform buffer data
+            {
+                let uniform = FragmentCombineUniforms::new(
+                    draw_call.uniforms.combine.prim_color.to_array(),
+                    draw_call.uniforms.combine.env_color.to_array(),
+                    draw_call.uniforms.combine.key_center.to_array(),
+                    draw_call.uniforms.combine.key_scale.to_array(),
+                    draw_call.uniforms.combine.prim_lod.x,
+                    draw_call.uniforms.combine.convert_k4,
+                    draw_call.uniforms.combine.convert_k5,
+                );
+
+                let uniform_size = align_to(
+                    std::mem::size_of::<FragmentCombineUniforms>() as wgpu::BufferAddress,
+                    256,
+                );
+
+                combine_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                // add padding to align to the next 256 byte boundary
+                combine_uniform_buffer_content.extend_from_slice(&vec![
+                    0;
+                    uniform_size as usize
+                        - std::mem::size_of::<
+                            FragmentCombineUniforms,
+                        >(
+                        )
+                ]);
+
+                combine_uniform_buffer_configs.push((current_combine_uniform_offset, uniform_size));
+                current_combine_uniform_offset += uniform_size;
+            }
+
+            // Handle frame uniform buffer data
+            {
+                if shader_entry.program.uses_alpha()
+                    && shader_entry.program.uses_alpha_compare_dither()
+                {
+                    let uniform = FragmentFrameUniforms {
+                        count: self.frame_count as u32,
+                        height: self.current_height as u32,
+                    };
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    frame_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    frame_uniform_buffer_content.extend_from_slice(&vec![
+                        0;
+                        uniform_size as usize
+                            - std::mem::size_of::<
+                                FragmentFrameUniforms,
+                            >(
+                            )
+                    ]);
+
+                    frame_uniform_buffer_configs
+                        .push(Some((current_frame_uniform_offset, uniform_size)));
+                    current_frame_uniform_offset += uniform_size;
+                } else {
+                    frame_uniform_buffer_configs.push(None);
+                }
+            }
         }
 
-        // Update the blend uniforms
-        let uniform = FragmentBlendUniforms {
-            blend_color: uniforms.blend.blend_color.to_array(),
-            fog_color: uniforms.blend.fog_color.to_array(),
-        };
+        queue.write_buffer(&self.vertex_buffer, 0, &vertex_buffer_content);
+        queue.write_buffer(
+            &self.vertex_uniform_buffer,
+            0,
+            &vertex_uniform_buffer_content,
+        );
+        queue.write_buffer(&self.blend_uniform_buffer, 0, &blend_uniform_buffer_content);
+        queue.write_buffer(
+            &self.combine_uniform_buffer,
+            0,
+            &combine_uniform_buffer_content,
+        );
+        queue.write_buffer(&self.frame_uniform_buffer, 0, &frame_uniform_buffer_content);
 
-        queue.write_buffer(&self.blend_uniform_buf, 0, bytemuck::bytes_of(&uniform));
-
-        // Update the combine uniforms
-        let uniform = FragmentCombineUniforms {
-            prim_color: uniforms.combine.prim_color.to_array(),
-            env_color: uniforms.combine.env_color.to_array(),
-            key_center: uniforms.combine.key_center.to_array(),
-            _pad: 0,
-            key_scale: uniforms.combine.key_scale.to_array(),
-            __pad: 0,
-            prim_lod_frac: uniforms.combine.prim_lod.x,
-            convert_k4: uniforms.combine.convert_k4,
-            convert_k5: uniforms.combine.convert_k5,
-            ___pad: 0,
-        };
-
-        queue.write_buffer(&self.combine_uniform_buf, 0, bytemuck::bytes_of(&uniform));
-
-        // Update the frame uniforms
-        let uniform = FragmentFrameUniforms {
-            count: self.frame_count as u32,
-            height: self.current_height as u32,
-        };
-
-        queue.write_buffer(&self.frame_uniform_buf, 0, bytemuck::bytes_of(&uniform));
+        (
+            vertex_buffer_offsets,
+            vertex_uniform_buffer_configs,
+            blend_uniform_buffer_configs,
+            combine_uniform_buffer_configs,
+            frame_uniform_buffer_configs,
+        )
     }
 
-    pub fn create_pipeline(
+    pub fn configure_uniform_bind_groups(
+        &mut self,
+        device: &wgpu::Device,
+        vertex_uniform_buffer_configs: &[(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)],
+        blend_uniform_buffer_configs: &[(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)],
+        combine_uniform_buffer_configs: &[(wgpu::BufferAddress, wgpu::BufferAddress)],
+        frame_uniform_buffer_configs: &[Option<(wgpu::BufferAddress, wgpu::BufferAddress)>],
+    ) {
+        // Handle vertex uniform buffer bind groups
+        for (shader_id, offset, size) in vertex_uniform_buffer_configs {
+            let shader_entry = self.shader_cache.get(shader_id).unwrap();
+
+            let vertex_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Vertex Uniform Bind Group"),
+                layout: &shader_entry.vertex_uniform_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.vertex_uniform_buffer,
+                        offset: *offset,
+                        size: wgpu::BufferSize::new(*size),
+                    }),
+                }],
+            });
+
+            self.vertex_uniform_bind_groups
+                .push(vertex_uniform_bind_group);
+        }
+
+        // Handle fragment uniform buffer bind groups
+        for (
+            ((shader_id, blend_offset, blend_size), (combine_offset, combine_size)),
+            frame_option,
+        ) in blend_uniform_buffer_configs
+            .iter()
+            .zip(combine_uniform_buffer_configs.iter())
+            .zip(frame_uniform_buffer_configs.iter())
+        {
+            let shader_entry = self.shader_cache.get(shader_id).unwrap();
+
+            let mut bind_group_entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.blend_uniform_buffer,
+                        offset: *blend_offset,
+                        size: wgpu::BufferSize::new(*blend_size),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.combine_uniform_buffer,
+                        offset: *combine_offset,
+                        size: wgpu::BufferSize::new(*combine_size),
+                    }),
+                },
+            ];
+
+            if let Some((frame_offset, frame_size)) = frame_option {
+                bind_group_entries.push(wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.frame_uniform_buffer,
+                        offset: *frame_offset,
+                        size: wgpu::BufferSize::new(*frame_size),
+                    }),
+                });
+            }
+
+            let fragment_uniform_bind_group =
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Fragment Uniform Bind Group"),
+                    layout: &shader_entry.fragment_uniform_bind_group_layout,
+                    entries: &bind_group_entries,
+                });
+
+            self.fragment_uniform_bind_groups
+                .push(fragment_uniform_bind_group);
+        }
+    }
+
+    pub fn configure_pipeline(
         &mut self,
         device: &wgpu::Device,
         surface_texture_format: wgpu::TextureFormat,
+        shader_id: &ShaderId,
+        pipeline_id: PipelineId,
         blend_state: Option<BlendState>,
         cull_mode: Option<Face>,
         depth_stencil: Option<OutputStencil>,
-    ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    ) {
         // Grab current program
-        let program = self
-            .shader_cache
-            .get_mut(&self.current_shader.unwrap())
-            .unwrap();
+        let program = self.shader_cache.get(shader_id).unwrap();
 
-        // Create the texture bind group layout
-        let texture_bind_group_layout = program.create_texture_bind_group_layout(device);
+        // Check if we have a cached pipeline
+        if self.pipeline_cache.contains_key(&pipeline_id) {
+            return;
+        }
 
         // Create the pipeline layout
+        let mut bind_group_layout_entries = vec![
+            &program.vertex_uniform_bind_group_layout,
+            &program.fragment_uniform_bind_group_layout,
+        ];
+
+        if program.program.uses_texture_0() {
+            bind_group_layout_entries.push(&self.texture_bind_group_layout);
+        }
+
+        if program.program.uses_texture_1() {
+            bind_group_layout_entries.push(&self.texture_bind_group_layout);
+        }
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Pipeline Layout"),
-            bind_group_layouts: &[
-                &self.vertex_bind_group_layout,
-                &self.fragment_uniform_bind_group_layout,
-                &texture_bind_group_layout,
-            ],
+            bind_group_layouts: &bind_group_layout_entries,
             push_constant_ranges: &[],
         });
 
@@ -683,7 +867,7 @@ impl WgpuGraphicsDevice {
 
         // Depth stencil state
         let depth_stencil = depth_stencil.map(|ds| wgpu::DepthStencilState {
-            format: Self::DEPTH_FORMAT,
+            format: DEPTH_FORMAT,
             depth_write_enabled: ds.depth_write_enabled,
             depth_compare: compare_function_to_wgpu(ds.depth_compare),
             stencil: wgpu::StencilState::default(),
@@ -699,12 +883,12 @@ impl WgpuGraphicsDevice {
             label: Some("Render Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: program.compiled_vertex_program.as_ref().unwrap(),
+                module: program.program.compiled_vertex_program.as_ref().unwrap(),
                 entry_point: "main",
-                buffers: &[program.vertex_description()],
+                buffers: &[program.vertex_buf_layout.clone()],
             },
             fragment: Some(wgpu::FragmentState {
-                module: program.compiled_fragment_program.as_ref().unwrap(),
+                module: program.program.compiled_fragment_program.as_ref().unwrap(),
                 entry_point: "main",
                 targets: &[Some(color_target_states)],
             }),
@@ -717,91 +901,20 @@ impl WgpuGraphicsDevice {
             multiview: None,
         });
 
-        (texture_bind_group_layout, pipeline)
+        self.pipeline_cache.insert(pipeline_id, pipeline);
+    }
+}
+
+fn clamp_to_wgpu(val: u32) -> wgpu::AddressMode {
+    if val & g::tx::CLAMP as u32 != 0 {
+        return wgpu::AddressMode::ClampToEdge;
     }
 
-    pub fn draw_triangles(
-        &mut self,
-        draw_call_index: usize,
-        view: &wgpu::TextureView,
-        device: &wgpu::Device,
-        _queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        pipeline: &wgpu::RenderPipeline,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-        viewport: &glam::Vec4,
-        scissor: [u32; 4],
-        buf_vbo: &[u8],
-        num_tris: usize,
-    ) {
-        // Grab current program
-        let program = self
-            .shader_cache
-            .get(&self.current_shader.unwrap())
-            .unwrap();
-
-        // Render the triangles
-        encoder.push_debug_group(&format!("draw triangle pass: {}", draw_call_index));
-
-        {
-            // Create the texture bind groups
-            let textures_bind_group =
-                self.create_textures_bind_group(device, program, texture_bind_group_layout);
-
-            // Copy the vertex data to the buffer
-            let staging_vertex_buffer =
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Vertex Staging Buffer"),
-                    contents: buf_vbo,
-                    usage: wgpu::BufferUsages::COPY_SRC,
-                });
-
-            encoder.copy_buffer_to_buffer(
-                &staging_vertex_buffer,
-                0,
-                &self.vertex_buf,
-                0,
-                buf_vbo.len() as u64,
-            );
-
-            // queue.write_buffer(&self.vertex_buf, 0, buf_vbo);
-
-            // Create the render pass
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&format!("Game Render Pass: {}", draw_call_index)),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: true,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: true,
-                    }),
-                    stencil_ops: None,
-                }),
-            });
-
-            pass.push_debug_group("Prepare data for draw.");
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &self.vertex_bind_group, &[]);
-            pass.set_bind_group(1, &self.fragment_uniform_bind_group, &[]);
-            pass.set_bind_group(2, &textures_bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
-            pass.set_viewport(viewport.x, viewport.y, viewport.z, viewport.w, 0.0, 1.0);
-            pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
-            pass.pop_debug_group();
-            pass.insert_debug_marker("Draw!");
-            pass.draw(0..(num_tris * 3) as u32, 0..1);
-        }
-
-        encoder.pop_debug_group();
+    if val & g::tx::MIRROR as u32 != 0 {
+        return wgpu::AddressMode::MirrorRepeat;
     }
+
+    wgpu::AddressMode::Repeat
 }
 
 fn face_to_wgpu(face: Option<Face>) -> Option<wgpu::Face> {

@@ -245,6 +245,7 @@ impl<T> OpenGLProgram<T> {
             #endif
 
             layout(std140, set = 0, binding = 0) uniform Uniforms {
+                vec2 screenSize;
                 mat4 uProjection;
                 #ifdef USE_FOG
                     float uFogMultiplier;
@@ -257,6 +258,7 @@ impl<T> OpenGLProgram<T> {
                     gl_Position = vec4(aVtxPos.xyz, 1.0);
                 } else {
                     gl_Position = aVtxPos * uProjection;
+                    gl_Position.x = gl_Position.x * (4.0 / 3.0) / (screenSize.x / screenSize.y);
                 }
 
                 #ifdef USE_FOG
@@ -300,9 +302,7 @@ impl<T> OpenGLProgram<T> {
             } else {
                 match input {
                     CCMUX::CENTER__SCALE__ONE => "tOne.rgb", // matching against ONE
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => {
-                        "vec3(randomNoise, randomNoise, randomNoise)"
-                    } // matching against NOISE
+                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(RAND_NOISE, RAND_NOISE, RAND_NOISE)", // matching against NOISE
                     _ => "tZero.rgb",
                 }
             }
@@ -434,12 +434,12 @@ impl<T> OpenGLProgram<T> {
             vec4 Texture2D_N64_Point(in sampler2D tex, in vec2 texCoord) {{
                 return texture(tex, texCoord);
             }}
-            
+
             vec4 Texture2D_N64_Average(in sampler2D tex, in vec2 texCoord) {{
                 // Unimplemented.
                 return texture(tex, texCoord);
             }}
-            
+
             // Implements N64-style "triangle bilienar filtering" with three taps.
             // Based on ArthurCarvalho's implementation, modified for use here.
             vec4 Texture2D_N64_Bilerp(in sampler2D tex, in vec2 texCoord) {{
@@ -451,27 +451,22 @@ impl<T> OpenGLProgram<T> {
                 vec4 s2 = TEX_OFFSET(vec2(offset.x, offset.y - sign(offset.y)));
                 return s0 + abs(offset.x) * (s1 - s0) + abs(offset.y) * (s2 - s0);
             }}
-            
+
             #define Texture2D_N64 Texture2D_N64_{}
+            #define RAND_NOISE floor(random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight))), float(uFrameCount))) + 0.5)
 
             vec3 CombineColorCycle0(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
-                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
-                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
-                #endif
                 return ({} - {}) * {} + {};
-            }} 
-            
+            }}
+
             float CombineAlphaCycle0(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
                 return ({} - {}) * {} + {};
             }}
-            
+
             vec3 CombineColorCycle1(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
-                #if defined(USE_ALPHA) && defined(ALPHA_COMPARE_DITHER)
-                    float randomNoise = random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight)), float(uFrameCount))) + 1.0) / 2.0;
-                #endif
                 return ({} - {}) * {} + {};
             }}
-            
+
             float CombineAlphaCycle1(vec4 tCombColor, vec4 texVal0, vec4 texVal1) {{
                 return ({} - {}) * {} + {};
             }}
@@ -493,7 +488,7 @@ impl<T> OpenGLProgram<T> {
                         CombineColorCycle0(tHalf, texVal0, texVal1),
                         CombineAlphaCycle0(tHalf, texVal0, texVal1)
                     );
-                    
+
                     #ifdef TWO_CYCLE
                         // Note that in the second cycle, Tex0 and Tex1 are swapped
                         texel = vec4(
@@ -505,9 +500,9 @@ impl<T> OpenGLProgram<T> {
 
                 #if defined(USE_ALPHA)
                     #if defined(ALPHA_COMPARE_DITHER)
-                        if (texel.a < floor(random(vec3(floor(gl_FragCoord.xy * (240.0 / float(uFrameHeight))), float(uFrameCount))) + 0.5)) discard;
+                        if (texel.a < RAND_NOISE) discard;
                     #endif
-                    
+
                     #if defined(ALPHA_COMPARE_THRESHOLD)
                         if (texel.a < uBlendColor.a) discard;
                     #endif

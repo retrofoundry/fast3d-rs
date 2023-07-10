@@ -8,10 +8,7 @@ use texture_cache::TextureCache;
 
 use self::gfx::{BlendState, CompareFunction, Face};
 
-use super::{
-    models::{color_combiner::CombineParams, tile_descriptor::TileDescriptor},
-    rdp::NUM_TILE_DESCRIPTORS,
-};
+use super::models::color_combiner::CombineParams;
 
 pub mod gfx;
 pub mod models;
@@ -28,7 +25,6 @@ pub struct ShaderConfig {
     pub other_mode_l: u32,
     pub geometry_mode: u32,
     pub combine: CombineParams,
-    pub tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
 }
 
 impl ShaderConfig {
@@ -38,7 +34,6 @@ impl ShaderConfig {
             other_mode_l: 0,
             geometry_mode: 0,
             combine: CombineParams::ZERO,
-            tile_descriptors: [TileDescriptor::EMPTY; NUM_TILE_DESCRIPTORS],
         }
     };
 }
@@ -150,7 +145,6 @@ impl RCPOutput {
         other_mode_l: u32,
         geometry_mode: u32,
         combine: CombineParams,
-        tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
     ) {
         let draw_call = self.current_draw_call();
         let shader_config = ShaderConfig {
@@ -158,7 +152,6 @@ impl RCPOutput {
             other_mode_l,
             geometry_mode,
             combine,
-            tile_descriptors,
         };
 
         draw_call.shader_id = ShaderId(shader_config);
