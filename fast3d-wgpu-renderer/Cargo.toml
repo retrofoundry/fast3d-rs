@@ -21,3 +21,4 @@ rustc-hash.workspace = true
 wgpu = { version = "0.16", features = ["glsl"] }
 naga = "0.12.2"
 rayon = "1.7.0"
+dashmap = "5.4.0"
