@@ -36,8 +36,6 @@ pub struct WgpuDrawCall {
     pub vertex_buffer_offset: wgpu::BufferAddress,
     pub vertex_count: usize,
 
-    pub fragment_uniform_bind_group: wgpu::BindGroup,
-
     pub viewport: glam::Vec4,
     pub scissor: [u32; 4],
 }
@@ -48,7 +46,6 @@ impl WgpuDrawCall {
         pipeline_id: PipelineId,
         vertex_buffer_offset: wgpu::BufferAddress,
         vertex_count: usize,
-        fragment_uniform_bind_group: wgpu::BindGroup,
         viewport: glam::Vec4,
         scissor: [u32; 4],
     ) -> Self {
@@ -59,8 +56,6 @@ impl WgpuDrawCall {
 
             vertex_buffer_offset,
             vertex_count,
-
-            fragment_uniform_bind_group,
 
             viewport,
             scissor,
@@ -83,6 +78,7 @@ pub struct WgpuGraphicsDevice<'a> {
     combine_uniform_buffer: wgpu::Buffer,
     frame_uniform_buffer: wgpu::Buffer,
     vertex_uniform_bind_groups: Vec<wgpu::BindGroup>,
+    fragment_uniform_bind_groups: Vec<wgpu::BindGroup>,
 
     texture_bind_group_layout: wgpu::BindGroupLayout,
     texture_bind_groups: FxHashMap<usize, wgpu::BindGroup>,
@@ -167,6 +163,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             combine_uniform_buffer,
             frame_uniform_buffer,
             vertex_uniform_bind_groups: Vec::new(),
+            fragment_uniform_bind_groups: Vec::new(),
 
             texture_bind_group_layout,
             texture_bind_groups: FxHashMap::default(),
@@ -181,6 +178,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         self.draw_calls.clear();
         self.last_pipeline_id = None;
         self.vertex_uniform_bind_groups.clear();
+        self.fragment_uniform_bind_groups.clear();
     }
 
     pub fn process_rcp_output(
@@ -191,10 +189,6 @@ impl<'a> WgpuGraphicsDevice<'a> {
         output: &mut RCPOutput,
     ) {
         self.clear_state();
-
-        let mut blend_uniform_buffer_offset = 0;
-        let mut combine_uniform_buffer_offset = 0;
-        let mut frame_uniform_buffer_offset = 0;
 
         // prepare shaders in parallel, but first, reduce to unique shader id's
         output
@@ -220,6 +214,18 @@ impl<'a> WgpuGraphicsDevice<'a> {
         let mut vertex_uniform_buffer_content: Vec<u8> = Vec::new();
         let mut vertex_uniform_buffer_configs: Vec<(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)> = Vec::new();
 
+        let mut current_blend_uniform_offset = 0;
+        let mut blend_uniform_buffer_content: Vec<u8> = Vec::new();
+        let mut blend_uniform_buffer_configs: Vec<(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)> = Vec::new();
+
+        let mut current_combine_uniform_offset = 0;
+        let mut combine_uniform_buffer_content: Vec<u8> = Vec::new();
+        let mut combine_uniform_buffer_configs: Vec<(wgpu::BufferAddress, wgpu::BufferAddress)> = Vec::new();
+
+        let mut current_frame_uniform_offset = 0;
+        let mut frame_uniform_buffer_content: Vec<u8> = Vec::new();
+        let mut frame_uniform_buffer_configs: Vec<Option<(wgpu::BufferAddress, wgpu::BufferAddress)>> = Vec::new();
+
         for draw_call in output.draw_calls.iter().take(output.draw_calls.len() - 1) {
             let shader_entry = self.shader_cache.get(&draw_call.shader_id).unwrap();
 
@@ -229,53 +235,143 @@ impl<'a> WgpuGraphicsDevice<'a> {
             current_vbo_offset += draw_call.vbo.vbo.len() as u64;
 
             // Handle vertex uniform buffer data
-            if shader_entry.program.uses_fog() {
-                let uniform = VertexWithFogUniforms::new(
-                    draw_call.projection_matrix.to_cols_array_2d(),
-                    draw_call.fog.multiplier as f32,
-                    draw_call.fog.offset as f32,
+            {
+                if shader_entry.program.uses_fog() {
+                    let uniform = VertexWithFogUniforms::new(
+                        draw_call.projection_matrix.to_cols_array_2d(),
+                        draw_call.fog.multiplier as f32,
+                        draw_call.fog.offset as f32,
+                    );
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<VertexWithFogUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    vertex_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    vertex_uniform_buffer_content.extend_from_slice(&vec![0; uniform_size as usize - std::mem::size_of::<VertexWithFogUniforms>()]);
+
+                    vertex_uniform_buffer_configs.push((draw_call.shader_id, current_vertex_uniform_offset, uniform_size));
+                    current_vertex_uniform_offset += uniform_size;
+                } else {
+                    let uniform = VertexUniforms {
+                        projection_matrix: draw_call.projection_matrix.to_cols_array_2d(),
+                    };
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    vertex_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    vertex_uniform_buffer_content.extend_from_slice(&vec![0; uniform_size as usize - std::mem::size_of::<VertexUniforms>()]);
+
+                    vertex_uniform_buffer_configs.push((draw_call.shader_id, current_vertex_uniform_offset, uniform_size));
+                    current_vertex_uniform_offset += uniform_size;
+                }
+            }
+
+            // Handle blend uniform buffer data
+            {
+                if shader_entry.program.uses_fog() {
+                    let uniform = FragmentBlendWithFogUniforms::new(
+                        draw_call.uniforms.blend.blend_color.to_array(),
+                        draw_call.uniforms.blend.fog_color.xyz().to_array(),
+                    );
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<FragmentBlendWithFogUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    blend_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    blend_uniform_buffer_content.extend_from_slice(&vec![0; uniform_size as usize - std::mem::size_of::<FragmentBlendWithFogUniforms>()]);
+
+                    blend_uniform_buffer_configs.push((draw_call.shader_id, current_blend_uniform_offset, uniform_size));
+                    current_blend_uniform_offset += uniform_size;
+                } else {
+                    let uniform = FragmentBlendUniforms {
+                        blend_color: draw_call.uniforms.blend.blend_color.to_array(),
+                    };
+
+                    let uniform_size = align_to(
+                        std::mem::size_of::<FragmentBlendUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
+
+                    blend_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    blend_uniform_buffer_content.extend_from_slice(&vec![0; uniform_size as usize - std::mem::size_of::<FragmentBlendUniforms>()]);
+
+                    blend_uniform_buffer_configs.push((draw_call.shader_id, current_blend_uniform_offset, uniform_size));
+                    current_blend_uniform_offset += uniform_size;
+                }
+            }
+
+            // Handle combine uniform buffer data
+            {
+                let uniform = FragmentCombineUniforms::new(
+                    draw_call.uniforms.combine.prim_color.to_array(),
+                    draw_call.uniforms.combine.env_color.to_array(),
+                    draw_call.uniforms.combine.key_center.to_array(),
+                    draw_call.uniforms.combine.key_scale.to_array(),
+                    draw_call.uniforms.combine.prim_lod.x,
+                    draw_call.uniforms.combine.convert_k4,
+                    draw_call.uniforms.combine.convert_k5,
                 );
 
                 let uniform_size = align_to(
-                    std::mem::size_of::<VertexWithFogUniforms>() as wgpu::BufferAddress,
+                    std::mem::size_of::<FragmentCombineUniforms>() as wgpu::BufferAddress,
                     256,
                 );
 
-                vertex_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                combine_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
                 // add padding to align to the next 256 byte boundary
-                vertex_uniform_buffer_content.extend_from_slice(&vec![0; uniform_size as usize - std::mem::size_of::<VertexWithFogUniforms>()]);
+                combine_uniform_buffer_content.extend_from_slice(&vec![0; uniform_size as usize - std::mem::size_of::<FragmentCombineUniforms>()]);
 
-                vertex_uniform_buffer_configs.push((draw_call.shader_id, current_vertex_uniform_offset, uniform_size));
-                current_vertex_uniform_offset += uniform_size;
-            } else {
-                let uniform = VertexUniforms {
-                    projection_matrix: draw_call.projection_matrix.to_cols_array_2d(),
-                };
+                combine_uniform_buffer_configs.push((current_combine_uniform_offset, uniform_size));
+                current_combine_uniform_offset += uniform_size;
+            }
 
-                let uniform_size = align_to(
-                    std::mem::size_of::<VertexUniforms>() as wgpu::BufferAddress,
-                    256,
-                );
+            // Handle frame uniform buffer data
+            {
+                if shader_entry.program.uses_alpha() && shader_entry.program.uses_alpha_compare_dither() {
+                    let uniform = FragmentFrameUniforms {
+                        count: self.frame_count as u32,
+                        height: self.current_height as u32,
+                    };
 
-                vertex_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
-                // add padding to align to the next 256 byte boundary
-                vertex_uniform_buffer_content.extend_from_slice(&vec![0; uniform_size as usize - std::mem::size_of::<VertexUniforms>()]);
+                    let uniform_size = align_to(
+                        std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress,
+                        256,
+                    );
 
-                vertex_uniform_buffer_configs.push((draw_call.shader_id, current_vertex_uniform_offset, uniform_size));
-                current_vertex_uniform_offset += uniform_size;
+                    frame_uniform_buffer_content.extend_from_slice(bytemuck::bytes_of(&uniform));
+                    // add padding to align to the next 256 byte boundary
+                    frame_uniform_buffer_content.extend_from_slice(&vec![0; uniform_size as usize - std::mem::size_of::<FragmentFrameUniforms>()]);
+
+                    frame_uniform_buffer_configs.push(Some((current_frame_uniform_offset, uniform_size)));
+                    current_frame_uniform_offset += uniform_size;
+                } else {
+                    frame_uniform_buffer_configs.push(None);
+                }
             }
         }
 
-        // write vertex buffer data
+        // write buffers
         queue.write_buffer(&self.vertex_buffer, 0, &vertex_buffer_content);
-        // write vertex uniform buffer data
         queue.write_buffer(&self.vertex_uniform_buffer, 0, &vertex_uniform_buffer_content);
+        queue.write_buffer(&self.blend_uniform_buffer, 0, &blend_uniform_buffer_content);
+        queue.write_buffer(&self.combine_uniform_buffer, 0, &combine_uniform_buffer_content);
+        queue.write_buffer(&self.frame_uniform_buffer, 0, &frame_uniform_buffer_content);
 
-        // create uniform bind groups
+        // Handle vertex uniform buffer bind groups
         for (shader_id, offset, size) in vertex_uniform_buffer_configs {
             let shader_entry = self.shader_cache.get(&shader_id).unwrap();
 
-            // Handle vertex uniform buffer bind group
             let vertex_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Vertex Uniform Bind Group"),
                 layout: &shader_entry.vertex_uniform_bind_group_layout,
@@ -290,6 +386,49 @@ impl<'a> WgpuGraphicsDevice<'a> {
             });
 
             self.vertex_uniform_bind_groups.push(vertex_uniform_bind_group);
+        }
+
+        // Handle fragment uniform buffer bind groups
+        for (((shader_id, blend_offset, blend_size), (combine_offset, combine_size)), frame_option) in blend_uniform_buffer_configs.iter().zip(combine_uniform_buffer_configs.iter()).zip(frame_uniform_buffer_configs.iter()) {
+            let shader_entry = self.shader_cache.get(&shader_id).unwrap();
+
+            let mut bind_group_entries = vec![
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.blend_uniform_buffer,
+                        offset: *blend_offset,
+                        size: wgpu::BufferSize::new(*blend_size),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.combine_uniform_buffer,
+                        offset: *combine_offset,
+                        size: wgpu::BufferSize::new(*combine_size),
+                    }),
+                },
+            ];
+
+             if let Some((frame_offset, frame_size)) = frame_option {
+                bind_group_entries.push(wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.frame_uniform_buffer,
+                        offset: *frame_offset,
+                        size: wgpu::BufferSize::new(*frame_size),
+                    }),
+                });
+             }
+
+             let fragment_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                 label: Some("Fragment Uniform Bind Group"),
+                 layout: &shader_entry.fragment_uniform_bind_group_layout,
+                 entries: &bind_group_entries,
+             });
+
+             self.fragment_uniform_bind_groups.push(fragment_uniform_bind_group);
         }
 
         // omit the last draw call, because we know we that's an extra from the last flush
@@ -316,43 +455,12 @@ impl<'a> WgpuGraphicsDevice<'a> {
                 draw_call.stencil,
             );
 
-            // Configure uniforms
-            let (
-                blend_uniform_buffer_size,
-                combine_uniform_buffer_size,
-                frame_uniform_buffer_size,
-            ) = self.configure_uniforms(
-                queue,
-                &draw_call.shader_id,
-                &draw_call,
-                blend_uniform_buffer_offset,
-                combine_uniform_buffer_offset,
-                frame_uniform_buffer_offset,
-            );
-
-            let fragment_uniform_bind_group = self
-                .configure_uniform_bind_groups(
-                    device,
-                    &draw_call.shader_id,
-                    blend_uniform_buffer_offset,
-                    blend_uniform_buffer_size,
-                    combine_uniform_buffer_offset,
-                    combine_uniform_buffer_size,
-                    frame_uniform_buffer_offset,
-                    frame_uniform_buffer_size,
-                );
-
-            blend_uniform_buffer_offset += blend_uniform_buffer_size;
-            combine_uniform_buffer_offset += combine_uniform_buffer_size;
-            frame_uniform_buffer_offset += frame_uniform_buffer_size;
-
             // Create mutable draw_call
             let mut wgpu_draw_call = WgpuDrawCall::new(
                 draw_call.shader_id,
                 pipeline_id,
                 vertex_buffer_offsets[index],
                 draw_call.vbo.num_tris * 3,
-                fragment_uniform_bind_group,
                 draw_call.viewport,
                 draw_call.scissor,
             );
@@ -391,7 +499,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
             let vertex_uniform_bind_group = self.vertex_uniform_bind_groups.get(index).unwrap();
             rpass.set_bind_group(0, vertex_uniform_bind_group, &[]);
-            rpass.set_bind_group(1, &draw_call.fragment_uniform_bind_group, &[]);
+            let fragment_uniform_bind_group = self.fragment_uniform_bind_groups.get(index).unwrap();
+            rpass.set_bind_group(1, fragment_uniform_bind_group, &[]);
 
             for i in 0..2 {
                 if let Some(texture_id) = draw_call.textures[i] {
@@ -584,108 +693,6 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
         // create the shader entry
         return Some(ShaderEntry::new(program, device));
-    }
-
-    pub fn configure_uniforms(
-        &mut self,
-        queue: &wgpu::Queue,
-        shader_id: &ShaderId,
-        draw_call: &IntermediateDrawCall,
-        blend_uniform_buffer_offset: wgpu::BufferAddress,
-        combine_uniform_buffer_offset: wgpu::BufferAddress,
-        frame_uniform_buffer_offset: wgpu::BufferAddress,
-    ) -> (
-        wgpu::BufferAddress,
-        wgpu::BufferAddress,
-        wgpu::BufferAddress,
-    ) {
-        // Grab the shader entry
-        let shader_entry = self.shader_cache.get(shader_id).unwrap();
-
-        // Update the blend uniforms
-        let blend_uniform_buf_size = if shader_entry.program.uses_fog() {
-            let uniform = FragmentBlendWithFogUniforms::new(
-                draw_call.uniforms.blend.blend_color.to_array(),
-                draw_call.uniforms.blend.fog_color.xyz().to_array(),
-            );
-
-            queue.write_buffer(
-                &self.blend_uniform_buffer,
-                blend_uniform_buffer_offset,
-                bytemuck::bytes_of(&uniform),
-            );
-
-            align_to(
-                std::mem::size_of::<FragmentBlendWithFogUniforms>() as wgpu::BufferAddress,
-                256,
-            )
-        } else {
-            let uniform = FragmentBlendUniforms {
-                blend_color: draw_call.uniforms.blend.blend_color.to_array(),
-            };
-
-            queue.write_buffer(
-                &self.blend_uniform_buffer,
-                blend_uniform_buffer_offset,
-                bytemuck::bytes_of(&uniform),
-            );
-
-            align_to(
-                std::mem::size_of::<FragmentBlendUniforms>() as wgpu::BufferAddress,
-                256,
-            )
-        };
-
-        // Update the combine uniforms
-        let uniform = FragmentCombineUniforms::new(
-            draw_call.uniforms.combine.prim_color.to_array(),
-            draw_call.uniforms.combine.env_color.to_array(),
-            draw_call.uniforms.combine.key_center.to_array(),
-            draw_call.uniforms.combine.key_scale.to_array(),
-            draw_call.uniforms.combine.prim_lod.x,
-            draw_call.uniforms.combine.convert_k4,
-            draw_call.uniforms.combine.convert_k5,
-        );
-
-        queue.write_buffer(
-            &self.combine_uniform_buffer,
-            combine_uniform_buffer_offset,
-            bytemuck::bytes_of(&uniform),
-        );
-
-        let combine_uniform_buf_size = align_to(
-            std::mem::size_of::<FragmentCombineUniforms>() as wgpu::BufferAddress,
-            256,
-        );
-
-        // Update the frame uniforms
-        let frame_uniform_buf_size = if shader_entry.program.uses_alpha()
-            && shader_entry.program.uses_alpha_compare_dither()
-        {
-            let uniform = FragmentFrameUniforms {
-                count: self.frame_count as u32,
-                height: self.current_height as u32,
-            };
-
-            queue.write_buffer(
-                &self.frame_uniform_buffer,
-                frame_uniform_buffer_offset,
-                bytemuck::bytes_of(&uniform),
-            );
-
-            align_to(
-                std::mem::size_of::<FragmentFrameUniforms>() as wgpu::BufferAddress,
-                256,
-            )
-        } else {
-            0
-        };
-
-        (
-            blend_uniform_buf_size,
-            combine_uniform_buf_size,
-            frame_uniform_buf_size,
-        )
     }
 
     pub fn configure_uniform_bind_groups(
