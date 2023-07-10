@@ -36,7 +36,12 @@ pub struct VertexWithFogUniforms {
 }
 
 impl VertexWithFogUniforms {
-    pub fn new(screen_size: [f32; 2], projection_matrix: [[f32; 4]; 4], fog_multiplier: f32, fog_offset: f32) -> Self {
+    pub fn new(
+        screen_size: [f32; 2],
+        projection_matrix: [[f32; 4]; 4],
+        fog_multiplier: f32,
+        fog_offset: f32,
+    ) -> Self {
         Self {
             screen_size,
             _padding: [0.0; 2],
