@@ -1,11 +1,7 @@
-use dashmap::DashMap;
 use glam::Vec4Swizzles;
-use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::borrow::Cow;
-use std::collections::HashSet;
 
-use std::sync::Arc;
 use wgpu::util::align_to;
 
 use crate::defines::{
@@ -19,7 +15,7 @@ use fast3d::{
     gbi::defines::g,
     output::{
         gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
-        models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
+        models::{OutputSampler, OutputStencil, OutputTexture},
         ShaderConfig, ShaderId,
     },
 };
@@ -69,7 +65,7 @@ pub struct WgpuGraphicsDevice<'a> {
     screen_size: [u32; 2],
 
     texture_cache: Vec<TextureData>,
-    shader_cache: Arc<DashMap<ShaderId, ShaderEntry<'a>>>,
+    shader_cache: FxHashMap<ShaderId, ShaderEntry<'a>>,
     pipeline_cache: FxHashMap<PipelineId, wgpu::RenderPipeline>,
 
     vertex_buffer: wgpu::Buffer,
@@ -154,7 +150,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             screen_size,
 
             texture_cache: Vec::new(),
-            shader_cache: Arc::new(DashMap::new()),
+            shader_cache: FxHashMap::default(),
             pipeline_cache: FxHashMap::default(),
 
             vertex_buffer,
@@ -190,22 +186,12 @@ impl<'a> WgpuGraphicsDevice<'a> {
     ) {
         self.clear_state();
 
-        // prepare shaders in parallel, but first, reduce to unique shader id's
-        output
-            .draw_calls
-            .iter()
-            .map(|draw_call| (draw_call.shader_id, draw_call.shader_config))
-            .collect::<HashSet<_>>()
-            .into_par_iter()
-            .flat_map(|(shader_id, shader_config)| {
-                Self::prepare_shader(device, &shader_id, &shader_config, &self.shader_cache)
-                    .map(|shader| (shader_id, shader))
-            })
-            .for_each(|(shader_id, shader)| {
-                self.shader_cache.insert(shader_id, shader);
-            });
-
         let usable_draw_calls = &output.draw_calls[0..output.draw_calls.len() - 1];
+
+        // prepare shaders in parallel, but first, reduce to unique shader id's
+        usable_draw_calls.iter().for_each(|draw_call| {
+            self.prepare_shader(device, &draw_call.shader_id, &draw_call.shader_config);
+        });
 
         // configure buffers
         let (
@@ -214,7 +200,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             blend_uniform_buffer_configs,
             combine_uniform_buffer_configs,
             frame_uniform_buffer_configs,
-        ) = self.configure_buffers(queue, &usable_draw_calls);
+        ) = self.configure_buffers(queue, usable_draw_calls);
 
         // configure bind groups
         self.configure_uniform_bind_groups(
@@ -449,14 +435,14 @@ impl<'a> WgpuGraphicsDevice<'a> {
     }
 
     fn prepare_shader(
+        &mut self,
         device: &wgpu::Device,
         shader_id: &ShaderId,
         shader_config: &ShaderConfig,
-        shader_cache: &Arc<DashMap<ShaderId, ShaderEntry<'a>>>,
-    ) -> Option<ShaderEntry<'a>> {
+    ) {
         // check if the shader is in the cache
-        if shader_cache.contains_key(shader_id) {
-            return None;
+        if self.shader_cache.contains_key(shader_id) {
+            return;
         }
 
         // create the shader and add it to the cache
@@ -485,7 +471,8 @@ impl<'a> WgpuGraphicsDevice<'a> {
             }));
 
         // create the shader entry
-        return Some(ShaderEntry::new(program, device));
+        self.shader_cache
+            .insert(*shader_id, ShaderEntry::new(program, device));
     }
 
     pub fn configure_buffers(
@@ -759,7 +746,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
     ) {
         // Handle vertex uniform buffer bind groups
         for (shader_id, offset, size) in vertex_uniform_buffer_configs {
-            let shader_entry = self.shader_cache.get(&shader_id).unwrap();
+            let shader_entry = self.shader_cache.get(shader_id).unwrap();
 
             let vertex_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Vertex Uniform Bind Group"),
@@ -787,7 +774,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             .zip(combine_uniform_buffer_configs.iter())
             .zip(frame_uniform_buffer_configs.iter())
         {
-            let shader_entry = self.shader_cache.get(&shader_id).unwrap();
+            let shader_entry = self.shader_cache.get(shader_id).unwrap();
 
             let mut bind_group_entries = vec![
                 wgpu::BindGroupEntry {
