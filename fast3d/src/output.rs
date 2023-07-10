@@ -96,20 +96,20 @@ impl IntermediateDrawCall {
     };
 }
 
-pub struct RCPOutput {
+pub struct RCPOutputCollector {
     pub texture_cache: TextureCache,
     pub draw_calls: Vec<IntermediateDrawCall>,
 }
 
-impl Default for RCPOutput {
+impl Default for RCPOutputCollector {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RCPOutput {
+impl RCPOutputCollector {
     pub fn new() -> Self {
-        RCPOutput {
+        RCPOutputCollector {
             texture_cache: TextureCache::new(TEXTURE_CACHE_MAX_SIZE),
             // start draw calls with a default draw call
             draw_calls: vec![IntermediateDrawCall::EMPTY],

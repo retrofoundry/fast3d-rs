@@ -5,7 +5,7 @@ use super::{gbi::defines::Light, models::color::Color};
 use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
 use crate::gbi::utils::geometry_mode_uses_fog;
 use crate::models::texture::TextureState;
-use crate::output::RCPOutput;
+use crate::output::RCPOutputCollector;
 use crate::rdp::RDP;
 use glam::{Mat4, Vec2, Vec3A};
 
@@ -267,7 +267,7 @@ impl RSP {
     pub fn set_vertex(
         &mut self,
         rdp: &mut RDP,
-        output: &mut RCPOutput,
+        output: &mut RCPOutputCollector,
         address: usize,
         vertex_count: usize,
         mut write_index: usize,

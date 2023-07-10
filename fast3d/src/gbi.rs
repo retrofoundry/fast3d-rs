@@ -1,6 +1,6 @@
 use self::defines::Gfx;
 
-use super::{output::RCPOutput, rdp::RDP, rsp::RSP};
+use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
 use std::collections::HashMap;
 
 mod f3d;
@@ -22,7 +22,7 @@ pub enum GBIResult {
 pub struct GBICommandParams<'a> {
     pub rdp: &'a mut RDP,
     pub rsp: &'a mut RSP,
-    pub output: &'a mut RCPOutput,
+    pub output: &'a mut RCPOutputCollector,
     pub command: &'a mut *mut Gfx,
 }
 

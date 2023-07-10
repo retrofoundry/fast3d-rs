@@ -371,7 +371,7 @@ mod tests {
     use crate::gbi::defines::{GWords, Gfx};
     use crate::gbi::f3dex2::MoveWord;
     use crate::gbi::{GBICommand, GBICommandParams};
-    use crate::output::RCPOutput;
+    use crate::output::RCPOutputCollector;
     use crate::rdp::RDP;
     use crate::rsp::RSP;
 
@@ -383,7 +383,7 @@ mod tests {
 
         let mut rsp = RSP::default();
         let mut rdp = RDP::default();
-        let mut output = RCPOutput::default();
+        let mut output = RCPOutputCollector::default();
 
         let mut command: *mut Gfx = Box::into_raw(Box::new(Gfx {
             words: GWords { w0, w1 },
@@ -405,7 +405,7 @@ mod tests {
 
         let mut rsp = RSP::default();
         let mut rdp = RDP::default();
-        let mut output = RCPOutput::default();
+        let mut output = RCPOutputCollector::default();
 
         let mut command: *mut Gfx = Box::into_raw(Box::new(Gfx {
             words: GWords { w0, w1 },

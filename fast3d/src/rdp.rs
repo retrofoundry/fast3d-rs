@@ -7,7 +7,7 @@ use crate::gbi::defines::g;
 
 use crate::output::{
     gfx::{BlendState, CompareFunction},
-    RCPOutput,
+    RCPOutputCollector,
 };
 
 use super::models::color::Color;
@@ -370,7 +370,12 @@ impl RDP {
         );
     }
 
-    pub fn import_tile_texture(&mut self, rsp: &RSP, output: &mut RCPOutput, tmem_index: usize) {
+    pub fn import_tile_texture(
+        &mut self,
+        rsp: &RSP,
+        output: &mut RCPOutputCollector,
+        tmem_index: usize,
+    ) {
         let tile = self.tile_descriptors[rsp.texture_state.tile as usize + tmem_index];
         let format = tile.format as u32;
         let size = tile.size as u32;
@@ -463,7 +468,7 @@ impl RDP {
             && self.combine.uses_texture1()
     }
 
-    pub fn flush_textures(&mut self, rsp: &RSP, output: &mut RCPOutput) {
+    pub fn flush_textures(&mut self, rsp: &RSP, output: &mut RCPOutputCollector) {
         // if textures are not on, then we have no textures to flush
         // if !self.texture_state.on {
         //     return;
@@ -506,7 +511,7 @@ impl RDP {
         // }
     }
 
-    pub fn flush(&mut self, output: &mut RCPOutput) {
+    pub fn flush(&mut self, output: &mut RCPOutputCollector) {
         if self.buf_vbo_len > 0 {
             let vbo = bytemuck::cast_slice(&self.buf_vbo[..self.buf_vbo_len]);
             output.set_vbo(vbo.to_vec(), self.buf_vbo_num_tris);
@@ -517,7 +522,7 @@ impl RDP {
 
     // MARK: - Blend
 
-    fn process_depth_params(&mut self, output: &mut RCPOutput, geometry_mode: u32) {
+    fn process_depth_params(&mut self, output: &mut RCPOutputCollector, geometry_mode: u32) {
         let depth_test = geometry_mode & rsp_geometry::g::ZBUFFER != 0;
 
         let zmode: u32 = self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03;
@@ -546,7 +551,7 @@ impl RDP {
 
     pub fn update_render_state(
         &mut self,
-        output: &mut RCPOutput,
+        output: &mut RCPOutputCollector,
         geometry_mode: u32,
         rsp_constants: &RSPConstants,
     ) {
@@ -713,7 +718,7 @@ impl RDP {
     pub fn draw_triangles(
         &mut self,
         rsp: &mut RSP,
-        output: &mut RCPOutput,
+        output: &mut RCPOutputCollector,
         vertex_id1: usize,
         vertex_id2: usize,
         vertex_id3: usize,
@@ -799,7 +804,7 @@ impl RDP {
     pub fn draw_texture_rectangle(
         &mut self,
         rsp: &mut RSP,
-        output: &mut RCPOutput,
+        output: &mut RCPOutputCollector,
         ulx: i32,
         uly: i32,
         mut lrx: i32,
@@ -868,7 +873,7 @@ impl RDP {
     pub fn fill_rect(
         &mut self,
         rsp: &mut RSP,
-        output: &mut RCPOutput,
+        output: &mut RCPOutputCollector,
         ulx: i32,
         uly: i32,
         mut lrx: i32,
@@ -907,7 +912,7 @@ impl RDP {
     fn draw_rectangle(
         &mut self,
         rsp: &mut RSP,
-        output: &mut RCPOutput,
+        output: &mut RCPOutputCollector,
         ulx: i32,
         uly: i32,
         lrx: i32,

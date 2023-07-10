@@ -10,7 +10,7 @@ use crate::defines::{
     VertexWithFogUniforms,
 };
 use crate::wgpu_program::ShaderVersion;
-use fast3d::output::{IntermediateDrawCall, RCPOutput};
+use fast3d::output::{IntermediateDrawCall, RCPOutputCollector};
 use fast3d::{
     gbi::defines::g,
     output::{
@@ -59,7 +59,7 @@ impl WgpuDrawCall {
     }
 }
 
-pub struct WgpuGraphicsDevice<'a> {
+pub struct WgpuRenderer<'a> {
     frame_count: i32,
     current_height: i32,
     screen_size: [u32; 2],
@@ -84,7 +84,7 @@ pub struct WgpuGraphicsDevice<'a> {
     last_pipeline_id: Option<PipelineId>,
 }
 
-impl<'a> WgpuGraphicsDevice<'a> {
+impl<'a> WgpuRenderer<'a> {
     pub fn new(device: &wgpu::Device, screen_size: [u32; 2]) -> Self {
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -182,7 +182,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
-        output: &mut RCPOutput,
+        output: &mut RCPOutputCollector,
     ) {
         self.clear_state();
 
@@ -339,7 +339,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
 
     // MARK: - Helpers
 
-    pub fn configure_textures(
+    fn configure_textures(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -475,7 +475,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
             .insert(*shader_id, ShaderEntry::new(program, device));
     }
 
-    pub fn configure_buffers(
+    fn configure_buffers(
         &mut self,
         queue: &wgpu::Queue,
         draw_calls: &[IntermediateDrawCall],
@@ -738,7 +738,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         )
     }
 
-    pub fn configure_uniform_bind_groups(
+    fn configure_uniform_bind_groups(
         &mut self,
         device: &wgpu::Device,
         vertex_uniform_buffer_configs: &[(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)],
@@ -820,7 +820,7 @@ impl<'a> WgpuGraphicsDevice<'a> {
         }
     }
 
-    pub fn configure_pipeline(
+    fn configure_pipeline(
         &mut self,
         device: &wgpu::Device,
         surface_texture_format: wgpu::TextureFormat,

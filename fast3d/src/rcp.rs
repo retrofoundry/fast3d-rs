@@ -3,7 +3,7 @@ use log::trace;
 
 use super::{
     gbi::{defines::Gfx, GBICommandRegistry, GBIResult},
-    output::RCPOutput,
+    output::RCPOutputCollector,
     rdp::RDP,
     rsp::RSP,
 };
@@ -41,13 +41,13 @@ impl RCP {
     /// This function is called to process a work buffer.
     /// It takes in a pointer to the start of the work buffer and will
     /// process until it hits a `G_ENDDL` indicating the end.
-    pub fn run(&mut self, output: &mut RCPOutput, commands: usize) {
+    pub fn run(&mut self, output: &mut RCPOutputCollector, commands: usize) {
         self.reset();
         self.run_dl(output, commands);
         self.rdp.flush(output);
     }
 
-    fn run_dl(&mut self, output: &mut RCPOutput, commands: usize) {
+    fn run_dl(&mut self, output: &mut RCPOutputCollector, commands: usize) {
         let mut command = commands as *mut Gfx;
 
         loop {

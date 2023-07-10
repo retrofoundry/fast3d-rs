@@ -8,6 +8,7 @@ use fast3d::{
         gfx::{BlendComponent, BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
         models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
     },
+    RCPOutputCollector,
 };
 use glam::Vec4Swizzles;
 use glium::buffer::{Buffer, BufferAny, BufferMode, BufferType};
@@ -181,7 +182,7 @@ impl Uniforms for UniformVec<'_, '_> {
     }
 }
 
-pub struct GliumGraphicsDevice<'draw> {
+pub struct GliumRenderer<'a> {
     pub shader_cache: rustc_hash::FxHashMap<ShaderId, OpenGLProgram<Program>>,
     current_shader: Option<ShaderId>,
 
@@ -193,7 +194,7 @@ pub struct GliumGraphicsDevice<'draw> {
     current_height: i32,
     screen_size: [u32; 2],
 
-    draw_params: DrawParameters<'draw>,
+    draw_params: DrawParameters<'a>,
 }
 
 fn blend_component_to_glium(component: BlendComponent) -> BlendingFunction {
@@ -245,7 +246,7 @@ fn clamp_to_glium(clamp: u32) -> SamplerWrapFunction {
     SamplerWrapFunction::Repeat
 }
 
-impl<'draw> GliumGraphicsDevice<'draw> {
+impl<'a> GliumRenderer<'a> {
     pub fn new(screen_size: [u32; 2]) -> Self {
         Self {
             shader_cache: rustc_hash::FxHashMap::default(),
@@ -265,6 +266,8 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         }
     }
 
+    /// Starts a new frame.
+    /// Should be called before any drawing is done.
     pub fn start_frame(&mut self, target: &mut Frame) {
         self.frame_count += 1;
 
@@ -275,11 +278,66 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         };
     }
 
+    /// Sets the screen size for rendering.
+    ///
+    /// The easiest way of doing this is to take every [`WindowEvent::Resized`]
+    /// that is received and pass its [`dpi::PhysicalSize`] into this function.
     pub fn resize(&mut self, screen_size: [u32; 2]) {
         self.screen_size = screen_size;
     }
 
-    pub fn set_cull_mode(&mut self, cull_mode: Option<Face>) {
+    /// Render the contents of a given [`RCPOutputCollector`] to the screen.
+    pub fn render_rcp_output(
+        &mut self,
+        output: &mut RCPOutputCollector,
+        display: &Display,
+        frame: &mut Frame,
+    ) {
+        // omit the last draw call, because we know we that's an extra from the last flush
+        // for draw_call in &self.rcp_output.draw_calls[..self.rcp_output.draw_calls.len() - 1] {
+        for draw_call in output.draw_calls.iter().take(output.draw_calls.len() - 1) {
+            assert!(!draw_call.vbo.vbo.is_empty());
+
+            self.set_cull_mode(draw_call.cull_mode);
+            self.set_depth_stencil_params(draw_call.stencil);
+            self.set_blend_state(draw_call.blend_state);
+            self.set_viewport(&draw_call.viewport);
+            self.set_scissor(draw_call.scissor);
+
+            // select the shader program
+            self.select_program(display, draw_call.shader_id, draw_call.shader_config);
+
+            // loop through textures and bind them
+            for (index, hash) in draw_call.texture_indices.iter().enumerate() {
+                if let Some(hash) = hash {
+                    let texture = output.texture_cache.get_mut(*hash).unwrap();
+                    self.bind_texture(display, index, texture);
+                }
+            }
+
+            // loop through samplers and bind them
+            for (index, sampler) in draw_call.samplers.iter().enumerate() {
+                if let Some(sampler) = sampler {
+                    self.bind_sampler(index, sampler);
+                }
+            }
+
+            // draw triangles
+            self.draw_triangles(
+                display,
+                frame,
+                draw_call.projection_matrix,
+                &draw_call.fog,
+                &draw_call.vbo.vbo,
+                draw_call.vbo.num_tris,
+                &draw_call.uniforms,
+            );
+        }
+    }
+
+    // MARK: - Helpers
+
+    fn set_cull_mode(&mut self, cull_mode: Option<Face>) {
         self.draw_params.backface_culling = match cull_mode {
             Some(Face::Front) => BackfaceCullingMode::CullCounterClockwise,
             Some(Face::Back) => BackfaceCullingMode::CullClockwise,
@@ -287,7 +345,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         }
     }
 
-    pub fn set_depth_stencil_params(&mut self, params: Option<OutputStencil>) {
+    fn set_depth_stencil_params(&mut self, params: Option<OutputStencil>) {
         self.draw_params.depth = if let Some(params) = params {
             glium::Depth {
                 test: match params.depth_compare {
@@ -325,7 +383,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         };
     }
 
-    pub fn set_blend_state(&mut self, blend_state: Option<BlendState>) {
+    fn set_blend_state(&mut self, blend_state: Option<BlendState>) {
         self.draw_params.blend = if let Some(blend_state) = blend_state {
             glium::Blend {
                 color: blend_component_to_glium(blend_state.color),
@@ -339,7 +397,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         };
     }
 
-    pub fn set_viewport(&mut self, viewport: &glam::Vec4) {
+    fn set_viewport(&mut self, viewport: &glam::Vec4) {
         self.draw_params.viewport = Some(glium::Rect {
             left: viewport.x as u32,
             bottom: viewport.y as u32,
@@ -350,7 +408,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         self.current_height = viewport.w as i32;
     }
 
-    pub fn set_scissor(&mut self, scissor: [u32; 4]) {
+    fn set_scissor(&mut self, scissor: [u32; 4]) {
         self.draw_params.scissor = Some(glium::Rect {
             left: scissor[0],
             bottom: scissor[1],
@@ -359,7 +417,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         });
     }
 
-    pub fn select_program(
+    fn select_program(
         &mut self,
         display: &Display,
         shader_id: ShaderId,
@@ -403,7 +461,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         self.shader_cache.insert(shader_id, program);
     }
 
-    pub fn bind_texture(&mut self, display: &Display, tile: usize, texture: &mut OutputTexture) {
+    fn bind_texture(&mut self, display: &Display, tile: usize, texture: &mut OutputTexture) {
         // check if we've already uploaded this texture to the GPU
         if let Some(texture_id) = texture.device_id {
             // trace!("Texture found in GPU cache");
@@ -425,7 +483,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         self.textures.push(TextureData::new(native_texture));
     }
 
-    pub fn bind_sampler(&mut self, tile: usize, sampler: &OutputSampler) {
+    fn bind_sampler(&mut self, tile: usize, sampler: &OutputSampler) {
         if let Some(texture_data) = self.textures.get_mut(self.current_texture_ids[tile]) {
             let wrap_s = clamp_to_glium(sampler.clamp_s);
             let wrap_t = clamp_to_glium(sampler.clamp_t);
@@ -449,7 +507,7 @@ impl<'draw> GliumGraphicsDevice<'draw> {
         }
     }
 
-    pub fn draw_triangles(
+    fn draw_triangles(
         &self,
         display: &Display,
         target: &mut Frame,
