@@ -4,9 +4,11 @@ use fast3d::gbi::utils::{
     other_mode_l_uses_alpha, other_mode_l_uses_fog, other_mode_l_uses_texture_edge,
 };
 
-use fast3d::models::color_combiner::{CombineParams, ACMUX, CCMUX};
+use fast3d::models::color_combiner::CombineParams;
 
-use fast3d::gbi::defines::{CycleType, GeometryModes, TextureFilter};
+use fast3d::gbi::defines::{
+    AlphaCombinerMux, ColorCombinerMux, CycleType, GeometryModes, TextureFilter,
+};
 use fast3d::output::ShaderConfig;
 use naga::FastHashMap;
 
@@ -287,100 +289,98 @@ impl<T> WgpuProgram<T> {
         };
 
         let color_input_common = |input| match input {
-            CCMUX::COMBINED => "tCombColor.rgb",
-            CCMUX::TEXEL0 => "texVal0.rgb",
-            CCMUX::TEXEL1 => "texVal1.rgb",
-            CCMUX::PRIMITIVE => "uPrimColor.rgb",
-            CCMUX::SHADE => "vVtxColor.rgb",
-            CCMUX::ENVIRONMENT => "uEnvColor.rgb",
+            ColorCombinerMux::COMBINED => "tCombColor.rgb",
+            ColorCombinerMux::TEXEL0 => "texVal0.rgb",
+            ColorCombinerMux::TEXEL1 => "texVal1.rgb",
+            ColorCombinerMux::PRIMITIVE => "uPrimColor.rgb",
+            ColorCombinerMux::SHADE => "vVtxColor.rgb",
+            ColorCombinerMux::ENVIRONMENT => "uEnvColor.rgb",
             _ => panic!("Should be unreachable"),
         };
 
         let color_input_a = |input| {
-            if input <= CCMUX::ENVIRONMENT {
+            if input <= ColorCombinerMux::ENVIRONMENT {
                 color_input_common(input)
             } else {
                 match input {
-                    CCMUX::CENTER__SCALE__ONE => "tOne.rgb", // matching against ONE
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(RAND_NOISE, RAND_NOISE, RAND_NOISE)", // matching against NOISE
+                    ColorCombinerMux::ONE => "tOne.rgb",
+                    ColorCombinerMux::NOISE => "vec3(RAND_NOISE, RAND_NOISE, RAND_NOISE)",
                     _ => "tZero.rgb",
                 }
             }
         };
 
         let color_input_b = |input| {
-            if input <= CCMUX::ENVIRONMENT {
+            if input <= ColorCombinerMux::ENVIRONMENT {
                 color_input_common(input)
             } else {
                 match input {
-                    CCMUX::CENTER__SCALE__ONE => "uKeyCenter", // matching against CENTER
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "vec3(uK4, uK4, uK4)", // matching against K4
+                    ColorCombinerMux::CENTER => "uKeyCenter",
+                    ColorCombinerMux::K4 => "vec3(uK4, uK4, uK4)",
                     _ => "tZero.rgb",
                 }
             }
         };
 
         let color_input_c = |input| {
-            if input <= CCMUX::ENVIRONMENT {
+            if input <= ColorCombinerMux::ENVIRONMENT {
                 color_input_common(input)
             } else {
                 match input {
-                    CCMUX::CENTER__SCALE__ONE => "uKeyScale", // matching against SCALE
-                    CCMUX::COMBINED_ALPHA__NOISE__K4 => "tCombColor.aaa", // matching against COMBINED_ALPHA
-                    CCMUX::TEXEL0_ALPHA => "texVal0.aaa",
-                    CCMUX::TEXEL1_ALPHA => "texVal1.aaa",
-                    CCMUX::PRIMITIVE_ALPHA => "uPrimColor.aaa",
-                    CCMUX::SHADE_ALPHA => "vVtxColor.aaa",
-                    CCMUX::ENV_ALPHA => "uEnvColor.aaa",
-                    CCMUX::LOD_FRACTION => "tZero.rgb", // TODO: LOD FRACTION
-                    CCMUX::PRIM_LOD_FRACTION => "vec3(uPrimLodFrac, uPrimLodFrac, uPrimLodFrac)",
-                    CCMUX::K5 => "vec3(uK5, uK5, uK5)",
+                    ColorCombinerMux::SCALE => "uKeyScale",
+                    ColorCombinerMux::COMBINED_ALPHA => "tCombColor.aaa",
+                    ColorCombinerMux::TEXEL0_ALPHA => "texVal0.aaa",
+                    ColorCombinerMux::TEXEL1_ALPHA => "texVal1.aaa",
+                    ColorCombinerMux::PRIMITIVE_ALPHA => "uPrimColor.aaa",
+                    ColorCombinerMux::SHADE_ALPHA => "vVtxColor.aaa",
+                    ColorCombinerMux::ENVIRONMENT_ALPHA => "uEnvColor.aaa",
+                    ColorCombinerMux::LOD_FRACTION => "tZero.rgb", // TODO: LOD FRACTION
+                    ColorCombinerMux::PRIM_LOD_FRAC => {
+                        "vec3(uPrimLodFrac, uPrimLodFrac, uPrimLodFrac)"
+                    }
+                    ColorCombinerMux::K5 => "vec3(uK5, uK5, uK5)",
                     _ => "tZero.rgb",
                 }
             }
         };
 
         let color_input_d = |input| {
-            if input <= CCMUX::ENVIRONMENT {
+            if input <= ColorCombinerMux::ENVIRONMENT {
                 color_input_common(input)
             } else {
                 match input {
-                    CCMUX::CENTER__SCALE__ONE => "tOne.rgb", // matching against ONE
+                    ColorCombinerMux::ONE => "tOne.rgb",
                     _ => "tZero.rgb",
                 }
             }
         };
 
-        let alpha_input_abd = |input| {
-            match input {
-                ACMUX::COMBINED__LOD_FRAC => "tCombColor.a", // matching against COMBINED
-                ACMUX::TEXEL0 => "texVal0.a",
-                ACMUX::TEXEL1 => "texVal1.a",
-                ACMUX::PRIMITIVE => "uPrimColor.a",
-                ACMUX::SHADE => {
-                    if self.get_define_bool("USE_FOG") {
-                        "tOne.a"
-                    } else {
-                        "vVtxColor.a"
-                    }
+        let alpha_input_abd = |input| match input {
+            AlphaCombinerMux::COMBINED => "tCombColor.a",
+            AlphaCombinerMux::TEXEL0 => "texVal0.a",
+            AlphaCombinerMux::TEXEL1 => "texVal1.a",
+            AlphaCombinerMux::PRIMITIVE => "uPrimColor.a",
+            AlphaCombinerMux::SHADE => {
+                if self.get_define_bool("USE_FOG") {
+                    "tOne.a"
+                } else {
+                    "vVtxColor.a"
                 }
-                ACMUX::ENVIRONMENT => "uEnvColor.a",
-                ACMUX::PRIM_LOD_FRAC__ONE => "tOne.a", // matching against ONE
-                _ => "tZero.a",
             }
+            AlphaCombinerMux::ENVIRONMENT => "uEnvColor.a",
+            AlphaCombinerMux::ONE => "tOne.a",
+            _ => "tZero.a",
         };
 
-        let alpha_input_c = |input| {
-            match input {
-                ACMUX::COMBINED__LOD_FRAC => "tZero.a", // TODO: LOD_FRAC
-                ACMUX::TEXEL0 => "texVal0.a",
-                ACMUX::TEXEL1 => "texVal1.a",
-                ACMUX::PRIMITIVE => "uPrimColor.a",
-                ACMUX::SHADE => "vVtxColor.a",
-                ACMUX::ENVIRONMENT => "uEnvColor.a",
-                ACMUX::PRIM_LOD_FRAC__ONE => "uPrimLodFrac",
-                _ => "tZero.a",
-            }
+        let alpha_input_c = |input| match input {
+            AlphaCombinerMux::LOD_FRACTION => "tZero.a",
+            AlphaCombinerMux::TEXEL0 => "texVal0.a",
+            AlphaCombinerMux::TEXEL1 => "texVal1.a",
+            AlphaCombinerMux::PRIMITIVE => "uPrimColor.a",
+            AlphaCombinerMux::SHADE => "vVtxColor.a",
+            AlphaCombinerMux::ENVIRONMENT => "uEnvColor.a",
+            AlphaCombinerMux::PRIM_LOD_FRAC => "uPrimLodFrac",
+            _ => "tZero.a",
         };
 
         format!(

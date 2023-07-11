@@ -2,8 +2,8 @@ use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
 use crate::gbi::defines::{
-    ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeHLayout, RenderModeFlags,
-    TextureFilter, TextureLUT, TextureTile, ZMode,
+    AlphaCombinerMux, ColorCombinerMux, ComponentSize, CycleType, GeometryModes, ImageFormat,
+    OtherModeHLayout, RenderModeFlags, TextureFilter, TextureLUT, TextureTile, ZMode,
 };
 
 use crate::output::{
@@ -33,7 +33,6 @@ use super::{
 
 use crate::gbi::utils::{get_render_mode_from_other_mode_l, get_zmode_from_other_mode_l};
 use crate::models::color::R5G5B5A1;
-use crate::models::color_combiner::{ACMUX, CCMUX};
 use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
 use farbe::image::n64::ImageSize as FarbeImageSize;
 
@@ -755,9 +754,9 @@ impl RDP {
             dsdx >>= 2;
 
             // Color combiner is turned off in copy mode
-            let rhs =
-                (CCMUX::TEXEL0 as usize & 0b111) << 15 | (ACMUX::TEXEL0 as usize & 0b111) << 9;
-            self.combine = CombineParams::decode(0, rhs);
+            let rhs = (ColorCombinerMux::TEXEL0.bits() & 0b111) << 15
+                | (AlphaCombinerMux::TEXEL0.bits() & 0b111) << 9;
+            self.combine = CombineParams::decode(0, rhs as usize);
             self.shader_config_changed = true;
 
             // Per documentation one extra pixel is added in this modes to each edge
@@ -827,8 +826,9 @@ impl RDP {
         }
 
         let saved_combine_mode = self.combine;
-        let rhs = (CCMUX::SHADE as usize & 0b111) << 15 | (ACMUX::SHADE as usize & 0b111) << 9;
-        self.combine = CombineParams::decode(0, rhs);
+        let rhs = (ColorCombinerMux::SHADE.bits() & 0b111) << 15
+            | (AlphaCombinerMux::SHADE.bits() & 0b111) << 9;
+        self.combine = CombineParams::decode(0, rhs as usize);
         self.shader_config_changed = true;
         self.draw_rectangle(rsp, output, ulx, uly, lrx, lry);
         self.combine = saved_combine_mode;
