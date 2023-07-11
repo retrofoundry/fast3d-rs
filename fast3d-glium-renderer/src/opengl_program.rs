@@ -5,13 +5,10 @@ use fast3d::gbi::utils::{
     other_mode_l_uses_texture_edge,
 };
 
-use fast3d::models::{
-    color_combiner::{CombineParams, ACMUX, CCMUX},
-    texture::TextFilt,
-};
+use fast3d::models::color_combiner::{CombineParams, ACMUX, CCMUX};
 
+use fast3d::gbi::defines::{CycleType, TextureFilter};
 use fast3d::output::ShaderConfig;
-use fast3d::rdp::OtherModeHCycleType;
 use std::collections::HashMap;
 
 #[derive(PartialEq, Eq)]
@@ -183,8 +180,7 @@ impl<T> OpenGLProgram<T> {
 
         self.set_define_bool(
             "TWO_CYCLE".to_string(),
-            get_cycle_type_from_other_mode_h(self.other_mode_h)
-                == OtherModeHCycleType::G_CYC_2CYCLE,
+            get_cycle_type_from_other_mode_h(self.other_mode_h) == CycleType::TwoCycle,
         );
         self.set_define_bool(
             "LIGHTING".to_string(),
@@ -281,9 +277,9 @@ impl<T> OpenGLProgram<T> {
 
     fn generate_frag(&mut self) -> String {
         let tex_filter = match get_texture_filter_from_other_mode_h(self.other_mode_h) {
-            TextFilt::G_TF_POINT => "Point",
-            TextFilt::G_TF_AVERAGE => "Average",
-            TextFilt::G_TF_BILERP => "Bilerp",
+            TextureFilter::Point => "Point",
+            TextureFilter::Average => "Average",
+            TextureFilter::Bilerp => "Bilerp",
         };
 
         let color_input_common = |input| match input {

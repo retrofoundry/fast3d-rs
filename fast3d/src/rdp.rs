@@ -1,10 +1,9 @@
-use std::hash::Hasher;
-
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
 use crate::gbi::defines::{
-    g, ComponentSize, CycleType, ImageFormat, OtherModeHLayout, TextureFilter, TextureLUT, ZMode,
+    g, ComponentSize, CycleType, ImageFormat, OtherModeHLayout, RenderModeFlags, TextureFilter,
+    TextureLUT, ZMode,
 };
 
 use crate::output::{
@@ -33,6 +32,7 @@ use super::{
 };
 
 use crate::gbi::defines::rsp_geometry;
+use crate::gbi::utils::{get_render_mode_from_other_mode_l, get_zmode_from_other_mode_l};
 use crate::models::color::R5G5B5A1;
 use crate::models::color_combiner::{ACMUX, CCMUX};
 use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
@@ -86,54 +86,6 @@ impl OutputDimensions {
         height: 0,
         aspect_ratio: 0.0,
     };
-}
-
-pub enum OtherModeLayoutL {
-    // non-render-mode fields
-    G_MDSFT_ALPHACOMPARE = 0,
-    G_MDSFT_ZSRCSEL = 2,
-    // cycle-independent render-mode bits
-    AA_EN = 3,
-    Z_CMP = 4,
-    Z_UPD = 5,
-    IM_RD = 6,
-    CLR_ON_CVG = 7,
-    CVG_DST = 8,
-    ZMODE = 10,
-    CVG_X_ALPHA = 12,
-    ALPHA_CVG_SEL = 13,
-    FORCE_BL = 14,
-    // bit 15 unused, was "TEX_EDGE"
-    // cycle-dependent render-mode bits
-    B_2 = 16,
-    B_1 = 18,
-    M_2 = 20,
-    M_1 = 22,
-    A_2 = 24,
-    A_1 = 26,
-    P_2 = 28,
-    P_1 = 30,
-}
-
-pub enum BlendParamPMColor {
-    G_BL_CLR_IN = 0,
-    G_BL_CLR_MEM = 1,
-    G_BL_CLR_BL = 2,
-    G_BL_CLR_FOG = 3,
-}
-
-enum BlendParamA {
-    G_BL_A_IN = 0,
-    G_BL_A_FOG = 1,
-    G_BL_A_SHADE = 2,
-    G_BL_0 = 3,
-}
-
-pub enum BlendParamB {
-    G_BL_1MA = 0,
-    G_BL_A_MEM = 1,
-    G_BL_1 = 2,
-    G_BL_0 = 3,
 }
 
 pub struct TMEMMapEntry {
@@ -489,12 +441,13 @@ impl RDP {
     fn process_depth_params(&mut self, output: &mut RCPOutputCollector, geometry_mode: u32) {
         let depth_test = geometry_mode & rsp_geometry::g::ZBUFFER != 0;
 
-        let zmode: ZMode = ((self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03) as u8)
-            .try_into()
-            .unwrap();
+        let zmode = get_zmode_from_other_mode_l(self.other_mode_l);
 
         // handle depth compare
-        let depth_compare = if self.other_mode_l & (1 << OtherModeLayoutL::Z_CMP as u32) != 0 {
+        let depth_compare = if get_render_mode_from_other_mode_l(self.other_mode_l)
+            .flags
+            .contains(RenderModeFlags::Z_COMPARE)
+        {
             match zmode {
                 ZMode::Opaque => CompareFunction::Less,
                 ZMode::Interpenetrating => CompareFunction::Less, // TODO: Understand this
@@ -506,7 +459,9 @@ impl RDP {
         };
 
         // handle depth write
-        let depth_write = self.other_mode_l & (1 << OtherModeLayoutL::Z_UPD as u32) != 0;
+        let depth_write = get_render_mode_from_other_mode_l(self.other_mode_l)
+            .flags
+            .contains(RenderModeFlags::Z_UPDATE);
 
         // handle polygon offset (slope scale depth bias)
         let polygon_offset = zmode == ZMode::Decal;

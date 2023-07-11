@@ -1,9 +1,9 @@
-use crate::gbi::defines::{rsp_geometry, AlphaCompare, CycleType, OtherModeHLayout, TextureFilter};
-use crate::rsp::RSPConstants;
-use crate::{
-    output::gfx::{BlendFactor, Face},
-    rdp::{BlendParamB, BlendParamPMColor, OtherModeLayoutL},
+use crate::gbi::defines::{
+    rsp_geometry, AlphaCompare, BlendAlpha2, BlendColor, CycleType, OtherModeHLayout, RenderMode,
+    RenderModeFlags, TextureFilter, ZMode,
 };
+use crate::output::gfx::Face;
+use crate::rsp::RSPConstants;
 
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
     (val >> start_bit) & ((1 << num_bits) - 1)
@@ -17,12 +17,20 @@ pub fn geometry_mode_uses_fog(geometry_mode: u32) -> bool {
     geometry_mode & rsp_geometry::g::FOG > 0
 }
 
+pub fn get_render_mode_from_other_mode_l(other_mode_l: u32) -> RenderMode {
+    RenderMode::try_from(other_mode_l).unwrap()
+}
+
 pub fn other_mode_l_uses_texture_edge(other_mode_l: u32) -> bool {
-    other_mode_l >> (OtherModeLayoutL::CVG_X_ALPHA as u32) & 0x01 == 0x01
+    let render_mode = get_render_mode_from_other_mode_l(other_mode_l);
+    render_mode.flags.contains(RenderModeFlags::CVG_X_ALPHA)
 }
 
 pub fn other_mode_l_uses_alpha(other_mode_l: u32) -> bool {
-    other_mode_l & ((BlendParamB::G_BL_A_MEM as u32) << (OtherModeLayoutL::B_1 as u32)) == 0
+    let render_mode = get_render_mode_from_other_mode_l(other_mode_l);
+    render_mode.blend_cycle1.alpha2 == BlendAlpha2::OneMinusAlpha
+    // TODO: Do we need to check which cycle we're in?
+    // render_mode.blend_cycle2.color2 == BlendColor::Memory && render_mode.blend_cycle2.alpha2 == BlendAlpha2::OneMinusAlpha
 }
 
 pub fn other_mode_l_alpha_compare_threshold(other_mode_l: u32) -> bool {
@@ -30,7 +38,12 @@ pub fn other_mode_l_alpha_compare_threshold(other_mode_l: u32) -> bool {
 }
 
 pub fn other_mode_l_uses_fog(other_mode_l: u32) -> bool {
-    (other_mode_l >> OtherModeLayoutL::P_1 as u32) == BlendParamPMColor::G_BL_CLR_FOG as u32
+    let render_mode = get_render_mode_from_other_mode_l(other_mode_l);
+    render_mode.blend_cycle1.color1 == BlendColor::Fog
+}
+
+pub fn get_zmode_from_other_mode_l(other_mode_l: u32) -> ZMode {
+    get_render_mode_from_other_mode_l(other_mode_l).z_mode
 }
 
 pub fn other_mode_l_alpha_compare_dither(other_mode_l: u32) -> bool {
