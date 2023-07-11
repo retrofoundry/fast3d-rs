@@ -304,7 +304,7 @@ impl<'a> ShaderEntry<'a> {
             },
         ];
 
-        if let Some(_) = frame_uniform_buf {
+        if frame_uniform_buf.is_some() {
             bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,

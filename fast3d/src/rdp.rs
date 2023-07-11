@@ -1,9 +1,10 @@
-use std::hash::Hasher;
-
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
-use crate::gbi::defines::g;
+use crate::gbi::defines::{
+    AlphaCombinerMux, ColorCombinerMux, ComponentSize, CycleType, GeometryModes, ImageFormat,
+    OtherModeHLayout, RenderModeFlags, TextureFilter, TextureLUT, TextureTile, WrapMode, ZMode,
+};
 
 use crate::output::{
     gfx::{BlendState, CompareFunction},
@@ -15,7 +16,7 @@ use super::{
     gbi::{
         defines::Viewport,
         utils::{
-            get_cycle_type_from_other_mode_h, get_textfilter_from_other_mode_h,
+            get_cycle_type_from_other_mode_h, get_texture_filter_from_other_mode_h,
             other_mode_l_uses_alpha, other_mode_l_uses_texture_edge, translate_cull_mode,
         },
     },
@@ -24,16 +25,14 @@ use super::{
         texture::{
             translate_tile_ci4, translate_tile_ci8, translate_tile_i4, translate_tile_i8,
             translate_tile_ia16, translate_tile_ia4, translate_tile_ia8, translate_tile_rgba16,
-            translate_tile_rgba32, translate_tlut, ImageFormat, ImageSize, TextFilt,
-            TextureImageState, TextureLUT,
+            translate_tile_rgba32, translate_tlut, TextureImageState,
         },
         tile_descriptor::TileDescriptor,
     },
 };
 
-use crate::gbi::defines::rsp_geometry;
+use crate::gbi::utils::{get_render_mode_from_other_mode_l, get_zmode_from_other_mode_l};
 use crate::models::color::R5G5B5A1;
-use crate::models::color_combiner::{ACMUX, CCMUX};
 use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
 use farbe::image::n64::ImageSize as FarbeImageSize;
 
@@ -85,91 +84,6 @@ impl OutputDimensions {
         height: 0,
         aspect_ratio: 0.0,
     };
-}
-
-pub enum OtherModeLayoutL {
-    // non-render-mode fields
-    G_MDSFT_ALPHACOMPARE = 0,
-    G_MDSFT_ZSRCSEL = 2,
-    // cycle-independent render-mode bits
-    AA_EN = 3,
-    Z_CMP = 4,
-    Z_UPD = 5,
-    IM_RD = 6,
-    CLR_ON_CVG = 7,
-    CVG_DST = 8,
-    ZMODE = 10,
-    CVG_X_ALPHA = 12,
-    ALPHA_CVG_SEL = 13,
-    FORCE_BL = 14,
-    // bit 15 unused, was "TEX_EDGE"
-    // cycle-dependent render-mode bits
-    B_2 = 16,
-    B_1 = 18,
-    M_2 = 20,
-    M_1 = 22,
-    A_2 = 24,
-    A_1 = 26,
-    P_2 = 28,
-    P_1 = 30,
-}
-
-pub enum OtherModeH_Layout {
-    G_MDSFT_BLENDMASK = 0,
-    G_MDSFT_ALPHADITHER = 4,
-    G_MDSFT_RGBDITHER = 6,
-    G_MDSFT_COMBKEY = 8,
-    G_MDSFT_TEXTCONV = 9,
-    G_MDSFT_TEXTFILT = 12,
-    G_MDSFT_TEXTLUT = 14,
-    G_MDSFT_TEXTLOD = 16,
-    G_MDSFT_TEXTDETAIL = 17,
-    G_MDSFT_TEXTPERSP = 19,
-    G_MDSFT_CYCLETYPE = 20,
-    G_MDSFT_COLORDITHER = 22,
-    G_MDSFT_PIPELINE = 23,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OtherModeHCycleType {
-    G_CYC_1CYCLE = 0,
-    G_CYC_2CYCLE = 1,
-    G_CYC_COPY = 2,
-    G_CYC_FILL = 3,
-}
-
-enum ZMode {
-    ZMODE_OPA = 0,
-    ZMODE_INTER = 1,
-    ZMODE_XLU = 2, // translucent
-    ZMODE_DEC = 3,
-}
-
-pub enum BlendParamPMColor {
-    G_BL_CLR_IN = 0,
-    G_BL_CLR_MEM = 1,
-    G_BL_CLR_BL = 2,
-    G_BL_CLR_FOG = 3,
-}
-
-enum BlendParamA {
-    G_BL_A_IN = 0,
-    G_BL_A_FOG = 1,
-    G_BL_A_SHADE = 2,
-    G_BL_0 = 3,
-}
-
-pub enum BlendParamB {
-    G_BL_1MA = 0,
-    G_BL_A_MEM = 1,
-    G_BL_1 = 2,
-    G_BL_0 = 3,
-}
-
-pub enum AlphaCompare {
-    G_AC_NONE = 0,
-    G_AC_THRESHOLD = 1,
-    G_AC_DITHER = 3,
 }
 
 pub struct TMEMMapEntry {
@@ -310,7 +224,7 @@ impl RDP {
         // First, verify that we're loading the whole texture.
         assert!(uls == 0 && ult == 0);
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, g::tx::LOADTILE);
+        assert_eq!(tile, TextureTile::LOADTILE.bits());
 
         let tile = &mut self.tile_descriptors[tile as usize];
         self.tmem_map.insert(
@@ -332,7 +246,7 @@ impl RDP {
         // First, verify that we're loading the whole texture.
         assert!(uls == 0 && ult == 0);
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, g::tx::LOADTILE);
+        assert_eq!(tile, TextureTile::LOADTILE.bits());
 
         let tile = &mut self.tile_descriptors[tile as usize];
         self.tmem_map.insert(
@@ -352,8 +266,8 @@ impl RDP {
     // TODO: Verify this method against a game that uses TLUTs
     pub fn load_tlut(&mut self, tile: u8, high_index: u16) {
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, g::tx::LOADTILE);
-        assert_eq!(self.texture_image_state.size, ImageSize::G_IM_SIZ_16b as u8); // TLUTs are always 16-bit (so far)
+        assert_eq!(tile, TextureTile::LOADTILE.bits());
+        assert_eq!(self.texture_image_state.size, ComponentSize::Bits16 as u8); // TLUTs are always 16-bit (so far)
 
         assert!(
             self.tile_descriptors[tile as usize].tmem == 256
@@ -399,48 +313,48 @@ impl RDP {
         };
 
         let texture = match (format << 4) | size {
-            x if x
-                == ((ImageFormat::G_IM_FMT_RGBA as u32) << 4 | ImageSize::G_IM_SIZ_16b as u32) =>
-            {
+            x if x == ((ImageFormat::Rgba as u32) << 4 | ComponentSize::Bits16 as u32) => {
                 translate_tile_rgba16(texture_data, width, height)
             }
-            x if x
-                == ((ImageFormat::G_IM_FMT_RGBA as u32) << 4 | ImageSize::G_IM_SIZ_32b as u32) =>
-            {
+            x if x == ((ImageFormat::Rgba as u32) << 4 | ComponentSize::Bits32 as u32) => {
                 translate_tile_rgba32(texture_data, width, height)
             }
-            x if x == ((ImageFormat::G_IM_FMT_IA as u32) << 4 | ImageSize::G_IM_SIZ_4b as u32) => {
+            x if x == ((ImageFormat::Ia as u32) << 4 | ComponentSize::Bits4 as u32) => {
                 translate_tile_ia4(texture_data, width, height)
             }
-            x if x == ((ImageFormat::G_IM_FMT_IA as u32) << 4 | ImageSize::G_IM_SIZ_8b as u32) => {
+            x if x == ((ImageFormat::Ia as u32) << 4 | ComponentSize::Bits8 as u32) => {
                 translate_tile_ia8(texture_data, width, height)
             }
-            x if x == ((ImageFormat::G_IM_FMT_IA as u32) << 4 | ImageSize::G_IM_SIZ_16b as u32) => {
+            x if x == ((ImageFormat::Ia as u32) << 4 | ComponentSize::Bits16 as u32) => {
                 translate_tile_ia16(texture_data, width, height)
             }
-            x if x == ((ImageFormat::G_IM_FMT_I as u32) << 4 | ImageSize::G_IM_SIZ_4b as u32) => {
+            x if x == ((ImageFormat::I as u32) << 4 | ComponentSize::Bits4 as u32) => {
                 translate_tile_i4(texture_data, width, height)
             }
-            x if x == ((ImageFormat::G_IM_FMT_I as u32) << 4 | ImageSize::G_IM_SIZ_8b as u32) => {
+            x if x == ((ImageFormat::I as u32) << 4 | ComponentSize::Bits8 as u32) => {
                 translate_tile_i8(texture_data, width, height)
             }
-            x if x == ((ImageFormat::G_IM_FMT_CI as u32) << 4 | ImageSize::G_IM_SIZ_4b as u32) => {
+            x if x == ((ImageFormat::Ci as u32) << 4 | ComponentSize::Bits4 as u32) => {
                 let pal_addr = self
                     .tmem_map
                     .get(&(u16::MAX - tmem_index as u16))
                     .unwrap()
                     .address;
-                let texlut: TextureLUT = TextureLUT::from_u32((self.other_mode_h >> 14) & 0x3);
+                let texlut: TextureLUT = (((self.other_mode_h >> 14) & 0x3) as u8)
+                    .try_into()
+                    .unwrap();
                 let palette = translate_tlut(pal_addr, FarbeImageSize::S4B, &texlut);
                 translate_tile_ci4(texture_data, &palette, width, height)
             }
-            x if x == ((ImageFormat::G_IM_FMT_CI as u32) << 4 | ImageSize::G_IM_SIZ_8b as u32) => {
+            x if x == ((ImageFormat::Ci as u32) << 4 | ComponentSize::Bits8 as u32) => {
                 let pal_addr = self
                     .tmem_map
                     .get(&(u16::MAX - tmem_index as u16))
                     .unwrap()
                     .address;
-                let texlut: TextureLUT = TextureLUT::from_u32((self.other_mode_h >> 14) & 0x3);
+                let texlut: TextureLUT = (((self.other_mode_h >> 14) & 0x3) as u8)
+                    .try_into()
+                    .unwrap();
                 let palette = translate_tlut(pal_addr, FarbeImageSize::S8B, &texlut);
                 translate_tile_ci8(texture_data, &palette, width, height)
             }
@@ -464,7 +378,7 @@ impl RDP {
     }
 
     pub fn uses_texture1(&self) -> bool {
-        get_cycle_type_from_other_mode_h(self.other_mode_h) == OtherModeHCycleType::G_CYC_2CYCLE
+        get_cycle_type_from_other_mode_h(self.other_mode_h) == CycleType::TwoCycle
             && self.combine.uses_texture1()
     }
 
@@ -499,12 +413,12 @@ impl RDP {
 
                 let tile_descriptor = self.tile_descriptors[(rsp.texture_state.tile + i) as usize];
                 let linear_filter =
-                    get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT;
+                    get_texture_filter_from_other_mode_h(self.other_mode_h) != TextureFilter::Point;
                 output.set_sampler_parameters(
                     i as usize,
                     linear_filter,
-                    tile_descriptor.cm_s as u32,
-                    tile_descriptor.cm_t as u32,
+                    tile_descriptor.clamp_s,
+                    tile_descriptor.clamp_t,
                 );
             }
         }
@@ -522,29 +436,37 @@ impl RDP {
 
     // MARK: - Blend
 
-    fn process_depth_params(&mut self, output: &mut RCPOutputCollector, geometry_mode: u32) {
-        let depth_test = geometry_mode & rsp_geometry::g::ZBUFFER != 0;
+    fn process_depth_params(
+        &mut self,
+        output: &mut RCPOutputCollector,
+        geometry_mode: GeometryModes,
+    ) {
+        let depth_test = geometry_mode.contains(GeometryModes::ZBUFFER);
 
-        let zmode: u32 = self.other_mode_l >> (OtherModeLayoutL::ZMODE as u32) & 0x03;
+        let zmode = get_zmode_from_other_mode_l(self.other_mode_l);
 
         // handle depth compare
-        let depth_compare = if self.other_mode_l & (1 << OtherModeLayoutL::Z_CMP as u32) != 0 {
+        let depth_compare = if get_render_mode_from_other_mode_l(self.other_mode_l)
+            .flags
+            .contains(RenderModeFlags::Z_COMPARE)
+        {
             match zmode {
-                x if x == ZMode::ZMODE_OPA as u32 => CompareFunction::Less,
-                x if x == ZMode::ZMODE_INTER as u32 => CompareFunction::Less, // TODO: Understand this
-                x if x == ZMode::ZMODE_XLU as u32 => CompareFunction::Less,
-                x if x == ZMode::ZMODE_DEC as u32 => CompareFunction::LessEqual,
-                _ => panic!("Unknown ZMode"),
+                ZMode::Opaque => CompareFunction::Less,
+                ZMode::Interpenetrating => CompareFunction::Less, // TODO: Understand this
+                ZMode::Translucent => CompareFunction::Less,
+                ZMode::Decal => CompareFunction::LessEqual,
             }
         } else {
             CompareFunction::Always
         };
 
         // handle depth write
-        let depth_write = self.other_mode_l & (1 << OtherModeLayoutL::Z_UPD as u32) != 0;
+        let depth_write = get_render_mode_from_other_mode_l(self.other_mode_l)
+            .flags
+            .contains(RenderModeFlags::Z_UPDATE);
 
         // handle polygon offset (slope scale depth bias)
-        let polygon_offset = zmode == ZMode::ZMODE_DEC as u32;
+        let polygon_offset = zmode == ZMode::Decal;
 
         output.set_depth_stencil_params(depth_test, depth_write, depth_compare, polygon_offset);
     }
@@ -552,7 +474,7 @@ impl RDP {
     pub fn update_render_state(
         &mut self,
         output: &mut RCPOutputCollector,
-        geometry_mode: u32,
+        geometry_mode: GeometryModes,
         rsp_constants: &RSPConstants,
     ) {
         let cull_mode = translate_cull_mode(geometry_mode, rsp_constants);
@@ -626,6 +548,7 @@ impl RDP {
         self.shader_config_changed = true;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_tile(
         &mut self,
         tile: u8,
@@ -634,8 +557,8 @@ impl RDP {
         line: u16,
         tmem: u16,
         palette: u8,
-        cm_t: u8,
-        cm_s: u8,
+        clamp_t: WrapMode,
+        clamp_s: WrapMode,
         mask_t: u8,
         mask_s: u8,
         shift_t: u8,
@@ -648,10 +571,10 @@ impl RDP {
         tile.line = line;
         tile.tmem = tmem;
         tile.palette = palette;
-        tile.cm_t = cm_t;
+        tile.clamp_t = clamp_t;
         tile.mask_t = mask_t;
         tile.shift_t = shift_t;
-        tile.cm_s = cm_s;
+        tile.clamp_s = clamp_s;
         tile.mask_s = mask_s;
         tile.shift_s = shift_s;
 
@@ -735,8 +658,17 @@ impl RDP {
         let vertex_array = [vertex1, vertex2, vertex3];
 
         // Don't draw anything if both tris are being culled.
-        if (rsp.geometry_mode & rsp.constants.G_CULL_BOTH) == rsp.constants.G_CULL_BOTH {
-            return;
+        unsafe {
+            // We do unchecked comparisons because the values set in rsp.constants are per GBI
+            // and do not appear in the general GeometryModes enum
+            if rsp
+                .geometry_mode
+                .contains(GeometryModes::from_bits_unchecked(
+                    rsp.constants.geomode_cull_both_val,
+                ))
+            {
+                return;
+            }
         }
 
         self.update_render_state(output, rsp.geometry_mode, &rsp.constants);
@@ -785,7 +717,7 @@ impl RDP {
                 let mut u = (vertex.uv[0] - (current_tile.uls as f32) * 8.0) / 32.0;
                 let mut v = (vertex.uv[1] - (current_tile.ult as f32) * 8.0) / 32.0;
 
-                if get_textfilter_from_other_mode_h(self.other_mode_h) != TextFilt::G_TF_POINT {
+                if get_texture_filter_from_other_mode_h(self.other_mode_h) != TextureFilter::Point {
                     u += 0.5;
                     v += 0.5;
                 }
@@ -801,6 +733,7 @@ impl RDP {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_texture_rectangle(
         &mut self,
         rsp: &mut RSP,
@@ -817,17 +750,15 @@ impl RDP {
         flipped: bool,
     ) {
         let saved_combine_mode = self.combine;
-        if (self.other_mode_h >> OtherModeH_Layout::G_MDSFT_CYCLETYPE as u32) & 0x03
-            == OtherModeHCycleType::G_CYC_COPY as u32
-        {
+        if get_cycle_type_from_other_mode_h(self.other_mode_h) == CycleType::Copy {
             // Per RDP Command Summary Set Tile's shift s and this dsdx should be set to 4 texels
             // Divide by 4 to get 1 instead
             dsdx >>= 2;
 
             // Color combiner is turned off in copy mode
-            let rhs =
-                (CCMUX::TEXEL0 as usize & 0b111) << 15 | (ACMUX::TEXEL0 as usize & 0b111) << 9;
-            self.combine = CombineParams::decode(0, rhs);
+            let rhs = (ColorCombinerMux::TEXEL0.bits() & 0b111) << 15
+                | (AlphaCombinerMux::TEXEL0.bits() & 0b111) << 9;
+            self.combine = CombineParams::decode(0, rhs as usize);
             self.shader_config_changed = true;
 
             // Per documentation one extra pixel is added in this modes to each edge
@@ -885,9 +816,7 @@ impl RDP {
         }
 
         let cycle_type = get_cycle_type_from_other_mode_h(self.other_mode_h);
-        if cycle_type == OtherModeHCycleType::G_CYC_COPY
-            || cycle_type == OtherModeHCycleType::G_CYC_FILL
-        {
+        if cycle_type == CycleType::Copy || cycle_type == CycleType::Fill {
             // Per documentation one extra pixel is added in this modes to each edge
             lrx += 1 << 2;
             lry += 1 << 2;
@@ -899,8 +828,9 @@ impl RDP {
         }
 
         let saved_combine_mode = self.combine;
-        let rhs = (CCMUX::SHADE as usize & 0b111) << 15 | (ACMUX::SHADE as usize & 0b111) << 9;
-        self.combine = CombineParams::decode(0, rhs);
+        let rhs = (ColorCombinerMux::SHADE.bits() & 0b111) << 15
+            | (AlphaCombinerMux::SHADE.bits() & 0b111) << 9;
+        self.combine = CombineParams::decode(0, rhs as usize);
         self.shader_config_changed = true;
         self.draw_rectangle(rsp, output, ulx, uly, lrx, lry);
         self.combine = saved_combine_mode;
@@ -921,10 +851,9 @@ impl RDP {
         let saved_other_mode_h = self.other_mode_h;
         let cycle_type = get_cycle_type_from_other_mode_h(self.other_mode_h);
 
-        if cycle_type == OtherModeHCycleType::G_CYC_COPY {
-            self.other_mode_h = (self.other_mode_h
-                & !(3 << OtherModeH_Layout::G_MDSFT_TEXTFILT as u32))
-                | (TextFilt::G_TF_POINT as u32);
+        if cycle_type == CycleType::Copy {
+            self.other_mode_h = (self.other_mode_h & !(3 << OtherModeHLayout::TEXT_FILT.bits()))
+                | (TextureFilter::Point as u32);
             self.shader_config_changed = true;
         }
 
@@ -980,7 +909,7 @@ impl RDP {
         let geometry_mode_saved = rsp.geometry_mode;
 
         self.viewport = default_viewport;
-        rsp.geometry_mode = 0;
+        rsp.geometry_mode = GeometryModes::empty();
         self.shader_config_changed = true;
 
         self.draw_triangles(
@@ -1004,7 +933,7 @@ impl RDP {
         self.viewport = viewport_saved;
         self.shader_config_changed = true;
 
-        if cycle_type == OtherModeHCycleType::G_CYC_COPY {
+        if cycle_type == CycleType::Copy {
             self.other_mode_h = saved_other_mode_h;
             self.shader_config_changed = true;
         }

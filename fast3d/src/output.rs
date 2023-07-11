@@ -1,3 +1,4 @@
+use crate::gbi::defines::{GeometryModes, WrapMode};
 use crate::output::models::{
     OutputFogParams, OutputSampler, OutputStencil, OutputUniforms, OutputUniformsBlend,
     OutputUniformsCombine, OutputVBO,
@@ -23,7 +24,7 @@ pub struct ShaderId(pub ShaderConfig);
 pub struct ShaderConfig {
     pub other_mode_h: u32,
     pub other_mode_l: u32,
-    pub geometry_mode: u32,
+    pub geometry_mode: GeometryModes,
     pub combine: CombineParams,
 }
 
@@ -32,7 +33,7 @@ impl ShaderConfig {
         Self {
             other_mode_h: 0,
             other_mode_l: 0,
-            geometry_mode: 0,
+            geometry_mode: GeometryModes::empty(),
             combine: CombineParams::ZERO,
         }
     };
@@ -143,7 +144,7 @@ impl RCPOutputCollector {
         &mut self,
         other_mode_h: u32,
         other_mode_l: u32,
-        geometry_mode: u32,
+        geometry_mode: GeometryModes,
         combine: CombineParams,
     ) {
         let draw_call = self.current_draw_call();
@@ -167,8 +168,8 @@ impl RCPOutputCollector {
         &mut self,
         tile: usize,
         linear_filter: bool,
-        clamp_s: u32,
-        clamp_t: u32,
+        clamp_s: WrapMode,
+        clamp_t: WrapMode,
     ) {
         let draw_call = self.current_draw_call();
         draw_call.samplers[tile] = Some(OutputSampler {
@@ -224,6 +225,7 @@ impl RCPOutputCollector {
         draw_call.cull_mode = cull_mode;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_uniforms(
         &mut self,
         fog_color: glam::Vec4,

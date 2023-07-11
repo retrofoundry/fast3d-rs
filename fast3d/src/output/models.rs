@@ -1,10 +1,10 @@
-use crate::models::texture::{ImageFormat, ImageSize};
+use crate::gbi::defines::{ComponentSize, ImageFormat, WrapMode};
 use crate::output::gfx::CompareFunction;
 
 pub struct OutputTexture {
     pub game_address: usize,
     pub format: ImageFormat,
-    pub size: ImageSize,
+    pub size: ComponentSize,
 
     // properties from tile descriptor
     pub width: u32,
@@ -20,10 +20,11 @@ pub struct OutputTexture {
 }
 
 impl OutputTexture {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         game_address: usize,
         format: ImageFormat,
-        size: ImageSize,
+        size: ComponentSize,
         width: u32,
         height: u32,
         uls: u16,
@@ -48,8 +49,8 @@ impl OutputTexture {
 pub struct OutputSampler {
     pub tile: usize,
     pub linear_filter: bool,
-    pub clamp_s: u32,
-    pub clamp_t: u32,
+    pub clamp_s: WrapMode,
+    pub clamp_t: WrapMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

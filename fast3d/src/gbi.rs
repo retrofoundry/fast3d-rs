@@ -32,7 +32,7 @@ pub trait GBICommand {
 
 #[derive(Default)]
 pub struct GBICommandRegistry {
-    gbi_opcode_table: HashMap<usize, Box<dyn GBICommand>>,
+    gbi_opcode_table: HashMap<u8, Box<dyn GBICommand>>,
 }
 
 impl GBICommandRegistry {
@@ -49,7 +49,7 @@ impl GBICommandRegistry {
         f3dzex2::setup(self, rsp);
     }
 
-    pub fn register<G: GBICommand>(&mut self, opcode: usize, cmd: G)
+    pub fn register<G: GBICommand>(&mut self, opcode: u8, cmd: G)
     where
         G: 'static,
     {
@@ -57,7 +57,8 @@ impl GBICommandRegistry {
         self.gbi_opcode_table.insert(opcode, cmd);
     }
 
-    pub fn handler(&self, opcode: &usize) -> Option<&Box<dyn GBICommand>> {
-        self.gbi_opcode_table.get(opcode)
+    pub fn handler(&self, opcode: &u8) -> Option<&dyn GBICommand> {
+        let result = self.gbi_opcode_table.get(opcode);
+        result.map(|x| &**x)
     }
 }

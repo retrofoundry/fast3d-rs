@@ -10,19 +10,27 @@ use crate::defines::{
     VertexWithFogUniforms,
 };
 use crate::wgpu_program::ShaderVersion;
-use fast3d::output::{IntermediateDrawCall, RCPOutputCollector};
-use fast3d::{
-    gbi::defines::g,
-    output::{
-        gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
-        models::{OutputSampler, OutputStencil, OutputTexture},
-        ShaderConfig, ShaderId,
-    },
+use fast3d::gbi::defines::WrapMode;
+use fast3d::output::{
+    gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
+    models::{OutputSampler, OutputStencil, OutputTexture},
+    ShaderConfig, ShaderId,
 };
+use fast3d::output::{IntermediateDrawCall, RCPOutputCollector};
 
 use super::wgpu_program::WgpuProgram;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+type BindGroupConfig = (ShaderId, wgpu::BufferAddress, wgpu::BufferAddress);
+type BindGroupBufferConfig = (wgpu::BufferAddress, wgpu::BufferAddress);
+type BindGroupConfigOutput = (
+    Vec<u64>,
+    Vec<BindGroupConfig>,
+    Vec<BindGroupConfig>,
+    Vec<BindGroupBufferConfig>,
+    Vec<Option<BindGroupBufferConfig>>,
+);
 
 pub struct WgpuDrawCall {
     pub shader_id: ShaderId,
@@ -479,43 +487,26 @@ impl<'a> WgpuRenderer<'a> {
         &mut self,
         queue: &wgpu::Queue,
         draw_calls: &[IntermediateDrawCall],
-    ) -> (
-        Vec<u64>,
-        Vec<(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)>,
-        Vec<(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)>,
-        Vec<(wgpu::BufferAddress, wgpu::BufferAddress)>,
-        Vec<Option<(wgpu::BufferAddress, wgpu::BufferAddress)>>,
-    ) {
+    ) -> BindGroupConfigOutput {
         let mut current_vbo_offset = 0;
         let mut vertex_buffer_content: Vec<u8> = Vec::new();
         let mut vertex_buffer_offsets: Vec<u64> = Vec::new();
 
         let mut current_vertex_uniform_offset = 0;
         let mut vertex_uniform_buffer_content: Vec<u8> = Vec::new();
-        let mut vertex_uniform_buffer_configs: Vec<(
-            ShaderId,
-            wgpu::BufferAddress,
-            wgpu::BufferAddress,
-        )> = Vec::new();
+        let mut vertex_uniform_buffer_configs: Vec<BindGroupConfig> = Vec::new();
 
         let mut current_blend_uniform_offset = 0;
         let mut blend_uniform_buffer_content: Vec<u8> = Vec::new();
-        let mut blend_uniform_buffer_configs: Vec<(
-            ShaderId,
-            wgpu::BufferAddress,
-            wgpu::BufferAddress,
-        )> = Vec::new();
+        let mut blend_uniform_buffer_configs: Vec<BindGroupConfig> = Vec::new();
 
         let mut current_combine_uniform_offset = 0;
         let mut combine_uniform_buffer_content: Vec<u8> = Vec::new();
-        let mut combine_uniform_buffer_configs: Vec<(wgpu::BufferAddress, wgpu::BufferAddress)> =
-            Vec::new();
+        let mut combine_uniform_buffer_configs: Vec<BindGroupBufferConfig> = Vec::new();
 
         let mut current_frame_uniform_offset = 0;
         let mut frame_uniform_buffer_content: Vec<u8> = Vec::new();
-        let mut frame_uniform_buffer_configs: Vec<
-            Option<(wgpu::BufferAddress, wgpu::BufferAddress)>,
-        > = Vec::new();
+        let mut frame_uniform_buffer_configs: Vec<Option<BindGroupBufferConfig>> = Vec::new();
 
         for draw_call in draw_calls {
             let shader_entry = self.shader_cache.get(&draw_call.shader_id).unwrap();
@@ -741,10 +732,10 @@ impl<'a> WgpuRenderer<'a> {
     fn configure_uniform_bind_groups(
         &mut self,
         device: &wgpu::Device,
-        vertex_uniform_buffer_configs: &[(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)],
-        blend_uniform_buffer_configs: &[(ShaderId, wgpu::BufferAddress, wgpu::BufferAddress)],
-        combine_uniform_buffer_configs: &[(wgpu::BufferAddress, wgpu::BufferAddress)],
-        frame_uniform_buffer_configs: &[Option<(wgpu::BufferAddress, wgpu::BufferAddress)>],
+        vertex_uniform_buffer_configs: &[BindGroupConfig],
+        blend_uniform_buffer_configs: &[BindGroupConfig],
+        combine_uniform_buffer_configs: &[BindGroupBufferConfig],
+        frame_uniform_buffer_configs: &[Option<BindGroupBufferConfig>],
     ) {
         // Handle vertex uniform buffer bind groups
         for (shader_id, offset, size) in vertex_uniform_buffer_configs {
@@ -820,6 +811,7 @@ impl<'a> WgpuRenderer<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn configure_pipeline(
         &mut self,
         device: &wgpu::Device,
@@ -905,12 +897,10 @@ impl<'a> WgpuRenderer<'a> {
     }
 }
 
-fn clamp_to_wgpu(val: u32) -> wgpu::AddressMode {
-    if val & g::tx::CLAMP as u32 != 0 {
+fn clamp_to_wgpu(clamp: WrapMode) -> wgpu::AddressMode {
+    if clamp == WrapMode::Clamp {
         return wgpu::AddressMode::ClampToEdge;
-    }
-
-    if val & g::tx::MIRROR as u32 != 0 {
+    } else if clamp == WrapMode::MirrorRepeat {
         return wgpu::AddressMode::MirrorRepeat;
     }
 

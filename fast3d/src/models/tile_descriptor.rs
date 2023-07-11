@@ -1,4 +1,4 @@
-use crate::models::texture::{ImageFormat, ImageSize};
+use crate::gbi::defines::{ComponentSize, ImageFormat, WrapMode};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct TileDescriptor {
@@ -8,7 +8,7 @@ pub struct TileDescriptor {
     pub lrt: u16,
     // Set by G_SETTILE
     pub format: ImageFormat,
-    pub size: ImageSize,
+    pub size: ComponentSize,
     /// Size of 1 line (s-axis) of texture tile (9bit precision, 0 - 511)
     pub line: u16,
     /// Address of texture tile origin (9bit precision, 0 - 511)
@@ -18,13 +18,13 @@ pub struct TileDescriptor {
     /// Position of palette for 4bit color index textures (4bit precision, 0 - 15)
     pub palette: u8,
     /// s-axis mirror, wrap, clamp flags
-    pub cm_s: u8,
+    pub clamp_s: WrapMode,
     /// s-axis mask (4bit precision, 0 - 15)
     pub mask_s: u8,
     /// s-coordinate shift value
     pub shift_s: u8,
     /// t-axis mirror, wrap, clamp flags
-    pub cm_t: u8,
+    pub clamp_t: WrapMode,
     /// t-axis mask (4bit precision, 0 - 15)
     pub mask_t: u8,
     /// t-coordinate shift value
@@ -37,37 +37,37 @@ impl TileDescriptor {
         ult: 0,
         lrs: 0,
         lrt: 0,
-        format: ImageFormat::G_IM_FMT_YUV,
-        size: ImageSize::G_IM_SIZ_4b,
+        format: ImageFormat::Yuv,
+        size: ComponentSize::Bits4,
         line: 0,
         tmem: 0,
         tmem_index: 0,
         palette: 0,
-        cm_s: 0,
+        clamp_s: WrapMode::Repeat,
         mask_s: 0,
         shift_s: 0,
-        cm_t: 0,
+        clamp_t: WrapMode::Repeat,
         mask_t: 0,
         shift_t: 0,
     };
 
     pub fn set_format(&mut self, format: u8) {
         match format {
-            0 => self.format = ImageFormat::G_IM_FMT_RGBA,
-            1 => self.format = ImageFormat::G_IM_FMT_YUV,
-            2 => self.format = ImageFormat::G_IM_FMT_CI,
-            3 => self.format = ImageFormat::G_IM_FMT_IA,
-            4 => self.format = ImageFormat::G_IM_FMT_I,
+            0 => self.format = ImageFormat::Rgba,
+            1 => self.format = ImageFormat::Yuv,
+            2 => self.format = ImageFormat::Ci,
+            3 => self.format = ImageFormat::Ia,
+            4 => self.format = ImageFormat::I,
             _ => panic!("Invalid format: {}", format),
         }
     }
 
     pub fn set_size(&mut self, size: u8) {
         match size {
-            0 => self.size = ImageSize::G_IM_SIZ_4b,
-            1 => self.size = ImageSize::G_IM_SIZ_8b,
-            2 => self.size = ImageSize::G_IM_SIZ_16b,
-            3 => self.size = ImageSize::G_IM_SIZ_32b,
+            0 => self.size = ComponentSize::Bits4,
+            1 => self.size = ComponentSize::Bits8,
+            2 => self.size = ComponentSize::Bits16,
+            3 => self.size = ComponentSize::Bits32,
             _ => panic!("Invalid size: {}", size),
         }
     }

@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
 use crate::opengl_program::ShaderVersion;
+use fast3d::gbi::defines::WrapMode;
 use fast3d::output::{ShaderConfig, ShaderId};
 use fast3d::{
-    gbi::defines::g,
     output::{
         gfx::{BlendComponent, BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
         models::{OutputFogParams, OutputSampler, OutputStencil, OutputTexture, OutputUniforms},
@@ -234,12 +234,10 @@ fn blend_factor_to_glium(factor: BlendFactor) -> LinearBlendingFactor {
     }
 }
 
-fn clamp_to_glium(clamp: u32) -> SamplerWrapFunction {
-    if clamp & g::tx::CLAMP as u32 != 0 {
+fn clamp_to_glium(clamp: WrapMode) -> SamplerWrapFunction {
+    if clamp == WrapMode::Clamp {
         return SamplerWrapFunction::Clamp;
-    }
-
-    if clamp & g::tx::MIRROR as u32 != 0 {
+    } else if clamp == WrapMode::MirrorRepeat {
         return SamplerWrapFunction::Mirror;
     }
 
@@ -507,6 +505,7 @@ impl<'a> GliumRenderer<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_triangles(
         &self,
         display: &Display,

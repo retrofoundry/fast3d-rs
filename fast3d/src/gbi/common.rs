@@ -1,3 +1,4 @@
+use crate::gbi::defines::{OpCode, WrapMode};
 use crate::gbi::macros::gbi_command;
 use crate::gbi::utils::get_cmd;
 use crate::gbi::{GBICommand, GBICommandParams, GBICommandRegistry, GBIResult};
@@ -8,39 +9,37 @@ use crate::models::texture::TextureImageState;
 use crate::rdp::SCREEN_HEIGHT;
 use crate::rsp::RSP;
 
-use super::defines::g;
-
 pub struct Common;
 impl Common {
     pub fn setup(gbi: &mut GBICommandRegistry, _rsp: &mut RSP) {
-        gbi.register(g::NOOP as usize, RDPNoOp);
-        gbi.register(g::set::COLORIMG as usize, RDPSetColorImage);
-        gbi.register(g::set::DEPTHIMG as usize, RDPSetDepthImage);
-        gbi.register(g::set::TEXIMG as usize, RDPSetTextureImage);
-        gbi.register(g::set::COMBINE as usize, RDPSetCombine);
-        gbi.register(g::set::TILE as usize, RDPSetTile);
-        gbi.register(g::set::TILESIZE as usize, RDPSetTileSize);
-        gbi.register(g::load::TILE as usize, RDPLoadTile);
-        gbi.register(g::load::BLOCK as usize, RDPLoadBlock);
-        gbi.register(g::load::TLUT as usize, RDPLoadTLUT);
-        gbi.register(g::set::ENVCOLOR as usize, RDPSetEnvColor);
-        gbi.register(g::set::PRIMCOLOR as usize, RDPSetPrimColor);
-        gbi.register(g::set::BLENDCOLOR as usize, RDPSetBlendColor);
-        gbi.register(g::set::FOGCOLOR as usize, RDPSetFogColor);
-        gbi.register(g::set::FILLCOLOR as usize, RDPSetFillColor);
-        gbi.register(g::RDPSETOTHERMODE as usize, RDPSetOtherMode);
+        gbi.register(OpCode::NOOP.bits(), RDPNoOp);
+        gbi.register(OpCode::TEXRECT.bits(), RDPTextureRectangle);
+        gbi.register(OpCode::TEXRECTFLIP.bits(), RDPTextureRectangle);
+        gbi.register(OpCode::FILLRECT.bits(), RDPFillRectangle);
+        gbi.register(OpCode::SET_COLORIMG.bits(), RDPSetColorImage);
+        gbi.register(OpCode::SET_DEPTHIMG.bits(), RDPSetDepthImage);
+        gbi.register(OpCode::SET_TEXIMG.bits(), RDPSetTextureImage);
+        gbi.register(OpCode::SET_COMBINE.bits(), RDPSetCombine);
+        gbi.register(OpCode::SET_TILE.bits(), RDPSetTile);
+        gbi.register(OpCode::SET_TILESIZE.bits(), RDPSetTileSize);
+        gbi.register(OpCode::SET_ENVCOLOR.bits(), RDPSetEnvColor);
+        gbi.register(OpCode::SET_PRIMCOLOR.bits(), RDPSetPrimColor);
+        gbi.register(OpCode::SET_BLENDCOLOR.bits(), RDPSetBlendColor);
+        gbi.register(OpCode::SET_FOGCOLOR.bits(), RDPSetFogColor);
+        gbi.register(OpCode::SET_FILLCOLOR.bits(), RDPSetFillColor);
         // TODO: PRIM_DEPTH
-        gbi.register(g::set::SCISSOR as usize, RDPSetScissor);
-        gbi.register(g::set::CONVERT as usize, RDPSetConvert);
-        gbi.register(g::set::KEYR as usize, RDPSetKeyR);
-        gbi.register(g::set::KEYGB as usize, RDPSetKeyGB);
-        gbi.register(g::TEXRECT as usize, RDPTextureRectangle);
-        gbi.register(g::TEXRECTFLIP as usize, RDPTextureRectangle);
-        gbi.register(g::FILLRECT as usize, RDPFillRectangle);
-        gbi.register(g::RDPLOADSYNC as usize, RDPLoadSync);
-        gbi.register(g::RDPPIPESYNC as usize, RDPPipeSync);
-        gbi.register(g::RDPTILESYNC as usize, RDPTileSync);
-        gbi.register(g::RDPFULLSYNC as usize, RDPFullSync);
+        gbi.register(OpCode::SET_SCISSOR.bits(), RDPSetScissor);
+        gbi.register(OpCode::SET_CONVERT.bits(), RDPSetConvert);
+        gbi.register(OpCode::SET_KEYR.bits(), RDPSetKeyR);
+        gbi.register(OpCode::SET_KEYGB.bits(), RDPSetKeyGB);
+        gbi.register(OpCode::LOAD_TILE.bits(), RDPLoadTile);
+        gbi.register(OpCode::LOAD_BLOCK.bits(), RDPLoadBlock);
+        gbi.register(OpCode::LOAD_TLUT.bits(), RDPLoadTLUT);
+        gbi.register(OpCode::RDPLOADSYNC.bits(), RDPLoadSync);
+        gbi.register(OpCode::RDPPIPESYNC.bits(), RDPPipeSync);
+        gbi.register(OpCode::RDPTILESYNC.bits(), RDPTileSync);
+        gbi.register(OpCode::RDPFULLSYNC.bits(), RDPFullSync);
+        gbi.register(OpCode::RDPSETOTHERMODE.bits(), RDPSetOtherMode);
     }
 }
 
@@ -58,14 +57,14 @@ gbi_command!(RDPSetColorImage, |params: &mut GBICommandParams| {
     let _size = get_cmd(w0, 19, 2);
     let _width = get_cmd(w0, 0, 12) + 1;
 
-    params.rdp.color_image = params.rsp.from_segmented(w1);
+    params.rdp.color_image = params.rsp.get_segment(w1);
     GBIResult::Continue
 });
 
 gbi_command!(RDPSetDepthImage, |params: &mut GBICommandParams| {
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    params.rdp.depth_image = params.rsp.from_segmented(w1);
+    params.rdp.depth_image = params.rsp.get_segment(w1);
     GBIResult::Continue
 });
 
@@ -76,7 +75,7 @@ gbi_command!(RDPSetTextureImage, |params: &mut GBICommandParams| {
     let format = get_cmd(w0, 21, 3) as u8;
     let size = get_cmd(w0, 19, 2) as u8;
     let width = get_cmd(w0, 0, 12) as u16 + 1;
-    let address = params.rsp.from_segmented(w1);
+    let address = params.rsp.get_segment(w1);
 
     params.rdp.texture_image_state = TextureImageState {
         format,
@@ -106,10 +105,10 @@ gbi_command!(RDPSetTile, |params: &mut GBICommandParams| {
     let tmem = get_cmd(w0, 0, 9) as u16;
     let tile = get_cmd(w1, 24, 3) as u8;
     let palette = get_cmd(w1, 20, 4) as u8;
-    let cm_t: u8 = get_cmd(w1, 18, 2) as u8;
+    let cm_t: WrapMode = ((get_cmd(w1, 18, 2) & 0x3) as u8).into();
     let mask_t: u8 = get_cmd(w1, 14, 4) as u8;
     let shift_t: u8 = get_cmd(w1, 10, 4) as u8;
-    let cm_s: u8 = get_cmd(w1, 8, 2) as u8;
+    let cm_s: WrapMode = ((get_cmd(w1, 8, 2) & 0x3) as u8).into();
     let mask_s: u8 = get_cmd(w1, 4, 4) as u8;
     let shift_s: u8 = get_cmd(w1, 0, 4) as u8;
 
@@ -302,7 +301,7 @@ gbi_command!(RDPTextureRectangle, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    let opcode = w0 >> 24;
+    let opcode = (w0 >> 24) as u8;
 
     let lrx = get_cmd(w0, 12, 12);
     let lry = get_cmd(w0, 0, 12);
@@ -338,7 +337,7 @@ gbi_command!(RDPTextureRectangle, |params: &mut GBICommandParams| {
         ult as i16,
         dsdx as i16,
         dtdy as i16,
-        opcode == g::TEXRECTFLIP as usize,
+        opcode == OpCode::TEXRECTFLIP.bits(),
     );
 
     GBIResult::Continue

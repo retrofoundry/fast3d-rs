@@ -1,86 +1,75 @@
-use crate::gbi::defines::rsp_geometry;
-use crate::rsp::RSPConstants;
-use crate::{
-    models::texture::TextFilt,
-    output::gfx::{BlendFactor, Face},
-    rdp::{
-        AlphaCompare, BlendParamB, BlendParamPMColor, OtherModeHCycleType, OtherModeH_Layout,
-        OtherModeLayoutL,
-    },
+use crate::gbi::defines::{
+    AlphaCompare, BlendAlpha2, BlendColor, CycleType, GeometryModes, OtherModeHLayout, RenderMode,
+    RenderModeFlags, TextureFilter, ZMode,
 };
+use crate::output::gfx::Face;
+use crate::rsp::RSPConstants;
 
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
     (val >> start_bit) & ((1 << num_bits) - 1)
 }
 
-pub fn geometry_mode_uses_lighting(geometry_mode: u32) -> bool {
-    geometry_mode & rsp_geometry::g::LIGHTING > 0
-}
-
-pub fn geometry_mode_uses_fog(geometry_mode: u32) -> bool {
-    geometry_mode & rsp_geometry::g::FOG > 0
+pub fn get_render_mode_from_other_mode_l(other_mode_l: u32) -> RenderMode {
+    RenderMode::try_from(other_mode_l).unwrap()
 }
 
 pub fn other_mode_l_uses_texture_edge(other_mode_l: u32) -> bool {
-    other_mode_l >> (OtherModeLayoutL::CVG_X_ALPHA as u32) & 0x01 == 0x01
+    let render_mode = get_render_mode_from_other_mode_l(other_mode_l);
+    render_mode.flags.contains(RenderModeFlags::CVG_X_ALPHA)
 }
 
 pub fn other_mode_l_uses_alpha(other_mode_l: u32) -> bool {
-    other_mode_l & ((BlendParamB::G_BL_A_MEM as u32) << (OtherModeLayoutL::B_1 as u32)) == 0
+    let render_mode = get_render_mode_from_other_mode_l(other_mode_l);
+    render_mode.blend_cycle1.alpha2 == BlendAlpha2::OneMinusAlpha
+    // TODO: Do we need to check which cycle we're in?
+    // render_mode.blend_cycle2.color2 == BlendColor::Memory && render_mode.blend_cycle2.alpha2 == BlendAlpha2::OneMinusAlpha
 }
 
 pub fn other_mode_l_alpha_compare_threshold(other_mode_l: u32) -> bool {
-    other_mode_l & AlphaCompare::G_AC_THRESHOLD as u32 == AlphaCompare::G_AC_THRESHOLD as u32
+    other_mode_l & AlphaCompare::Threshold as u32 == AlphaCompare::Threshold as u32
 }
 
 pub fn other_mode_l_uses_fog(other_mode_l: u32) -> bool {
-    (other_mode_l >> OtherModeLayoutL::P_1 as u32) == BlendParamPMColor::G_BL_CLR_FOG as u32
+    let render_mode = get_render_mode_from_other_mode_l(other_mode_l);
+    render_mode.blend_cycle1.color1 == BlendColor::Fog
+}
+
+pub fn get_zmode_from_other_mode_l(other_mode_l: u32) -> ZMode {
+    get_render_mode_from_other_mode_l(other_mode_l).z_mode
 }
 
 pub fn other_mode_l_alpha_compare_dither(other_mode_l: u32) -> bool {
-    other_mode_l & AlphaCompare::G_AC_DITHER as u32 == AlphaCompare::G_AC_DITHER as u32
+    other_mode_l & AlphaCompare::Dither as u32 == AlphaCompare::Dither as u32
 }
 
-pub fn get_cycle_type_from_other_mode_h(mode_h: u32) -> OtherModeHCycleType {
-    match (mode_h >> OtherModeH_Layout::G_MDSFT_CYCLETYPE as u32) & 0x03 {
-        x if x == OtherModeHCycleType::G_CYC_1CYCLE as u32 => OtherModeHCycleType::G_CYC_1CYCLE,
-        x if x == OtherModeHCycleType::G_CYC_2CYCLE as u32 => OtherModeHCycleType::G_CYC_2CYCLE,
-        x if x == OtherModeHCycleType::G_CYC_COPY as u32 => OtherModeHCycleType::G_CYC_COPY,
-        x if x == OtherModeHCycleType::G_CYC_FILL as u32 => OtherModeHCycleType::G_CYC_FILL,
-        _ => panic!("Invalid cycle type"),
-    }
+pub fn get_cycle_type_from_other_mode_h(mode_h: u32) -> CycleType {
+    (((mode_h >> OtherModeHLayout::CYCLE_TYPE.bits()) & 0x03) as u8)
+        .try_into()
+        .unwrap()
 }
 
-pub fn get_textfilter_from_other_mode_h(mode_h: u32) -> TextFilt {
-    match (mode_h >> OtherModeH_Layout::G_MDSFT_TEXTFILT as u32) & 0x3 {
-        x if x == TextFilt::G_TF_POINT as u32 => TextFilt::G_TF_POINT,
-        x if x == TextFilt::G_TF_AVERAGE as u32 => TextFilt::G_TF_AVERAGE,
-        x if x == TextFilt::G_TF_BILERP as u32 => TextFilt::G_TF_BILERP,
-        _ => panic!("Invalid text filter"),
-    }
+pub fn get_texture_filter_from_other_mode_h(mode_h: u32) -> TextureFilter {
+    (((mode_h >> OtherModeHLayout::TEXT_FILT.bits()) & 0x3) as u8)
+        .try_into()
+        .unwrap()
 }
 
-pub fn translate_blend_param_b(param: u32, src: BlendFactor) -> BlendFactor {
-    match param {
-        x if x == BlendParamB::G_BL_1MA as u32 => {
-            if src == BlendFactor::SrcAlpha {
-                BlendFactor::OneMinusSrcAlpha
-            } else if src == BlendFactor::One {
-                BlendFactor::Zero
-            } else {
-                BlendFactor::One
-            }
-        }
-        x if x == BlendParamB::G_BL_A_MEM as u32 => BlendFactor::DstAlpha,
-        x if x == BlendParamB::G_BL_1 as u32 => BlendFactor::One,
-        x if x == BlendParamB::G_BL_0 as u32 => BlendFactor::Zero,
-        _ => panic!("Unknown Blend Param B: {}", param),
-    }
-}
-
-pub fn translate_cull_mode(geometry_mode: u32, rsp_constants: &RSPConstants) -> Option<Face> {
-    let cull_front = (geometry_mode & rsp_constants.G_CULL_FRONT) != 0;
-    let cull_back = (geometry_mode & rsp_constants.G_CULL_BACK) != 0;
+pub fn translate_cull_mode(
+    geometry_mode: GeometryModes,
+    rsp_constants: &RSPConstants,
+) -> Option<Face> {
+    // We do unchecked comparisons because the values set in rsp_constants are per GBI
+    // and do not appear in the general GeometryModes enum
+    let cull_front = unsafe {
+        geometry_mode.contains(GeometryModes::from_bits_unchecked(
+            rsp_constants.geomode_cull_front_val,
+        ))
+    };
+    let cull_back = unsafe {
+        geometry_mode.contains(GeometryModes::from_bits_unchecked(
+            rsp_constants.geomode_cull_back_val,
+        ))
+    };
 
     if cull_front && cull_back {
         panic!("Culling both front and back faces is not supported");

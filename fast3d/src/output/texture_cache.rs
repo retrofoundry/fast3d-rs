@@ -1,9 +1,8 @@
+use crate::gbi::defines::{ComponentSize, ImageFormat};
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 
 use crate::output::models::OutputTexture;
-
-use crate::models::texture::{ImageFormat, ImageSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureCacheId(pub TextureConfig);
@@ -12,7 +11,7 @@ pub struct TextureCacheId(pub TextureConfig);
 pub struct TextureConfig {
     pub game_address: usize,
     pub format: ImageFormat,
-    pub size: ImageSize,
+    pub size: ComponentSize,
 }
 
 pub struct TextureCache {
@@ -30,7 +29,7 @@ impl TextureCache {
         &mut self,
         game_address: usize,
         format: ImageFormat,
-        size: ImageSize,
+        size: ComponentSize,
     ) -> Option<TextureCacheId> {
         let texture_cache_id = TextureCacheId(TextureConfig {
             game_address,
@@ -61,11 +60,12 @@ impl TextureCache {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         &mut self,
         game_address: usize,
         format: ImageFormat,
-        size: ImageSize,
+        size: ComponentSize,
         width: u32,
         height: u32,
         uls: u16,

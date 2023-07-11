@@ -1,9 +1,9 @@
-use crate::gbi::defines::{rsp_geometry, DirLight, Vtx};
+use crate::gbi::defines::{DirLight, GeometryModes, Vtx};
 use std::slice;
 
 use super::{gbi::defines::Light, models::color::Color};
 use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
-use crate::gbi::utils::geometry_mode_uses_fog;
+
 use crate::models::texture::TextureState;
 use crate::output::RCPOutputCollector;
 use crate::rdp::RDP;
@@ -49,34 +49,35 @@ impl StagingVertex {
 }
 
 pub struct RSPConstants {
-    pub G_MTX_PUSH: u8,
-    pub G_MTX_LOAD: u8,
-    pub G_MTX_PROJECTION: u8,
+    pub mtx_push_val: u8,
+    pub mtx_load_val: u8,
+    pub mtx_projection_val: u8,
 
-    pub G_SHADING_SMOOTH: u32,
-    pub G_CULL_FRONT: u32,
-    pub G_CULL_BACK: u32,
-    pub G_CULL_BOTH: u32,
+    pub geomode_shading_smooth_val: u32,
+    pub geomode_cull_front_val: u32,
+    pub geomode_cull_back_val: u32,
+    pub geomode_cull_both_val: u32,
 }
 
 impl RSPConstants {
     pub const EMPTY: Self = Self {
-        G_MTX_PUSH: 0,
-        G_MTX_LOAD: 0,
-        G_MTX_PROJECTION: 0,
+        mtx_push_val: 0,
+        mtx_load_val: 0,
+        mtx_projection_val: 0,
 
-        G_SHADING_SMOOTH: 0,
-        G_CULL_FRONT: 0,
-        G_CULL_BACK: 0,
-        G_CULL_BOTH: 0,
+        geomode_shading_smooth_val: 0,
+        geomode_cull_front_val: 0,
+        geomode_cull_back_val: 0,
+        geomode_cull_both_val: 0,
     };
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct RSP {
     // constants set by each GBI
     pub constants: RSPConstants,
 
-    pub geometry_mode: u32,
+    pub geometry_mode: GeometryModes,
     pub projection_matrix: Mat4,
 
     pub matrix_stack: [Mat4; MATRIX_STACK_SIZE],
@@ -118,7 +119,7 @@ impl RSP {
         RSP {
             constants: RSPConstants::EMPTY,
 
-            geometry_mode: 0,
+            geometry_mode: GeometryModes::empty(),
             projection_matrix: Mat4::ZERO,
 
             matrix_stack: [Mat4::ZERO; MATRIX_STACK_SIZE],
@@ -174,7 +175,7 @@ impl RSP {
         self.segments[segment] = address;
     }
 
-    pub fn from_segmented(&self, address: usize) -> usize {
+    pub fn get_segment(&self, address: usize) -> usize {
         let segment = (address >> 24) & 0x0F;
         let offset = address & 0x00FFFFFF;
 
@@ -215,7 +216,7 @@ impl RSP {
     pub fn set_light(&mut self, index: usize, address: usize) {
         assert!(index <= MAX_LIGHTS);
 
-        let data = self.from_segmented(address);
+        let data = self.get_segment(address);
         let light_ptr = data as *const Light;
         let light = unsafe { &*light_ptr };
 
@@ -226,7 +227,7 @@ impl RSP {
 
     pub fn set_look_at(&mut self, index: usize, address: usize) {
         assert!(index < 2);
-        let data = self.from_segmented(address);
+        let data = self.get_segment(address);
         let dir_light_ptr = data as *const DirLight;
         let dir_light = unsafe { &*dir_light_ptr };
 
@@ -279,19 +280,19 @@ impl RSP {
             self.modelview_projection_matrix_changed = false;
         }
 
-        let vertices = self.from_segmented(address) as *const Vtx;
+        let vertices = self.get_segment(address) as *const Vtx;
 
         for i in 0..vertex_count {
             let vertex = unsafe { &(*vertices.add(i)).vertex };
             let vertex_normal = unsafe { &(*vertices.add(i)).normal };
             let staging_vertex = &mut self.vertex_table[write_index];
 
-            let mut U = (((vertex.texture_coords[0] as i32) * (self.texture_state.scale_s as i32))
+            let mut u = (((vertex.texture_coords[0] as i32) * (self.texture_state.scale_s as i32))
                 >> 16) as i16;
-            let mut V = (((vertex.texture_coords[1] as i32) * (self.texture_state.scale_t as i32))
+            let mut v = (((vertex.texture_coords[1] as i32) * (self.texture_state.scale_t as i32))
                 >> 16) as i16;
 
-            if self.geometry_mode & rsp_geometry::g::LIGHTING > 0 {
+            if self.geometry_mode.contains(GeometryModes::LIGHTING) {
                 if !self.lights_valid {
                     for i in 0..(self.num_lights + 1) {
                         let light: &Light = &self.lights[i as usize];
@@ -352,7 +353,7 @@ impl RSP {
                 staging_vertex.color.g = if g > 255.0 { 255.0 } else { g } / 255.0;
                 staging_vertex.color.b = if b > 255.0 { 255.0 } else { b } / 255.0;
 
-                if self.geometry_mode & rsp_geometry::g::TEXTURE_GEN > 0 {
+                if self.geometry_mode.contains(GeometryModes::TEXTURE_GEN) {
                     let dotx = vertex_normal.normal[0] as f32 * self.lookat_coeffs[0][0]
                         + vertex_normal.normal[1] as f32 * self.lookat_coeffs[0][1]
                         + vertex_normal.normal[2] as f32 * self.lookat_coeffs[0][2];
@@ -361,8 +362,8 @@ impl RSP {
                         + vertex_normal.normal[1] as f32 * self.lookat_coeffs[1][1]
                         + vertex_normal.normal[2] as f32 * self.lookat_coeffs[1][2];
 
-                    U = ((dotx / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_s as i16;
-                    V = ((doty / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_t as i16;
+                    u = ((dotx / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_s as i16;
+                    v = ((doty / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_t as i16;
                 }
             } else {
                 staging_vertex.color.r = vertex.color.r as f32 / 255.0;
@@ -370,15 +371,15 @@ impl RSP {
                 staging_vertex.color.b = vertex.color.b as f32 / 255.0;
             }
 
-            staging_vertex.uv[0] = U as f32;
-            staging_vertex.uv[1] = V as f32;
+            staging_vertex.uv[0] = u as f32;
+            staging_vertex.uv[1] = v as f32;
 
             staging_vertex.position.x = vertex.position[0] as f32;
             staging_vertex.position.y = vertex.position[1] as f32;
             staging_vertex.position.z = vertex.position[2] as f32;
             staging_vertex.position.w = 1.0;
 
-            if geometry_mode_uses_fog(self.geometry_mode) && self.fog_changed {
+            if self.geometry_mode.contains(GeometryModes::FOG) && self.fog_changed {
                 rdp.flush(output);
                 output.set_fog(self.fog_multiplier, self.fog_offset);
             }
@@ -409,17 +410,17 @@ impl RSP {
 
     pub fn matrix(&mut self, address: usize, params: u8) {
         let matrix = if cfg!(feature = "gbifloats") {
-            let addr = self.from_segmented(address) as *const f32;
+            let addr = self.get_segment(address) as *const f32;
             let slice = unsafe { slice::from_raw_parts(addr, 16) };
             Mat4::from_floats(slice)
         } else {
-            let addr = self.from_segmented(address) as *const i32;
+            let addr = self.get_segment(address) as *const i32;
             let slice = unsafe { slice::from_raw_parts(addr, 16) };
             Mat4::from_fixed_point(slice)
         };
 
-        if params & self.constants.G_MTX_PROJECTION != 0 {
-            if (params & self.constants.G_MTX_LOAD) != 0 {
+        if params & self.constants.mtx_projection_val != 0 {
+            if (params & self.constants.mtx_load_val) != 0 {
                 // Load the input matrix into the projection matrix
                 // rsp.projection_matrix.copy_from_slice(&matrix);
                 self.projection_matrix = matrix;
@@ -429,7 +430,7 @@ impl RSP {
             }
         } else {
             // Modelview matrix
-            if params & self.constants.G_MTX_PUSH != 0
+            if params & self.constants.mtx_push_val != 0
                 && self.matrix_stack_pointer < MATRIX_STACK_SIZE
             {
                 // Push a copy of the current matrix onto the stack
@@ -441,7 +442,7 @@ impl RSP {
                 right[0] = left[src_index];
             }
 
-            if params & self.constants.G_MTX_LOAD != 0 {
+            if params & self.constants.mtx_load_val != 0 {
                 // Load the input matrix into the current matrix
                 self.matrix_stack[self.matrix_stack_pointer - 1] = matrix;
             } else {
@@ -469,8 +470,11 @@ impl RSP {
     }
 
     pub fn update_geometry_mode(&mut self, rdp: &mut RDP, clear_bits: u32, set_bits: u32) {
-        self.geometry_mode &= clear_bits;
-        self.geometry_mode |= set_bits;
+        let casted_clear_bits = unsafe { GeometryModes::from_bits_unchecked(clear_bits) };
+        let casted_set_bits = unsafe { GeometryModes::from_bits_unchecked(set_bits) };
+
+        self.geometry_mode &= casted_clear_bits;
+        self.geometry_mode |= casted_set_bits;
 
         rdp.shader_config_changed = true;
     }
