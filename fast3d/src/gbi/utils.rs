@@ -1,5 +1,5 @@
 use crate::gbi::defines::{
-    rsp_geometry, AlphaCompare, BlendAlpha2, BlendColor, CycleType, OtherModeHLayout, RenderMode,
+    AlphaCompare, BlendAlpha2, BlendColor, CycleType, GeometryModes, OtherModeHLayout, RenderMode,
     RenderModeFlags, TextureFilter, ZMode,
 };
 use crate::output::gfx::Face;
@@ -10,11 +10,11 @@ pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
 }
 
 pub fn geometry_mode_uses_lighting(geometry_mode: u32) -> bool {
-    geometry_mode & rsp_geometry::g::LIGHTING > 0
+    geometry_mode & GeometryModes::LIGHTING.bits() > 0
 }
 
 pub fn geometry_mode_uses_fog(geometry_mode: u32) -> bool {
-    geometry_mode & rsp_geometry::g::FOG > 0
+    geometry_mode & GeometryModes::FOG.bits() > 0
 }
 
 pub fn get_render_mode_from_other_mode_l(other_mode_l: u32) -> RenderMode {

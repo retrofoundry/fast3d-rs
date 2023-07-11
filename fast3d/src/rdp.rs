@@ -2,8 +2,8 @@ use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
 use crate::gbi::defines::{
-    g, ComponentSize, CycleType, ImageFormat, OtherModeHLayout, RenderModeFlags, TextureFilter,
-    TextureLUT, ZMode,
+    g, ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeHLayout, RenderModeFlags,
+    TextureFilter, TextureLUT, ZMode,
 };
 
 use crate::output::{
@@ -31,7 +31,6 @@ use super::{
     },
 };
 
-use crate::gbi::defines::rsp_geometry;
 use crate::gbi::utils::{get_render_mode_from_other_mode_l, get_zmode_from_other_mode_l};
 use crate::models::color::R5G5B5A1;
 use crate::models::color_combiner::{ACMUX, CCMUX};
@@ -439,7 +438,7 @@ impl RDP {
     // MARK: - Blend
 
     fn process_depth_params(&mut self, output: &mut RCPOutputCollector, geometry_mode: u32) {
-        let depth_test = geometry_mode & rsp_geometry::g::ZBUFFER != 0;
+        let depth_test = geometry_mode & GeometryModes::ZBUFFER.bits() != 0;
 
         let zmode = get_zmode_from_other_mode_l(self.other_mode_l);
 

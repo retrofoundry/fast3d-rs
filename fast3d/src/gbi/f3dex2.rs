@@ -1,3 +1,4 @@
+use bitflags::bitflags;
 use std::cmp::max;
 
 use super::super::rsp::RSP;
@@ -8,14 +9,13 @@ use crate::gbi::{macros::gbi_command, GBICommand, GBICommandParams};
 
 use crate::rsp::RSPConstants;
 
-#[allow(dead_code)]
-pub mod rsp_geometry {
-    pub mod g {
-        pub const TEXTURE_ENABLE: u32 = 0;
-        pub const SHADING_SMOOTH: u32 = 1 << 21;
-        pub const CULL_FRONT: u32 = 1 << 9;
-        pub const CULL_BACK: u32 = 1 << 10;
-        pub const CULL_BOTH: u32 = CULL_FRONT | CULL_BACK;
+bitflags! {
+    pub struct GeometryModes: u32 {
+        const TEXTURE_ENABLE      = 0x00000002;
+        const SHADING_SMOOTH      = 0x00000200;
+        const CULL_FRONT          = 0x00001000;
+        const CULL_BACK           = 0x00002000;
+        const CULL_BOTH           = Self::CULL_FRONT.bits | Self::CULL_BACK.bits;
     }
 }
 
@@ -140,10 +140,10 @@ pub fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
         G_MTX_LOAD: g::mtx::LOAD,
         G_MTX_PROJECTION: g::mtx::PROJECTION,
 
-        G_SHADING_SMOOTH: rsp_geometry::g::SHADING_SMOOTH,
-        G_CULL_FRONT: rsp_geometry::g::CULL_FRONT,
-        G_CULL_BACK: rsp_geometry::g::CULL_BACK,
-        G_CULL_BOTH: rsp_geometry::g::CULL_BOTH,
+        G_SHADING_SMOOTH: GeometryModes::SHADING_SMOOTH.bits,
+        G_CULL_FRONT: GeometryModes::CULL_FRONT.bits,
+        G_CULL_BACK: GeometryModes::CULL_BACK.bits,
+        G_CULL_BOTH: GeometryModes::CULL_BOTH.bits,
     })
 }
 

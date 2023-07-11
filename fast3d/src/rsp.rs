@@ -1,4 +1,4 @@
-use crate::gbi::defines::{rsp_geometry, DirLight, Vtx};
+use crate::gbi::defines::{DirLight, GeometryModes, Vtx};
 use std::slice;
 
 use super::{gbi::defines::Light, models::color::Color};
@@ -291,7 +291,7 @@ impl RSP {
             let mut V = (((vertex.texture_coords[1] as i32) * (self.texture_state.scale_t as i32))
                 >> 16) as i16;
 
-            if self.geometry_mode & rsp_geometry::g::LIGHTING > 0 {
+            if self.geometry_mode & GeometryModes::LIGHTING.bits() > 0 {
                 if !self.lights_valid {
                     for i in 0..(self.num_lights + 1) {
                         let light: &Light = &self.lights[i as usize];
@@ -352,7 +352,7 @@ impl RSP {
                 staging_vertex.color.g = if g > 255.0 { 255.0 } else { g } / 255.0;
                 staging_vertex.color.b = if b > 255.0 { 255.0 } else { b } / 255.0;
 
-                if self.geometry_mode & rsp_geometry::g::TEXTURE_GEN > 0 {
+                if self.geometry_mode & GeometryModes::TEXTURE_GEN.bits() > 0 {
                     let dotx = vertex_normal.normal[0] as f32 * self.lookat_coeffs[0][0]
                         + vertex_normal.normal[1] as f32 * self.lookat_coeffs[0][1]
                         + vertex_normal.normal[2] as f32 * self.lookat_coeffs[0][2];

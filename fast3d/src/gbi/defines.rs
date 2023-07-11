@@ -433,15 +433,15 @@ pub mod g {
     pub const RDPSETOTHERMODE: u8 = 0xef;
 }
 
-pub mod rsp_geometry {
-    pub mod g {
-        pub const ZBUFFER: u32 = 1 << 0;
-        pub const SHADE: u32 = 1 << 2;
-        pub const FOG: u32 = 1 << 16;
-        pub const LIGHTING: u32 = 1 << 17;
-        pub const TEXTURE_GEN: u32 = 1 << 18;
-        pub const TEXTURE_GEN_LINEAR: u32 = 1 << 19;
-        pub const LOD: u32 = 1 << 20; /* NOT IMPLEMENTED */
-        pub const CLIPPING: u32 = 1 << 23;
+bitflags! {
+    pub struct GeometryModes: u32 {
+        const ZBUFFER             = 0x00000001;
+        const SHADE               = 0x00000004;
+        const FOG                 = 0x00010000;
+        const LIGHTING            = 0x00020000;
+        const TEXTURE_GEN         = 0x00040000;
+        const TEXTURE_GEN_LINEAR  = 0x00080000;
+        const LOD                 = 0x00100000;
+        const CLIPPING            = 0x00800000;
     }
 }
