@@ -1,13 +1,12 @@
 use fast3d::gbi::utils::{
-    geometry_mode_uses_lighting, get_cycle_type_from_other_mode_h,
-    get_texture_filter_from_other_mode_h, other_mode_l_alpha_compare_dither,
-    other_mode_l_alpha_compare_threshold, other_mode_l_uses_alpha, other_mode_l_uses_fog,
-    other_mode_l_uses_texture_edge,
+    get_cycle_type_from_other_mode_h, get_texture_filter_from_other_mode_h,
+    other_mode_l_alpha_compare_dither, other_mode_l_alpha_compare_threshold,
+    other_mode_l_uses_alpha, other_mode_l_uses_fog, other_mode_l_uses_texture_edge,
 };
 
 use fast3d::models::color_combiner::{CombineParams, ACMUX, CCMUX};
 
-use fast3d::gbi::defines::{CycleType, TextureFilter};
+use fast3d::gbi::defines::{CycleType, GeometryModes, TextureFilter};
 use fast3d::output::ShaderConfig;
 use std::collections::HashMap;
 
@@ -39,7 +38,7 @@ pub struct OpenGLProgram<T> {
     // configurators
     other_mode_h: u32,
     other_mode_l: u32,
-    geometry_mode: u32,
+    geometry_mode: GeometryModes,
     combine: CombineParams,
 
     pub num_floats: usize,
@@ -184,7 +183,7 @@ impl<T> OpenGLProgram<T> {
         );
         self.set_define_bool(
             "LIGHTING".to_string(),
-            geometry_mode_uses_lighting(self.geometry_mode),
+            self.geometry_mode.contains(GeometryModes::LIGHTING),
         );
         self.set_define_bool("USE_TEXTURE0".to_string(), self.combine.uses_texture0());
         self.set_define_bool("USE_TEXTURE1".to_string(), self.combine.uses_texture1());

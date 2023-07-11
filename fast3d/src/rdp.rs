@@ -437,8 +437,12 @@ impl RDP {
 
     // MARK: - Blend
 
-    fn process_depth_params(&mut self, output: &mut RCPOutputCollector, geometry_mode: u32) {
-        let depth_test = geometry_mode & GeometryModes::ZBUFFER.bits() != 0;
+    fn process_depth_params(
+        &mut self,
+        output: &mut RCPOutputCollector,
+        geometry_mode: GeometryModes,
+    ) {
+        let depth_test = geometry_mode.contains(GeometryModes::ZBUFFER);
 
         let zmode = get_zmode_from_other_mode_l(self.other_mode_l);
 
@@ -471,7 +475,7 @@ impl RDP {
     pub fn update_render_state(
         &mut self,
         output: &mut RCPOutputCollector,
-        geometry_mode: u32,
+        geometry_mode: GeometryModes,
         rsp_constants: &RSPConstants,
     ) {
         let cull_mode = translate_cull_mode(geometry_mode, rsp_constants);
@@ -654,8 +658,11 @@ impl RDP {
         let vertex_array = [vertex1, vertex2, vertex3];
 
         // Don't draw anything if both tris are being culled.
-        if (rsp.geometry_mode & rsp.constants.geomode_cull_both_val)
-            == rsp.constants.geomode_cull_both_val
+        if rsp
+            .geometry_mode
+            .contains(GeometryModes::from_bits_truncate(
+                rsp.constants.geomode_cull_both_val,
+            ))
         {
             return;
         }
@@ -896,7 +903,7 @@ impl RDP {
         let geometry_mode_saved = rsp.geometry_mode;
 
         self.viewport = default_viewport;
-        rsp.geometry_mode = 0;
+        rsp.geometry_mode = GeometryModes::empty();
         self.shader_config_changed = true;
 
         self.draw_triangles(

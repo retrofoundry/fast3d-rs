@@ -1,3 +1,4 @@
+use crate::gbi::defines::GeometryModes;
 use crate::output::models::{
     OutputFogParams, OutputSampler, OutputStencil, OutputUniforms, OutputUniformsBlend,
     OutputUniformsCombine, OutputVBO,
@@ -23,7 +24,7 @@ pub struct ShaderId(pub ShaderConfig);
 pub struct ShaderConfig {
     pub other_mode_h: u32,
     pub other_mode_l: u32,
-    pub geometry_mode: u32,
+    pub geometry_mode: GeometryModes,
     pub combine: CombineParams,
 }
 
@@ -32,7 +33,7 @@ impl ShaderConfig {
         Self {
             other_mode_h: 0,
             other_mode_l: 0,
-            geometry_mode: 0,
+            geometry_mode: GeometryModes::empty(),
             combine: CombineParams::ZERO,
         }
     };
@@ -143,7 +144,7 @@ impl RCPOutputCollector {
         &mut self,
         other_mode_h: u32,
         other_mode_l: u32,
-        geometry_mode: u32,
+        geometry_mode: GeometryModes,
         combine: CombineParams,
     ) {
         let draw_call = self.current_draw_call();

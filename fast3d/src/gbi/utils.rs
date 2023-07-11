@@ -9,14 +9,6 @@ pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
     (val >> start_bit) & ((1 << num_bits) - 1)
 }
 
-pub fn geometry_mode_uses_lighting(geometry_mode: u32) -> bool {
-    geometry_mode & GeometryModes::LIGHTING.bits() > 0
-}
-
-pub fn geometry_mode_uses_fog(geometry_mode: u32) -> bool {
-    geometry_mode & GeometryModes::FOG.bits() > 0
-}
-
 pub fn get_render_mode_from_other_mode_l(other_mode_l: u32) -> RenderMode {
     RenderMode::try_from(other_mode_l).unwrap()
 }
@@ -62,9 +54,16 @@ pub fn get_texture_filter_from_other_mode_h(mode_h: u32) -> TextureFilter {
         .unwrap()
 }
 
-pub fn translate_cull_mode(geometry_mode: u32, rsp_constants: &RSPConstants) -> Option<Face> {
-    let cull_front = (geometry_mode & rsp_constants.geomode_cull_front_val) != 0;
-    let cull_back = (geometry_mode & rsp_constants.geomode_cull_back_val) != 0;
+pub fn translate_cull_mode(
+    geometry_mode: GeometryModes,
+    rsp_constants: &RSPConstants,
+) -> Option<Face> {
+    let cull_front = geometry_mode.contains(GeometryModes::from_bits_truncate(
+        rsp_constants.geomode_cull_front_val,
+    ));
+    let cull_back = geometry_mode.contains(GeometryModes::from_bits_truncate(
+        rsp_constants.geomode_cull_back_val,
+    ));
 
     if cull_front && cull_back {
         panic!("Culling both front and back faces is not supported");

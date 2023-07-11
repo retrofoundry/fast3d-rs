@@ -3,7 +3,7 @@ use std::slice;
 
 use super::{gbi::defines::Light, models::color::Color};
 use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
-use crate::gbi::utils::geometry_mode_uses_fog;
+
 use crate::models::texture::TextureState;
 use crate::output::RCPOutputCollector;
 use crate::rdp::RDP;
@@ -76,7 +76,7 @@ pub struct RSP {
     // constants set by each GBI
     pub constants: RSPConstants,
 
-    pub geometry_mode: u32,
+    pub geometry_mode: GeometryModes,
     pub projection_matrix: Mat4,
 
     pub matrix_stack: [Mat4; MATRIX_STACK_SIZE],
@@ -118,7 +118,7 @@ impl RSP {
         RSP {
             constants: RSPConstants::EMPTY,
 
-            geometry_mode: 0,
+            geometry_mode: GeometryModes::empty(),
             projection_matrix: Mat4::ZERO,
 
             matrix_stack: [Mat4::ZERO; MATRIX_STACK_SIZE],
@@ -291,7 +291,7 @@ impl RSP {
             let mut V = (((vertex.texture_coords[1] as i32) * (self.texture_state.scale_t as i32))
                 >> 16) as i16;
 
-            if self.geometry_mode & GeometryModes::LIGHTING.bits() > 0 {
+            if self.geometry_mode.contains(GeometryModes::LIGHTING) {
                 if !self.lights_valid {
                     for i in 0..(self.num_lights + 1) {
                         let light: &Light = &self.lights[i as usize];
@@ -352,7 +352,7 @@ impl RSP {
                 staging_vertex.color.g = if g > 255.0 { 255.0 } else { g } / 255.0;
                 staging_vertex.color.b = if b > 255.0 { 255.0 } else { b } / 255.0;
 
-                if self.geometry_mode & GeometryModes::TEXTURE_GEN.bits() > 0 {
+                if self.geometry_mode.contains(GeometryModes::TEXTURE_GEN) {
                     let dotx = vertex_normal.normal[0] as f32 * self.lookat_coeffs[0][0]
                         + vertex_normal.normal[1] as f32 * self.lookat_coeffs[0][1]
                         + vertex_normal.normal[2] as f32 * self.lookat_coeffs[0][2];
@@ -378,7 +378,7 @@ impl RSP {
             staging_vertex.position.z = vertex.position[2] as f32;
             staging_vertex.position.w = 1.0;
 
-            if geometry_mode_uses_fog(self.geometry_mode) && self.fog_changed {
+            if self.geometry_mode.contains(GeometryModes::FOG) && self.fog_changed {
                 rdp.flush(output);
                 output.set_fog(self.fog_multiplier, self.fog_offset);
             }
@@ -469,6 +469,9 @@ impl RSP {
     }
 
     pub fn update_geometry_mode(&mut self, rdp: &mut RDP, clear_bits: u32, set_bits: u32) {
+        let clear_bits = GeometryModes::from_bits_truncate(clear_bits);
+        let set_bits = GeometryModes::from_bits_truncate(set_bits);
+
         self.geometry_mode &= clear_bits;
         self.geometry_mode |= set_bits;
 
