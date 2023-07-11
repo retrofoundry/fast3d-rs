@@ -15,7 +15,7 @@ jobs:
     - name: Run cargo fmt
       run: cargo fmt --all -- --check
     - name: Run cargo clippy
-      run: cargo clippy --all --
+      run: cargo clippy --all -- -D warnings
   macos-check:
     runs-on: macos-latest
     steps:
