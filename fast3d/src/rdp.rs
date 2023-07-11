@@ -4,7 +4,7 @@ use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
 use crate::gbi::defines::{
-    g, ComponentSize, CycleType, ImageFormat, TextureFilter, TextureLUT, ZMode,
+    g, ComponentSize, CycleType, ImageFormat, OtherModeHLayout, TextureFilter, TextureLUT, ZMode,
 };
 
 use crate::output::{
@@ -113,22 +113,6 @@ pub enum OtherModeLayoutL {
     A_1 = 26,
     P_2 = 28,
     P_1 = 30,
-}
-
-pub enum OtherModeH_Layout {
-    G_MDSFT_BLENDMASK = 0,
-    G_MDSFT_ALPHADITHER = 4,
-    G_MDSFT_RGBDITHER = 6,
-    G_MDSFT_COMBKEY = 8,
-    G_MDSFT_TEXTCONV = 9,
-    G_MDSFT_TEXTFILT = 12,
-    G_MDSFT_TEXTLUT = 14,
-    G_MDSFT_TEXTLOD = 16,
-    G_MDSFT_TEXTDETAIL = 17,
-    G_MDSFT_TEXTPERSP = 19,
-    G_MDSFT_CYCLETYPE = 20,
-    G_MDSFT_COLORDITHER = 22,
-    G_MDSFT_PIPELINE = 23,
 }
 
 pub enum BlendParamPMColor {
@@ -899,8 +883,7 @@ impl RDP {
         let cycle_type = get_cycle_type_from_other_mode_h(self.other_mode_h);
 
         if cycle_type == CycleType::Copy {
-            self.other_mode_h = (self.other_mode_h
-                & !(3 << OtherModeH_Layout::G_MDSFT_TEXTFILT as u32))
+            self.other_mode_h = (self.other_mode_h & !(3 << OtherModeHLayout::TEXT_FILT.bits()))
                 | (TextureFilter::Point as u32);
             self.shader_config_changed = true;
         }

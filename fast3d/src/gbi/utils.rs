@@ -1,8 +1,8 @@
-use crate::gbi::defines::{rsp_geometry, AlphaCompare, CycleType, TextureFilter};
+use crate::gbi::defines::{rsp_geometry, AlphaCompare, CycleType, OtherModeHLayout, TextureFilter};
 use crate::rsp::RSPConstants;
 use crate::{
     output::gfx::{BlendFactor, Face},
-    rdp::{BlendParamB, BlendParamPMColor, OtherModeH_Layout, OtherModeLayoutL},
+    rdp::{BlendParamB, BlendParamPMColor, OtherModeLayoutL},
 };
 
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
@@ -38,33 +38,15 @@ pub fn other_mode_l_alpha_compare_dither(other_mode_l: u32) -> bool {
 }
 
 pub fn get_cycle_type_from_other_mode_h(mode_h: u32) -> CycleType {
-    (((mode_h >> OtherModeH_Layout::G_MDSFT_CYCLETYPE as u32) & 0x03) as u8)
+    (((mode_h >> OtherModeHLayout::CYCLE_TYPE.bits()) & 0x03) as u8)
         .try_into()
         .unwrap()
 }
 
 pub fn get_texture_filter_from_other_mode_h(mode_h: u32) -> TextureFilter {
-    (((mode_h >> OtherModeH_Layout::G_MDSFT_TEXTFILT as u32) & 0x3) as u8)
+    (((mode_h >> OtherModeHLayout::TEXT_FILT.bits()) & 0x3) as u8)
         .try_into()
         .unwrap()
-}
-
-pub fn translate_blend_param_b(param: u32, src: BlendFactor) -> BlendFactor {
-    match param {
-        x if x == BlendParamB::G_BL_1MA as u32 => {
-            if src == BlendFactor::SrcAlpha {
-                BlendFactor::OneMinusSrcAlpha
-            } else if src == BlendFactor::One {
-                BlendFactor::Zero
-            } else {
-                BlendFactor::One
-            }
-        }
-        x if x == BlendParamB::G_BL_A_MEM as u32 => BlendFactor::DstAlpha,
-        x if x == BlendParamB::G_BL_1 as u32 => BlendFactor::One,
-        x if x == BlendParamB::G_BL_0 as u32 => BlendFactor::Zero,
-        _ => panic!("Unknown Blend Param B: {}", param),
-    }
 }
 
 pub fn translate_cull_mode(geometry_mode: u32, rsp_constants: &RSPConstants) -> Option<Face> {

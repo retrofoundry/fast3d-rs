@@ -1,3 +1,4 @@
+use bitflags::bitflags;
 use num_enum::TryFromPrimitive;
 
 #[repr(C)]
@@ -210,6 +211,30 @@ pub enum AlphaCompare {
 impl Default for AlphaCompare {
     fn default() -> Self {
         Self::None
+    }
+}
+
+bitflags! {
+    pub struct OtherModeHLayout: u32 {
+        const BLEND_MASK = 0x00000000;
+        const ALPHA_DITHER = 0x00000004;
+        const RGB_DITHER = 0x00000006;
+        const COMB_KEY = 0x00000008;
+        const TEXT_CONV = 0x00000009;
+        const TEXT_FILT = 0x0000000c;
+        const TEXT_LUT = 0x0000000e;
+        const TEXT_LOD = 0x00000010;
+        const TEXT_DETAIL = 0x00000011;
+        const TEXT_PERSP = 0x00000013;
+        const CYCLE_TYPE = 0x00000014;
+        const COLOR_DITHER = 0x00000016;
+        const PIPELINE = 0x00000017;
+    }
+}
+
+impl Default for OtherModeHLayout {
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
