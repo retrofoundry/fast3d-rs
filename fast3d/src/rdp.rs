@@ -548,6 +548,7 @@ impl RDP {
         self.shader_config_changed = true;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_tile(
         &mut self,
         tile: u8,
@@ -732,6 +733,7 @@ impl RDP {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_texture_rectangle(
         &mut self,
         rsp: &mut RSP,

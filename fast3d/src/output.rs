@@ -225,6 +225,7 @@ impl RCPOutputCollector {
         draw_call.cull_mode = cull_mode;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn set_uniforms(
         &mut self,
         fog_color: glam::Vec4,

@@ -20,6 +20,7 @@ pub struct OutputTexture {
 }
 
 impl OutputTexture {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         game_address: usize,
         format: ImageFormat,

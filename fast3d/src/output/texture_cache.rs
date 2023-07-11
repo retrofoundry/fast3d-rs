@@ -60,6 +60,7 @@ impl TextureCache {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert(
         &mut self,
         game_address: usize,
