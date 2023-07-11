@@ -507,6 +507,7 @@ impl<'a> GliumRenderer<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_triangles(
         &self,
         display: &Display,
