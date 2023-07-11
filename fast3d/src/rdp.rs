@@ -658,13 +658,17 @@ impl RDP {
         let vertex_array = [vertex1, vertex2, vertex3];
 
         // Don't draw anything if both tris are being culled.
-        if rsp
-            .geometry_mode
-            .contains(GeometryModes::from_bits_truncate(
-                rsp.constants.geomode_cull_both_val,
-            ))
-        {
-            return;
+        unsafe {
+            // We do unchecked comparisons because the values set in rsp.constants are per GBI
+            // and do not appear in the general GeometryModes enum
+            if rsp
+                .geometry_mode
+                .contains(GeometryModes::from_bits_unchecked(
+                    rsp.constants.geomode_cull_both_val,
+                ))
+            {
+                return;
+            }
         }
 
         self.update_render_state(output, rsp.geometry_mode, &rsp.constants);

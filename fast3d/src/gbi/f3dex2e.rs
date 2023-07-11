@@ -5,6 +5,7 @@ use crate::rsp::RSP;
 
 use super::{f3dex2, utils::get_cmd, GBICommandParams, GBICommandRegistry, GBIResult};
 
+#[allow(dead_code)]
 pub fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
     f3dex2::setup(gbi, rsp);
     gbi.register(OpCode::TEXRECT.bits(), TextureRectangle);

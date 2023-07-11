@@ -58,12 +58,18 @@ pub fn translate_cull_mode(
     geometry_mode: GeometryModes,
     rsp_constants: &RSPConstants,
 ) -> Option<Face> {
-    let cull_front = geometry_mode.contains(GeometryModes::from_bits_truncate(
-        rsp_constants.geomode_cull_front_val,
-    ));
-    let cull_back = geometry_mode.contains(GeometryModes::from_bits_truncate(
-        rsp_constants.geomode_cull_back_val,
-    ));
+    // We do unchecked comparisons because the values set in rsp_constants are per GBI
+    // and do not appear in the general GeometryModes enum
+    let cull_front = unsafe {
+        geometry_mode.contains(GeometryModes::from_bits_unchecked(
+            rsp_constants.geomode_cull_front_val,
+        ))
+    };
+    let cull_back = unsafe {
+        geometry_mode.contains(GeometryModes::from_bits_unchecked(
+            rsp_constants.geomode_cull_back_val,
+        ))
+    };
 
     if cull_front && cull_back {
         panic!("Culling both front and back faces is not supported");

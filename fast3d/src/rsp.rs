@@ -286,9 +286,9 @@ impl RSP {
             let vertex_normal = unsafe { &(*vertices.add(i)).normal };
             let staging_vertex = &mut self.vertex_table[write_index];
 
-            let mut U = (((vertex.texture_coords[0] as i32) * (self.texture_state.scale_s as i32))
+            let mut u = (((vertex.texture_coords[0] as i32) * (self.texture_state.scale_s as i32))
                 >> 16) as i16;
-            let mut V = (((vertex.texture_coords[1] as i32) * (self.texture_state.scale_t as i32))
+            let mut v = (((vertex.texture_coords[1] as i32) * (self.texture_state.scale_t as i32))
                 >> 16) as i16;
 
             if self.geometry_mode.contains(GeometryModes::LIGHTING) {
@@ -361,8 +361,8 @@ impl RSP {
                         + vertex_normal.normal[1] as f32 * self.lookat_coeffs[1][1]
                         + vertex_normal.normal[2] as f32 * self.lookat_coeffs[1][2];
 
-                    U = ((dotx / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_s as i16;
-                    V = ((doty / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_t as i16;
+                    u = ((dotx / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_s as i16;
+                    v = ((doty / 127.0 + 1.0) / 4.0) as i16 * self.texture_state.scale_t as i16;
                 }
             } else {
                 staging_vertex.color.r = vertex.color.r as f32 / 255.0;
@@ -370,8 +370,8 @@ impl RSP {
                 staging_vertex.color.b = vertex.color.b as f32 / 255.0;
             }
 
-            staging_vertex.uv[0] = U as f32;
-            staging_vertex.uv[1] = V as f32;
+            staging_vertex.uv[0] = u as f32;
+            staging_vertex.uv[1] = v as f32;
 
             staging_vertex.position.x = vertex.position[0] as f32;
             staging_vertex.position.y = vertex.position[1] as f32;
@@ -469,11 +469,11 @@ impl RSP {
     }
 
     pub fn update_geometry_mode(&mut self, rdp: &mut RDP, clear_bits: u32, set_bits: u32) {
-        let clear_bits = GeometryModes::from_bits_truncate(clear_bits);
-        let set_bits = GeometryModes::from_bits_truncate(set_bits);
+        let casted_clear_bits = unsafe { GeometryModes::from_bits_unchecked(clear_bits) };
+        let casted_set_bits = unsafe { GeometryModes::from_bits_unchecked(set_bits) };
 
-        self.geometry_mode &= clear_bits;
-        self.geometry_mode |= set_bits;
+        self.geometry_mode &= casted_clear_bits;
+        self.geometry_mode |= casted_set_bits;
 
         rdp.shader_config_changed = true;
     }

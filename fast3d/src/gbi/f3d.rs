@@ -77,6 +77,7 @@ bitflags! {
     }
 }
 
+#[allow(dead_code)]
 pub fn setup(gbi: &mut GBICommandRegistry, _rsp: &mut RSP) {
     gbi.register(OpCode::SPNOOP.bits(), SpNoOp);
     gbi.register(OpCode::DL.bits(), SubDL);
