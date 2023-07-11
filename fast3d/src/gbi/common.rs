@@ -1,4 +1,4 @@
-use crate::gbi::defines::OpCode;
+use crate::gbi::defines::{OpCode, WrapMode};
 use crate::gbi::macros::gbi_command;
 use crate::gbi::utils::get_cmd;
 use crate::gbi::{GBICommand, GBICommandParams, GBICommandRegistry, GBIResult};
@@ -105,10 +105,10 @@ gbi_command!(RDPSetTile, |params: &mut GBICommandParams| {
     let tmem = get_cmd(w0, 0, 9) as u16;
     let tile = get_cmd(w1, 24, 3) as u8;
     let palette = get_cmd(w1, 20, 4) as u8;
-    let cm_t: u8 = get_cmd(w1, 18, 2) as u8;
+    let cm_t: WrapMode = ((get_cmd(w1, 18, 2) & 0x3) as u8).into();
     let mask_t: u8 = get_cmd(w1, 14, 4) as u8;
     let shift_t: u8 = get_cmd(w1, 10, 4) as u8;
-    let cm_s: u8 = get_cmd(w1, 8, 2) as u8;
+    let cm_s: WrapMode = ((get_cmd(w1, 8, 2) & 0x3) as u8).into();
     let mask_s: u8 = get_cmd(w1, 4, 4) as u8;
     let shift_s: u8 = get_cmd(w1, 0, 4) as u8;
 

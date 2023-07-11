@@ -423,12 +423,32 @@ bitflags! {
     }
 }
 
-bitflags! {
-    pub struct TextureWrapMode: u32 {
-        const NOMIRROR = 0x00;
-        const WRAP = 0x00;
-        const MIRROR = 0x01;
-        const CLAMP = 0x02;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum WrapMode {
+    Clamp,
+    Repeat,
+    MirrorRepeat,
+}
+
+impl Default for WrapMode {
+    fn default() -> Self {
+        Self::Repeat
+    }
+}
+
+impl From<u8> for WrapMode {
+    fn from(v: u8) -> Self {
+        let mirror = v & 0x1 != 0;
+        let clamp = v & 0x2 != 0;
+
+        if clamp {
+            WrapMode::Clamp
+        } else if mirror {
+            WrapMode::MirrorRepeat
+        } else {
+            WrapMode::Repeat
+        }
     }
 }
 

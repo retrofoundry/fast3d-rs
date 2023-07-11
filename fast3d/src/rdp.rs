@@ -3,7 +3,7 @@ use log::trace;
 
 use crate::gbi::defines::{
     AlphaCombinerMux, ColorCombinerMux, ComponentSize, CycleType, GeometryModes, ImageFormat,
-    OtherModeHLayout, RenderModeFlags, TextureFilter, TextureLUT, TextureTile, ZMode,
+    OtherModeHLayout, RenderModeFlags, TextureFilter, TextureLUT, TextureTile, WrapMode, ZMode,
 };
 
 use crate::output::{
@@ -417,8 +417,8 @@ impl RDP {
                 output.set_sampler_parameters(
                     i as usize,
                     linear_filter,
-                    tile_descriptor.cm_s as u32,
-                    tile_descriptor.cm_t as u32,
+                    tile_descriptor.clamp_s,
+                    tile_descriptor.clamp_t,
                 );
             }
         }
@@ -557,8 +557,8 @@ impl RDP {
         line: u16,
         tmem: u16,
         palette: u8,
-        cm_t: u8,
-        cm_s: u8,
+        clamp_t: WrapMode,
+        clamp_s: WrapMode,
         mask_t: u8,
         mask_s: u8,
         shift_t: u8,
@@ -571,10 +571,10 @@ impl RDP {
         tile.line = line;
         tile.tmem = tmem;
         tile.palette = palette;
-        tile.cm_t = cm_t;
+        tile.clamp_t = clamp_t;
         tile.mask_t = mask_t;
         tile.shift_t = shift_t;
-        tile.cm_s = cm_s;
+        tile.clamp_s = clamp_s;
         tile.mask_s = mask_s;
         tile.shift_s = shift_s;
 

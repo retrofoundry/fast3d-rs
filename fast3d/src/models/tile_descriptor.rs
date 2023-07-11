@@ -1,4 +1,4 @@
-use crate::gbi::defines::{ComponentSize, ImageFormat};
+use crate::gbi::defines::{ComponentSize, ImageFormat, WrapMode};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct TileDescriptor {
@@ -18,13 +18,13 @@ pub struct TileDescriptor {
     /// Position of palette for 4bit color index textures (4bit precision, 0 - 15)
     pub palette: u8,
     /// s-axis mirror, wrap, clamp flags
-    pub cm_s: u8,
+    pub clamp_s: WrapMode,
     /// s-axis mask (4bit precision, 0 - 15)
     pub mask_s: u8,
     /// s-coordinate shift value
     pub shift_s: u8,
     /// t-axis mirror, wrap, clamp flags
-    pub cm_t: u8,
+    pub clamp_t: WrapMode,
     /// t-axis mask (4bit precision, 0 - 15)
     pub mask_t: u8,
     /// t-coordinate shift value
@@ -43,10 +43,10 @@ impl TileDescriptor {
         tmem: 0,
         tmem_index: 0,
         palette: 0,
-        cm_s: 0,
+        clamp_s: WrapMode::Repeat,
         mask_s: 0,
         shift_s: 0,
-        cm_t: 0,
+        clamp_t: WrapMode::Repeat,
         mask_t: 0,
         shift_t: 0,
     };

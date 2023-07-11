@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use crate::opengl_program::ShaderVersion;
-use fast3d::gbi::defines::TextureWrapMode;
+use fast3d::gbi::defines::WrapMode;
 use fast3d::output::{ShaderConfig, ShaderId};
 use fast3d::{
     output::{
@@ -234,12 +234,10 @@ fn blend_factor_to_glium(factor: BlendFactor) -> LinearBlendingFactor {
     }
 }
 
-fn clamp_to_glium(clamp: u32) -> SamplerWrapFunction {
-    if clamp & TextureWrapMode::CLAMP.bits() != 0 {
+fn clamp_to_glium(clamp: WrapMode) -> SamplerWrapFunction {
+    if clamp == WrapMode::Clamp {
         return SamplerWrapFunction::Clamp;
-    }
-
-    if clamp & TextureWrapMode::MIRROR.bits() != 0 {
+    } else if clamp == WrapMode::MirrorRepeat {
         return SamplerWrapFunction::Mirror;
     }
 

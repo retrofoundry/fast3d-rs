@@ -1,4 +1,4 @@
-use crate::gbi::defines::{ComponentSize, ImageFormat};
+use crate::gbi::defines::{ComponentSize, ImageFormat, WrapMode};
 use crate::output::gfx::CompareFunction;
 
 pub struct OutputTexture {
@@ -49,8 +49,8 @@ impl OutputTexture {
 pub struct OutputSampler {
     pub tile: usize,
     pub linear_filter: bool,
-    pub clamp_s: u32,
-    pub clamp_t: u32,
+    pub clamp_s: WrapMode,
+    pub clamp_t: WrapMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

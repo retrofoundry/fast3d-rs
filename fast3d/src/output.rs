@@ -1,4 +1,4 @@
-use crate::gbi::defines::GeometryModes;
+use crate::gbi::defines::{GeometryModes, WrapMode};
 use crate::output::models::{
     OutputFogParams, OutputSampler, OutputStencil, OutputUniforms, OutputUniformsBlend,
     OutputUniformsCombine, OutputVBO,
@@ -168,8 +168,8 @@ impl RCPOutputCollector {
         &mut self,
         tile: usize,
         linear_filter: bool,
-        clamp_s: u32,
-        clamp_t: u32,
+        clamp_s: WrapMode,
+        clamp_t: WrapMode,
     ) {
         let draw_call = self.current_draw_call();
         draw_call.samplers[tile] = Some(OutputSampler {

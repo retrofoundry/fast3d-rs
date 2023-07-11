@@ -10,7 +10,7 @@ use crate::defines::{
     VertexWithFogUniforms,
 };
 use crate::wgpu_program::ShaderVersion;
-use fast3d::gbi::defines::TextureWrapMode;
+use fast3d::gbi::defines::WrapMode;
 use fast3d::output::{
     gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
     models::{OutputSampler, OutputStencil, OutputTexture},
@@ -897,12 +897,10 @@ impl<'a> WgpuRenderer<'a> {
     }
 }
 
-fn clamp_to_wgpu(val: u32) -> wgpu::AddressMode {
-    if val & TextureWrapMode::CLAMP.bits() != 0 {
+fn clamp_to_wgpu(clamp: WrapMode) -> wgpu::AddressMode {
+    if clamp == WrapMode::Clamp {
         return wgpu::AddressMode::ClampToEdge;
-    }
-
-    if val & TextureWrapMode::MIRROR.bits() != 0 {
+    } else if clamp == WrapMode::MirrorRepeat {
         return wgpu::AddressMode::MirrorRepeat;
     }
 
