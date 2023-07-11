@@ -2,8 +2,8 @@ use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
 use crate::gbi::defines::{
-    g, ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeHLayout, RenderModeFlags,
-    TextureFilter, TextureLUT, ZMode,
+    ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeHLayout, RenderModeFlags,
+    TextureFilter, TextureLUT, TextureTile, ZMode,
 };
 
 use crate::output::{
@@ -225,7 +225,7 @@ impl RDP {
         // First, verify that we're loading the whole texture.
         assert!(uls == 0 && ult == 0);
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, g::tx::LOADTILE);
+        assert_eq!(tile, TextureTile::LOADTILE.bits());
 
         let tile = &mut self.tile_descriptors[tile as usize];
         self.tmem_map.insert(
@@ -247,7 +247,7 @@ impl RDP {
         // First, verify that we're loading the whole texture.
         assert!(uls == 0 && ult == 0);
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, g::tx::LOADTILE);
+        assert_eq!(tile, TextureTile::LOADTILE.bits());
 
         let tile = &mut self.tile_descriptors[tile as usize];
         self.tmem_map.insert(
@@ -267,7 +267,7 @@ impl RDP {
     // TODO: Verify this method against a game that uses TLUTs
     pub fn load_tlut(&mut self, tile: u8, high_index: u16) {
         // Verify that we're loading into LOADTILE.
-        assert_eq!(tile, g::tx::LOADTILE);
+        assert_eq!(tile, TextureTile::LOADTILE.bits());
         assert_eq!(self.texture_image_state.size, ComponentSize::Bits16 as u8); // TLUTs are always 16-bit (so far)
 
         assert!(

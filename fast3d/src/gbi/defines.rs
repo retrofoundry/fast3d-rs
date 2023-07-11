@@ -367,70 +367,81 @@ pub enum BlendAlpha2 {
     One = 2,
 }
 
-pub mod g {
-    pub mod set {
-        pub const COLORIMG: u8 = 0xff;
-        pub const DEPTHIMG: u8 = 0xfe;
-        pub const TEXIMG: u8 = 0xfd;
-        pub const COMBINE: u8 = 0xfc;
-        pub const ENVCOLOR: u8 = 0xfb;
-        pub const PRIMCOLOR: u8 = 0xfa;
-        pub const BLENDCOLOR: u8 = 0xf9;
-        pub const FOGCOLOR: u8 = 0xf8;
-        pub const FILLCOLOR: u8 = 0xf7;
-        pub const TILE: u8 = 0xf5;
-        pub const TILESIZE: u8 = 0xf2;
-        pub const PRIMDEPTH: u8 = 0xee;
-        pub const SCISSOR: u8 = 0xed;
-        pub const CONVERT: u8 = 0xec;
-        pub const KEYR: u8 = 0xeb;
-        pub const KEYGB: u8 = 0xea;
+bitflags! {
+    pub struct OpCode: u8 {
+        const NOOP = 0x00;
+
+        const SET_COLORIMG = 0xff;
+        const SET_DEPTHIMG = 0xfe;
+        const SET_TEXIMG = 0xfd;
+        const SET_COMBINE = 0xfc;
+        const SET_ENVCOLOR = 0xfb;
+        const SET_PRIMCOLOR = 0xfa;
+        const SET_BLENDCOLOR = 0xf9;
+        const SET_FOGCOLOR = 0xf8;
+        const SET_FILLCOLOR = 0xf7;
+        const SET_TILE = 0xf5;
+        const SET_TILESIZE = 0xf2;
+        const SET_PRIMDEPTH = 0xee;
+        const SET_SCISSOR = 0xed;
+        const SET_CONVERT = 0xec;
+        const SET_KEYR = 0xeb;
+        const SET_KEYGB = 0xea;
+
+        const LOAD_BLOCK = 0xf3;
+        const LOAD_TILE = 0xf4;
+        const LOAD_TLUT = 0xf0;
+
+        const TEXRECT = 0xe4;
+        const TEXRECTFLIP = 0xe5;
+        const FILLRECT = 0xf6;
+
+        const RDPFULLSYNC = 0xe9;
+        const RDPTILESYNC = 0xe8;
+        const RDPPIPESYNC = 0xe7;
+        const RDPLOADSYNC = 0xe6;
+        const RDPSETOTHERMODE = 0xef;
     }
+}
 
-    pub mod load {
-        pub const BLOCK: u8 = 0xf3;
-        pub const TILE: u8 = 0xf4;
-        pub const TLUT: u8 = 0xf0;
+bitflags! {
+    pub struct MoveWordIndex: u8 {
+        const MATRIX = 0x00; /* NOTE: also used by movemem */
+        const NUMLIGHT = 0x02;
+        const CLIP = 0x04;
+        const SEGMENT = 0x06;
+        const FOG = 0x08;
+        const LIGHTCOL = 0x0A;
+        const PERSPNORM = 0x0E;
     }
+}
 
-    pub mod mw {
-        pub const MATRIX: u8 = 0x00; /* NOTE: also used by movemem */
-        pub const NUMLIGHT: u8 = 0x02;
-        pub const CLIP: u8 = 0x04;
-        pub const SEGMENT: u8 = 0x06;
-        pub const FOG: u8 = 0x08;
-        pub const LIGHTCOL: u8 = 0x0A;
-        #[cfg(feature = "f3dex2")]
-        pub const FORCEMTX: u8 = 0x0C;
-        #[cfg(not(feature = "f3dex2"))]
-        pub const POINTS: u8 = 0x0C;
-        pub const PERSPNORM: u8 = 0x0E;
+bitflags! {
+    pub struct TextureTile: u8 {
+        const LOADTILE = 0x07;
+        const RENDERTILE = 0x00;
     }
+}
 
-    pub mod tx {
-        pub const LOADTILE: u8 = 7;
-        pub const RENDERTILE: u8 = 0;
-        pub const NOMIRROR: u8 = 0;
-        pub const WRAP: u8 = 0;
-        pub const MIRROR: u8 = 1;
-        pub const CLAMP: u8 = 2;
-        pub const NOMASK: u8 = 0;
-        pub const NOLOD: u8 = 0;
+bitflags! {
+    pub struct TextureWrapMode: u32 {
+        const NOMIRROR = 0x00;
+        const WRAP = 0x00;
+        const MIRROR = 0x01;
+        const CLAMP = 0x02;
     }
+}
 
-    // lose defines
+bitflags! {
+    pub struct TextureMask: u8 {
+        const NOMASK = 0x00;
+    }
+}
 
-    pub const TEXRECT: u8 = 0xe4;
-    pub const TEXRECTFLIP: u8 = 0xe5;
-    pub const FILLRECT: u8 = 0xf6;
-
-    pub const NOOP: u8 = 0x00;
-    pub const RDPFULLSYNC: u8 = 0xe9;
-    pub const RDPTILESYNC: u8 = 0xe8;
-    pub const RDPPIPESYNC: u8 = 0xe7;
-    pub const RDPLOADSYNC: u8 = 0xe6;
-
-    pub const RDPSETOTHERMODE: u8 = 0xef;
+bitflags! {
+    pub struct TextureShift: u8 {
+        const NOLOD = 0x00;
+    }
 }
 
 bitflags! {

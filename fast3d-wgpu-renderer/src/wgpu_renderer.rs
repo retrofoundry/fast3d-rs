@@ -10,15 +10,13 @@ use crate::defines::{
     VertexWithFogUniforms,
 };
 use crate::wgpu_program::ShaderVersion;
-use fast3d::output::{IntermediateDrawCall, RCPOutputCollector};
-use fast3d::{
-    gbi::defines::g,
-    output::{
-        gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
-        models::{OutputSampler, OutputStencil, OutputTexture},
-        ShaderConfig, ShaderId,
-    },
+use fast3d::gbi::defines::TextureWrapMode;
+use fast3d::output::{
+    gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
+    models::{OutputSampler, OutputStencil, OutputTexture},
+    ShaderConfig, ShaderId,
 };
+use fast3d::output::{IntermediateDrawCall, RCPOutputCollector};
 
 use super::wgpu_program::WgpuProgram;
 
@@ -906,11 +904,11 @@ impl<'a> WgpuRenderer<'a> {
 }
 
 fn clamp_to_wgpu(val: u32) -> wgpu::AddressMode {
-    if val & g::tx::CLAMP as u32 != 0 {
+    if val & TextureWrapMode::CLAMP.bits() != 0 {
         return wgpu::AddressMode::ClampToEdge;
     }
 
-    if val & g::tx::MIRROR as u32 != 0 {
+    if val & TextureWrapMode::MIRROR.bits() != 0 {
         return wgpu::AddressMode::MirrorRepeat;
     }
 

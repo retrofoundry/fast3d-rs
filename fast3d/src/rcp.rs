@@ -51,7 +51,7 @@ impl RCP {
         let mut command = commands as *mut Gfx;
 
         loop {
-            let opcode = unsafe { (*command).words.w0 } >> 24;
+            let opcode = (unsafe { (*command).words.w0 } >> 24) as u8;
             if let Some(handler) = self.gbi.handler(&opcode) {
                 let handler_input = &mut GBICommandParams {
                     rdp: &mut self.rdp,

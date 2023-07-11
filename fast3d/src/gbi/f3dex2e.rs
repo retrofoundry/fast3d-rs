@@ -1,21 +1,22 @@
+use crate::gbi::defines::OpCode;
 use crate::gbi::macros::gbi_command;
 use crate::gbi::GBICommand;
 use crate::rsp::RSP;
 
-use super::{defines::g, f3dex2, utils::get_cmd, GBICommandParams, GBICommandRegistry, GBIResult};
+use super::{f3dex2, utils::get_cmd, GBICommandParams, GBICommandRegistry, GBIResult};
 
 pub fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
     f3dex2::setup(gbi, rsp);
-    gbi.register(g::TEXRECT as usize, TextureRectangle);
-    gbi.register(g::TEXRECTFLIP as usize, TextureRectangle);
-    gbi.register(g::FILLRECT as usize, FillRectangle);
+    gbi.register(OpCode::TEXRECT.bits(), TextureRectangle);
+    gbi.register(OpCode::TEXRECTFLIP.bits(), TextureRectangle);
+    gbi.register(OpCode::FILLRECT.bits(), FillRectangle);
 }
 
 gbi_command!(TextureRectangle, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    let opcode = w0 >> 24;
+    let opcode = (w0 >> 24) as u8;
 
     let lrx = get_cmd(w0, 0, 24) << 8 >> 8;
     let lry = get_cmd(w1, 0, 24) << 8 >> 8;
@@ -53,7 +54,7 @@ gbi_command!(TextureRectangle, |params: &mut GBICommandParams| {
         ult as i16,
         dsdx as i16,
         dtdy as i16,
-        opcode == g::TEXRECTFLIP as usize,
+        opcode == OpCode::TEXRECTFLIP.bits(),
     );
 
     GBIResult::Continue
