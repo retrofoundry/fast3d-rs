@@ -141,14 +141,14 @@ pub fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
     gbi.register(defines::OpCode::RDPSETOTHERMODE.bits(), SetOtherMode);
 
     rsp.setup_constants(RSPConstants {
-        G_MTX_PUSH: MatrixOperation::PUSH.bits,
-        G_MTX_LOAD: MatrixOperation::LOAD.bits,
-        G_MTX_PROJECTION: MatrixMode::PROJECTION.bits,
+        mtx_push_val: MatrixOperation::PUSH.bits,
+        mtx_load_val: MatrixOperation::LOAD.bits,
+        mtx_projection_val: MatrixMode::PROJECTION.bits,
 
-        G_SHADING_SMOOTH: GeometryModes::SHADING_SMOOTH.bits,
-        G_CULL_FRONT: GeometryModes::CULL_FRONT.bits,
-        G_CULL_BACK: GeometryModes::CULL_BACK.bits,
-        G_CULL_BOTH: GeometryModes::CULL_BOTH.bits,
+        geomode_shading_smooth_val: GeometryModes::SHADING_SMOOTH.bits,
+        geomode_cull_front_val: GeometryModes::CULL_FRONT.bits,
+        geomode_cull_back_val: GeometryModes::CULL_BACK.bits,
+        geomode_cull_both_val: GeometryModes::CULL_BOTH.bits,
     })
 }
 
@@ -156,7 +156,7 @@ gbi_command!(Matrix, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    let mtx_params = get_cmd(w0, 0, 8) as u8 ^ params.rsp.constants.G_MTX_PUSH;
+    let mtx_params = get_cmd(w0, 0, 8) as u8 ^ MatrixOperation::PUSH.bits;
     params.rsp.matrix(w1, mtx_params);
 
     GBIResult::Continue

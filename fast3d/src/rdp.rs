@@ -654,7 +654,9 @@ impl RDP {
         let vertex_array = [vertex1, vertex2, vertex3];
 
         // Don't draw anything if both tris are being culled.
-        if (rsp.geometry_mode & rsp.constants.G_CULL_BOTH) == rsp.constants.G_CULL_BOTH {
+        if (rsp.geometry_mode & rsp.constants.geomode_cull_both_val)
+            == rsp.constants.geomode_cull_both_val
+        {
             return;
         }
 

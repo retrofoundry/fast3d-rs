@@ -63,8 +63,8 @@ pub fn get_texture_filter_from_other_mode_h(mode_h: u32) -> TextureFilter {
 }
 
 pub fn translate_cull_mode(geometry_mode: u32, rsp_constants: &RSPConstants) -> Option<Face> {
-    let cull_front = (geometry_mode & rsp_constants.G_CULL_FRONT) != 0;
-    let cull_back = (geometry_mode & rsp_constants.G_CULL_BACK) != 0;
+    let cull_front = (geometry_mode & rsp_constants.geomode_cull_front_val) != 0;
+    let cull_back = (geometry_mode & rsp_constants.geomode_cull_back_val) != 0;
 
     if cull_front && cull_back {
         panic!("Culling both front and back faces is not supported");

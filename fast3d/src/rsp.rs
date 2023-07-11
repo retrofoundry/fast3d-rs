@@ -49,26 +49,26 @@ impl StagingVertex {
 }
 
 pub struct RSPConstants {
-    pub G_MTX_PUSH: u8,
-    pub G_MTX_LOAD: u8,
-    pub G_MTX_PROJECTION: u8,
+    pub mtx_push_val: u8,
+    pub mtx_load_val: u8,
+    pub mtx_projection_val: u8,
 
-    pub G_SHADING_SMOOTH: u32,
-    pub G_CULL_FRONT: u32,
-    pub G_CULL_BACK: u32,
-    pub G_CULL_BOTH: u32,
+    pub geomode_shading_smooth_val: u32,
+    pub geomode_cull_front_val: u32,
+    pub geomode_cull_back_val: u32,
+    pub geomode_cull_both_val: u32,
 }
 
 impl RSPConstants {
     pub const EMPTY: Self = Self {
-        G_MTX_PUSH: 0,
-        G_MTX_LOAD: 0,
-        G_MTX_PROJECTION: 0,
+        mtx_push_val: 0,
+        mtx_load_val: 0,
+        mtx_projection_val: 0,
 
-        G_SHADING_SMOOTH: 0,
-        G_CULL_FRONT: 0,
-        G_CULL_BACK: 0,
-        G_CULL_BOTH: 0,
+        geomode_shading_smooth_val: 0,
+        geomode_cull_front_val: 0,
+        geomode_cull_back_val: 0,
+        geomode_cull_both_val: 0,
     };
 }
 
@@ -418,8 +418,8 @@ impl RSP {
             Mat4::from_fixed_point(slice)
         };
 
-        if params & self.constants.G_MTX_PROJECTION != 0 {
-            if (params & self.constants.G_MTX_LOAD) != 0 {
+        if params & self.constants.mtx_projection_val != 0 {
+            if (params & self.constants.mtx_load_val) != 0 {
                 // Load the input matrix into the projection matrix
                 // rsp.projection_matrix.copy_from_slice(&matrix);
                 self.projection_matrix = matrix;
@@ -429,7 +429,7 @@ impl RSP {
             }
         } else {
             // Modelview matrix
-            if params & self.constants.G_MTX_PUSH != 0
+            if params & self.constants.mtx_push_val != 0
                 && self.matrix_stack_pointer < MATRIX_STACK_SIZE
             {
                 // Push a copy of the current matrix onto the stack
@@ -441,7 +441,7 @@ impl RSP {
                 right[0] = left[src_index];
             }
 
-            if params & self.constants.G_MTX_LOAD != 0 {
+            if params & self.constants.mtx_load_val != 0 {
                 // Load the input matrix into the current matrix
                 self.matrix_stack[self.matrix_stack_pointer - 1] = matrix;
             } else {

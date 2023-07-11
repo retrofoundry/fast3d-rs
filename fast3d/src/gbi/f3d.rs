@@ -14,20 +14,20 @@ bitflags! {
 
 bitflags! {
     pub struct MoveWordOffset: u8 {
-        const aLIGHT_2 = 0x20;
-        const bLIGHT_2 = 0x24;
-        const aLIGHT_3 = 0x40;
-        const bLIGHT_3 = 0x44;
-        const aLIGHT_4 = 0x60;
-        const bLIGHT_4 = 0x64;
-        const aLIGHT_5 = 0x80;
-        const bLIGHT_5 = 0x84;
-        const aLIGHT_6 = 0xa0;
-        const bLIGHT_6 = 0xa4;
-        const aLIGHT_7 = 0xc0;
-        const bLIGHT_7 = 0xc4;
-        const aLIGHT_8 = 0xe0;
-        const bLIGHT_8 = 0xe4;
+        const A_LIGHT_2 = 0x20;
+        const B_LIGHT_2 = 0x24;
+        const A_LIGHT_3 = 0x40;
+        const B_LIGHT_3 = 0x44;
+        const A_LIGHT_4 = 0x60;
+        const B_LIGHT_4 = 0x64;
+        const A_LIGHT_5 = 0x80;
+        const B_LIGHT_5 = 0x84;
+        const A_LIGHT_6 = 0xa0;
+        const B_LIGHT_6 = 0xa4;
+        const A_LIGHT_7 = 0xc0;
+        const B_LIGHT_7 = 0xc4;
+        const A_LIGHT_8 = 0xe0;
+        const B_LIGHT_8 = 0xe4;
     }
 }
 
