@@ -72,6 +72,7 @@ impl RSPConstants {
     };
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct RSP {
     // constants set by each GBI
     pub constants: RSPConstants,
@@ -174,7 +175,7 @@ impl RSP {
         self.segments[segment] = address;
     }
 
-    pub fn from_segmented(&self, address: usize) -> usize {
+    pub fn get_segment(&self, address: usize) -> usize {
         let segment = (address >> 24) & 0x0F;
         let offset = address & 0x00FFFFFF;
 
@@ -215,7 +216,7 @@ impl RSP {
     pub fn set_light(&mut self, index: usize, address: usize) {
         assert!(index <= MAX_LIGHTS);
 
-        let data = self.from_segmented(address);
+        let data = self.get_segment(address);
         let light_ptr = data as *const Light;
         let light = unsafe { &*light_ptr };
 
@@ -226,7 +227,7 @@ impl RSP {
 
     pub fn set_look_at(&mut self, index: usize, address: usize) {
         assert!(index < 2);
-        let data = self.from_segmented(address);
+        let data = self.get_segment(address);
         let dir_light_ptr = data as *const DirLight;
         let dir_light = unsafe { &*dir_light_ptr };
 
@@ -279,7 +280,7 @@ impl RSP {
             self.modelview_projection_matrix_changed = false;
         }
 
-        let vertices = self.from_segmented(address) as *const Vtx;
+        let vertices = self.get_segment(address) as *const Vtx;
 
         for i in 0..vertex_count {
             let vertex = unsafe { &(*vertices.add(i)).vertex };
@@ -409,11 +410,11 @@ impl RSP {
 
     pub fn matrix(&mut self, address: usize, params: u8) {
         let matrix = if cfg!(feature = "gbifloats") {
-            let addr = self.from_segmented(address) as *const f32;
+            let addr = self.get_segment(address) as *const f32;
             let slice = unsafe { slice::from_raw_parts(addr, 16) };
             Mat4::from_floats(slice)
         } else {
-            let addr = self.from_segmented(address) as *const i32;
+            let addr = self.get_segment(address) as *const i32;
             let slice = unsafe { slice::from_raw_parts(addr, 16) };
             Mat4::from_fixed_point(slice)
         };

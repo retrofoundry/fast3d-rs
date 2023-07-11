@@ -175,7 +175,7 @@ gbi_command!(MoveMem, |params: &mut GBICommandParams| {
 
     let index: u8 = get_cmd(w0, 0, 8) as u8;
     let offset = get_cmd(w0, 8, 8) * 8;
-    let data = params.rsp.from_segmented(w1);
+    let data = params.rsp.get_segment(w1);
 
     match index {
         index if index == MoveMemoryIndex::VIEWPORT.bits => {

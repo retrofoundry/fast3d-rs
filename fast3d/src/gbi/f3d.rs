@@ -99,10 +99,10 @@ gbi_command!(SubDL, |params: &mut GBICommandParams| {
 
     if get_cmd(w0, 16, 1) == 0 {
         // Push return address
-        let new_addr = params.rsp.from_segmented(w1);
+        let new_addr = params.rsp.get_segment(w1);
         GBIResult::Recurse(new_addr)
     } else {
-        let new_addr = params.rsp.from_segmented(w1);
+        let new_addr = params.rsp.get_segment(w1);
         let cmd = new_addr as *mut Gfx;
         unsafe { *params.command = cmd.sub(1) };
         GBIResult::Continue

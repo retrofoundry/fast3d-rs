@@ -57,14 +57,14 @@ gbi_command!(RDPSetColorImage, |params: &mut GBICommandParams| {
     let _size = get_cmd(w0, 19, 2);
     let _width = get_cmd(w0, 0, 12) + 1;
 
-    params.rdp.color_image = params.rsp.from_segmented(w1);
+    params.rdp.color_image = params.rsp.get_segment(w1);
     GBIResult::Continue
 });
 
 gbi_command!(RDPSetDepthImage, |params: &mut GBICommandParams| {
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    params.rdp.depth_image = params.rsp.from_segmented(w1);
+    params.rdp.depth_image = params.rsp.get_segment(w1);
     GBIResult::Continue
 });
 
@@ -75,7 +75,7 @@ gbi_command!(RDPSetTextureImage, |params: &mut GBICommandParams| {
     let format = get_cmd(w0, 21, 3) as u8;
     let size = get_cmd(w0, 19, 2) as u8;
     let width = get_cmd(w0, 0, 12) as u16 + 1;
-    let address = params.rsp.from_segmented(w1);
+    let address = params.rsp.get_segment(w1);
 
     params.rdp.texture_image_state = TextureImageState {
         format,
