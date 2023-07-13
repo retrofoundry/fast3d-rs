@@ -28,8 +28,8 @@ static mut theta: f32 = 0.0;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-const SCREEN_HT: u32 = 240;
-const SCREEN_WD: u32 = 320;
+const SCREEN_HEIGHT: u32 = 240;
+const SCREEN_WIDTH: u32 = 320;
 
 struct Example<'a> {
     rcp: RCP,
@@ -185,7 +185,7 @@ fn main() {
     let rdp_init_dl: Vec<Gfx> = vec![
         gsDPSetCycleType(G_CYC_1CYCLE),
         gsDPPipelineMode(G_PM_NPRIMITIVE),
-        gsDPSetScissor(G_SC_NON_INTERLACE, 0, 0, SCREEN_WD, SCREEN_HT),
+        gsDPSetScissor(G_SC_NON_INTERLACE, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT),
         gsDPSetTextureLOD(G_TL_TILE),
         gsDPSetTextureLUT(G_TT_NONE),
         gsDPSetTextureDetail(G_TD_CLAMP),
@@ -203,14 +203,14 @@ fn main() {
 
     let viewport = Viewport::new(
         [
-            SCREEN_WD as i16 * 2,
-            SCREEN_HT as i16 * 2,
+            SCREEN_WIDTH as i16 * 2,
+            SCREEN_HEIGHT as i16 * 2,
             G_MAXZ as i16 / 2,
             0,
         ],
         [
-            SCREEN_WD as i16 * 2,
-            SCREEN_HT as i16 * 2,
+            SCREEN_WIDTH as i16 * 2,
+            SCREEN_HEIGHT as i16 * 2,
             G_MAXZ as i16 / 2,
             0,
         ],
@@ -233,21 +233,21 @@ fn main() {
         gsSPEndDisplayList(),
     ];
 
-    let rsp_color_fb: [u16; (SCREEN_WD * SCREEN_HT) as usize] =
-        [0; (SCREEN_WD * SCREEN_HT) as usize];
+    let rsp_color_fb: [u16; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize] =
+        [0; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize];
     let clear_color_fb_dl: Vec<Gfx> = vec![
         gsDPSetCycleType(G_CYC_FILL),
         gsDPSetColorImage(
             G_IM_FMT_RGBA,
             G_IM_SIZ_16b,
-            SCREEN_WD,
+            SCREEN_WIDTH,
             &rsp_color_fb as *const u16 as usize,
         ),
         gsDPSetFillColor(GPACK_RGBA5551(64, 64, 64, 1) << 16 | GPACK_RGBA5551(64, 64, 64, 1)),
-        gsDPFillRectangle(0, 0, SCREEN_WD - 1, SCREEN_HT - 1),
+        gsDPFillRectangle(0, 0, SCREEN_WIDTH - 1, SCREEN_HEIGHT - 1),
         gsDPPipeSync(),
         gsDPSetFillColor(GPACK_RGBA5551(64, 64, 255, 1) << 16 | GPACK_RGBA5551(64, 64, 255, 1)),
-        gsDPFillRectangle(20, 20, SCREEN_WD - 20, SCREEN_HT - 20),
+        gsDPFillRectangle(20, 20, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 20),
         gsSPEndDisplayList(),
     ];
 
@@ -356,10 +356,10 @@ fn main() {
 
                 guOrtho(
                     projection_mtx_ptr,
-                    -(SCREEN_WD as f32) / 2.0,
-                    (SCREEN_WD as f32) / 2.0,
-                    -(SCREEN_HT as f32) / 2.0,
-                    (SCREEN_HT as f32) / 2.0,
+                    -(SCREEN_WIDTH as f32) / 2.0,
+                    (SCREEN_WIDTH as f32) / 2.0,
+                    -(SCREEN_HEIGHT as f32) / 2.0,
+                    (SCREEN_HEIGHT as f32) / 2.0,
                     1.0,
                     10.0,
                     1.0,

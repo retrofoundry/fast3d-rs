@@ -332,7 +332,7 @@ pub fn gsDPFillRectangle(ulx: u32, uly: u32, lrx: u32, lry: u32) -> Gfx {
 
     w0 |= shiftl(G_FILLRECT, 24, 8);
     w0 |= shiftl(lrx, 14, 10);
-    w1 |= shiftl(lry, 2, 10);
+    w0 |= shiftl(lry, 2, 10);
 
     w1 |= shiftl(ulx, 14, 10);
     w1 |= shiftl(uly, 2, 10);
