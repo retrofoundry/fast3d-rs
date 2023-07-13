@@ -1,5 +1,5 @@
 use fast3d::gbi::defines::{AlphaCombinerMux, ColorCombinerMux, GWords, Gfx, Mtx, Viewport, Vtx};
-use fast3d::models::color_combiner::{CombineParams};
+use fast3d::models::color_combiner::CombineParams;
 
 /// At the moment these commands are of F3DEX2. In the future we should add more.
 /// They're only here for the example testing.
@@ -92,6 +92,7 @@ pub const G_IM_SIZ_DD: u32 = 5;
 // flags for G_SETGEOMETRYMODE
 pub const G_SHADE: u32 = 0x00000004;
 pub const G_SHADING_SMOOTH: u32 = 0x00200000; // value unique to f3dex2
+pub const G_CULL_BACK: u32 = 0x00000400; // value unique to f3dex2
 pub const G_CULL_BOTH: u32 = 0x00000600; // value unique to f3dex2
 pub const G_FOG: u32 = 0x00010000;
 pub const G_LIGHTING: u32 = 0x00020000;

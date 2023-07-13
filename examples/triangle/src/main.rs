@@ -1,9 +1,9 @@
-use std::{future::Future, pin::Pin, task};
-use winit::dpi::LogicalSize;
 use f3dwgpu::WgpuRenderer;
-use fast3d::{RCP, RCPOutputCollector};
 use fast3d::gbi::defines::{Color_t, Gfx, Mtx, Viewport, Vtx, Vtx_t};
 use fast3d::rdp::{OutputDimensions, SCREEN_HEIGHT, SCREEN_WIDTH};
+use fast3d::{RCPOutputCollector, RCP};
+use std::{future::Future, pin::Pin, task};
+use winit::dpi::LogicalSize;
 
 use crate::gbi::{
     gsDPFillRectangle, gsDPFullSync, gsDPPipeSync, gsDPPipelineMode, gsDPSetAlphaCompare,
@@ -141,7 +141,13 @@ impl<'a> Example<'a> {
         vec![
             gsDPSetCycleType(G_CYC_1CYCLE),
             gsDPPipelineMode(G_PM_NPRIMITIVE),
-            gsDPSetScissor(G_SC_NON_INTERLACE, 0, 0, SCREEN_WIDTH as u32, SCREEN_HEIGHT as u32),
+            gsDPSetScissor(
+                G_SC_NON_INTERLACE,
+                0,
+                0,
+                SCREEN_WIDTH as u32,
+                SCREEN_HEIGHT as u32,
+            ),
             gsDPSetTextureLOD(G_TL_TILE),
             gsDPSetTextureLUT(G_TT_NONE),
             gsDPSetTextureDetail(G_TD_CLAMP),
@@ -195,7 +201,11 @@ impl<'a> Example<'a> {
         ]
     }
 
-    fn generate_triangle_dl(projection_mtx_ptr: *mut Mtx, modelview_mtx_ptr: *mut Mtx, triangle_vertices: &[Vtx]) -> Vec<Gfx> {
+    fn generate_triangle_dl(
+        projection_mtx_ptr: *mut Mtx,
+        modelview_mtx_ptr: *mut Mtx,
+        triangle_vertices: &[Vtx],
+    ) -> Vec<Gfx> {
         vec![
             gsSPMatrix(
                 projection_mtx_ptr,
@@ -209,9 +219,9 @@ impl<'a> Example<'a> {
             gsDPSetCycleType(G_CYC_1CYCLE),
             gsDPSetRenderMode(G_RM_AA_OPA_SURF, G_RM_AA_OPA_SURF2),
             gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH),
-            gsSPVertex(&triangle_vertices, 4, 0),
+            gsSPVertex(triangle_vertices, 4, 0),
             gsSP1Triangle(0, 1, 2, 0),
-            gsSP1Triangle(0, 2, 3, 0),
+            gsSP1Triangle(0, 3, 2, 0),
             gsSPEndDisplayList(),
         ]
     }
@@ -294,7 +304,8 @@ impl<'a> fast3d_example::framework::Example for Example<'static> {
 
         let rdp_init_dl = Self::generate_rdp_init_dl();
         let rsp_init_dl = Self::generate_rsp_init_dl(&self.viewport);
-        let clear_color_fb_dl = Self::generate_clear_color_fb_dl(self.rsp_color_fb.as_ptr() as usize);
+        let clear_color_fb_dl =
+            Self::generate_clear_color_fb_dl(self.rsp_color_fb.as_ptr() as usize);
 
         let mut projection_mtx = Mtx { m: [[0; 4]; 4] };
         let projection_mtx_ptr = &mut projection_mtx as *mut Mtx;
@@ -302,23 +313,21 @@ impl<'a> fast3d_example::framework::Example for Example<'static> {
         let mut modelview_mtx = Mtx { m: [[0; 4]; 4] };
         let modelview_mtx_ptr = &mut modelview_mtx as *mut Mtx;
 
+        // set up projection and modelview matrices
         guOrtho(
             projection_mtx_ptr,
-            -(SCREEN_WIDTH as f32) / 2.0,
-            (SCREEN_WIDTH as f32) / 2.0,
-            -(SCREEN_HEIGHT as f32) / 2.0,
-            (SCREEN_HEIGHT as f32) / 2.0,
+            -(SCREEN_WIDTH) / 2.0,
+            (SCREEN_WIDTH) / 2.0,
+            -(SCREEN_HEIGHT) / 2.0,
+            (SCREEN_HEIGHT) / 2.0,
             1.0,
             10.0,
             1.0,
         );
-        guRotate(modelview_mtx_ptr, self.frame_count, 0.0, 0.0, 1.0);
+        guRotate(modelview_mtx_ptr, self.frame_count, 0.0, 1.0, 0.0);
 
-        let triangle_dl = Self::generate_triangle_dl(
-            projection_mtx_ptr,
-            modelview_mtx_ptr,
-            &self.vertex_data,
-        );
+        let triangle_dl =
+            Self::generate_triangle_dl(projection_mtx_ptr, modelview_mtx_ptr, &self.vertex_data);
 
         let commands_dl = [
             gsSPDisplayList(&rdp_init_dl),
@@ -376,5 +385,11 @@ impl<'a> fast3d_example::framework::Example for Example<'static> {
 }
 
 fn main() {
-    fast3d_example::framework::run::<Example>("triangle", Some(LogicalSize { width: 800, height: 600 }));
+    fast3d_example::framework::run::<Example>(
+        "triangle",
+        Some(LogicalSize {
+            width: 800,
+            height: 600,
+        }),
+    );
 }

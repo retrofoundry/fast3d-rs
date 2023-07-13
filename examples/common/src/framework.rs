@@ -1,10 +1,10 @@
 use std::future::Future;
 use std::time::Instant;
+use winit::dpi::LogicalSize;
 use winit::{
     event::{self, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
 };
-use winit::dpi::LogicalSize;
 
 #[allow(dead_code)]
 pub fn cast_slice<T>(data: &[T]) -> &[u8] {
@@ -99,9 +99,10 @@ async fn setup<E: Example>(title: &str, size: Option<LogicalSize<u32>>) -> Setup
         (size, surface)
     };
 
-    let adapter = wgpu::util::initialize_adapter_from_env_or_default(&instance, backends, Some(&surface))
-        .await
-        .expect("No suitable GPU adapters found on the system!");
+    let adapter =
+        wgpu::util::initialize_adapter_from_env_or_default(&instance, backends, Some(&surface))
+            .await
+            .expect("No suitable GPU adapters found on the system!");
 
     let adapter_info = adapter.get_info();
     println!("Using {} ({:?})", adapter_info.name, adapter_info.backend);
@@ -199,11 +200,11 @@ fn start<E: Example>(
             }
             event::Event::WindowEvent {
                 event:
-                WindowEvent::Resized(size)
-                | WindowEvent::ScaleFactorChanged {
-                    new_inner_size: &mut size,
-                    ..
-                },
+                    WindowEvent::Resized(size)
+                    | WindowEvent::ScaleFactorChanged {
+                        new_inner_size: &mut size,
+                        ..
+                    },
                 ..
             } => {
                 // there's a bug where at first the size is u32::MAX so we just ignore it
@@ -220,11 +221,11 @@ fn start<E: Example>(
             event::Event::WindowEvent { event, .. } => match event {
                 WindowEvent::KeyboardInput {
                     input:
-                    event::KeyboardInput {
-                        virtual_keycode: Some(event::VirtualKeyCode::Escape),
-                        state: event::ElementState::Pressed,
-                        ..
-                    },
+                        event::KeyboardInput {
+                            virtual_keycode: Some(event::VirtualKeyCode::Escape),
+                            state: event::ElementState::Pressed,
+                            ..
+                        },
                     ..
                 }
                 | WindowEvent::CloseRequested => {
@@ -232,11 +233,11 @@ fn start<E: Example>(
                 }
                 WindowEvent::KeyboardInput {
                     input:
-                    event::KeyboardInput {
-                        virtual_keycode: Some(event::VirtualKeyCode::R),
-                        state: event::ElementState::Pressed,
-                        ..
-                    },
+                        event::KeyboardInput {
+                            virtual_keycode: Some(event::VirtualKeyCode::R),
+                            state: event::ElementState::Pressed,
+                            ..
+                        },
                     ..
                 } => {
                     println!("{:#?}", instance.generate_report());
