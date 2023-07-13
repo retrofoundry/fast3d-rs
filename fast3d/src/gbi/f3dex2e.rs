@@ -1,6 +1,5 @@
 use crate::gbi::defines::OpCode;
 use crate::gbi::macros::gbi_command;
-use crate::gbi::GBICommand;
 use crate::rsp::RSP;
 
 use super::{f3dex2, utils::get_cmd, GBICommandParams, GBICommandRegistry, GBIResult};

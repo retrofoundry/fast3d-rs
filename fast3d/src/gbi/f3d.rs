@@ -1,7 +1,7 @@
 use crate::gbi::defines::Gfx;
 use crate::gbi::utils::get_cmd;
 use crate::gbi::{
-    macros::gbi_command, GBICommand, GBICommandParams, GBICommandRegistry, GBIResult,
+    macros::gbi_command, GBICommandParams, GBICommandRegistry, GBIResult,
 };
 use crate::rsp::RSP;
 use bitflags::bitflags;
