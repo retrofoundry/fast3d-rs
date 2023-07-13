@@ -11,6 +11,13 @@ pub struct ColorCombinePass {
 }
 
 impl ColorCombinePass {
+    pub const SHADE: Self = Self {
+        a: ColorCombinerMux::ZERO,
+        b: ColorCombinerMux::ZERO,
+        c: ColorCombinerMux::ZERO,
+        d: ColorCombinerMux::SHADE,
+    };
+
     // grab property by index
     pub fn get(&self, index: usize) -> ColorCombinerMux {
         match index {
@@ -55,6 +62,13 @@ pub struct AlphaCombinePass {
 }
 
 impl AlphaCombinePass {
+    pub const SHADE: Self = Self {
+        a: AlphaCombinerMux::ZERO,
+        b: AlphaCombinerMux::ZERO,
+        c: AlphaCombinerMux::ZERO,
+        d: AlphaCombinerMux::SHADE,
+    };
+
     // grab property by index
     pub fn get(&self, index: usize) -> AlphaCombinerMux {
         match index {
@@ -94,27 +108,54 @@ impl CombineParams {
     pub const ZERO: Self = Self {
         c0: ColorCombinePass {
             a: ColorCombinerMux::COMBINED,
-            b: ColorCombinerMux::TEXEL0,
-            c: ColorCombinerMux::PRIMITIVE,
+            b: ColorCombinerMux::COMBINED,
+            c: ColorCombinerMux::COMBINED,
             d: ColorCombinerMux::COMBINED,
         },
         a0: AlphaCombinePass {
             a: AlphaCombinerMux::COMBINED,
-            b: AlphaCombinerMux::TEXEL0,
-            c: AlphaCombinerMux::PRIMITIVE,
+            b: AlphaCombinerMux::COMBINED,
+            c: AlphaCombinerMux::COMBINED,
             d: AlphaCombinerMux::COMBINED,
         },
         c1: ColorCombinePass {
             a: ColorCombinerMux::COMBINED,
-            b: ColorCombinerMux::TEXEL0,
-            c: ColorCombinerMux::PRIMITIVE,
+            b: ColorCombinerMux::COMBINED,
+            c: ColorCombinerMux::COMBINED,
             d: ColorCombinerMux::COMBINED,
         },
         a1: AlphaCombinePass {
             a: AlphaCombinerMux::COMBINED,
-            b: AlphaCombinerMux::TEXEL0,
-            c: AlphaCombinerMux::PRIMITIVE,
+            b: AlphaCombinerMux::COMBINED,
+            c: AlphaCombinerMux::COMBINED,
             d: AlphaCombinerMux::COMBINED,
+        },
+    };
+
+    pub const SHADE: Self = Self {
+        c0: ColorCombinePass {
+            a: ColorCombinerMux::COMBINED,
+            b: ColorCombinerMux::COMBINED,
+            c: ColorCombinerMux::COMBINED,
+            d: ColorCombinerMux::SHADE,
+        },
+        a0: AlphaCombinePass {
+            a: AlphaCombinerMux::COMBINED,
+            b: AlphaCombinerMux::COMBINED,
+            c: AlphaCombinerMux::COMBINED,
+            d: AlphaCombinerMux::SHADE,
+        },
+        c1: ColorCombinePass {
+            a: ColorCombinerMux::COMBINED,
+            b: ColorCombinerMux::COMBINED,
+            c: ColorCombinerMux::COMBINED,
+            d: ColorCombinerMux::SHADE,
+        },
+        a1: AlphaCombinePass {
+            a: AlphaCombinerMux::COMBINED,
+            b: AlphaCombinerMux::COMBINED,
+            c: AlphaCombinerMux::COMBINED,
+            d: AlphaCombinerMux::SHADE,
         },
     };
 

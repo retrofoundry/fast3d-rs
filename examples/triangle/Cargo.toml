@@ -1,0 +1,24 @@
+[package]
+name = "fast3d-triangle-example"
+version.workspace = true
+license-file.workspace = true
+edition.workspace = true
+description = "fast3d triangle example"
+publish = false
+
+[[bin]]
+name = "triangle"
+path = "src/main.rs"
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+log.workspace = true
+fast3d.workspace = true
+wgpu.workspace = true
+f3dwgpu.workspace = true
+env_logger = "0.10.0"
+winit = { version = "0.28.6", features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
+pollster = "0.3.0"
+
+[dev-dependencies]

@@ -23,6 +23,16 @@ pub struct Viewport {
     _padding: [u8; 8],    // padding to 64-bit boundary
 }
 
+impl Viewport {
+    pub const fn new(vscale: [i16; 4], vtrans: [i16; 4]) -> Self {
+        Self {
+            vscale,
+            vtrans,
+            _padding: [0; 8],
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RawLight {
@@ -80,6 +90,7 @@ impl LookAt {
     }
 }
 
+// TODO: Replace with pigment's color type
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Color_t {
@@ -98,6 +109,20 @@ pub union Vtx {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub union Mtx {
+    pub m: [[u32; 4]; 4],
+    force_structure_alignment: i64,
+}
+
+#[cfg(feature = "gbifloats")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub union Mtxf {
+    pub m: [[f32; 4]; 4],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct Vtx_t {
     #[cfg(feature = "gbifloats")]
@@ -107,6 +132,22 @@ pub struct Vtx_t {
     flag: u16, // unused
     pub texture_coords: [i16; 2],
     pub color: Color_t,
+}
+
+impl Vtx_t {
+    pub const fn new(
+        #[cfg(feature = "gbifloats")] position: [f32; 3],
+        #[cfg(not(feature = "gbifloats"))] position: [i16; 3],
+        texture_coords: [i16; 2],
+        color: Color_t,
+    ) -> Self {
+        Self {
+            position,
+            flag: 0,
+            texture_coords,
+            color,
+        }
+    }
 }
 
 #[repr(C)]

@@ -3,10 +3,13 @@ members = [
     "fast3d",
     "fast3d-glium-renderer",
     "fast3d-wgpu-renderer",
+    "examples/*",
 ]
 default-members = [
+    "examples/*",
     "fast3d",
     "fast3d-glium-renderer",
+    "fast3d-wgpu-renderer",
 ]
 
 [workspace.package]
@@ -35,3 +38,7 @@ glam = { version = "0.24.1", features = ["approx", "bytemuck"] }
 log = "0.4"
 fast3d = { version = "0.4.2", path = "./fast3d" }
 rustc-hash = "1.1"
+wgpu = { version = "0.16", features = ["glsl"] }
+naga = "0.12.2"
+glium = "0.32.1"
+

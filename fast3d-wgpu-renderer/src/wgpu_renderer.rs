@@ -254,10 +254,10 @@ impl<'a> WgpuRenderer<'a> {
 
             // Process textures
             for (index, tex_cache_id) in draw_call.texture_indices.iter().enumerate() {
-                let sampler = draw_call.samplers[index];
-                assert_eq!(tex_cache_id.is_none(), sampler.is_none());
-
                 if let Some(tex_cache_id) = tex_cache_id {
+                    let sampler = draw_call.samplers[index];
+                    assert!(sampler.is_some());
+
                     let texture = output.texture_cache.get_mut(*tex_cache_id).unwrap();
                     let sampler = sampler.unwrap();
 

@@ -264,7 +264,7 @@ gbi_command!(Vertex, |params: &mut GBICommandParams| {
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
     let vertex_count = get_cmd(w0, 12, 8);
-    let write_index = get_cmd(w0, 1, 7) - get_cmd(w0, 12, 8);
+    let write_index = get_cmd(w0, 1, 7) - vertex_count;
     params
         .rsp
         .set_vertex(params.rdp, params.output, w1, vertex_count, write_index);
@@ -338,11 +338,11 @@ gbi_command!(SetOtherModeL, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    let size = get_cmd(w0, 0, 8) + 1;
-    let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
+    let length = get_cmd(w0, 0, 8) + 1;
+    let offset = max(0, 32 - get_cmd(w0, 8, 8) - length);
     params
         .rsp
-        .set_other_mode_l(params.rdp, size, offset, w1 as u32);
+        .set_other_mode_l(params.rdp, length, offset, w1 as u32);
 
     GBIResult::Continue
 });
@@ -351,11 +351,11 @@ gbi_command!(SetOtherModeH, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    let size = get_cmd(w0, 0, 8) + 1;
-    let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
+    let length = get_cmd(w0, 0, 8) + 1;
+    let offset = max(0, 32 - get_cmd(w0, 8, 8) - length);
     params
         .rsp
-        .set_other_mode_h(params.rdp, size, offset, w1 as u32);
+        .set_other_mode_h(params.rdp, length, offset, w1 as u32);
 
     GBIResult::Continue
 });

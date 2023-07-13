@@ -15,6 +15,7 @@ pub const MAX_LIGHTS: usize = 7;
 pub const MAX_SEGMENTS: usize = 16;
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct Position {
     pub x: f32,
     pub y: f32,
@@ -32,6 +33,7 @@ impl Position {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct StagingVertex {
     pub position: Position,
     pub uv: Vec2,
@@ -390,14 +392,14 @@ impl RSP {
         }
     }
 
-    pub fn set_other_mode_h(&mut self, rdp: &mut RDP, size: usize, offset: usize, data: u32) {
-        let mask = ((1 << size) - 1) << offset;
+    pub fn set_other_mode_h(&mut self, rdp: &mut RDP, length: usize, offset: usize, data: u32) {
+        let mask = ((1 << length) - 1) << offset;
         self.other_mode_h = (self.other_mode_h & !mask) | data;
         rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
     }
 
-    pub fn set_other_mode_l(&mut self, rdp: &mut RDP, size: usize, offset: usize, data: u32) {
-        let mask = ((1 << size) - 1) << offset;
+    pub fn set_other_mode_l(&mut self, rdp: &mut RDP, length: usize, offset: usize, data: u32) {
+        let mask = ((1 << length) - 1) << offset;
         self.other_mode_l = (self.other_mode_l & !mask) | data;
         rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
     }

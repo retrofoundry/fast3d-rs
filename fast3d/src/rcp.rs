@@ -1,5 +1,4 @@
 use crate::gbi::GBICommandParams;
-use log::trace;
 
 use super::{
     gbi::{defines::Gfx, GBICommandRegistry, GBIResult},
@@ -65,7 +64,7 @@ impl RCP {
                     GBIResult::Continue => {}
                 }
             } else {
-                trace!("Unknown GBI command: {:#x}", opcode);
+                log::trace!("Unknown GBI command: {:#x}", opcode);
             }
 
             unsafe { command = command.add(1) };
