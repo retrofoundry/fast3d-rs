@@ -30,7 +30,7 @@ pub struct GBICommandParams<'a> {
 pub type GBICommandFn = fn(&mut GBICommandParams) -> GBIResult;
 
 pub struct GBICommandRegistry {
-    gbi_opcode_table: HashMap<usize, GBICommandFn, BuildNoHashHasher<usize>>,
+    gbi_opcode_table: HashMap<u8, GBICommandFn, BuildNoHashHasher<u8>>,
 }
 
 impl GBICommandRegistry {
@@ -52,11 +52,11 @@ impl GBICommandRegistry {
         f3dzex2::setup(self, rsp);
     }
 
-    pub fn register(&mut self, opcode: usize, cmd: GBICommandFn) {
+    pub fn register(&mut self, opcode: u8, cmd: GBICommandFn) {
         self.gbi_opcode_table.insert(opcode, cmd);
     }
 
-    pub fn handler(&self, opcode: &usize) -> Option<&GBICommandFn> {
+    pub fn handler(&self, opcode: &u8) -> Option<&GBICommandFn> {
         self.gbi_opcode_table.get(opcode)
     }
 }
