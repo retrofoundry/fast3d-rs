@@ -1,6 +1,7 @@
 [package]
 name = "fast3d-glium-renderer"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 description = "Glium renderer for fast3d-rs"
 homepage = "https://crates.io/crates/fast3d-glium-renderer"

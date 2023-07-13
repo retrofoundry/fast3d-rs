@@ -1,6 +1,7 @@
 [package]
 name = "fast3d"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 description.workspace = true
 homepage.workspace = true
@@ -24,11 +25,11 @@ gbifloats = []
 
 [dependencies]
 bytemuck.workspace = true
-farbe = "0.2.0"
+farbe.workspace = true
 glam.workspace = true
 log.workspace = true
 rustc-hash.workspace = true
-lru = "0.10.1"
-num_enum = "0.6.1"
-bitflags = "1.3.2"
+lru.workspace = true
+num_enum.workspace = true
+bitflags.workspace = true
 nohash-hasher = "0.2.0"

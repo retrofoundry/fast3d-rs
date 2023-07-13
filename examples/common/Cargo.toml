@@ -1,23 +1,21 @@
 [package]
-name = "fast3d-wgpu-renderer"
+name = "fast3d-example"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
-description = "WGPU renderer for fast3d-rs"
-homepage = "https://crates.io/crates/fast3d-wgpu-renderer"
+description = "Common example code"
+homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true
 license-file.workspace = true
-readme.workspace = true
-
-[lib]
-crate-type = ["lib", "cdylib"]
+publish = false
 
 [dependencies]
 bytemuck.workspace = true
 glam.workspace = true
 log.workspace = true
-fast3d.workspace = true
-rustc-hash.workspace = true
 wgpu.workspace = true
-naga.workspace = true
+env_logger.workspace = true
+winit.workspace = true
+pollster.workspace = true
+async-executor.workspace = true
