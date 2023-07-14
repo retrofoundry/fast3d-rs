@@ -8,8 +8,6 @@ use crate::f3dex2::OpCode;
 #[cfg(not(feature = "f3dex2"))]
 use crate::f3d::OpCode;
 
-use crate::defines::GeometryModes;
-
 #[allow(non_snake_case)]
 pub fn gsDPPipelineMode(mode: u32) -> GfxCommand {
     gsSPSetOtherMode(

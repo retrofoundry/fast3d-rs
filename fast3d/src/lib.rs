@@ -10,7 +10,6 @@ pub mod rdp;
 pub use rdp::RDP;
 
 mod rsp;
-use rsp::RSP;
 
 mod extensions;
 pub mod models;

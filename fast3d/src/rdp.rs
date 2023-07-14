@@ -27,8 +27,8 @@ use farbe::image::n64::ImageSize as FarbeImageSize;
 use gbi_assembler::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
 use gbi_assembler::defines::render_mode::{RenderModeFlags, ZMode};
 use gbi_assembler::defines::{
-    ComponentSize, CycleType, GeometryModes, GfxCommand, ImageFormat, OtherModeH, TextureFilter,
-    TextureLUT, TextureTile, Viewport, WrapMode,
+    ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeH, TextureFilter, TextureLUT,
+    TextureTile, Viewport, WrapMode,
 };
 
 pub const SCREEN_WIDTH: f32 = 320.0;

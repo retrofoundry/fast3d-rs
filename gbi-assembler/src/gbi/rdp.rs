@@ -3,9 +3,6 @@ use crate::gbi::shiftl;
 
 use crate::defines::{GfxCommand, OpCode as SharedOpCode};
 
-#[cfg(feature = "f3dex2")]
-use crate::f3dex2::OpCode;
-
 #[cfg(not(feature = "f3dex2"))]
 use crate::f3d::OpCode;
 
