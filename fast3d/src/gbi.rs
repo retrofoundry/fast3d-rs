@@ -2,7 +2,6 @@ use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
 use fast3d_gbi::defines::GfxCommand;
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::HashMap;
-use nohash_hasher::BuildNoHashHasher;
 
 mod f3d;
 mod f3dex2;
