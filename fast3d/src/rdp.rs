@@ -1,40 +1,35 @@
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
-use crate::gbi::defines::{
-    AlphaCombinerMux, ColorCombinerMux, ComponentSize, CycleType, GeometryModes, ImageFormat,
-    OtherModeHLayout, RenderModeFlags, TextureFilter, TextureLUT, TextureTile, WrapMode, ZMode,
-};
-
 use crate::output::{
     gfx::{BlendState, CompareFunction},
     RCPOutputCollector,
 };
 
 use super::models::color::Color;
-use super::{
-    gbi::{
-        defines::Viewport,
-        utils::{
-            get_cycle_type_from_other_mode_h, get_texture_filter_from_other_mode_h,
-            other_mode_l_uses_alpha, other_mode_l_uses_texture_edge, translate_cull_mode,
-        },
+use super::models::{
+    texture::{
+        translate_tile_ci4, translate_tile_ci8, translate_tile_i4, translate_tile_i8,
+        translate_tile_ia16, translate_tile_ia4, translate_tile_ia8, translate_tile_rgba16,
+        translate_tile_rgba32, translate_tlut, TextureImageState,
     },
-    models::{
-        color_combiner::CombineParams,
-        texture::{
-            translate_tile_ci4, translate_tile_ci8, translate_tile_i4, translate_tile_i8,
-            translate_tile_ia16, translate_tile_ia4, translate_tile_ia8, translate_tile_rgba16,
-            translate_tile_rgba32, translate_tlut, TextureImageState,
-        },
-        tile_descriptor::TileDescriptor,
-    },
+    tile_descriptor::TileDescriptor,
 };
 
-use crate::gbi::utils::{get_render_mode_from_other_mode_l, get_zmode_from_other_mode_l};
+use crate::gbi::utils::{
+    get_cycle_type_from_other_mode_h, get_render_mode_from_other_mode_l,
+    get_texture_filter_from_other_mode_h, get_zmode_from_other_mode_l, other_mode_l_uses_alpha,
+    other_mode_l_uses_texture_edge, translate_cull_mode,
+};
 use crate::models::color::R5G5B5A1;
 use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
 use farbe::image::n64::ImageSize as FarbeImageSize;
+use fast3d_gbi::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
+use fast3d_gbi::defines::render_mode::{RenderModeFlags, ZMode};
+use fast3d_gbi::defines::{
+    ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeH, TextureFilter, TextureLUT,
+    TextureTile, Viewport, WrapMode,
+};
 
 pub const SCREEN_WIDTH: f32 = 320.0;
 pub const SCREEN_HEIGHT: f32 = 240.0;
@@ -852,7 +847,7 @@ impl RDP {
         let cycle_type = get_cycle_type_from_other_mode_h(self.other_mode_h);
 
         if cycle_type == CycleType::Copy {
-            self.other_mode_h = (self.other_mode_h & !(3 << OtherModeHLayout::TEXT_FILT.bits()))
+            self.other_mode_h = (self.other_mode_h & !(3 << OtherModeH::Shift::TEXT_FILT.bits()))
                 | (TextureFilter::Point as u32);
             self.shader_config_changed = true;
         }

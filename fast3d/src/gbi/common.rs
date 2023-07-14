@@ -1,9 +1,8 @@
-use crate::gbi::defines::{OpCode, WrapMode};
 use crate::gbi::macros::gbi_command;
 use crate::gbi::utils::get_cmd;
 use crate::gbi::{GBICommandParams, GBICommandRegistry, GBIResult};
+use fast3d_gbi::defines::{CombineParams, OpCode, WrapMode};
 
-use crate::models::color_combiner::CombineParams;
 use crate::models::texture::TextureImageState;
 
 use crate::rdp::SCREEN_HEIGHT;

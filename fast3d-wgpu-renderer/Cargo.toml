@@ -1,6 +1,7 @@
 [package]
 name = "fast3d-wgpu-renderer"
 version.workspace = true
+authors.workspace = true
 edition.workspace = true
 description = "WGPU renderer for fast3d-rs"
 homepage = "https://crates.io/crates/fast3d-wgpu-renderer"
@@ -18,5 +19,6 @@ glam.workspace = true
 log.workspace = true
 fast3d.workspace = true
 rustc-hash.workspace = true
-wgpu = { version = "0.16", features = ["glsl"] }
-naga = "0.12.2"
+wgpu.workspace = true
+naga.workspace = true
+fast3d-gbi.workspace = true

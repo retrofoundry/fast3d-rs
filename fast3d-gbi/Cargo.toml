@@ -1,9 +1,9 @@
 [package]
-name = "fast3d"
+name = "fast3d-gbi"
+description = "F3D GBI Assembler"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
-description.workspace = true
 homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true
@@ -16,22 +16,13 @@ crate-type = ["lib", "cdylib"]
 [features]
 default = ["f3dex2"]
 
-f3d = []
 f3dex2 = []
-f3dex2e = ["gbifloats", "f3dex2"]
-f3dzex2 = ["f3dex2"]
+f3dex2e = []
 
 gbifloats = []
+hardware_version_1 = []
 
 [dependencies]
-bytemuck.workspace = true
-farbe.workspace = true
-glam.workspace = true
-log.workspace = true
-rustc-hash.workspace = true
-lru.workspace = true
 num_enum.workspace = true
 bitflags.workspace = true
-fast3d-gbi.workspace = true
 pigment.workspace = true
-nohash-hasher.workspace = true

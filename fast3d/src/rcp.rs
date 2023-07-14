@@ -1,12 +1,6 @@
-use crate::gbi::GBICommandParams;
-use log::trace;
-
-use super::{
-    gbi::{defines::Gfx, GBICommandRegistry, GBIResult},
-    output::RCPOutputCollector,
-    rdp::RDP,
-    rsp::RSP,
-};
+use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
+use crate::gbi::{GBICommandParams, GBICommandRegistry, GBIResult};
+use fast3d_gbi::defines::GfxCommand;
 
 pub struct RCP {
     gbi: GBICommandRegistry,
@@ -22,7 +16,7 @@ impl Default for RCP {
 
 impl RCP {
     pub fn new() -> Self {
-        let mut gbi = GBICommandRegistry::new();
+        let mut gbi = GBICommandRegistry::default();
         let mut rsp = RSP::default();
         gbi.setup(&mut rsp);
 
@@ -48,7 +42,7 @@ impl RCP {
     }
 
     fn run_dl(&mut self, output: &mut RCPOutputCollector, commands: usize) {
-        let mut command = commands as *mut Gfx;
+        let mut command = commands as *mut GfxCommand;
 
         loop {
             let opcode = (unsafe { (*command).words.w0 } >> 24) as u8;
@@ -65,7 +59,7 @@ impl RCP {
                     GBIResult::Continue => {}
                 }
             } else {
-                trace!("Unknown GBI command: {:#x}", opcode);
+                log::trace!("Unknown GBI command: {:#x}", opcode);
             }
 
             unsafe { command = command.add(1) };

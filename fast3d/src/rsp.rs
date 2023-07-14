@@ -1,12 +1,11 @@
-use crate::gbi::defines::{DirLight, GeometryModes, Vtx};
 use std::slice;
 
-use super::{gbi::defines::Light, models::color::Color};
 use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
-
+use crate::models::color::Color;
 use crate::models::texture::TextureState;
 use crate::output::RCPOutputCollector;
 use crate::rdp::RDP;
+use fast3d_gbi::defines::{DirLight, GeometryModes, Light, Vertex};
 use glam::{Mat4, Vec2, Vec3A};
 
 pub const MATRIX_STACK_SIZE: usize = 32;
@@ -15,6 +14,7 @@ pub const MAX_LIGHTS: usize = 7;
 pub const MAX_SEGMENTS: usize = 16;
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct Position {
     pub x: f32,
     pub y: f32,
@@ -32,6 +32,7 @@ impl Position {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 pub struct StagingVertex {
     pub position: Position,
     pub uv: Vec2,
@@ -280,10 +281,10 @@ impl RSP {
             self.modelview_projection_matrix_changed = false;
         }
 
-        let vertices = self.get_segment(address) as *const Vtx;
+        let vertices = self.get_segment(address) as *const Vertex;
 
         for i in 0..vertex_count {
-            let vertex = unsafe { &(*vertices.add(i)).vertex };
+            let vertex = unsafe { &(*vertices.add(i)).color };
             let vertex_normal = unsafe { &(*vertices.add(i)).normal };
             let staging_vertex = &mut self.vertex_table[write_index];
 
@@ -390,14 +391,14 @@ impl RSP {
         }
     }
 
-    pub fn set_other_mode_h(&mut self, rdp: &mut RDP, size: usize, offset: usize, data: u32) {
-        let mask = ((1 << size) - 1) << offset;
+    pub fn set_other_mode_h(&mut self, rdp: &mut RDP, length: usize, offset: usize, data: u32) {
+        let mask = ((1 << length) - 1) << offset;
         self.other_mode_h = (self.other_mode_h & !mask) | data;
         rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
     }
 
-    pub fn set_other_mode_l(&mut self, rdp: &mut RDP, size: usize, offset: usize, data: u32) {
-        let mask = ((1 << size) - 1) << offset;
+    pub fn set_other_mode_l(&mut self, rdp: &mut RDP, length: usize, offset: usize, data: u32) {
+        let mask = ((1 << length) - 1) << offset;
         self.other_mode_l = (self.other_mode_l & !mask) | data;
         rdp.set_other_mode(self.other_mode_h, self.other_mode_l);
     }

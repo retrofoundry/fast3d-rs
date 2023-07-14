@@ -1,0 +1,21 @@
+[package]
+name = "fast3d-example"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description = "Common example code"
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license-file.workspace = true
+publish = false
+
+[dependencies]
+bytemuck.workspace = true
+glam.workspace = true
+log.workspace = true
+wgpu.workspace = true
+env_logger.workspace = true
+winit.workspace = true
+pollster.workspace = true
+async-executor.workspace = true

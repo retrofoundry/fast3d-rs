@@ -1,8 +1,7 @@
-use self::defines::Gfx;
-
 use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
-use std::collections::HashMap;
+use fast3d_gbi::defines::GfxCommand;
 use nohash_hasher::BuildNoHashHasher;
+use std::collections::HashMap;
 
 mod f3d;
 mod f3dex2;
@@ -10,7 +9,6 @@ mod f3dex2e;
 mod f3dzex2;
 
 mod common;
-pub mod defines;
 pub mod macros;
 pub mod utils;
 
@@ -24,7 +22,7 @@ pub struct GBICommandParams<'a> {
     pub rdp: &'a mut RDP,
     pub rsp: &'a mut RSP,
     pub output: &'a mut RCPOutputCollector,
-    pub command: &'a mut *mut Gfx,
+    pub command: &'a mut *mut GfxCommand,
 }
 
 pub type GBICommandFn = fn(&mut GBICommandParams) -> GBIResult;
@@ -34,9 +32,10 @@ pub struct GBICommandRegistry {
 }
 
 impl GBICommandRegistry {
-
     pub fn new() -> GBICommandRegistry {
-        GBICommandRegistry { gbi_opcode_table: HashMap::with_hasher(BuildNoHashHasher::default()) }
+        GBICommandRegistry {
+            gbi_opcode_table: HashMap::with_hasher(BuildNoHashHasher::default()),
+        }
     }
 
     pub fn setup(&mut self, rsp: &mut RSP) {
@@ -58,5 +57,11 @@ impl GBICommandRegistry {
 
     pub fn handler(&self, opcode: &u8) -> Option<&GBICommandFn> {
         self.gbi_opcode_table.get(opcode)
+    }
+}
+
+impl Default for GBICommandRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }

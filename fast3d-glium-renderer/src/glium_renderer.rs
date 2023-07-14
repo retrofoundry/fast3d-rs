@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 
 use crate::opengl_program::ShaderVersion;
-use fast3d::gbi::defines::WrapMode;
 use fast3d::output::{ShaderConfig, ShaderId};
 use fast3d::{
     output::{
@@ -10,6 +9,7 @@ use fast3d::{
     },
     RCPOutputCollector,
 };
+use fast3d_gbi::defines::WrapMode;
 use glam::Vec4Swizzles;
 use glium::buffer::{Buffer, BufferAny, BufferMode, BufferType};
 use glium::{

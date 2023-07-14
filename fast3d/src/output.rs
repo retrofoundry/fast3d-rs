@@ -1,15 +1,14 @@
-use crate::gbi::defines::{GeometryModes, WrapMode};
 use crate::output::models::{
     OutputFogParams, OutputSampler, OutputStencil, OutputUniforms, OutputUniformsBlend,
     OutputUniformsCombine, OutputVBO,
 };
 use crate::output::texture_cache::TextureCacheId;
+use fast3d_gbi::defines::color_combiner::CombineParams;
+use fast3d_gbi::defines::{GeometryModes, WrapMode};
 use std::hash::Hash;
 use texture_cache::TextureCache;
 
 use self::gfx::{BlendState, CompareFunction, Face};
-
-use super::models::color_combiner::CombineParams;
 
 pub mod gfx;
 pub mod models;

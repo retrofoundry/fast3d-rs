@@ -1,154 +1,44 @@
-use bitflags::bitflags;
+use crate::gbi::macros::gbi_command;
+use crate::gbi::{f3d, GBICommandParams, GBICommandRegistry, GBIResult};
+use fast3d_gbi::defines::Viewport;
+use fast3d_gbi::{
+    defines::f3dex2::{
+        GeometryModes, MatrixMode, MatrixOperation, MoveMemoryIndex, MoveWordIndex, OpCode,
+    },
+    defines::{MoveWordIndex as SharedMoveWordIndex, OpCode as SharedOpCode},
+};
 use std::cmp::max;
 
-use super::super::rsp::RSP;
-use super::defines::{self, Viewport};
 use super::utils::get_cmd;
-use super::{f3d, GBICommandRegistry, GBIResult};
-use crate::gbi::{macros::gbi_command, GBICommandParams};
 
-use crate::rsp::RSPConstants;
-
-bitflags! {
-    pub struct GeometryModes: u32 {
-        const TEXTURE_ENABLE      = 0x00000002;
-        const SHADING_SMOOTH      = 0x00000200;
-        const CULL_FRONT          = 0x00001000;
-        const CULL_BACK           = 0x00002000;
-        const CULL_BOTH           = Self::CULL_FRONT.bits | Self::CULL_BACK.bits;
-    }
-}
-
-bitflags! {
-    pub struct MatrixMode: u8 {
-        const MODELVIEW = 0x00000000;
-        const PROJECTION = 0x00000004;
-    }
-}
-
-bitflags! {
-    pub struct MatrixOperation: u8 {
-        const NOPUSH = 0x00000000;
-        const PUSH = 0x00000001;
-        const MUL = 0x00000000;
-        const LOAD = 0x00000002;
-    }
-}
-
-bitflags! {
-    pub struct MoveWordIndex: u8 {
-        const FORCEMTX = 0x0C;
-    }
-}
-
-bitflags! {
-    pub struct MoveWordOffset: u8 {
-        const A_LIGHT_2 = 0x18;
-        const B_LIGHT_2 = 0x1c;
-        const A_LIGHT_3 = 0x30;
-        const B_LIGHT_3 = 0x34;
-        const A_LIGHT_4 = 0x48;
-        const B_LIGHT_4 = 0x4c;
-        const A_LIGHT_5 = 0x60;
-        const B_LIGHT_5 = 0x64;
-        const A_LIGHT_6 = 0x78;
-        const B_LIGHT_6 = 0x7c;
-        const A_LIGHT_7 = 0x90;
-        const B_LIGHT_7 = 0x94;
-        const A_LIGHT_8 = 0xa8;
-        const B_LIGHT_8 = 0xac;
-    }
-}
-
-bitflags! {
-    pub struct MoveMemoryIndex: u8 {
-        const MMTX = 2;
-        const PMTX = 6;
-        const VIEWPORT = 8;
-        const LIGHT = 10;
-        const POINT = 12;
-        const MATRIX = 14;
-    }
-}
-
-bitflags! {
-    pub struct MoveMemoryOffset: u8 {
-        const LOOKATX = 0; // (0 * 24);
-        const LOOKATY = 24;
-        const L0 = 2 * 24;
-        const L1 = 3 * 24;
-        const L2 = 4 * 24;
-        const L3 = 5 * 24;
-        const L4 = 6 * 24;
-        const L5 = 7 * 24;
-        const L6 = 8 * 24;
-        const L7 = 9 * 24;
-    }
-}
-
-bitflags! {
-    pub struct OpCode: u8 {
-        const NOOP = 0x00;
-        // RDP
-        const SETOTHERMODE_H = 0xe3;
-        const SETOTHERMODE_L = 0xe2;
-        const RDPHALF_1 = 0xe1;
-        const RDPHALF_2 = 0xf1;
-
-        const SPNOOP = 0xe0;
-
-        // RSP
-        const ENDDL = 0xdf;
-        const DL = 0xde;
-        const LOAD_UCODE = 0xdd;
-        const MOVEMEM = 0xdc;
-        const MOVEWORD = 0xdb;
-        const MTX = 0xda;
-        const GEOMETRYMODE = 0xd9;
-        const POPMTX = 0xd8;
-        const TEXTURE = 0xd7;
-
-        // DMA
-        const VTX = 0x01;
-        const MODIFYVTX = 0x02;
-        const CULLDL = 0x03;
-        const BRANCH_Z = 0x04;
-        const TRI1 = 0x05;
-        const TRI2 = 0x06;
-        const QUAD = 0x07;
-        const LINE3D = 0x08;
-        const DMA_IO = 0xD6;
-
-        const SPECIAL_1 = 0xD5;
-    }
-}
+use crate::rsp::{RSPConstants, RSP};
 
 pub fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
-    gbi.register(OpCode::MTX.bits, Matrix);
-    gbi.register(OpCode::POPMTX.bits, PopMatrix);
-    gbi.register(OpCode::MOVEMEM.bits, MoveMem);
-    gbi.register(OpCode::MOVEWORD.bits, MoveWord);
-    gbi.register(OpCode::TEXTURE.bits, Texture);
-    gbi.register(OpCode::VTX.bits, Vertex);
-    gbi.register(OpCode::DL.bits, f3d::SubDL);
-    gbi.register(OpCode::GEOMETRYMODE.bits, GeometryMode);
-    gbi.register(OpCode::TRI1.bits, Tri1);
-    gbi.register(OpCode::TRI2.bits, Tri2);
-    gbi.register(OpCode::ENDDL.bits, f3d::EndDL);
-    gbi.register(OpCode::SPNOOP.bits, f3d::SpNoOp);
-    gbi.register(OpCode::SETOTHERMODE_L.bits, SetOtherModeL);
-    gbi.register(OpCode::SETOTHERMODE_H.bits, SetOtherModeH);
-    gbi.register(defines::OpCode::RDPSETOTHERMODE.bits(), SetOtherMode);
+    gbi.register(OpCode::MTX.bits(), Matrix);
+    gbi.register(OpCode::POPMTX.bits(), PopMatrix);
+    gbi.register(OpCode::MOVEMEM.bits(), MoveMem);
+    gbi.register(OpCode::MOVEWORD.bits(), MoveWord);
+    gbi.register(OpCode::TEXTURE.bits(), Texture);
+    gbi.register(OpCode::VTX.bits(), Vertex);
+    gbi.register(OpCode::DL.bits(), f3d::SubDL);
+    gbi.register(OpCode::GEOMETRYMODE.bits(), GeometryMode);
+    gbi.register(OpCode::TRI1.bits(), Tri1);
+    gbi.register(OpCode::TRI2.bits(), Tri2);
+    gbi.register(OpCode::ENDDL.bits(), f3d::EndDL);
+    gbi.register(OpCode::SPNOOP.bits(), f3d::SpNoOp);
+    gbi.register(OpCode::SETOTHERMODE_L.bits(), SetOtherModeL);
+    gbi.register(OpCode::SETOTHERMODE_H.bits(), SetOtherModeH);
+    gbi.register(SharedOpCode::RDPSETOTHERMODE.bits(), SetOtherMode);
 
     rsp.setup_constants(RSPConstants {
-        mtx_push_val: MatrixOperation::PUSH.bits,
-        mtx_load_val: MatrixOperation::LOAD.bits,
-        mtx_projection_val: MatrixMode::PROJECTION.bits,
+        mtx_push_val: MatrixOperation::PUSH.bits(),
+        mtx_load_val: MatrixOperation::LOAD.bits(),
+        mtx_projection_val: MatrixMode::PROJECTION.bits(),
 
-        geomode_shading_smooth_val: GeometryModes::SHADING_SMOOTH.bits,
-        geomode_cull_front_val: GeometryModes::CULL_FRONT.bits,
-        geomode_cull_back_val: GeometryModes::CULL_BACK.bits,
-        geomode_cull_both_val: GeometryModes::CULL_BOTH.bits,
+        geomode_shading_smooth_val: GeometryModes::SHADING_SMOOTH.bits(),
+        geomode_cull_front_val: GeometryModes::CULL_FRONT.bits(),
+        geomode_cull_back_val: GeometryModes::CULL_BACK.bits(),
+        geomode_cull_both_val: GeometryModes::CULL_BOTH.bits(),
     })
 }
 
@@ -156,7 +46,7 @@ gbi_command!(Matrix, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    let mtx_params = get_cmd(w0, 0, 8) as u8 ^ MatrixOperation::PUSH.bits;
+    let mtx_params = get_cmd(w0, 0, 8) as u8 ^ MatrixOperation::PUSH.bits();
     params.rsp.matrix(w1, mtx_params);
 
     GBIResult::Continue
@@ -178,16 +68,16 @@ gbi_command!(MoveMem, |params: &mut GBICommandParams| {
     let data = params.rsp.get_segment(w1);
 
     match index {
-        index if index == MoveMemoryIndex::VIEWPORT.bits => {
+        index if index == MoveMemoryIndex::VIEWPORT.bits() => {
             let viewport_ptr = data as *const Viewport;
             let viewport = unsafe { &*viewport_ptr };
             params.rdp.calculate_and_set_viewport(*viewport);
         }
-        index if index == MoveMemoryIndex::MATRIX.bits => {
+        index if index == MoveMemoryIndex::MATRIX.bits() => {
             panic!("Unimplemented move matrix");
             // unsafe { *command = (*command).add(1) };
         }
-        index if index == MoveMemoryIndex::LIGHT.bits => {
+        index if index == MoveMemoryIndex::LIGHT.bits() => {
             let index = offset / 24;
             if index >= 2 {
                 params.rsp.set_light(index - 2, w1);
@@ -208,29 +98,29 @@ gbi_command!(MoveWord, |params: &mut GBICommandParams| {
     let m_type = get_cmd(w0, 16, 8) as u8;
 
     match m_type {
-        m_type if m_type == MoveWordIndex::FORCEMTX.bits => {
+        m_type if m_type == MoveWordIndex::FORCEMTX.bits() => {
             params.rsp.modelview_projection_matrix_changed = w1 == 0
         }
-        m_type if m_type == defines::MoveWordIndex::NUMLIGHT.bits() => {
+        m_type if m_type == SharedMoveWordIndex::NUMLIGHT.bits() => {
             params.rsp.set_num_lights(w1 as u8 / 24)
         }
-        m_type if m_type == defines::MoveWordIndex::CLIP.bits() => {
+        m_type if m_type == SharedMoveWordIndex::CLIP.bits() => {
             params.rsp.set_clip_ratio(w1);
         }
-        m_type if m_type == defines::MoveWordIndex::SEGMENT.bits() => {
+        m_type if m_type == SharedMoveWordIndex::SEGMENT.bits() => {
             let segment = get_cmd(w0, 2, 4);
             params.rsp.set_segment(segment, w1 & 0x00FFFFFF)
         }
-        m_type if m_type == defines::MoveWordIndex::FOG.bits() => {
+        m_type if m_type == SharedMoveWordIndex::FOG.bits() => {
             let multiplier = get_cmd(w1, 16, 16) as i16;
             let offset = get_cmd(w1, 0, 16) as i16;
             params.rsp.set_fog(multiplier, offset);
         }
-        m_type if m_type == defines::MoveWordIndex::LIGHTCOL.bits() => {
+        m_type if m_type == SharedMoveWordIndex::LIGHTCOL.bits() => {
             let index = get_cmd(w0, 0, 16) / 24;
             params.rsp.set_light_color(index, w1 as u32);
         }
-        m_type if m_type == defines::MoveWordIndex::PERSPNORM.bits() => {
+        m_type if m_type == SharedMoveWordIndex::PERSPNORM.bits() => {
             params.rsp.set_persp_norm(w1);
         }
         // TODO: G_MW_MATRIX
@@ -264,7 +154,7 @@ gbi_command!(Vertex, |params: &mut GBICommandParams| {
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
     let vertex_count = get_cmd(w0, 12, 8);
-    let write_index = get_cmd(w0, 1, 7) - get_cmd(w0, 12, 8);
+    let write_index = get_cmd(w0, 1, 7) - vertex_count;
     params
         .rsp
         .set_vertex(params.rdp, params.output, w1, vertex_count, write_index);
@@ -338,11 +228,11 @@ gbi_command!(SetOtherModeL, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    let size = get_cmd(w0, 0, 8) + 1;
-    let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
+    let length = get_cmd(w0, 0, 8) + 1;
+    let offset = max(0, 32 - get_cmd(w0, 8, 8) - length);
     params
         .rsp
-        .set_other_mode_l(params.rdp, size, offset, w1 as u32);
+        .set_other_mode_l(params.rdp, length, offset, w1 as u32);
 
     GBIResult::Continue
 });
@@ -351,11 +241,11 @@ gbi_command!(SetOtherModeH, |params: &mut GBICommandParams| {
     let w0 = unsafe { (*(*params.command)).words.w0 };
     let w1 = unsafe { (*(*params.command)).words.w1 };
 
-    let size = get_cmd(w0, 0, 8) + 1;
-    let offset = max(0, 32 - get_cmd(w0, 8, 8) - size);
+    let length = get_cmd(w0, 0, 8) + 1;
+    let offset = max(0, 32 - get_cmd(w0, 8, 8) - length);
     params
         .rsp
-        .set_other_mode_h(params.rdp, size, offset, w1 as u32);
+        .set_other_mode_h(params.rdp, length, offset, w1 as u32);
 
     GBIResult::Continue
 });
@@ -375,13 +265,12 @@ gbi_command!(SetOtherMode, |params: &mut GBICommandParams| {
 
 #[cfg(test)]
 mod tests {
-    use crate::gbi::defines::{GWords, Gfx};
     use crate::gbi::f3dex2::MoveWord;
     use crate::gbi::GBICommandParams;
     use crate::output::RCPOutputCollector;
-    
     use crate::rdp::RDP;
     use crate::rsp::RSP;
+    use fast3d_gbi::defines::GfxCommand;
 
     #[test]
     fn test_moveword() {
@@ -393,9 +282,7 @@ mod tests {
         let mut rdp = RDP::default();
         let mut output = RCPOutputCollector::default();
 
-        let mut command: *mut Gfx = Box::into_raw(Box::new(Gfx {
-            words: GWords { w0, w1 },
-        }));
+        let mut command: *mut GfxCommand = Box::into_raw(Box::new(GfxCommand::new(w0, w1)));
 
         let mut params = GBICommandParams {
             rdp: &mut rdp,
@@ -415,9 +302,7 @@ mod tests {
         let mut rdp = RDP::default();
         let mut output = RCPOutputCollector::default();
 
-        let mut command: *mut Gfx = Box::into_raw(Box::new(Gfx {
-            words: GWords { w0, w1 },
-        }));
+        let mut command: *mut GfxCommand = Box::into_raw(Box::new(GfxCommand::new(w0, w1)));
 
         let mut params = GBICommandParams {
             rdp: &mut rdp,

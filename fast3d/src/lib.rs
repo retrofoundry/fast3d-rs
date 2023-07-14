@@ -13,3 +13,5 @@ mod rsp;
 
 mod extensions;
 pub mod models;
+
+pub use fast3d_gbi;

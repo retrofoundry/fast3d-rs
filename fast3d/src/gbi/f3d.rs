@@ -1,10 +1,9 @@
-use crate::gbi::defines::Gfx;
 use crate::gbi::utils::get_cmd;
-use crate::gbi::{
-    macros::gbi_command, GBICommandParams, GBICommandRegistry, GBIResult,
-};
+use crate::gbi::{macros::gbi_command, GBICommandParams, GBICommandRegistry, GBIResult};
 use crate::rsp::RSP;
 use bitflags::bitflags;
+use fast3d_gbi::defines::f3d::OpCode;
+use fast3d_gbi::defines::GfxCommand;
 
 bitflags! {
     pub struct MoveWordIndex: u8 {
@@ -52,31 +51,6 @@ bitflags! {
     }
 }
 
-bitflags! {
-    pub struct OpCode: u8 {
-        const NOOP = 0xc0;
-        const SETOTHERMODE_H = 0xBA;
-        const SETOTHERMODE_L = 0xB9;
-        const RDPHALF_1 = 0xB4;
-        const RDPHALF_2 = 0xB3;
-        const SPNOOP = 0x00;
-        const ENDDL = 0xB8;
-        const DL = 0x06;
-        const MOVEMEM = 0x03;
-        const MOVEWORD = 0xBC;
-        const MTX = 0x01;
-        const POPMTX = 0xBD;
-        const TEXTURE = 0xBB;
-        const VTX = 0x04;
-        const CULLDL = 0xBE;
-        const TRI1 = 0xBF;
-        const QUAD = 0xB5;
-        const SPRITE2D_BASE = 0x09;
-        const SETGEOMETRYMODE = 0xB7;
-        const CLEARGEOMETRYMODE = 0xB6;
-    }
-}
-
 #[allow(dead_code)]
 pub fn setup(gbi: &mut GBICommandRegistry, _rsp: &mut RSP) {
     gbi.register(OpCode::SPNOOP.bits(), SpNoOp);
@@ -103,7 +77,7 @@ gbi_command!(SubDL, |params: &mut GBICommandParams| {
         GBIResult::Recurse(new_addr)
     } else {
         let new_addr = params.rsp.get_segment(w1);
-        let cmd = new_addr as *mut Gfx;
+        let cmd = new_addr as *mut GfxCommand;
         unsafe { *params.command = cmd.sub(1) };
         GBIResult::Continue
     }

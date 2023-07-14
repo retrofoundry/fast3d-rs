@@ -1,10 +1,11 @@
-use crate::gbi::defines::{
-    AlphaCompare, BlendAlpha2, BlendColor, CycleType, GeometryModes, OtherModeHLayout, RenderMode,
-    RenderModeFlags, TextureFilter, ZMode,
-};
 use crate::output::gfx::Face;
 use crate::rsp::RSPConstants;
+use fast3d_gbi::defines::render_mode::{
+    BlendAlpha2, BlendColor, RenderMode, RenderModeFlags, ZMode,
+};
+use fast3d_gbi::defines::{AlphaCompare, CycleType, GeometryModes, OtherModeH, TextureFilter};
 
+// TODO: Replace with the new getter on GfxCommand
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
     (val >> start_bit) & ((1 << num_bits) - 1)
 }
@@ -43,13 +44,13 @@ pub fn other_mode_l_alpha_compare_dither(other_mode_l: u32) -> bool {
 }
 
 pub fn get_cycle_type_from_other_mode_h(mode_h: u32) -> CycleType {
-    (((mode_h >> OtherModeHLayout::CYCLE_TYPE.bits()) & 0x03) as u8)
+    (((mode_h >> OtherModeH::Shift::CYCLE_TYPE.bits()) & 0x03) as u8)
         .try_into()
         .unwrap()
 }
 
 pub fn get_texture_filter_from_other_mode_h(mode_h: u32) -> TextureFilter {
-    (((mode_h >> OtherModeHLayout::TEXT_FILT.bits()) & 0x3) as u8)
+    (((mode_h >> OtherModeH::Shift::TEXT_FILT.bits()) & 0x3) as u8)
         .try_into()
         .unwrap()
 }

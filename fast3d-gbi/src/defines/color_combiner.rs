@@ -1,5 +1,52 @@
-use crate::gbi::defines::{AlphaCombinerMux, ColorCombinerMux};
-use crate::gbi::utils::get_cmd;
+use bitflags::bitflags;
+
+pub const G_CC_SHADE: CombineParams = CombineParams::SHADE;
+
+// TODO: Replace with the new getter on GfxCommand
+pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
+    (val >> start_bit) & ((1 << num_bits) - 1)
+}
+
+bitflags! {
+    pub struct ColorCombinerMux: u32 {
+        const COMBINED = 0x00;
+        const TEXEL0 = 0x01;
+        const TEXEL1 = 0x02;
+        const PRIMITIVE = 0x03;
+        const SHADE = 0x04;
+        const ENVIRONMENT = 0x05;
+        const CENTER = 0x06;
+        const SCALE = 0x06;
+        const COMBINED_ALPHA = 0x07;
+        const TEXEL0_ALPHA = 0x08;
+        const TEXEL1_ALPHA = 0x09;
+        const PRIMITIVE_ALPHA = 0x0A;
+        const SHADE_ALPHA = 0x0B;
+        const ENVIRONMENT_ALPHA = 0x0C;
+        const LOD_FRACTION = 0x0D;
+        const PRIM_LOD_FRAC = 0x0E;
+        const NOISE = 0x07;
+        const K4 = 0x07;
+        const K5 = 0x0F;
+        const ONE = 0x06;
+        const ZERO = 0x1F;
+    }
+}
+
+bitflags! {
+    pub struct AlphaCombinerMux: u32 {
+        const COMBINED = 0x00;
+        const TEXEL0 = 0x01;
+        const TEXEL1 = 0x02;
+        const PRIMITIVE = 0x03;
+        const SHADE = 0x04;
+        const ENVIRONMENT = 0x05;
+        const LOD_FRACTION = 0x00;
+        const PRIM_LOD_FRAC = 0x06;
+        const ONE = 0x06;
+        const ZERO = 0x07;
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -11,6 +58,13 @@ pub struct ColorCombinePass {
 }
 
 impl ColorCombinePass {
+    pub const SHADE: Self = Self {
+        a: ColorCombinerMux::ZERO,
+        b: ColorCombinerMux::ZERO,
+        c: ColorCombinerMux::ZERO,
+        d: ColorCombinerMux::SHADE,
+    };
+
     // grab property by index
     pub fn get(&self, index: usize) -> ColorCombinerMux {
         match index {
@@ -55,6 +109,13 @@ pub struct AlphaCombinePass {
 }
 
 impl AlphaCombinePass {
+    pub const SHADE: Self = Self {
+        a: AlphaCombinerMux::ZERO,
+        b: AlphaCombinerMux::ZERO,
+        c: AlphaCombinerMux::ZERO,
+        d: AlphaCombinerMux::SHADE,
+    };
+
     // grab property by index
     pub fn get(&self, index: usize) -> AlphaCombinerMux {
         match index {
@@ -94,27 +155,54 @@ impl CombineParams {
     pub const ZERO: Self = Self {
         c0: ColorCombinePass {
             a: ColorCombinerMux::COMBINED,
-            b: ColorCombinerMux::TEXEL0,
-            c: ColorCombinerMux::PRIMITIVE,
+            b: ColorCombinerMux::COMBINED,
+            c: ColorCombinerMux::COMBINED,
             d: ColorCombinerMux::COMBINED,
         },
         a0: AlphaCombinePass {
             a: AlphaCombinerMux::COMBINED,
-            b: AlphaCombinerMux::TEXEL0,
-            c: AlphaCombinerMux::PRIMITIVE,
+            b: AlphaCombinerMux::COMBINED,
+            c: AlphaCombinerMux::COMBINED,
             d: AlphaCombinerMux::COMBINED,
         },
         c1: ColorCombinePass {
             a: ColorCombinerMux::COMBINED,
-            b: ColorCombinerMux::TEXEL0,
-            c: ColorCombinerMux::PRIMITIVE,
+            b: ColorCombinerMux::COMBINED,
+            c: ColorCombinerMux::COMBINED,
             d: ColorCombinerMux::COMBINED,
         },
         a1: AlphaCombinePass {
             a: AlphaCombinerMux::COMBINED,
-            b: AlphaCombinerMux::TEXEL0,
-            c: AlphaCombinerMux::PRIMITIVE,
+            b: AlphaCombinerMux::COMBINED,
+            c: AlphaCombinerMux::COMBINED,
             d: AlphaCombinerMux::COMBINED,
+        },
+    };
+
+    pub const SHADE: Self = Self {
+        c0: ColorCombinePass {
+            a: ColorCombinerMux::COMBINED,
+            b: ColorCombinerMux::COMBINED,
+            c: ColorCombinerMux::COMBINED,
+            d: ColorCombinerMux::SHADE,
+        },
+        a0: AlphaCombinePass {
+            a: AlphaCombinerMux::COMBINED,
+            b: AlphaCombinerMux::COMBINED,
+            c: AlphaCombinerMux::COMBINED,
+            d: AlphaCombinerMux::SHADE,
+        },
+        c1: ColorCombinePass {
+            a: ColorCombinerMux::COMBINED,
+            b: ColorCombinerMux::COMBINED,
+            c: ColorCombinerMux::COMBINED,
+            d: ColorCombinerMux::SHADE,
+        },
+        a1: AlphaCombinePass {
+            a: AlphaCombinerMux::COMBINED,
+            b: AlphaCombinerMux::COMBINED,
+            c: AlphaCombinerMux::COMBINED,
+            d: AlphaCombinerMux::SHADE,
         },
     };
 

@@ -1,17 +1,23 @@
 [workspace]
 members = [
     "fast3d",
+    "fast3d-gbi",
     "fast3d-glium-renderer",
     "fast3d-wgpu-renderer",
+    "examples/*",
 ]
 default-members = [
+    "examples/*",
     "fast3d",
+    "fast3d-gbi",
     "fast3d-glium-renderer",
+    "fast3d-wgpu-renderer",
 ]
 
 [workspace.package]
 edition = "2021"
 version = "0.4.2"
+authors = ["fast3d-rs developers"]
 description = "A Rust library for N64 Fast3D Graphics Rendering"
 homepage = "https://crates.io/crates/fast3d"
 repository = "https://github.com/retrofoundry/fast3d-rs"
@@ -33,5 +39,20 @@ version = "0.4.2"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 glam = { version = "0.24.1", features = ["approx", "bytemuck"] }
 log = "0.4"
+fast3d-gbi = { version = "0.4.2", path = "fast3d-gbi" }
 fast3d = { version = "0.4.2", path = "./fast3d" }
+fast3d-example = { version = "0.4.2", path = "./examples/common" }
 rustc-hash = "1.1"
+wgpu = { version = "0.16", features = ["glsl"] }
+naga = "0.12.2"
+glium = "0.32.1"
+env_logger = "0.10.0"
+winit = { version = "0.28.6", features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
+pollster = "0.3.0"
+farbe = "0.2.0"
+lru = "0.10.1"
+num_enum = "0.6.1"
+bitflags = "1.3.2"
+async-executor = "1"
+pigment = { git = "https://github.com/decompals/pigment.git" }
+nohash-hasher = "0.2.0"

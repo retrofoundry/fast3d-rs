@@ -1,8 +1,8 @@
-use crate::gbi::defines::OpCode;
 use crate::gbi::macros::gbi_command;
+use crate::gbi::utils::get_cmd;
+use crate::gbi::{f3dex2, GBICommandParams, GBICommandRegistry, GBIResult};
 use crate::rsp::RSP;
-
-use super::{f3dex2, utils::get_cmd, GBICommandParams, GBICommandRegistry, GBIResult};
+use fast3d_gbi::defines::OpCode;
 
 #[allow(dead_code)]
 pub fn setup(gbi: &mut GBICommandRegistry, rsp: &mut RSP) {
