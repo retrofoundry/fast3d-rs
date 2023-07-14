@@ -20,6 +20,7 @@ pub fn guMtxF2L(float_mtx: &[[f32; 4]; 4], output: *mut Matrix) {
     }
 }
 #[cfg(feature = "gbifloats")]
+#[allow(non_snake_case)]
 pub fn guMtxF2L(float_mtx: &[[f32; 4]; 4], output: *mut Matrix) {
     // TODO: Does this work? Otherwise we can just copy the values manually.
     unsafe {
