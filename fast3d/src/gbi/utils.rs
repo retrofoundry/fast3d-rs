@@ -1,3 +1,4 @@
+use bitflags::Flags;
 use crate::output::gfx::Face;
 use crate::rsp::RSPConstants;
 use fast3d_gbi::defines::render_mode::{
@@ -62,12 +63,12 @@ pub fn translate_cull_mode(
     // We do unchecked comparisons because the values set in rsp_constants are per GBI
     // and do not appear in the general GeometryModes enum
     let cull_front = unsafe {
-        geometry_mode.contains(GeometryModes::from_bits_unchecked(
+        geometry_mode.contains(GeometryModes::from_bits_retain(
             rsp_constants.geomode_cull_front_val,
         ))
     };
     let cull_back = unsafe {
-        geometry_mode.contains(GeometryModes::from_bits_unchecked(
+        geometry_mode.contains(GeometryModes::from_bits_retain(
             rsp_constants.geomode_cull_back_val,
         ))
     };

@@ -61,6 +61,7 @@ impl TryFrom<u32> for RenderMode {
 }
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct RenderModeFlags: u16 {
         const ANTI_ALIASING = 0x0008;
         const Z_COMPARE     = 0x0010;

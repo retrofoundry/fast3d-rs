@@ -264,6 +264,7 @@ pub mod OtherModeL {
 }
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct GeometryModes: u32 {
         const ZBUFFER             = 0x00000001;
         const SHADE               = 0x00000004;

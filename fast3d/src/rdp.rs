@@ -1,3 +1,4 @@
+use bitflags::Flags;
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
 
@@ -658,7 +659,7 @@ impl RDP {
             // and do not appear in the general GeometryModes enum
             if rsp
                 .geometry_mode
-                .contains(GeometryModes::from_bits_unchecked(
+                .contains(GeometryModes::from_bits_retain(
                     rsp.constants.geomode_cull_both_val,
                 ))
             {
