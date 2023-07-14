@@ -1,4 +1,4 @@
-use crate::gbi::defines::{ComponentSize, ImageFormat, WrapMode};
+use gbi_assembler::defines::{ComponentSize, ImageFormat, WrapMode};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct TileDescriptor {

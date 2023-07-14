@@ -1,4 +1,4 @@
-use crate::gbi::defines::{ComponentSize, ImageFormat};
+use gbi_assembler::defines::{ComponentSize, ImageFormat};
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 

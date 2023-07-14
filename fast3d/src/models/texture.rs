@@ -1,7 +1,7 @@
-use crate::gbi::defines::TextureLUT;
 use farbe::image::n64::{
     ImageFormat as FarbeImageFormat, ImageSize as FarbeImageSize, NativeImage, TLUT,
 };
+use gbi_assembler::defines::TextureLUT;
 use log::trace;
 
 pub fn translate_tile_rgba16(tmem: &[u8], tile_width: u32, tile_height: u32) -> Vec<u8> {

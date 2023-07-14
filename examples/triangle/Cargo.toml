@@ -17,3 +17,5 @@ f3dwgpu.workspace = true
 fast3d-example.workspace = true
 wgpu.workspace = true
 winit.workspace = true
+gbi-assembler.workspace = true
+pigment.workspace = true

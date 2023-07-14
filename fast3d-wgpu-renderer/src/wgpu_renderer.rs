@@ -10,13 +10,13 @@ use crate::defines::{
     VertexWithFogUniforms,
 };
 use crate::wgpu_program::ShaderVersion;
-use fast3d::gbi::defines::WrapMode;
 use fast3d::output::{
     gfx::{BlendFactor, BlendOperation, BlendState, CompareFunction, Face},
     models::{OutputSampler, OutputStencil, OutputTexture},
     ShaderConfig, ShaderId,
 };
 use fast3d::output::{IntermediateDrawCall, RCPOutputCollector};
+use gbi_assembler::defines::WrapMode;
 
 use super::wgpu_program::WgpuProgram;
 

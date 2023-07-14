@@ -3,13 +3,9 @@ use fast3d::gbi::utils::{
     other_mode_l_alpha_compare_dither, other_mode_l_alpha_compare_threshold,
     other_mode_l_uses_alpha, other_mode_l_uses_fog, other_mode_l_uses_texture_edge,
 };
-
-use fast3d::models::color_combiner::CombineParams;
-
-use fast3d::gbi::defines::{
-    AlphaCombinerMux, ColorCombinerMux, CycleType, GeometryModes, TextureFilter,
-};
 use fast3d::output::ShaderConfig;
+use gbi_assembler::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
+use gbi_assembler::defines::{CycleType, GeometryModes, TextureFilter};
 use naga::FastHashMap;
 
 #[derive(PartialEq, Eq)]

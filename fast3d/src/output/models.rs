@@ -1,5 +1,5 @@
-use crate::gbi::defines::{ComponentSize, ImageFormat, WrapMode};
 use crate::output::gfx::CompareFunction;
+use gbi_assembler::defines::{ComponentSize, ImageFormat, WrapMode};
 
 pub struct OutputTexture {
     pub game_address: usize,

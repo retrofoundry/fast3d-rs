@@ -1,7 +1,8 @@
-use fast3d::gbi::defines::Mtx;
+use crate::defines::Matrix;
 
+#[cfg(not(feature = "gbifloats"))]
 #[allow(non_snake_case)]
-pub fn guMtxF2L(float_mtx: &[[f32; 4]; 4], output: *mut Mtx) {
+pub fn guMtxF2L(float_mtx: &[[f32; 4]; 4], output: *mut Matrix) {
     let mut m1 = unsafe { &mut (*output).m[0][0] as *mut u32 };
     let mut m2 = unsafe { &mut (*output).m[2][0] as *mut u32 };
 
@@ -18,10 +19,21 @@ pub fn guMtxF2L(float_mtx: &[[f32; 4]; 4], output: *mut Mtx) {
         }
     }
 }
+#[cfg(feature = "gbifloats")]
+pub fn guMtxF2L(float_mtx: &[[f32; 4]; 4], output: *mut Matrix) {
+    // TODO: Does this work? Otherwise we can just copy the values manually.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            float_mtx.as_ptr() as *const u8,
+            output as *mut u8,
+            std::mem::size_of::<Matrix>(),
+        );
+    }
+}
 
 #[allow(non_snake_case)]
 pub fn guOrtho(
-    matrix: *mut Mtx,
+    matrix: *mut Matrix,
     left: f32,
     right: f32,
     bottom: f32,
@@ -85,7 +97,7 @@ pub fn guMtxIdentF(matrix: &mut [[f32; 4]; 4]) {
 }
 
 #[allow(non_snake_case)]
-pub fn guRotate(matrix: *mut Mtx, angle: f32, x: f32, y: f32, z: f32) {
+pub fn guRotate(matrix: *mut Matrix, angle: f32, x: f32, y: f32, z: f32) {
     let mut float_matrix: [[f32; 4]; 4] = [[0.0; 4]; 4];
     guRotateF(&mut float_matrix, angle, x, y, z);
     guMtxF2L(&float_matrix, matrix);

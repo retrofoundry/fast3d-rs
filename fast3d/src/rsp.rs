@@ -1,12 +1,11 @@
-use crate::gbi::defines::{DirLight, GeometryModes, Vtx};
 use std::slice;
 
-use super::{gbi::defines::Light, models::color::Color};
 use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
-
+use crate::models::color::Color;
 use crate::models::texture::TextureState;
 use crate::output::RCPOutputCollector;
 use crate::rdp::RDP;
+use gbi_assembler::defines::{DirLight, GeometryModes, Light, Vertex};
 use glam::{Mat4, Vec2, Vec3A};
 
 pub const MATRIX_STACK_SIZE: usize = 32;
@@ -282,10 +281,10 @@ impl RSP {
             self.modelview_projection_matrix_changed = false;
         }
 
-        let vertices = self.get_segment(address) as *const Vtx;
+        let vertices = self.get_segment(address) as *const Vertex;
 
         for i in 0..vertex_count {
-            let vertex = unsafe { &(*vertices.add(i)).vertex };
+            let vertex = unsafe { &(*vertices.add(i)).color };
             let vertex_normal = unsafe { &(*vertices.add(i)).normal };
             let staging_vertex = &mut self.vertex_table[write_index];
 

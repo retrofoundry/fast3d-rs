@@ -1,11 +1,6 @@
-use crate::gbi::GBICommandParams;
-
-use super::{
-    gbi::{defines::Gfx, GBICommandRegistry, GBIResult},
-    output::RCPOutputCollector,
-    rdp::RDP,
-    rsp::RSP,
-};
+use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
+use crate::gbi::{GBICommandParams, GBICommandRegistry, GBIResult};
+use gbi_assembler::defines::GfxCommand;
 
 pub struct RCP {
     gbi: GBICommandRegistry,
@@ -41,16 +36,19 @@ impl RCP {
     /// It takes in a pointer to the start of the work buffer and will
     /// process until it hits a `G_ENDDL` indicating the end.
     pub fn run(&mut self, output: &mut RCPOutputCollector, commands: usize) {
+        println!("starting run");
         self.reset();
         self.run_dl(output, commands);
         self.rdp.flush(output);
+        println!("ending run");
     }
 
     fn run_dl(&mut self, output: &mut RCPOutputCollector, commands: usize) {
-        let mut command = commands as *mut Gfx;
+        let mut command = commands as *mut GfxCommand;
 
         loop {
             let opcode = (unsafe { (*command).words.w0 } >> 24) as u8;
+            println!("opcode: {:#x}", opcode);
             if let Some(handler) = self.gbi.handler(&opcode) {
                 let handler_input = &mut GBICommandParams {
                     rdp: &mut self.rdp,

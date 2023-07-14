@@ -1,79 +1,47 @@
 use f3dwgpu::WgpuRenderer;
-use fast3d::gbi::defines::{Color_t, Gfx, Mtx, Viewport, Vtx, Vtx_t};
 use fast3d::rdp::{OutputDimensions, SCREEN_HEIGHT, SCREEN_WIDTH};
 use fast3d::{RCPOutputCollector, RCP};
+use gbi_assembler::defines::color_combiner::G_CC_SHADE;
+use gbi_assembler::defines::{
+    AlphaCompare, ColorDither, ColorVertex, ComponentSize, CycleType,
+    GeometryModes as SharedGeometryModes, GfxCommand, ImageFormat, Matrix, PipelineMode,
+    ScissorMode, TextureConvert, TextureDetail, TextureFilter, TextureLOD, TextureLUT, Vertex,
+    Viewport, G_MAXZ,
+};
+use gbi_assembler::dma::{gsSPDisplayList, gsSPMatrix, gsSPViewport};
+use gbi_assembler::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
+use gbi_assembler::gbi::{
+    gsDPFullSync, gsDPPipeSync, gsSPEndDisplayList, GPACK_RGBA5551, G_RM_AA_OPA_SURF,
+    G_RM_AA_OPA_SURF2, G_RM_OPA_SURF, G_RM_OPA_SURF2,
+};
+use gbi_assembler::gu::{guOrtho, guRotate};
+use gbi_assembler::rdp::{gsDPFillRectangle, gsDPSetColorImage, gsDPSetFillColor, gsDPSetScissor};
+use gbi_assembler::rsp::{
+    gsDPPipelineMode, gsDPSetAlphaCompare, gsDPSetColorDither, gsDPSetCombineKey,
+    gsDPSetCombineMode, gsDPSetCycleType, gsDPSetRenderMode, gsDPSetTextureConvert,
+    gsDPSetTextureDetail, gsDPSetTextureFilter, gsDPSetTextureLOD, gsDPSetTextureLUT,
+    gsDPSetTexturePersp, gsSP1Triangle, gsSPClearGeometryMode, gsSPSetGeometryMode, gsSPTexture,
+    gsSPVertex,
+};
+use pigment::color::Color;
 use std::{future::Future, pin::Pin, task};
 use winit::dpi::LogicalSize;
 
-use crate::gbi::{
-    gsDPFillRectangle, gsDPFullSync, gsDPPipeSync, gsDPPipelineMode, gsDPSetAlphaCompare,
-    gsDPSetColorDither, gsDPSetColorImage, gsDPSetCombineKey, gsDPSetCombineMode, gsDPSetCycleType,
-    gsDPSetFillColor, gsDPSetRenderMode, gsDPSetScissor, gsDPSetTextureConvert,
-    gsDPSetTextureDetail, gsDPSetTextureFilter, gsDPSetTextureLOD, gsDPSetTextureLUT,
-    gsDPSetTexturePersp, gsSP1Triangle, gsSPClearGeometryMode, gsSPDisplayList, gsSPEndDisplayList,
-    gsSPMatrix, gsSPSetGeometryMode, gsSPTexture, gsSPVertex, gsSPViewport, G_IM_SIZ_16b,
-    GPACK_RGBA5551, G_AC_NONE, G_CC_SHADE, G_CD_DISABLE, G_CK_NONE, G_CULL_BOTH, G_CYC_1CYCLE,
-    G_CYC_FILL, G_FOG, G_IM_FMT_RGBA, G_LIGHTING, G_LOD, G_MAXZ, G_MTX_LOAD, G_MTX_MODELVIEW,
-    G_MTX_NOPUSH, G_MTX_PROJECTION, G_PM_NPRIMITIVE, G_RM_AA_OPA_SURF, G_RM_AA_OPA_SURF2,
-    G_RM_OPA_SURF, G_RM_OPA_SURF2, G_SC_NON_INTERLACE, G_SHADE, G_SHADING_SMOOTH, G_TC_FILT,
-    G_TD_CLAMP, G_TEXTURE_GEN, G_TEXTURE_GEN_LINEAR, G_TF_BILERP, G_TL_TILE, G_TP_PERSP, G_TT_NONE,
-};
-use crate::gu::{guOrtho, guRotate};
-
-mod gbi;
-mod gu;
-
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-fn create_vertices() -> Vec<Vtx> {
+fn create_vertices() -> Vec<Vertex> {
     vec![
-        Vtx {
-            vertex: Vtx_t::new(
-                [-64, 64, -5],
-                [0, 0],
-                Color_t {
-                    r: 0,
-                    g: 0xFF,
-                    b: 0,
-                    a: 0xFF,
-                },
-            ),
+        Vertex {
+            color: ColorVertex::new([-64, 64, -5], [0, 0], Color::RGBA(0, 0xFF, 0, 0xFF)),
         },
-        Vtx {
-            vertex: Vtx_t::new(
-                [64, 64, -5],
-                [0, 0],
-                Color_t {
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    a: 0xFF,
-                },
-            ),
+        Vertex {
+            color: ColorVertex::new([64, 64, -5], [0, 0], Color::RGBA(0, 0, 0, 0xFF)),
         },
-        Vtx {
-            vertex: Vtx_t::new(
-                [64, -64, -5],
-                [0, 0],
-                Color_t {
-                    r: 0,
-                    g: 0,
-                    b: 0xFF,
-                    a: 0xFF,
-                },
-            ),
+        Vertex {
+            color: ColorVertex::new([64, -64, -5], [0, 0], Color::RGBA(0, 0, 0xFF, 0xFF)),
         },
-        Vtx {
-            vertex: Vtx_t::new(
-                [-64, -64, -5],
-                [0, 0],
-                Color_t {
-                    r: 0xFF,
-                    g: 0,
-                    b: 0,
-                    a: 0xFF,
-                },
-            ),
+        Vertex {
+            color: ColorVertex::new([-64, -64, -5], [0, 0], Color::RGBA(0xFF, 0, 0, 0xFF)),
         },
     ]
 }
@@ -108,7 +76,7 @@ struct Example<'a> {
     depth_texture: wgpu::TextureView,
     surface_format: wgpu::TextureFormat,
 
-    vertex_data: Vec<Vtx>,
+    vertex_data: Vec<Vertex>,
     viewport: Viewport,
     frame_count: f32,
     rsp_color_fb: [u16; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize],
@@ -137,58 +105,59 @@ impl<'a> Example<'a> {
         depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    fn generate_rdp_init_dl() -> Vec<Gfx> {
+    fn generate_rdp_init_dl() -> Vec<GfxCommand> {
         vec![
-            gsDPSetCycleType(G_CYC_1CYCLE),
-            gsDPPipelineMode(G_PM_NPRIMITIVE),
+            gsDPSetCycleType(CycleType::default().raw_gbi_value()),
+            gsDPPipelineMode(PipelineMode::default().raw_gbi_value()),
             gsDPSetScissor(
-                G_SC_NON_INTERLACE,
+                ScissorMode::NonInterlace as u32,
                 0,
                 0,
                 SCREEN_WIDTH as u32,
                 SCREEN_HEIGHT as u32,
             ),
-            gsDPSetTextureLOD(G_TL_TILE),
-            gsDPSetTextureLUT(G_TT_NONE),
-            gsDPSetTextureDetail(G_TD_CLAMP),
-            gsDPSetTexturePersp(G_TP_PERSP),
-            gsDPSetTextureFilter(G_TF_BILERP),
-            gsDPSetTextureConvert(G_TC_FILT),
+            gsDPSetTextureLOD(TextureLOD::default().raw_gbi_value()),
+            gsDPSetTextureLUT(TextureLUT::default().raw_gbi_value()),
+            gsDPSetTextureDetail(TextureDetail::default().raw_gbi_value()),
+            gsDPSetTexturePersp(true),
+            gsDPSetTextureFilter(TextureFilter::Bilerp.raw_gbi_value()),
+            gsDPSetTextureConvert(TextureConvert::Filt.raw_gbi_value()),
             gsDPSetCombineMode(G_CC_SHADE),
-            gsDPSetCombineKey(G_CK_NONE),
-            gsDPSetAlphaCompare(G_AC_NONE),
+            gsDPSetCombineKey(false),
+            gsDPSetAlphaCompare(AlphaCompare::None.raw_gbi_value()),
             gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2),
-            gsDPSetColorDither(G_CD_DISABLE),
+            gsDPSetColorDither(ColorDither::Disable.raw_gbi_value()),
             gsDPPipeSync(),
             gsSPEndDisplayList(),
         ]
     }
 
-    fn generate_rsp_init_dl(viewport: &Viewport) -> Vec<Gfx> {
+    fn generate_rsp_init_dl(viewport: &Viewport) -> Vec<GfxCommand> {
         vec![
             gsSPViewport(viewport),
             gsSPClearGeometryMode(
-                G_SHADE
-                    | G_SHADING_SMOOTH
-                    | G_CULL_BOTH
-                    | G_FOG
-                    | G_LIGHTING
-                    | G_TEXTURE_GEN
-                    | G_TEXTURE_GEN_LINEAR
-                    | G_LOD,
+                SharedGeometryModes::SHADE.bits()
+                    | GeometryModes::SHADING_SMOOTH.bits()
+                    | SharedGeometryModes::FOG.bits()
+                    | SharedGeometryModes::LIGHTING.bits()
+                    | SharedGeometryModes::TEXTURE_GEN.bits()
+                    | SharedGeometryModes::TEXTURE_GEN_LINEAR.bits()
+                    | SharedGeometryModes::LOD.bits(),
             ),
             gsSPTexture(0, 0, 0, 0, false),
-            gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH),
+            gsSPSetGeometryMode(
+                SharedGeometryModes::SHADE.bits() | GeometryModes::SHADING_SMOOTH.bits(),
+            ),
             gsSPEndDisplayList(),
         ]
     }
 
-    fn generate_clear_color_fb_dl(rsp_color_fb: usize) -> Vec<Gfx> {
+    fn generate_clear_color_fb_dl(rsp_color_fb: usize) -> Vec<GfxCommand> {
         vec![
-            gsDPSetCycleType(G_CYC_FILL),
+            gsDPSetCycleType(CycleType::Fill.raw_gbi_value()),
             gsDPSetColorImage(
-                G_IM_FMT_RGBA,
-                G_IM_SIZ_16b,
+                ImageFormat::Rgba as u32,
+                ComponentSize::Bits16 as u32,
                 SCREEN_WIDTH as u32,
                 rsp_color_fb,
             ),
@@ -202,23 +171,29 @@ impl<'a> Example<'a> {
     }
 
     fn generate_triangle_dl(
-        projection_mtx_ptr: *mut Mtx,
-        modelview_mtx_ptr: *mut Mtx,
-        triangle_vertices: &[Vtx],
-    ) -> Vec<Gfx> {
+        projection_mtx_ptr: *mut Matrix,
+        modelview_mtx_ptr: *mut Matrix,
+        triangle_vertices: &[Vertex],
+    ) -> Vec<GfxCommand> {
         vec![
             gsSPMatrix(
                 projection_mtx_ptr,
-                G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH,
+                (MatrixMode::PROJECTION.bits()
+                    | MatrixOperation::LOAD.bits()
+                    | MatrixOperation::NOPUSH.bits()) as u32,
             ),
             gsSPMatrix(
                 modelview_mtx_ptr,
-                G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH,
+                (MatrixMode::MODELVIEW.bits()
+                    | MatrixOperation::LOAD.bits()
+                    | MatrixOperation::NOPUSH.bits()) as u32,
             ),
             gsDPPipeSync(),
-            gsDPSetCycleType(G_CYC_1CYCLE),
+            gsDPSetCycleType(CycleType::OneCycle.raw_gbi_value()),
             gsDPSetRenderMode(G_RM_AA_OPA_SURF, G_RM_AA_OPA_SURF2),
-            gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH),
+            gsSPSetGeometryMode(
+                SharedGeometryModes::SHADE.bits() | GeometryModes::SHADING_SMOOTH.bits(),
+            ),
             gsSPVertex(triangle_vertices, 4, 0),
             gsSP1Triangle(0, 1, 2, 0),
             gsSP1Triangle(0, 3, 2, 0),
@@ -307,11 +282,11 @@ impl<'a> fast3d_example::framework::Example for Example<'static> {
         let clear_color_fb_dl =
             Self::generate_clear_color_fb_dl(self.rsp_color_fb.as_ptr() as usize);
 
-        let mut projection_mtx = Mtx { m: [[0; 4]; 4] };
-        let projection_mtx_ptr = &mut projection_mtx as *mut Mtx;
+        let mut projection_mtx = Matrix { m: [[0; 4]; 4] };
+        let projection_mtx_ptr = &mut projection_mtx as *mut Matrix;
 
-        let mut modelview_mtx = Mtx { m: [[0; 4]; 4] };
-        let modelview_mtx_ptr = &mut modelview_mtx as *mut Mtx;
+        let mut modelview_mtx = Matrix { m: [[0; 4]; 4] };
+        let modelview_mtx_ptr = &mut modelview_mtx as *mut Matrix;
 
         // set up projection and modelview matrices
         guOrtho(

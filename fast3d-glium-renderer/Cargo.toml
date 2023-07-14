@@ -19,5 +19,4 @@ log.workspace = true
 fast3d.workspace = true
 rustc-hash.workspace = true
 glium.workspace = true
-
-
+gbi-assembler.workspace = true

@@ -21,3 +21,4 @@ fast3d.workspace = true
 rustc-hash.workspace = true
 wgpu.workspace = true
 naga.workspace = true
+gbi-assembler.workspace = true

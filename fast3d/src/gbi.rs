@@ -1,6 +1,5 @@
-use self::defines::Gfx;
-
 use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
+use gbi_assembler::defines::GfxCommand;
 use std::collections::HashMap;
 use nohash_hasher::BuildNoHashHasher;
 
@@ -10,7 +9,6 @@ mod f3dex2e;
 mod f3dzex2;
 
 mod common;
-pub mod defines;
 pub mod macros;
 pub mod utils;
 
@@ -24,7 +22,7 @@ pub struct GBICommandParams<'a> {
     pub rdp: &'a mut RDP,
     pub rsp: &'a mut RSP,
     pub output: &'a mut RCPOutputCollector,
-    pub command: &'a mut *mut Gfx,
+    pub command: &'a mut *mut GfxCommand,
 }
 
 pub type GBICommandFn = fn(&mut GBICommandParams) -> GBIResult;
