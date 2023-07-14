@@ -4,8 +4,8 @@ use fast3d::gbi::utils::{
     other_mode_l_uses_alpha, other_mode_l_uses_fog, other_mode_l_uses_texture_edge,
 };
 use fast3d::output::ShaderConfig;
-use gbi_assembler::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
-use gbi_assembler::defines::{CycleType, GeometryModes, TextureFilter};
+use fast3d_gbi::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
+use fast3d_gbi::defines::{CycleType, GeometryModes, TextureFilter};
 use std::collections::HashMap;
 
 #[derive(PartialEq, Eq)]

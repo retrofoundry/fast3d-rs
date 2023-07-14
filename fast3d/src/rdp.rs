@@ -24,9 +24,9 @@ use crate::gbi::utils::{
 use crate::models::color::R5G5B5A1;
 use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
 use farbe::image::n64::ImageSize as FarbeImageSize;
-use gbi_assembler::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
-use gbi_assembler::defines::render_mode::{RenderModeFlags, ZMode};
-use gbi_assembler::defines::{
+use fast3d_gbi::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
+use fast3d_gbi::defines::render_mode::{RenderModeFlags, ZMode};
+use fast3d_gbi::defines::{
     ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeH, TextureFilter, TextureLUT,
     TextureTile, Viewport, WrapMode,
 };

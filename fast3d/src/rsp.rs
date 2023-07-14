@@ -5,7 +5,7 @@ use crate::models::color::Color;
 use crate::models::texture::TextureState;
 use crate::output::RCPOutputCollector;
 use crate::rdp::RDP;
-use gbi_assembler::defines::{DirLight, GeometryModes, Light, Vertex};
+use fast3d_gbi::defines::{DirLight, GeometryModes, Light, Vertex};
 use glam::{Mat4, Vec2, Vec3A};
 
 pub const MATRIX_STACK_SIZE: usize = 32;

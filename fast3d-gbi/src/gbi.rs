@@ -48,10 +48,12 @@ fn gsDPNoParam(command: u32) -> GfxCommand {
 
 // MARK: - OtherMode L Helpers
 
+#[allow(non_snake_case)]
 const fn GBL_c1(m1a: u32, m1b: u32, m2a: u32, m2b: u32) -> u32 {
     (m1a) << 30 | (m1b) << 26 | (m2a) << 22 | (m2b) << 18
 }
 
+#[allow(non_snake_case)]
 const fn GBL_c2(m1a: u32, m1b: u32, m2a: u32, m2b: u32) -> u32 {
     (m1a) << 28 | (m1b) << 24 | (m2a) << 20 | (m2b) << 16
 }

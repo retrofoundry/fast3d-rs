@@ -16,7 +16,7 @@ use fast3d::output::{
     ShaderConfig, ShaderId,
 };
 use fast3d::output::{IntermediateDrawCall, RCPOutputCollector};
-use gbi_assembler::defines::WrapMode;
+use fast3d_gbi::defines::WrapMode;
 
 use super::wgpu_program::WgpuProgram;
 

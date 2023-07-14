@@ -4,8 +4,8 @@ use crate::gbi::{
 };
 use crate::rsp::RSP;
 use bitflags::bitflags;
-use gbi_assembler::defines::GfxCommand;
-use gbi_assembler::f3d::OpCode;
+use fast3d_gbi::defines::GfxCommand;
+use fast3d_gbi::f3d::OpCode;
 
 bitflags! {
     pub struct MoveWordIndex: u8 {

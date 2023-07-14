@@ -1,7 +1,7 @@
 use crate::gbi::macros::gbi_command;
 use crate::gbi::{f3d, GBICommand, GBICommandParams, GBICommandRegistry, GBIResult};
-use gbi_assembler::defines::Viewport;
-use gbi_assembler::{
+use fast3d_gbi::defines::Viewport;
+use fast3d_gbi::{
     defines::{MoveWordIndex as SharedMoveWordIndex, OpCode as SharedOpCode},
     f3dex2::{GeometryModes, MatrixMode, MatrixOperation, MoveMemoryIndex, MoveWordIndex, OpCode},
 };
@@ -269,7 +269,7 @@ mod tests {
     
     use crate::rdp::RDP;
     use crate::rsp::RSP;
-    use gbi_assembler::defines::GfxCommand;
+    use fast3d_gbi::defines::GfxCommand;
 
     #[test]
     fn test_moveword() {

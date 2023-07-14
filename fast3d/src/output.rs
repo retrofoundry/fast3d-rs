@@ -3,8 +3,8 @@ use crate::output::models::{
     OutputUniformsCombine, OutputVBO,
 };
 use crate::output::texture_cache::TextureCacheId;
-use gbi_assembler::defines::color_combiner::CombineParams;
-use gbi_assembler::defines::{GeometryModes, WrapMode};
+use fast3d_gbi::defines::color_combiner::CombineParams;
+use fast3d_gbi::defines::{GeometryModes, WrapMode};
 use std::hash::Hash;
 use texture_cache::TextureCache;
 

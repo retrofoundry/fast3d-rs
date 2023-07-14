@@ -1,4 +1,4 @@
-use gbi_assembler::defines::{ComponentSize, ImageFormat};
+use fast3d_gbi::defines::{ComponentSize, ImageFormat};
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 

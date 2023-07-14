@@ -1,22 +1,22 @@
 use f3dwgpu::WgpuRenderer;
 use fast3d::rdp::{OutputDimensions, SCREEN_HEIGHT, SCREEN_WIDTH};
 use fast3d::{RCPOutputCollector, RCP};
-use gbi_assembler::defines::color_combiner::G_CC_SHADE;
-use gbi_assembler::defines::{
+use fast3d_gbi::defines::color_combiner::G_CC_SHADE;
+use fast3d_gbi::defines::{
     AlphaCompare, ColorDither, ColorVertex, ComponentSize, CycleType,
     GeometryModes as SharedGeometryModes, GfxCommand, ImageFormat, Matrix, PipelineMode,
     ScissorMode, TextureConvert, TextureDetail, TextureFilter, TextureLOD, TextureLUT, Vertex,
     Viewport, G_MAXZ,
 };
-use gbi_assembler::dma::{gsSPDisplayList, gsSPMatrix, gsSPViewport};
-use gbi_assembler::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
-use gbi_assembler::gbi::{
+use fast3d_gbi::dma::{gsSPDisplayList, gsSPMatrix, gsSPViewport};
+use fast3d_gbi::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
+use fast3d_gbi::gbi::{
     gsDPFullSync, gsDPPipeSync, gsSPEndDisplayList, GPACK_RGBA5551, G_RM_AA_OPA_SURF,
     G_RM_AA_OPA_SURF2, G_RM_OPA_SURF, G_RM_OPA_SURF2,
 };
-use gbi_assembler::gu::{guOrtho, guRotate};
-use gbi_assembler::rdp::{gsDPFillRectangle, gsDPSetColorImage, gsDPSetFillColor, gsDPSetScissor};
-use gbi_assembler::rsp::{
+use fast3d_gbi::gu::{guOrtho, guRotate};
+use fast3d_gbi::rdp::{gsDPFillRectangle, gsDPSetColorImage, gsDPSetFillColor, gsDPSetScissor};
+use fast3d_gbi::rsp::{
     gsDPPipelineMode, gsDPSetAlphaCompare, gsDPSetColorDither, gsDPSetCombineKey,
     gsDPSetCombineMode, gsDPSetCycleType, gsDPSetRenderMode, gsDPSetTextureConvert,
     gsDPSetTextureDetail, gsDPSetTextureFilter, gsDPSetTextureLOD, gsDPSetTextureLUT,
@@ -202,7 +202,7 @@ impl<'a> Example<'a> {
     }
 }
 
-impl<'a> fast3d_example::framework::Example for Example<'static> {
+impl fast3d_example::framework::Example for Example<'static> {
     fn init(
         config: &wgpu::SurfaceConfiguration,
         _adapter: &wgpu::Adapter,

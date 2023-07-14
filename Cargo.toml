@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "fast3d",
-    "gbi-assembler",
+    "fast3d-gbi",
     "fast3d-glium-renderer",
     "fast3d-wgpu-renderer",
     "examples/*",
@@ -9,7 +9,7 @@ members = [
 default-members = [
     "examples/*",
     "fast3d",
-    "gbi-assembler",
+    "fast3d-gbi",
     "fast3d-glium-renderer",
     "fast3d-wgpu-renderer",
 ]
@@ -39,7 +39,7 @@ version = "0.4.2"
 bytemuck = { version = "1.13.1", features = ["derive"] }
 glam = { version = "0.24.1", features = ["approx", "bytemuck"] }
 log = "0.4"
-gbi-assembler = { version = "0.4.2", path = "./gbi-assembler" }
+fast3d-gbi = { version = "0.4.2", path = "fast3d-gbi" }
 fast3d = { version = "0.4.2", path = "./fast3d" }
 fast3d-example = { version = "0.4.2", path = "./examples/common" }
 rustc-hash = "1.1"

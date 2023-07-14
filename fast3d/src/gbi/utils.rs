@@ -1,9 +1,9 @@
 use crate::output::gfx::Face;
 use crate::rsp::RSPConstants;
-use gbi_assembler::defines::render_mode::{
+use fast3d_gbi::defines::render_mode::{
     BlendAlpha2, BlendColor, RenderMode, RenderModeFlags, ZMode,
 };
-use gbi_assembler::defines::{AlphaCompare, CycleType, GeometryModes, OtherModeH, TextureFilter};
+use fast3d_gbi::defines::{AlphaCompare, CycleType, GeometryModes, OtherModeH, TextureFilter};
 
 // TODO: Replace with the new getter on GfxCommand
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {

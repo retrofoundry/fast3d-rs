@@ -1,5 +1,5 @@
 use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
-use gbi_assembler::defines::GfxCommand;
+use fast3d_gbi::defines::GfxCommand;
 use std::collections::HashMap;
 use nohash_hasher::BuildNoHashHasher;
 

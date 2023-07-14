@@ -1,5 +1,5 @@
 [package]
-name = "gbi-assembler"
+name = "fast3d-gbi"
 description = "F3D GBI Assembler"
 version.workspace = true
 authors.workspace = true
