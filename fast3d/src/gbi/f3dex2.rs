@@ -5,7 +5,7 @@ use super::super::rsp::RSP;
 use super::defines::{self, Viewport};
 use super::utils::get_cmd;
 use super::{f3d, GBICommandRegistry, GBIResult};
-use crate::gbi::{macros::gbi_command, GBICommand, GBICommandParams};
+use crate::gbi::{macros::gbi_command, GBICommandParams};
 
 use crate::rsp::RSPConstants;
 
@@ -377,8 +377,9 @@ gbi_command!(SetOtherMode, |params: &mut GBICommandParams| {
 mod tests {
     use crate::gbi::defines::{GWords, Gfx};
     use crate::gbi::f3dex2::MoveWord;
-    use crate::gbi::{GBICommand, GBICommandParams};
+    use crate::gbi::GBICommandParams;
     use crate::output::RCPOutputCollector;
+    
     use crate::rdp::RDP;
     use crate::rsp::RSP;
 
@@ -403,7 +404,7 @@ mod tests {
             command: &mut command,
         };
 
-        MoveWord {}.process(&mut params);
+        MoveWord(&mut params);
         assert_eq!(rsp.num_lights, 1);
 
         // FOG
@@ -425,7 +426,7 @@ mod tests {
             command: &mut command,
         };
 
-        MoveWord {}.process(&mut params);
+        MoveWord(&mut params);
         assert_eq!(rsp.fog_multiplier, 4266);
         assert_eq!(rsp.fog_offset, -4010);
     }

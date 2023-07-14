@@ -2,6 +2,7 @@ use self::defines::Gfx;
 
 use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
 use std::collections::HashMap;
+use nohash_hasher::BuildNoHashHasher;
 
 mod f3d;
 mod f3dex2;
@@ -26,16 +27,18 @@ pub struct GBICommandParams<'a> {
     pub command: &'a mut *mut Gfx,
 }
 
-pub trait GBICommand {
-    fn process(&self, params: &mut GBICommandParams) -> GBIResult;
-}
+pub type GBICommandFn = fn(&mut GBICommandParams) -> GBIResult;
 
-#[derive(Default)]
 pub struct GBICommandRegistry {
-    gbi_opcode_table: HashMap<u8, Box<dyn GBICommand>>,
+    gbi_opcode_table: HashMap<u8, GBICommandFn, BuildNoHashHasher<u8>>,
 }
 
 impl GBICommandRegistry {
+
+    pub fn new() -> GBICommandRegistry {
+        GBICommandRegistry { gbi_opcode_table: HashMap::with_hasher(BuildNoHashHasher::default()) }
+    }
+
     pub fn setup(&mut self, rsp: &mut RSP) {
         common::Common::setup(self, rsp);
 
@@ -49,16 +52,11 @@ impl GBICommandRegistry {
         f3dzex2::setup(self, rsp);
     }
 
-    pub fn register<G: GBICommand>(&mut self, opcode: u8, cmd: G)
-    where
-        G: 'static,
-    {
-        let cmd = Box::new(cmd);
+    pub fn register(&mut self, opcode: u8, cmd: GBICommandFn) {
         self.gbi_opcode_table.insert(opcode, cmd);
     }
 
-    pub fn handler(&self, opcode: &u8) -> Option<&dyn GBICommand> {
-        let result = self.gbi_opcode_table.get(opcode);
-        result.map(|x| &**x)
+    pub fn handler(&self, opcode: &u8) -> Option<&GBICommandFn> {
+        self.gbi_opcode_table.get(opcode)
     }
 }

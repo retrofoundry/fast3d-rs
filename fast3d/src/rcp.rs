@@ -22,7 +22,7 @@ impl Default for RCP {
 
 impl RCP {
     pub fn new() -> Self {
-        let mut gbi = GBICommandRegistry::default();
+        let mut gbi = GBICommandRegistry::new();
         let mut rsp = RSP::default();
         gbi.setup(&mut rsp);
 
@@ -59,7 +59,7 @@ impl RCP {
                     output,
                     command: &mut command,
                 };
-                match handler.process(handler_input) {
+                match handler(handler_input) {
                     GBIResult::Recurse(new_command) => self.run_dl(output, new_command),
                     GBIResult::Return => return,
                     GBIResult::Continue => {}
