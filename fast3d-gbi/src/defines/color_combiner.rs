@@ -8,6 +8,7 @@ pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
 }
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, Eq, Hash)]
     pub struct ColorCombinerMux: u32 {
         const COMBINED = 0x00;
         const TEXEL0 = 0x01;
@@ -34,6 +35,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct AlphaCombinerMux: u32 {
         const COMBINED = 0x00;
         const TEXEL0 = 0x01;

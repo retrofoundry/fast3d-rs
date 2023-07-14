@@ -43,7 +43,7 @@ bitflags! {
         const SHADING_SMOOTH      = 0x00000200;
         const CULL_FRONT          = 0x00001000;
         const CULL_BACK           = 0x00002000;
-        const CULL_BOTH           = Self::CULL_FRONT.bits | Self::CULL_BACK.bits;
+        const CULL_BOTH           = Self::CULL_FRONT.bits() | Self::CULL_BACK.bits();
     }
 }
 

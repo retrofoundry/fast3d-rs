@@ -1,5 +1,7 @@
 use crate::output::gfx::Face;
 use crate::rsp::RSPConstants;
+#[allow(unused_imports)]
+use bitflags::Flags;
 use fast3d_gbi::defines::render_mode::{
     BlendAlpha2, BlendColor, RenderMode, RenderModeFlags, ZMode,
 };
@@ -61,16 +63,12 @@ pub fn translate_cull_mode(
 ) -> Option<Face> {
     // We do unchecked comparisons because the values set in rsp_constants are per GBI
     // and do not appear in the general GeometryModes enum
-    let cull_front = unsafe {
-        geometry_mode.contains(GeometryModes::from_bits_unchecked(
-            rsp_constants.geomode_cull_front_val,
-        ))
-    };
-    let cull_back = unsafe {
-        geometry_mode.contains(GeometryModes::from_bits_unchecked(
-            rsp_constants.geomode_cull_back_val,
-        ))
-    };
+    let cull_front = geometry_mode.contains(GeometryModes::from_bits_retain(
+        rsp_constants.geomode_cull_front_val,
+    ));
+    let cull_back = geometry_mode.contains(GeometryModes::from_bits_retain(
+        rsp_constants.geomode_cull_back_val,
+    ));
 
     if cull_front && cull_back {
         panic!("Culling both front and back faces is not supported");
