@@ -35,3 +35,4 @@ bitflags.workspace = true
 nohash-hasher = "0.2.0"
 fast3d-gbi.workspace = true
 pigment.workspace = true
+nohash-hasher.workspace = true

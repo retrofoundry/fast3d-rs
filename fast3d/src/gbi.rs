@@ -1,5 +1,6 @@
 use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
 use fast3d_gbi::defines::GfxCommand;
+use nohash_hasher::BuildNoHashHasher;
 use std::collections::HashMap;
 use nohash_hasher::BuildNoHashHasher;
 
@@ -32,9 +33,10 @@ pub struct GBICommandRegistry {
 }
 
 impl GBICommandRegistry {
-
     pub fn new() -> GBICommandRegistry {
-        GBICommandRegistry { gbi_opcode_table: HashMap::with_hasher(BuildNoHashHasher::default()) }
+        GBICommandRegistry {
+            gbi_opcode_table: HashMap::with_hasher(BuildNoHashHasher::default()),
+        }
     }
 
     pub fn setup(&mut self, rsp: &mut RSP) {

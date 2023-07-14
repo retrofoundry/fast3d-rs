@@ -1,5 +1,5 @@
 use crate::gbi::macros::gbi_command;
-use crate::gbi::{f3d, GBICommand, GBICommandParams, GBICommandRegistry, GBIResult};
+use crate::gbi::{f3d, GBICommandParams, GBICommandRegistry, GBIResult};
 use fast3d_gbi::defines::Viewport;
 use fast3d_gbi::{
     defines::f3dex2::{
@@ -268,7 +268,6 @@ mod tests {
     use crate::gbi::f3dex2::MoveWord;
     use crate::gbi::GBICommandParams;
     use crate::output::RCPOutputCollector;
-    
     use crate::rdp::RDP;
     use crate::rsp::RSP;
     use fast3d_gbi::defines::GfxCommand;
