@@ -1,7 +1,7 @@
 use crate::gbi::macros::gbi_command;
 use crate::gbi::utils::get_cmd;
 use crate::gbi::{GBICommandParams, GBICommandRegistry, GBIResult};
-use fast3d_gbi::defines::{color_combiner::CombineParams, OpCode, WrapMode};
+use fast3d_gbi::defines::{CombineParams, OpCode, WrapMode};
 
 use crate::models::texture::TextureImageState;
 
