@@ -1,6 +1,6 @@
 use f3dwgpu::WgpuRenderer;
 use fast3d::rdp::{OutputDimensions, SCREEN_HEIGHT, SCREEN_WIDTH};
-use fast3d::{RCPOutputCollector, RCP};
+use fast3d::RCP;
 use fast3d_gbi::defines::color_combiner::G_CC_SHADE;
 use fast3d_gbi::defines::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
 use fast3d_gbi::defines::{
@@ -70,7 +70,6 @@ impl<F: Future<Output = Option<wgpu::Error>>> Future for ErrorFuture<F> {
 
 struct Example<'a> {
     rcp: RCP,
-    rcp_output_collector: RCPOutputCollector,
     renderer: WgpuRenderer<'a>,
 
     depth_texture: wgpu::TextureView,
@@ -236,7 +235,6 @@ impl fast3d_example::framework::Example for Example<'static> {
 
         Self {
             rcp,
-            rcp_output_collector: RCPOutputCollector::default(),
             renderer: WgpuRenderer::new(device, [config.width, config.height]),
 
             depth_texture: Self::create_depth_texture(config, device),
@@ -339,21 +337,19 @@ impl fast3d_example::framework::Example for Example<'static> {
         });
 
         // Run the RCP
-        self.rcp
-            .run(&mut self.rcp_output_collector, draw_commands_ptr as usize);
+        let mut render_data = self.rcp.run(draw_commands_ptr as usize);
 
         // Process the RCP output
         self.renderer.process_rcp_output(
             device,
             queue,
             self.surface_format,
-            &mut self.rcp_output_collector,
+            &mut render_data,
         );
 
         // Draw the RCP output
         self.renderer.draw(&mut rpass);
 
-        self.rcp_output_collector.clear_draw_calls();
         drop(rpass);
         queue.submit(Some(encoder.finish()));
     }

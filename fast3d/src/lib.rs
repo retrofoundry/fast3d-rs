@@ -1,7 +1,7 @@
 pub mod gbi;
 
 pub mod output;
-pub use output::RCPOutputCollector;
+pub use output::RenderData;
 
 pub mod rcp;
 pub use rcp::RCP;

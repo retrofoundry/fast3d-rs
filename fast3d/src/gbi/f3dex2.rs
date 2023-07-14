@@ -267,7 +267,7 @@ gbi_command!(SetOtherMode, |params: &mut GBICommandParams| {
 mod tests {
     use crate::gbi::f3dex2::MoveWord;
     use crate::gbi::GBICommandParams;
-    use crate::output::RCPOutputCollector;
+    use crate::output::RenderData;
     use crate::rdp::RDP;
     use crate::rsp::RSP;
     use fast3d_gbi::defines::GfxCommand;
@@ -280,7 +280,7 @@ mod tests {
 
         let mut rsp = RSP::default();
         let mut rdp = RDP::default();
-        let mut output = RCPOutputCollector::default();
+        let mut output = RenderData::default();
 
         let mut command: *mut GfxCommand = Box::into_raw(Box::new(GfxCommand::new(w0, w1)));
 
@@ -300,7 +300,7 @@ mod tests {
 
         let mut rsp = RSP::default();
         let mut rdp = RDP::default();
-        let mut output = RCPOutputCollector::default();
+        let mut output = RenderData::default();
 
         let mut command: *mut GfxCommand = Box::into_raw(Box::new(GfxCommand::new(w0, w1)));
 

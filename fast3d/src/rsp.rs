@@ -5,7 +5,7 @@ use std::slice;
 use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
 use crate::models::color::Color;
 use crate::models::texture::TextureState;
-use crate::output::RCPOutputCollector;
+use crate::output::RenderData;
 use crate::rdp::RDP;
 use fast3d_gbi::defines::{DirLight, GeometryModes, Light, Vertex};
 use glam::{Mat4, Vec2, Vec3A};
@@ -271,7 +271,7 @@ impl RSP {
     pub fn set_vertex(
         &mut self,
         rdp: &mut RDP,
-        output: &mut RCPOutputCollector,
+        output: &mut RenderData,
         address: usize,
         vertex_count: usize,
         mut write_index: usize,
