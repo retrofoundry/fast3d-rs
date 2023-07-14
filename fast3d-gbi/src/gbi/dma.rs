@@ -2,18 +2,18 @@ use crate::defines::{DisplayListMode, GfxCommand, Matrix, Viewport};
 use crate::gbi::shiftl;
 
 #[cfg(feature = "f3dex2")]
-use crate::f3dex2::MatrixOperation;
+use crate::defines::f3dex2::MatrixOperation;
 #[cfg(feature = "f3dex2")]
-use crate::f3dex2::MoveMemoryIndex;
+use crate::defines::f3dex2::MoveMemoryIndex;
 #[cfg(feature = "f3dex2")]
-use crate::f3dex2::OpCode;
+use crate::defines::f3dex2::OpCode;
 
 #[cfg(not(feature = "f3dex2"))]
-use crate::f3d::MatrixOperation;
+use crate::defines::f3d::MatrixOperation;
 #[cfg(not(feature = "f3dex2"))]
-use crate::f3d::MoveMemoryIndex;
+use crate::defines::f3d::MoveMemoryIndex;
 #[cfg(not(feature = "f3dex2"))]
-use crate::f3d::OpCode;
+use crate::defines::f3d::OpCode;
 
 #[allow(non_snake_case)]
 pub fn gsSPMatrix(matrix: *mut Matrix, params: u32) -> GfxCommand {

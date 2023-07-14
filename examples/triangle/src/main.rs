@@ -2,6 +2,7 @@ use f3dwgpu::WgpuRenderer;
 use fast3d::rdp::{OutputDimensions, SCREEN_HEIGHT, SCREEN_WIDTH};
 use fast3d::{RCPOutputCollector, RCP};
 use fast3d_gbi::defines::color_combiner::G_CC_SHADE;
+use fast3d_gbi::defines::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
 use fast3d_gbi::defines::{
     AlphaCompare, ColorDither, ColorVertex, ComponentSize, CycleType,
     GeometryModes as SharedGeometryModes, GfxCommand, ImageFormat, Matrix, PipelineMode,
@@ -9,7 +10,6 @@ use fast3d_gbi::defines::{
     Viewport, G_MAXZ,
 };
 use fast3d_gbi::dma::{gsSPDisplayList, gsSPMatrix, gsSPViewport};
-use fast3d_gbi::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
 use fast3d_gbi::gbi::{
     gsDPFullSync, gsDPPipeSync, gsSPEndDisplayList, GPACK_RGBA5551, G_RM_AA_OPA_SURF,
     G_RM_AA_OPA_SURF2, G_RM_OPA_SURF, G_RM_OPA_SURF2,

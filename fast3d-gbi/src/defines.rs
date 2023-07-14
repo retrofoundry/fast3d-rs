@@ -3,9 +3,12 @@ use num_enum::TryFromPrimitive;
 use pigment::color::Color;
 
 pub mod color_combiner;
+pub use color_combiner::*;
+pub mod render_mode;
+pub use render_mode::*;
+
 pub mod f3d;
 pub mod f3dex2;
-pub mod render_mode;
 
 pub const G_MAXZ: u32 = 0x03ff;
 

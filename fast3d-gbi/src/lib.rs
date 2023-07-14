@@ -6,5 +6,3 @@ pub use gbi::rsp;
 pub mod gu;
 
 pub mod defines;
-pub use defines::f3d;
-pub use defines::f3dex2;

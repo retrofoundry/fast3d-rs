@@ -3,10 +3,10 @@ use crate::defines::{GfxCommand, OtherModeH, OtherModeL, Vertex};
 use crate::gbi::{rdp, shiftl, BOWTIE_VAL};
 
 #[cfg(feature = "f3dex2")]
-use crate::f3dex2::OpCode;
+use crate::defines::f3dex2::OpCode;
 
 #[cfg(not(feature = "f3dex2"))]
-use crate::f3d::OpCode;
+use crate::defines::f3d::OpCode;
 
 #[allow(non_snake_case)]
 pub fn gsDPPipelineMode(mode: u32) -> GfxCommand {

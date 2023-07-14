@@ -2,8 +2,10 @@ use crate::gbi::macros::gbi_command;
 use crate::gbi::{f3d, GBICommand, GBICommandParams, GBICommandRegistry, GBIResult};
 use fast3d_gbi::defines::Viewport;
 use fast3d_gbi::{
+    defines::f3dex2::{
+        GeometryModes, MatrixMode, MatrixOperation, MoveMemoryIndex, MoveWordIndex, OpCode,
+    },
     defines::{MoveWordIndex as SharedMoveWordIndex, OpCode as SharedOpCode},
-    f3dex2::{GeometryModes, MatrixMode, MatrixOperation, MoveMemoryIndex, MoveWordIndex, OpCode},
 };
 use std::cmp::max;
 
