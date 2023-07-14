@@ -59,3 +59,9 @@ impl GBICommandRegistry {
         self.gbi_opcode_table.get(opcode)
     }
 }
+
+impl Default for GBICommandRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}

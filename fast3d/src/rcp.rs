@@ -16,7 +16,7 @@ impl Default for RCP {
 
 impl RCP {
     pub fn new() -> Self {
-        let mut gbi = GBICommandRegistry::new();
+        let mut gbi = GBICommandRegistry::default();
         let mut rsp = RSP::default();
         gbi.setup(&mut rsp);
 

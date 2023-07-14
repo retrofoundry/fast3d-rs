@@ -1,15 +1,15 @@
 use crate::defines::Matrix;
 
 #[cfg(not(feature = "gbifloats"))]
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::not_unsafe_ptr_arg_deref)]
 pub fn guMtxF2L(float_mtx: &[[f32; 4]; 4], output: *mut Matrix) {
     let mut m1 = unsafe { &mut (*output).m[0][0] as *mut u32 };
     let mut m2 = unsafe { &mut (*output).m[2][0] as *mut u32 };
 
-    for row in 0..4 {
+    for row in float_mtx.iter() {
         for col in 0..2 {
-            let tmp1 = (float_mtx[row][2 * col] * 65536.0) as u32;
-            let tmp2 = (float_mtx[row][2 * col + 1] * 65536.0) as u32;
+            let tmp1 = (row[2 * col] * 65536.0) as u32;
+            let tmp2 = (row[2 * col + 1] * 65536.0) as u32;
             unsafe {
                 *m1 = tmp1 & 0xFFFF0000 | ((tmp2 >> 16) & 0xFFFF);
                 *m2 = (tmp1 << 16) & 0xFFFF0000 | (tmp2 & 0xFFFF);
@@ -31,7 +31,7 @@ pub fn guMtxF2L(float_mtx: &[[f32; 4]; 4], output: *mut Matrix) {
     }
 }
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn guOrtho(
     matrix: *mut Matrix,
     left: f32,
@@ -56,7 +56,7 @@ pub fn guOrtho(
     guMtxF2L(&float_matrix, matrix);
 }
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn guOrthoF(
     matrix: &mut [[f32; 4]; 4],
     left: f32,
@@ -76,22 +76,18 @@ pub fn guOrthoF(
     matrix[3][2] = -(far + near) / (far - near);
     matrix[3][3] = 1.0;
 
-    for row in 0..4 {
-        for col in 0..4 {
-            matrix[row][col] *= scale;
+    for row in matrix.iter_mut() {
+        for col in row.iter_mut() {
+            *col *= scale;
         }
     }
 }
 
 #[allow(non_snake_case)]
 pub fn guMtxIdentF(matrix: &mut [[f32; 4]; 4]) {
-    for row in 0..4 {
-        for col in 0..4 {
-            if row == col {
-                matrix[row][col] = 1.0;
-            } else {
-                matrix[row][col] = 0.0;
-            }
+    for (row_index, row) in matrix.iter_mut().enumerate() {
+        for (col_index, col) in row.iter_mut().enumerate() {
+            *col = if row_index == col_index { 1.0 } else { 0.0 };
         }
     }
 }
