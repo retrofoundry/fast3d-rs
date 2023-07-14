@@ -310,13 +310,13 @@ bitflags! {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
 #[repr(u8)]
 pub enum DisplayListMode {
-    Push = 0,
-    NoPush = 1,
+    Display = 0,
+    Branch = 1,
 }
 
 impl Default for DisplayListMode {
     fn default() -> Self {
-        Self::Push
+        Self::Display
     }
 }
 

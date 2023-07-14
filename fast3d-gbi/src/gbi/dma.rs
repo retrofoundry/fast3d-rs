@@ -41,7 +41,7 @@ pub fn gsSPDisplayList(display_list: &[GfxCommand]) -> GfxCommand {
         OpCode::DL.bits() as u32,
         address,
         0,
-        DisplayListMode::Push as u32,
+        DisplayListMode::Display as u32,
     )
 }
 
