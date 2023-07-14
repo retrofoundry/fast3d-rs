@@ -293,7 +293,11 @@ impl<'a> GliumRenderer<'a> {
     ) {
         // omit the last draw call, because we know we that's an extra from the last flush
         // for draw_call in &self.rcp_output.draw_calls[..self.rcp_output.draw_calls.len() - 1] {
-        for draw_call in render_data.draw_calls.iter().take(render_data.draw_calls.len() - 1) {
+        for draw_call in render_data
+            .draw_calls
+            .iter()
+            .take(render_data.draw_calls.len() - 1)
+        {
             assert!(!draw_call.vbo.vbo.is_empty());
 
             self.set_cull_mode(draw_call.cull_mode);

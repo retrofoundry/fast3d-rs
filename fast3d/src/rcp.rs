@@ -32,10 +32,11 @@ impl RCP {
         self.rsp.reset();
     }
 
-    /// This function is called to process a render list.
-    /// It takes in a pointer to the start of the render list and will
-    /// process until it hits a final `G_ENDDL`.
-    pub fn run(&mut self, commands: usize) -> RenderData {
+    /// Processes a render list. Takes in a pointer to the start of the
+    /// render list and process until it hits a final `G_ENDDL`.
+    /// Returns a `RenderData` struct containing graphics data that
+    /// can be used to render.
+    pub fn process_dl(&mut self, commands: usize) -> RenderData {
         self.reset();
 
         let mut output = RenderData::new();

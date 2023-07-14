@@ -337,15 +337,11 @@ impl fast3d_example::framework::Example for Example<'static> {
         });
 
         // Run the RCP
-        let mut render_data = self.rcp.run(draw_commands_ptr as usize);
+        let mut render_data = self.rcp.process_dl(draw_commands_ptr as usize);
 
         // Process the RCP output
-        self.renderer.process_rcp_output(
-            device,
-            queue,
-            self.surface_format,
-            &mut render_data,
-        );
+        self.renderer
+            .process_rcp_output(device, queue, self.surface_format, &mut render_data);
 
         // Draw the RCP output
         self.renderer.draw(&mut rpass);
