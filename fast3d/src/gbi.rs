@@ -1,4 +1,4 @@
-use super::{output::RCPOutputCollector, rdp::RDP, rsp::RSP};
+use super::{output::RenderData, rdp::RDP, rsp::RSP};
 use fast3d_gbi::defines::GfxCommand;
 use nohash_hasher::BuildNoHashHasher;
 use std::collections::HashMap;
@@ -21,7 +21,7 @@ pub enum GBIResult {
 pub struct GBICommandParams<'a> {
     pub rdp: &'a mut RDP,
     pub rsp: &'a mut RSP,
-    pub output: &'a mut RCPOutputCollector,
+    pub output: &'a mut RenderData,
     pub command: &'a mut *mut GfxCommand,
 }
 

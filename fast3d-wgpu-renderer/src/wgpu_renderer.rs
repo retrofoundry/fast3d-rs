@@ -15,7 +15,7 @@ use fast3d::output::{
     models::{OutputSampler, OutputStencil, OutputTexture},
     ShaderConfig, ShaderId,
 };
-use fast3d::output::{IntermediateDrawCall, RCPOutputCollector};
+use fast3d::output::{IntermediateDrawCall, RenderData};
 use fast3d_gbi::defines::WrapMode;
 
 use super::wgpu_program::WgpuProgram;
@@ -190,11 +190,11 @@ impl<'a> WgpuRenderer<'a> {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
-        output: &mut RCPOutputCollector,
+        render_data: &mut RenderData,
     ) {
         self.clear_state();
 
-        let usable_draw_calls = &output.draw_calls[0..output.draw_calls.len() - 1];
+        let usable_draw_calls = &render_data.draw_calls[0..render_data.draw_calls.len() - 1];
 
         // prepare shaders in parallel, but first, reduce to unique shader id's
         usable_draw_calls.iter().for_each(|draw_call| {
@@ -258,7 +258,7 @@ impl<'a> WgpuRenderer<'a> {
                     let sampler = draw_call.samplers[index];
                     assert!(sampler.is_some());
 
-                    let texture = output.texture_cache.get_mut(*tex_cache_id).unwrap();
+                    let texture = render_data.texture_cache.get_mut(*tex_cache_id).unwrap();
                     let sampler = sampler.unwrap();
 
                     self.configure_textures(

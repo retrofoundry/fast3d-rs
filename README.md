@@ -9,15 +9,18 @@ fast3d-rs is a library written in Rust for rendering N64 graphics API commands.
 - [x] OpenGL rendering
 
 ## How to Use
+Add this library to your project and one of the following renderers: `fast3d-wgpu-renderer` or `fast3d-glium-renderer`.
 
 The library consists of three main components:
 
-- `RCP` - This represents the N64 RCP and provides a reset and a runDL method.
-- `RCPOutput` - This is a component given to the RCP run command that collects draw calls for parsing into different renderers
-- `WgpuGraphicsDevice` - This is a renderer that can be used to render the output produced
-- `GliumGraphicsDevice` - This is a renderer that can be used to render the output produced
+- `RCP` - This represents the N64 RCP and provides a reset and a `process_dl` method.
+- `RenderData` - This is the output returned after processing a display list.
+- `WgpuRenderer` - This is a renderer that can be used to render data produced
+- `GliumRenderer` - This is a renderer that can be used to render data produced
 
-For examples see an example usage here for [wgpu](https://github.com/retrofoundry/helix/blob/main/src/gui/wgpu_renderer.rs) and [opengl](https://github.com/retrofoundry/helix/blob/main/src/gui/glium_renderer.rs).
+Check out the examples folder for some examples of how to use the library.
+
+_Looking for a solution that includes this, windowing, audio and controller input? Check out [Helix](https://github.com/retrofoundry/helix)!._
 
 ## Community
 

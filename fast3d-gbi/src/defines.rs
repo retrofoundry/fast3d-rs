@@ -137,7 +137,7 @@ pub union Light {
 pub struct DirLight {
     pub col: [u8; 3], // diffuse light value (rgba)
     pad1: i8,
-    pub colc: [u8; 3], // copy of diffuse light value (rgba)
+    pub color_copy: [u8; 3], // copy of diffuse light value (rgba)
     pad2: i8,
     pub dir: [i8; 3], // direction of light (normalized)
     pad3: i8,
@@ -149,7 +149,7 @@ pub struct PosLight {
     pub kc: u8,
     pub col: [u8; 3],
     pub kl: u8,
-    pub colc: [u8; 3],
+    pub color_copy: [u8; 3],
     pub pos: [i16; 2],
     pub reserved1: u8,
     pub kq: u8,
