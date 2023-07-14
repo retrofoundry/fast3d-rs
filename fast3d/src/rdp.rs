@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use bitflags::Flags;
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
@@ -654,17 +655,12 @@ impl RDP {
         let vertex_array = [vertex1, vertex2, vertex3];
 
         // Don't draw anything if both tris are being culled.
-        unsafe {
-            // We do unchecked comparisons because the values set in rsp.constants are per GBI
-            // and do not appear in the general GeometryModes enum
-            if rsp
-                .geometry_mode
-                .contains(GeometryModes::from_bits_retain(
-                    rsp.constants.geomode_cull_both_val,
-                ))
-            {
-                return;
-            }
+        // We do unchecked comparisons because the values set in rsp.constants are per GBI
+        // and do not appear in the general GeometryModes enum
+        if rsp.geometry_mode.contains(GeometryModes::from_bits_retain(
+            rsp.constants.geomode_cull_both_val,
+        )) {
+            return;
         }
 
         self.update_render_state(output, rsp.geometry_mode, &rsp.constants);

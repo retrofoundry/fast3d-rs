@@ -1,5 +1,6 @@
-use std::slice;
+#[allow(unused_imports)]
 use bitflags::Flags;
+use std::slice;
 
 use crate::extensions::glam::{calculate_normal_dir, MatrixFrom};
 use crate::models::color::Color;
@@ -472,8 +473,8 @@ impl RSP {
     }
 
     pub fn update_geometry_mode(&mut self, rdp: &mut RDP, clear_bits: u32, set_bits: u32) {
-        let casted_clear_bits = unsafe { GeometryModes::from_bits_retain(clear_bits) };
-        let casted_set_bits = unsafe { GeometryModes::from_bits_retain(set_bits) };
+        let casted_clear_bits = GeometryModes::from_bits_retain(clear_bits);
+        let casted_set_bits = GeometryModes::from_bits_retain(set_bits);
 
         self.geometry_mode &= casted_clear_bits;
         self.geometry_mode |= casted_set_bits;
