@@ -54,5 +54,5 @@ lru = "0.11.0"
 num_enum = "0.6.1"
 bitflags = "2.3.3"
 async-executor = "1"
-pigment = { git = "https://github.com/decompals/pigment.git" }
+pigment64 = "0.2"
 nohash-hasher = "0.2.0"

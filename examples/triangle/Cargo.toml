@@ -18,4 +18,4 @@ fast3d-example.workspace = true
 wgpu.workspace = true
 winit.workspace = true
 fast3d-gbi.workspace = true
-pigment.workspace = true
+pigment64.workspace = true

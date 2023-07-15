@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 use num_enum::TryFromPrimitive;
-use pigment::color::Color;
+use pigment64::color::Color;
 
 pub mod color_combiner;
 pub use color_combiner::*;

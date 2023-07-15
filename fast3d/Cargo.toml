@@ -33,5 +33,5 @@ lru.workspace = true
 num_enum.workspace = true
 bitflags.workspace = true
 fast3d-gbi.workspace = true
-pigment.workspace = true
+pigment64.workspace = true
 nohash-hasher.workspace = true

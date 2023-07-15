@@ -25,4 +25,4 @@ hardware_version_1 = []
 [dependencies]
 num_enum.workspace = true
 bitflags.workspace = true
-pigment.workspace = true
+pigment64.workspace = true

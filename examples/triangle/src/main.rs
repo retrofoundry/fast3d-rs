@@ -23,7 +23,7 @@ use fast3d_gbi::rsp::{
     gsDPSetTexturePersp, gsSP1Triangle, gsSPClearGeometryMode, gsSPSetGeometryMode, gsSPTexture,
     gsSPVertex,
 };
-use pigment::color::Color;
+use pigment64::color::Color;
 use std::{future::Future, pin::Pin, task};
 use winit::dpi::LogicalSize;
 
