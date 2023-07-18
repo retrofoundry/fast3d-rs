@@ -36,14 +36,10 @@ impl RCP {
     /// render list and process until it hits a final `G_ENDDL`.
     /// Returns a `RenderData` struct containing graphics data that
     /// can be used to render.
-    pub fn process_dl(&mut self, commands: usize) -> RenderData {
+    pub fn process_dl(&mut self, commands: usize, output: &mut RenderData) {
         self.reset();
-
-        let mut output = RenderData::new();
-        self.run_dl(&mut output, commands);
-        self.rdp.flush(&mut output);
-
-        output
+        self.run_dl(output, commands);
+        self.rdp.flush(output);
     }
 
     fn run_dl(&mut self, output: &mut RenderData, commands: usize) {
