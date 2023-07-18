@@ -25,7 +25,6 @@ gbifloats = []
 
 [dependencies]
 bytemuck.workspace = true
-farbe.workspace = true
 glam.workspace = true
 log.workspace = true
 rustc-hash.workspace = true
