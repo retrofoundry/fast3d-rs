@@ -348,6 +348,9 @@ impl fast3d_example::framework::Example for Example<'static> {
         // Draw the RCP output
         self.renderer.draw(&mut rpass);
 
+        // Clear the draw calls
+        self.render_data.clear_draw_calls();
+
         drop(rpass);
         queue.submit(Some(encoder.finish()));
     }
