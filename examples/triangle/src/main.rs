@@ -1,6 +1,6 @@
 use f3dwgpu::WgpuRenderer;
 use fast3d::rdp::{OutputDimensions, SCREEN_HEIGHT, SCREEN_WIDTH};
-use fast3d::{RCP, RenderData};
+use fast3d::{RenderData, RCP};
 use fast3d_gbi::defines::color_combiner::G_CC_SHADE;
 use fast3d_gbi::defines::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
 use fast3d_gbi::defines::{
@@ -339,7 +339,8 @@ impl fast3d_example::framework::Example for Example<'static> {
         });
 
         // Run the RCP
-        self.rcp.process_dl(draw_commands_ptr as usize, &mut self.render_data);
+        self.rcp
+            .process_dl(draw_commands_ptr as usize, &mut self.render_data);
 
         // Process the RCP output
         self.renderer
