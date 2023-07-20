@@ -337,7 +337,8 @@ impl fast3d_example::framework::Example for Example<'static> {
         });
 
         // Run the RCP
-        let mut render_data = self.rcp.process_dl(draw_commands_ptr as usize);
+        let mut render_data = self.rcp
+            .process_dl(draw_commands_ptr as usize);
 
         // Process the RCP output
         self.renderer
