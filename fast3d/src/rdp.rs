@@ -98,9 +98,18 @@ pub struct RDP {
     pub output_dimensions: OutputDimensions,
 
     pub texture_image_state: TextureImageState, // coming via GBI (texture to load)
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub tile_descriptors: [TileDescriptor; NUM_TILE_DESCRIPTORS],
+    #[cfg(target_arch = "wasm32")]
+    pub tile_descriptors: Vec<TileDescriptor>,
+
     pub tmem_map: rustc_hash::FxHashMap<u16, TMEMMapEntry>, // tmem address -> texture image state address
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub textures_changed: [bool; 2],
+    #[cfg(target_arch = "wasm32")]
+    pub textures_changed: Vec<bool>,
 
     pub viewport: Rect,
     pub scissor: Rect,
@@ -110,7 +119,11 @@ pub struct RDP {
     pub other_mode_h: u32,
     pub shader_config_changed: bool,
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub buf_vbo: [f32; MAX_VBO_SIZE * (26 * 3)], // 3 vertices in a triangle and 26 floats per vtx
+    #[cfg(target_arch = "wasm32")]
+    pub buf_vbo: Vec<f32>,
+
     pub buf_vbo_len: usize,
     pub buf_vbo_num_tris: usize,
 
@@ -142,9 +155,18 @@ impl RDP {
             output_dimensions: OutputDimensions::ZERO,
 
             texture_image_state: TextureImageState::EMPTY,
+
+            #[cfg(not(target_arch = "wasm32"))]
             tile_descriptors: [TileDescriptor::EMPTY; 8],
+            #[cfg(target_arch = "wasm32")]
+            tile_descriptors: vec![TileDescriptor::EMPTY; 8],
+
             tmem_map: rustc_hash::FxHashMap::default(),
+
+            #[cfg(not(target_arch = "wasm32"))]
             textures_changed: [false; 2],
+            #[cfg(target_arch = "wasm32")]
+            textures_changed: vec![false; 2],
 
             viewport: Rect::ZERO,
             scissor: Rect::ZERO,
@@ -154,7 +176,11 @@ impl RDP {
             other_mode_h: 0,
             shader_config_changed: false,
 
+            #[cfg(not(target_arch = "wasm32"))]
             buf_vbo: [0.0; MAX_VBO_SIZE * (26 * 3)],
+            #[cfg(target_arch = "wasm32")]
+            buf_vbo: vec![0.0; MAX_VBO_SIZE * (26 * 3)],
+
             buf_vbo_len: 0,
             buf_vbo_num_tris: 0,
 
