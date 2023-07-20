@@ -30,8 +30,8 @@ use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
 use fast3d_gbi::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
 use fast3d_gbi::defines::render_mode::{RenderModeFlags, ZMode};
 use fast3d_gbi::defines::{
-    ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeH, TextureFilter,
-    TextureTile, Viewport, WrapMode,
+    ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeH, TextureFilter, TextureTile,
+    Viewport, WrapMode,
 };
 
 pub const SCREEN_WIDTH: f32 = 320.0;
@@ -334,7 +334,8 @@ impl RDP {
                     .unwrap()
                     .address;
                 let tlut_size = ImageSize::Bits4.get_tlut_size();
-                let palette_data = unsafe { std::slice::from_raw_parts(pal_addr as *const u8, tlut_size) };
+                let palette_data =
+                    unsafe { std::slice::from_raw_parts(pal_addr as *const u8, tlut_size) };
 
                 let texlut: TextureLUT = (((self.other_mode_h >> 14) & 0x3) as u8)
                     .try_into()
@@ -350,7 +351,8 @@ impl RDP {
                     .unwrap()
                     .address;
                 let tlut_size = ImageSize::Bits8.get_tlut_size();
-                let palette_data = unsafe { std::slice::from_raw_parts(pal_addr as *const u8, tlut_size) };
+                let palette_data =
+                    unsafe { std::slice::from_raw_parts(pal_addr as *const u8, tlut_size) };
 
                 let texlut: TextureLUT = (((self.other_mode_h >> 14) & 0x3) as u8)
                     .try_into()
