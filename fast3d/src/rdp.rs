@@ -2,6 +2,8 @@
 use bitflags::Flags;
 use glam::{Vec2, Vec3, Vec4};
 use log::trace;
+use pigment64::image::native_image::parse_tlut;
+use pigment64::{ImageSize, TextureLUT};
 
 use crate::output::{
     gfx::{BlendState, CompareFunction},
@@ -13,7 +15,7 @@ use super::models::{
     texture::{
         translate_tile_ci4, translate_tile_ci8, translate_tile_i4, translate_tile_i8,
         translate_tile_ia16, translate_tile_ia4, translate_tile_ia8, translate_tile_rgba16,
-        translate_tile_rgba32, translate_tlut, TextureImageState,
+        translate_tile_rgba32, TextureImageState,
     },
     tile_descriptor::TileDescriptor,
 };
@@ -25,12 +27,11 @@ use crate::gbi::utils::{
 };
 use crate::models::color::R5G5B5A1;
 use crate::rsp::{RSPConstants, MAX_VERTICES, RSP};
-use farbe::image::n64::ImageSize as FarbeImageSize;
 use fast3d_gbi::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
 use fast3d_gbi::defines::render_mode::{RenderModeFlags, ZMode};
 use fast3d_gbi::defines::{
-    ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeH, TextureFilter, TextureLUT,
-    TextureTile, Viewport, WrapMode,
+    ComponentSize, CycleType, GeometryModes, ImageFormat, OtherModeH, TextureFilter, TextureTile,
+    Viewport, WrapMode,
 };
 
 pub const SCREEN_WIDTH: f32 = 320.0;
@@ -332,10 +333,15 @@ impl RDP {
                     .get(&(u16::MAX - tmem_index as u16))
                     .unwrap()
                     .address;
+                let tlut_size = ImageSize::Bits4.get_tlut_size();
+                let palette_data =
+                    unsafe { std::slice::from_raw_parts(pal_addr as *const u8, tlut_size) };
+
                 let texlut: TextureLUT = (((self.other_mode_h >> 14) & 0x3) as u8)
                     .try_into()
                     .unwrap();
-                let palette = translate_tlut(pal_addr, FarbeImageSize::S4B, &texlut);
+
+                let palette = parse_tlut(palette_data, ImageSize::Bits4, texlut).unwrap();
                 translate_tile_ci4(texture_data, &palette, width, height)
             }
             x if x == ((ImageFormat::Ci as u32) << 4 | ComponentSize::Bits8 as u32) => {
@@ -344,10 +350,15 @@ impl RDP {
                     .get(&(u16::MAX - tmem_index as u16))
                     .unwrap()
                     .address;
+                let tlut_size = ImageSize::Bits8.get_tlut_size();
+                let palette_data =
+                    unsafe { std::slice::from_raw_parts(pal_addr as *const u8, tlut_size) };
+
                 let texlut: TextureLUT = (((self.other_mode_h >> 14) & 0x3) as u8)
                     .try_into()
                     .unwrap();
-                let palette = translate_tlut(pal_addr, FarbeImageSize::S8B, &texlut);
+
+                let palette = parse_tlut(palette_data, ImageSize::Bits8, texlut).unwrap();
                 translate_tile_ci8(texture_data, &palette, width, height)
             }
             _ => {

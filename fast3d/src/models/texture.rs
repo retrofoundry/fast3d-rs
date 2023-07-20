@@ -1,67 +1,71 @@
-use farbe::image::n64::{
-    ImageFormat as FarbeImageFormat, ImageSize as FarbeImageSize, NativeImage, TLUT,
-};
-use fast3d_gbi::defines::TextureLUT;
 use log::trace;
+use pigment64::{ImageType, NativeImage};
 
 pub fn translate_tile_rgba16(tmem: &[u8], tile_width: u32, tile_height: u32) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::RGBA16, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::Rgba16, tile_width, tile_height).unwrap();
     trace!("Decoding RGBA16 image");
-    let decoded = image.decode(None).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, None).unwrap();
     trace!("Decoded RGBA16 image");
 
     decoded
 }
 
 pub fn translate_tile_rgba32(tmem: &[u8], tile_width: u32, tile_height: u32) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::RGBA32, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::Rgba32, tile_width, tile_height).unwrap();
     trace!("Decoding RGBA32 image");
-    let decoded = image.decode(None).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, None).unwrap();
     trace!("Decoded RGBA32 image");
 
     decoded
 }
 
 pub fn translate_tile_ia4(tmem: &[u8], tile_width: u32, tile_height: u32) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::IA4, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::Ia4, tile_width, tile_height).unwrap();
     trace!("Decoding IA4 image");
-    let decoded = image.decode(None).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, None).unwrap();
     trace!("Decoded IA4 image");
 
     decoded
 }
 
 pub fn translate_tile_ia8(tmem: &[u8], tile_width: u32, tile_height: u32) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::IA8, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::Ia8, tile_width, tile_height).unwrap();
     trace!("Decoding IA8 image");
-    let decoded = image.decode(None).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, None).unwrap();
     trace!("Decoded IA8 image");
 
     decoded
 }
 
 pub fn translate_tile_ia16(tmem: &[u8], tile_width: u32, tile_height: u32) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::IA16, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::Ia16, tile_width, tile_height).unwrap();
     trace!("Decoding IA16 image");
-    let decoded = image.decode(None).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, None).unwrap();
     trace!("Decoded IA16 image");
 
     decoded
 }
 
 pub fn translate_tile_i4(tmem: &[u8], tile_width: u32, tile_height: u32) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::I4, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::I4, tile_width, tile_height).unwrap();
     trace!("Decoding I4 image");
-    let decoded = image.decode(None).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, None).unwrap();
     trace!("Decoded I4 image");
 
     decoded
 }
 
 pub fn translate_tile_i8(tmem: &[u8], tile_width: u32, tile_height: u32) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::I8, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::I8, tile_width, tile_height).unwrap();
     trace!("Decoding I8 image");
-    let decoded = image.decode(None).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, None).unwrap();
     trace!("Decoded I8 image");
 
     decoded
@@ -73,9 +77,10 @@ pub fn translate_tile_ci4(
     tile_width: u32,
     tile_height: u32,
 ) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::I8, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::I8, tile_width, tile_height).unwrap();
     trace!("Decoding CI4 image");
-    let decoded = image.decode(Some(palette)).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, Some(palette)).unwrap();
     trace!("Decoded CI4 image");
 
     decoded
@@ -87,29 +92,11 @@ pub fn translate_tile_ci8(
     tile_width: u32,
     tile_height: u32,
 ) -> Vec<u8> {
-    let image = NativeImage::read(tmem, FarbeImageFormat::I8, tile_width, tile_height).unwrap();
+    let image = NativeImage::read(tmem, ImageType::I8, tile_width, tile_height).unwrap();
     trace!("Decoding CI8 image");
-    let decoded = image.decode(Some(palette)).unwrap();
+    let mut decoded: Vec<u8> = Vec::new();
+    image.decode(&mut decoded, Some(palette)).unwrap();
     trace!("Decoded CI8 image");
-
-    decoded
-}
-
-pub fn translate_tlut(
-    pal_dram_addr: usize,
-    image_size: FarbeImageSize,
-    texlut: &TextureLUT,
-) -> Vec<u8> {
-    // TODO: handle non-rgba16 palettes
-    assert_eq!(texlut, &TextureLUT::Rgba16);
-
-    let tlut_size = image_size.tlut_size_in_bytes();
-    let palette_data = unsafe { std::slice::from_raw_parts(pal_dram_addr as *const u8, tlut_size) };
-
-    let tlut = TLUT::read(palette_data, image_size).unwrap();
-    trace!("Decoding TLUT");
-    let decoded = tlut.decode().unwrap();
-    trace!("Decoded TLUT");
 
     decoded
 }
