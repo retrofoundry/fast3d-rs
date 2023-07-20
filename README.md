@@ -14,7 +14,7 @@ Add this library to your project and one of the following renderers: `fast3d-wgp
 The library consists of three main components:
 
 - `RCP` - This represents the N64 RCP and provides a reset and a `process_dl` method.
-- `RenderData` - This is the output returned after processing a display list.
+- `RenderData` - This is given to the RCP run command that collects draw data and textures for rendering with different renderers.
 - `WgpuRenderer` - This is a renderer that can be used to render data produced
 - `GliumRenderer` - This is a renderer that can be used to render data produced
 
