@@ -34,3 +34,16 @@ jobs:
     - uses: actions/checkout@v2
     - name: Test
       run: cargo test
+  wasm-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install wasm-pack
+      uses: taiki-e/install-action@v2
+      with:
+        tool: wasm-pack
+    - name: Test
+      run: |
+        cd fast3d
+        wasm-pack test --headless --chrome
+

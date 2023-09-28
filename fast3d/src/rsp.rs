@@ -16,7 +16,7 @@ pub const MAX_LIGHTS: usize = 7;
 pub const MAX_SEGMENTS: usize = 16;
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Position {
     pub x: f32,
     pub y: f32,
@@ -34,7 +34,7 @@ impl Position {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StagingVertex {
     pub position: Position,
     pub uv: Vec2,
@@ -101,12 +101,26 @@ pub struct RSP {
     pub fog_offset: i16,
     pub fog_changed: bool,
 
+    // check for wasm
+    #[cfg(not(target_arch = "wasm32"))]
     pub vertex_table: [StagingVertex; MAX_VERTICES + 4],
+    #[cfg(target_arch = "wasm32")]
+    pub vertex_table: Vec<StagingVertex>,
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub lights_coeffs: [Vec3A; MAX_LIGHTS],
-    pub lookat_coeffs: [Vec3A; 2], // lookat_x, lookat_y
+    #[cfg(target_arch = "wasm32")]
+    pub lights_coeffs: Vec<Vec3A>,
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub lookat_coeffs: [Vec3A; 2], // lookat_x, lookat_y
+    #[cfg(target_arch = "wasm32")]
+    pub lookat_coeffs: Vec<Vec3A>, // lookat_x, lookat_y
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub segments: [usize; MAX_SEGMENTS],
+    #[cfg(target_arch = "wasm32")]
+    pub segments: Vec<usize>,
 
     pub texture_state: TextureState,
 }
@@ -143,12 +157,25 @@ impl RSP {
             fog_offset: 0,
             fog_changed: false,
 
+            #[cfg(not(target_arch = "wasm32"))]
             vertex_table: [StagingVertex::ZERO; MAX_VERTICES + 4],
+            #[cfg(target_arch = "wasm32")]
+            vertex_table: vec![StagingVertex::ZERO; MAX_VERTICES + 4],
 
+            #[cfg(not(target_arch = "wasm32"))]
             lights_coeffs: [Vec3A::ZERO; MAX_LIGHTS],
-            lookat_coeffs: [Vec3A::ZERO; 2],
+            #[cfg(target_arch = "wasm32")]
+            lights_coeffs: vec![Vec3A::ZERO; MAX_LIGHTS],
 
+            #[cfg(not(target_arch = "wasm32"))]
+            lookat_coeffs: [Vec3A::ZERO; 2],
+            #[cfg(target_arch = "wasm32")]
+            lookat_coeffs: vec![Vec3A::ZERO; 2],
+
+            #[cfg(not(target_arch = "wasm32"))]
             segments: [0; MAX_SEGMENTS],
+            #[cfg(target_arch = "wasm32")]
+            segments: vec![0; MAX_SEGMENTS],
 
             texture_state: TextureState::EMPTY,
         }

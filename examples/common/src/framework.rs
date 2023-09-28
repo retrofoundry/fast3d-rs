@@ -85,10 +85,9 @@ async fn setup<E: Example>(title: &str, size: Option<LogicalSize<u32>>) -> Setup
         (size, surface)
     };
 
-    let adapter =
-        wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface))
-            .await
-            .expect("No suitable GPU adapters found on the system!");
+    let adapter = wgpu::util::initialize_adapter_from_env_or_default(&instance, Some(&surface))
+        .await
+        .expect("No suitable GPU adapters found on the system!");
 
     let adapter_info = adapter.get_info();
     log::debug!("Using {} ({:?})", adapter_info.name, adapter_info.backend);
