@@ -16,7 +16,7 @@ default-members = [
 
 [workspace.package]
 edition = "2021"
-version = "0.4.4"
+version = "0.5.0"
 authors = ["fast3d-rs developers"]
 description = "A Rust library for N64 Fast3D Graphics Rendering"
 homepage = "https://crates.io/crates/fast3d"
@@ -28,20 +28,20 @@ license-file = "LICENSE"
 [workspace.dependencies.f3dglium]
 package = "fast3d-glium-renderer"
 path = "./fast3d-glium-renderer"
-version = "0.4.4"
+version = "0.5.0"
 
 [workspace.dependencies.f3dwgpu]
 package = "fast3d-wgpu-renderer"
 path = "./fast3d-wgpu-renderer"
-version = "0.4.4"
+version = "0.5.0"
 
 [workspace.dependencies]
 bytemuck = { version = "1.13.1", features = ["derive"] }
 glam = { version = "0.24.1", features = ["approx", "bytemuck"] }
 log = "0.4"
-fast3d-gbi = { version = "0.4.4", path = "fast3d-gbi" }
-fast3d = { version = "0.4.4", path = "./fast3d" }
-fast3d-example = { version = "0.4.4", path = "./examples/common" }
+fast3d-gbi = { version = "0.5.0", path = "fast3d-gbi" }
+fast3d = { version = "0.5.0", path = "./fast3d" }
+fast3d-example = { version = "0.5.0", path = "./examples/common" }
 rustc-hash = "1.1"
 wgpu = { version = "0.17", features = ["glsl"] }
 naga = "0.13"
