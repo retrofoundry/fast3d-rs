@@ -43,5 +43,7 @@ jobs:
       with:
         tool: wasm-pack
     - name: Test
-      run: wasm-pack test --headless --chrome --workspace
+      run: |
+        cd fast3d
+        wasm-pack test --headless --chrome
 
