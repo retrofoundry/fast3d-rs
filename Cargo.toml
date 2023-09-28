@@ -50,7 +50,7 @@ env_logger = "0.10.0"
 winit = { version = "0.28.7", features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
 pollster = "0.3.0"
 lru = "0.11.0"
-num_enum = "0.6.1"
+num_enum = "0.7.0"
 bitflags = "2.3.3"
 async-executor = "1"
 pigment64 = "0.3.0"
