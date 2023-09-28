@@ -43,8 +43,8 @@ fast3d-gbi = { version = "0.4.4", path = "fast3d-gbi" }
 fast3d = { version = "0.4.4", path = "./fast3d" }
 fast3d-example = { version = "0.4.4", path = "./examples/common" }
 rustc-hash = "1.1"
-wgpu = { version = "0.16", features = ["glsl"] }
-naga = "0.12.2"
+wgpu = { version = "0.17", features = ["glsl"] }
+naga = "0.13"
 glium = "0.32.1"
 env_logger = "0.10.0"
 winit = { version = "0.28.6", features = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"] }
