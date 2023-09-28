@@ -193,11 +193,6 @@ fn start<E: Example>(
                     },
                 ..
             } => {
-                // there's a bug where at first the size is u32::MAX so we just ignore it
-                if size.width == u32::MAX || size.height == u32::MAX {
-                    return;
-                }
-
                 log::info!("Resizing to {:?}", size);
                 config.width = size.width.max(1);
                 config.height = size.height.max(1);
