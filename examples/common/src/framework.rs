@@ -91,7 +91,7 @@ async fn setup<E: Example>(title: &str, size: Option<LogicalSize<u32>>) -> Setup
             .expect("No suitable GPU adapters found on the system!");
 
     let adapter_info = adapter.get_info();
-    println!("Using {} ({:?})", adapter_info.name, adapter_info.backend);
+    log::debug!("Using {} ({:?})", adapter_info.name, adapter_info.backend);
 
     let optional_features = E::optional_features();
     let required_features = E::required_features();
@@ -221,7 +221,7 @@ fn start<E: Example>(
                         },
                     ..
                 } => {
-                    println!("{:#?}", instance.generate_report());
+                    log::debug!("{:#?}", instance.generate_report());
                 }
                 _ => {
                     example.update(event);
@@ -232,7 +232,7 @@ fn start<E: Example>(
                 last_frame_inst = Instant::now();
                 frame_count += 1;
                 if frame_count == 100 {
-                    println!(
+                    log::debug!(
                         "Avg frame time {}ms",
                         accum_time * 1000.0 / frame_count as f32
                     );
