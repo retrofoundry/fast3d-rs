@@ -160,7 +160,7 @@ impl RSP {
             #[cfg(not(target_arch = "wasm32"))]
             vertex_table: [StagingVertex::ZERO; MAX_VERTICES + 4],
             #[cfg(target_arch = "wasm32")]
-            vertex_table:  vec![StagingVertex::ZERO; MAX_VERTICES + 4],
+            vertex_table: vec![StagingVertex::ZERO; MAX_VERTICES + 4],
 
             #[cfg(not(target_arch = "wasm32"))]
             lights_coeffs: [Vec3A::ZERO; MAX_LIGHTS],
