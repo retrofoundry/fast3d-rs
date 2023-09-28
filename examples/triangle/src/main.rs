@@ -360,9 +360,12 @@ impl fast3d_example::framework::Example for Example<'static> {
 fn main() {
     fast3d_example::framework::run::<Example>(
         "triangle",
+        #[cfg(not(target_arch = "wasm32"))]
         Some(LogicalSize {
             width: 800,
             height: 600,
         }),
+        #[cfg(target_arch = "wasm32")]
+        None,
     );
 }

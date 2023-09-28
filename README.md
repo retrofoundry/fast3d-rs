@@ -22,6 +22,18 @@ Check out the examples folder for some examples of how to use the library.
 
 _Looking for a solution that includes this, windowing, audio and controller input? Check out [Helix](https://github.com/retrofoundry/helix)!._
 
+## Examples
+
+### Triangle
+```bash
+cargo run --bin triangle
+```
+
+To run on web (requires browser with WebGPU support) you can use:
+```bash
+RUSTFLAGS=--cfg=web_sys_unstable_apis cargo run-wasm --bin triangle
+```
+
 ## Community
 
 [![](https://dcbadge.vercel.app/api/server/nGckYNTp4w)](https://discord.gg/nGckYNTp4w)
