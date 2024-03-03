@@ -3,9 +3,9 @@ use std::future::Future;
 use std::str::FromStr;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
-use winit::dpi::LogicalSize;
 #[cfg(target_arch = "wasm32")]
 use web_sys::{ImageBitmapRenderingContext, OffscreenCanvas};
+use winit::dpi::LogicalSize;
 use winit::{
     event::{self, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -112,7 +112,7 @@ async fn setup<E: Example>(title: &str, size: Option<LogicalSize<u32>>) -> Setup
     }
 
     #[cfg(target_arch = "wasm32")]
-        let mut offscreen_canvas_setup: Option<OffscreenCanvasSetup> = None;
+    let mut offscreen_canvas_setup: Option<OffscreenCanvasSetup> = None;
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::JsCast;
@@ -159,9 +159,9 @@ async fn setup<E: Example>(title: &str, size: Option<LogicalSize<u32>>) -> Setup
         let size = window.inner_size();
 
         #[cfg(any(not(target_arch = "wasm32"), target_os = "emscripten"))]
-            let surface = instance.create_surface(&window).unwrap();
+        let surface = instance.create_surface(&window).unwrap();
         #[cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))]
-            let surface = {
+        let surface = {
             if let Some(offscreen_canvas_setup) = &offscreen_canvas_setup {
                 log::info!("Creating surface from OffscreenCanvas");
                 instance.create_surface_from_offscreen_canvas(
@@ -171,7 +171,7 @@ async fn setup<E: Example>(title: &str, size: Option<LogicalSize<u32>>) -> Setup
                 instance.create_surface(&window)
             }
         }
-            .unwrap();
+        .unwrap();
 
         (size, surface)
     };
@@ -276,9 +276,9 @@ fn start<E: Example>(
     let mut example = E::init(&config, &adapter, &device, &queue, size);
 
     #[cfg(not(target_arch = "wasm32"))]
-        let mut last_frame_inst = Instant::now();
+    let mut last_frame_inst = Instant::now();
     #[cfg(not(target_arch = "wasm32"))]
-        let (mut frame_count, mut accum_time) = (0, 0.0);
+    let (mut frame_count, mut accum_time) = (0, 0.0);
 
     log::info!("Entering render loop...");
     event_loop.run(move |event, _, control_flow| {
@@ -297,11 +297,11 @@ fn start<E: Example>(
             }
             event::Event::WindowEvent {
                 event:
-                WindowEvent::Resized(size)
-                | WindowEvent::ScaleFactorChanged {
-                    new_inner_size: &mut size,
-                    ..
-                },
+                    WindowEvent::Resized(size)
+                    | WindowEvent::ScaleFactorChanged {
+                        new_inner_size: &mut size,
+                        ..
+                    },
                 ..
             } => {
                 // Once winit is fixed, the detection conditions here can be removed.
@@ -324,11 +324,11 @@ fn start<E: Example>(
             event::Event::WindowEvent { event, .. } => match event {
                 WindowEvent::KeyboardInput {
                     input:
-                    event::KeyboardInput {
-                        virtual_keycode: Some(event::VirtualKeyCode::Escape),
-                        state: event::ElementState::Pressed,
-                        ..
-                    },
+                        event::KeyboardInput {
+                            virtual_keycode: Some(event::VirtualKeyCode::Escape),
+                            state: event::ElementState::Pressed,
+                            ..
+                        },
                     ..
                 }
                 | WindowEvent::CloseRequested => {
@@ -337,11 +337,11 @@ fn start<E: Example>(
                 #[cfg(not(target_arch = "wasm32"))]
                 WindowEvent::KeyboardInput {
                     input:
-                    event::KeyboardInput {
-                        virtual_keycode: Some(event::VirtualKeyCode::R),
-                        state: event::ElementState::Pressed,
-                        ..
-                    },
+                        event::KeyboardInput {
+                            virtual_keycode: Some(event::VirtualKeyCode::R),
+                            state: event::ElementState::Pressed,
+                            ..
+                        },
                     ..
                 } => {
                     println!("{:#?}", instance.generate_report());
