@@ -19,6 +19,115 @@ impl RenderMode {
         blend_cycle2: BlendMode::ZERO,
     };
 
+    #[allow(non_snake_case)]
+    pub const fn AA_OPA_SURF(cycle: u8) -> RenderMode {
+        let blend_mode = BlendMode {
+            color1: BlendColor::Input,
+            alpha1: BlendAlpha1::Input,
+            color2: BlendColor::Memory,
+            alpha2: BlendAlpha2::Memory,
+        };
+
+        RenderMode {
+            flags: RenderModeFlags::ANTI_ALIASING
+                .union(RenderModeFlags::IMAGE_READ)
+                .union(RenderModeFlags::ALPHA_CVG_SEL),
+            cvg_dst: CvgDst::Clamp,
+            z_mode: ZMode::Opaque,
+            blend_cycle1: if cycle == 1 {
+                blend_mode
+            } else {
+                BlendMode::ZERO
+            },
+            blend_cycle2: if cycle == 2 {
+                blend_mode
+            } else {
+                BlendMode::ZERO
+            },
+        }
+    }
+
+    #[allow(non_snake_case)]
+    pub const fn OPA_SURF(cycle: u32) -> RenderMode {
+        let blend_mode = BlendMode {
+            color1: BlendColor::Input,
+            alpha1: BlendAlpha1::Zero,
+            color2: BlendColor::Input,
+            alpha2: BlendAlpha2::One,
+        };
+
+        RenderMode {
+            flags: RenderModeFlags::FORCE_BLEND,
+            cvg_dst: CvgDst::Clamp,
+            z_mode: ZMode::Opaque,
+            blend_cycle1: if cycle == 1 {
+                blend_mode
+            } else {
+                BlendMode::ZERO
+            },
+            blend_cycle2: if cycle == 2 {
+                blend_mode
+            } else {
+                BlendMode::ZERO
+            },
+        }
+    }
+
+    #[allow(non_snake_case)]
+    pub const fn RA_OPA_SURF(cycle: u32) -> RenderMode {
+        let blend_mode = BlendMode {
+            color1: BlendColor::Input,
+            alpha1: BlendAlpha1::Input,
+            color2: BlendColor::Memory,
+            alpha2: BlendAlpha2::Memory,
+        };
+
+        RenderMode {
+            flags: RenderModeFlags::ANTI_ALIASING.union(RenderModeFlags::ALPHA_CVG_SEL),
+            cvg_dst: CvgDst::Clamp,
+            z_mode: ZMode::Opaque,
+            blend_cycle1: if cycle == 1 {
+                blend_mode
+            } else {
+                BlendMode::ZERO
+            },
+            blend_cycle2: if cycle == 2 {
+                blend_mode
+            } else {
+                BlendMode::ZERO
+            },
+        }
+    }
+
+    #[allow(non_snake_case)]
+    pub const fn AA_XLU_SURF(cycle: u32) -> RenderMode {
+        let blend_mode = BlendMode {
+            color1: BlendColor::Input,
+            alpha1: BlendAlpha1::Input,
+            color2: BlendColor::Memory,
+            alpha2: BlendAlpha2::OneMinusAlpha,
+        };
+
+        RenderMode {
+            flags: RenderModeFlags::ANTI_ALIASING
+                .union(RenderModeFlags::IMAGE_READ)
+                .union(RenderModeFlags::CLEAR_ON_CVG)
+                .union(RenderModeFlags::FORCE_BLEND),
+            cvg_dst: CvgDst::Wrap,
+            z_mode: ZMode::Opaque,
+            blend_cycle1: if cycle == 1 {
+                blend_mode
+            } else {
+                BlendMode::ZERO
+            },
+            blend_cycle2: if cycle == 2 {
+                blend_mode
+            } else {
+                BlendMode::ZERO
+            },
+        }
+    }
+
     pub const fn to_w(&self) -> u32 {
         let mut w1 = self.flags.bits() as u32;
 

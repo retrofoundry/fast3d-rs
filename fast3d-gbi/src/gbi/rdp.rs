@@ -1,13 +1,22 @@
 use crate::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
-use crate::gbi::shiftl;
+use crate::gbi::{shiftl, G_TX_LDBLK_MAX_TXL};
+use bitflags::Flags;
 
-use crate::defines::{GfxCommand, OpCode as SharedOpCode};
+use crate::defines::{
+    ComponentSize, GfxCommand, ImageFormat, OpCode as SharedOpCode, TextureShift, TextureTile,
+    WrapMode,
+};
 
 #[cfg(not(feature = "f3dex2"))]
 use crate::f3d::OpCode;
 
 #[allow(non_snake_case)]
-pub fn gsDPSetColorImage(format: u32, size: u32, width: u32, address: usize) -> GfxCommand {
+pub fn gsDPSetColorImage(
+    format: ImageFormat,
+    size: ComponentSize,
+    width: u32,
+    address: usize,
+) -> GfxCommand {
     gsSetImage(
         SharedOpCode::SET_COLORIMG.bits() as u32,
         format,
@@ -82,6 +91,90 @@ pub fn gsDPSetCombineLERP(combine: CombineParams) -> GfxCommand {
     GfxCommand::new(w0, w1)
 }
 
+#[allow(non_snake_case)]
+pub fn gsDPSetTextureImage(
+    format: ImageFormat,
+    size: ComponentSize,
+    width: u32,
+    address: usize,
+) -> GfxCommand {
+    gsSetImage(
+        SharedOpCode::SET_TEXIMG.bits() as u32,
+        format,
+        size,
+        width,
+        address,
+    )
+}
+
+#[allow(non_snake_case)]
+pub fn gsDPSetTile(
+    format: ImageFormat,
+    size: ComponentSize,
+    line: u32,
+    tmem: u32,
+    tile: TextureTile,
+    palette: u32,
+    cm_t: WrapMode,
+    mask_t: u32,
+    shift_t: TextureShift,
+    cm_s: WrapMode,
+    mask_s: u32,
+    shift_s: TextureShift,
+) -> GfxCommand {
+    let mut w0: usize = 0x0;
+    w0 |= shiftl(SharedOpCode::SET_TILE.bits() as u32, 24, 8);
+    w0 |= shiftl(format as u32, 21, 3);
+    w0 |= shiftl(size as u32, 19, 2);
+    w0 |= shiftl(line, 9, 9);
+    w0 |= shiftl(tmem, 0, 9);
+
+    let mut w1: usize = 0x0;
+    w1 |= shiftl(tile.bits() as u32, 24, 3);
+    w1 |= shiftl(palette, 20, 4);
+    w1 |= shiftl(cm_t.raw_gbi_value(), 18, 2);
+    w1 |= shiftl(mask_t, 14, 4);
+    w1 |= shiftl(shift_t.bits() as u32, 10, 4);
+    w1 |= shiftl(cm_s.raw_gbi_value(), 8, 2);
+    w1 |= shiftl(mask_s, 4, 4);
+    w1 |= shiftl(shift_s.bits() as u32, 0, 4);
+
+    GfxCommand::new(w0, w1)
+}
+
+#[allow(non_snake_case)]
+pub fn gsDPSetTileSize(
+    tile: TextureTile,
+    ul_s: u32,
+    ul_t: u32,
+    lr_s: u32,
+    lr_t: u32,
+) -> GfxCommand {
+    gsDPLoadTileGeneric(
+        SharedOpCode::SET_TILESIZE.bits() as u32,
+        tile,
+        ul_s,
+        ul_t,
+        lr_s,
+        lr_t,
+    )
+}
+
+#[allow(non_snake_case)]
+pub fn gsDPLoadBlock(tile: TextureTile, ul_s: u32, ul_t: u32, lr_s: u32, dxt: u32) -> GfxCommand {
+    let mut w0: usize = 0x0;
+    w0 |= shiftl(SharedOpCode::LOAD_BLOCK.bits() as u32, 24, 8);
+    w0 |= shiftl(ul_s, 12, 12);
+    w0 |= shiftl(ul_t, 0, 12);
+
+    let mut w1: usize = 0x0;
+    w1 |= shiftl(tile.bits() as u32, 24, 3);
+    w1 |= shiftl(std::cmp::min(lr_s, G_TX_LDBLK_MAX_TXL), 12, 12);
+    w1 |= shiftl(dxt, 0, 12);
+
+    GfxCommand::new(w0, w1)
+}
+
 // MARK: - Private Helpers
 
 #[allow(non_snake_case)]
@@ -93,11 +186,17 @@ fn gsDPSetColor(command: u32, color: u32) -> GfxCommand {
 }
 
 #[allow(non_snake_case)]
-fn gsSetImage(command: u32, format: u32, size: u32, width: u32, address: usize) -> GfxCommand {
+fn gsSetImage(
+    command: u32,
+    format: ImageFormat,
+    size: ComponentSize,
+    width: u32,
+    address: usize,
+) -> GfxCommand {
     let mut word: usize = 0x0;
     word |= shiftl(command, 24, 8);
-    word |= shiftl(format, 21, 3);
-    word |= shiftl(size, 19, 2);
+    word |= shiftl(format as u32, 21, 3);
+    word |= shiftl(size as u32, 19, 2);
     word |= shiftl(width - 1, 0, 12);
 
     GfxCommand::new(word, address)
@@ -149,4 +248,26 @@ fn GCCc1w1(
         | shiftl(aRGB1.bits(), 6, 3) as u32
         | shiftl(sbA1.bits(), 3, 3) as u32
         | shiftl(aA1.bits(), 0, 3) as u32
+}
+
+#[allow(non_snake_case)]
+fn gsDPLoadTileGeneric(
+    command: u32,
+    tile: TextureTile,
+    ul_s: u32,
+    ul_t: u32,
+    lr_s: u32,
+    lr_t: u32,
+) -> GfxCommand {
+    let mut w0: usize = 0x0;
+    w0 |= shiftl(command, 24, 8);
+    w0 |= shiftl(ul_s, 12, 12);
+    w0 |= shiftl(ul_t, 0, 12);
+
+    let mut w1: usize = 0x0;
+    w1 |= shiftl(tile.bits() as u32, 24, 3);
+    w1 |= shiftl(lr_s, 12, 12);
+    w1 |= shiftl(lr_t, 0, 12);
+
+    GfxCommand::new(w0, w1)
 }

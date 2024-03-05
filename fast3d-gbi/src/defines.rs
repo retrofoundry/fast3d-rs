@@ -303,6 +303,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Clone, Copy, Debug)]
     pub struct TextureShift: u8 {
         const NOLOD = 0x00;
     }
@@ -482,6 +483,7 @@ pub enum ImageFormat {
     I = 4,
 }
 
+// TODO: Rename ImageSize?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
 #[repr(u8)]
 pub enum ComponentSize {
@@ -495,6 +497,54 @@ pub enum ComponentSize {
 impl Default for ComponentSize {
     fn default() -> Self {
         Self::Bits4
+    }
+}
+
+impl ComponentSize {
+    pub const fn shift(&self) -> u32 {
+        match self {
+            Self::Bits4 => 3,
+            Self::Bits8 => 1,
+            _ => 0,
+        }
+    }
+
+    pub const fn load_block(&self) -> Self {
+        match self {
+            Self::Bits4 => ComponentSize::Bits16,
+            Self::Bits8 => ComponentSize::Bits16,
+            Self::Bits16 => ComponentSize::Bits16,
+            Self::Bits32 => ComponentSize::Bits32,
+            Self::DD => unimplemented!()
+        }
+    }
+
+    pub const fn increment(&self) -> u32 {
+        match self {
+            Self::Bits4 => 3,
+            Self::Bits8 => 1,
+            _ => 0,
+        }
+    }
+
+    pub const fn bytes(&self) -> u32 {
+        match self {
+            Self::Bits4 => 0,
+            Self::Bits8 => 1,
+            Self::Bits16 => 2,
+            Self::Bits32 => 4,
+            Self::DD => unimplemented!(),
+        }
+    }
+
+    pub const fn line_bytes(&self) -> u32 {
+        match self {
+            Self::Bits4 => self.bytes(),
+            Self::Bits8 => self.bytes(),
+            Self::Bits16 => self.bytes(),
+            Self::Bits32 => 2,
+            Self::DD => unimplemented!(),
+        }
     }
 }
 
@@ -613,6 +663,16 @@ impl From<u8> for WrapMode {
             WrapMode::MirrorRepeat
         } else {
             WrapMode::Repeat
+        }
+    }
+}
+
+impl WrapMode {
+    pub const fn raw_gbi_value(&self) -> u32 {
+        match self {
+            WrapMode::Clamp => 0x2,
+            WrapMode::Repeat => 0x0,
+            WrapMode::MirrorRepeat => 0x1,
         }
     }
 }
