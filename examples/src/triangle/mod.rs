@@ -288,21 +288,19 @@ impl crate::framework::Example for Example<'static> {
     }
 
     fn update(&mut self, event: winit::event::WindowEvent) {
-        match event {
-            winit::event::WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        logical_key: Key::Named(NamedKey::Space),
-                        ..
-                    },
-                ..
-            } => {
-                self.render_mode = match self.render_mode {
-                    RenderMode::Shade => RenderMode::Texture,
-                    RenderMode::Texture => RenderMode::Shade,
-                };
-            }
-            _ => {}
+        if let winit::event::WindowEvent::KeyboardInput {
+            event:
+                KeyEvent {
+                    logical_key: Key::Named(NamedKey::Space),
+                    ..
+                },
+            ..
+        } = event
+        {
+            self.render_mode = match self.render_mode {
+                RenderMode::Shade => RenderMode::Texture,
+                RenderMode::Texture => RenderMode::Shade,
+            };
         }
     }
 

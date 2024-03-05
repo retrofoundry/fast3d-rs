@@ -16,5 +16,4 @@ fn test_color() {
 fn test_rcp() {
     let mut rcp = RCP::default();
     rcp.reset();
-    assert!(true);
 }
