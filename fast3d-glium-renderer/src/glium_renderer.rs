@@ -12,6 +12,7 @@ use fast3d::{
 use fast3d_gbi::defines::WrapMode;
 use glam::Vec4Swizzles;
 use glium::buffer::{Buffer, BufferAny, BufferMode, BufferType};
+use glium::glutin::surface::WindowSurface;
 use glium::{
     draw_parameters::{DepthClamp, PolygonOffset},
     implement_uniform_block, implement_vertex,
@@ -288,7 +289,7 @@ impl<'a> GliumRenderer<'a> {
     pub fn render_rcp_output(
         &mut self,
         render_data: &mut RenderData,
-        display: &Display,
+        display: &Display<WindowSurface>,
         frame: &mut Frame,
     ) {
         // omit the last draw call, because we know we that's an extra from the last flush
@@ -421,7 +422,7 @@ impl<'a> GliumRenderer<'a> {
 
     fn select_program(
         &mut self,
-        display: &Display,
+        display: &Display<WindowSurface>,
         shader_id: ShaderId,
         shader_config: ShaderConfig,
     ) {
@@ -463,7 +464,12 @@ impl<'a> GliumRenderer<'a> {
         self.shader_cache.insert(shader_id, program);
     }
 
-    fn bind_texture(&mut self, display: &Display, tile: usize, texture: &mut OutputTexture) {
+    fn bind_texture(
+        &mut self,
+        display: &Display<WindowSurface>,
+        tile: usize,
+        texture: &mut OutputTexture,
+    ) {
         // check if we've already uploaded this texture to the GPU
         if let Some(texture_id) = texture.device_id {
             // trace!("Texture found in GPU cache");
@@ -512,7 +518,7 @@ impl<'a> GliumRenderer<'a> {
     #[allow(clippy::too_many_arguments)]
     fn draw_triangles(
         &self,
-        display: &Display,
+        display: &Display<WindowSurface>,
         target: &mut Frame,
         projection_matrix: glam::Mat4,
         fog: &OutputFogParams,
