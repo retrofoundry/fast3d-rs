@@ -1,7 +1,7 @@
 use crate::defines::render_mode::{BlendAlpha1, BlendAlpha2, BlendColor};
 use crate::defines::render_mode::{CvgDst, RenderModeFlags, ZMode};
-use crate::defines::GfxCommand;
 use crate::defines::OpCode as SharedOpCode;
+use crate::defines::{BlendMode, GfxCommand, RenderMode};
 
 pub mod dma;
 pub mod rdp;
@@ -49,71 +49,63 @@ fn gsDPNoParam(command: u32) -> GfxCommand {
 // MARK: - OtherMode L Helpers
 
 #[allow(non_snake_case)]
-const fn GBL_c1(m1a: u32, m1b: u32, m2a: u32, m2b: u32) -> u32 {
-    (m1a) << 30 | (m1b) << 26 | (m2a) << 22 | (m2b) << 18
+const fn RM_AA_OPA_SURF(cycle: u8) -> RenderMode {
+    RenderMode {
+        flags: RenderModeFlags::ANTI_ALIASING
+            .union(RenderModeFlags::IMAGE_READ)
+            .union(RenderModeFlags::ALPHA_CVG_SEL),
+        cvg_dst: CvgDst::Clamp,
+        z_mode: ZMode::Opaque,
+        blend_cycle1: match cycle {
+            1 => BlendMode {
+                color1: BlendColor::Input,
+                alpha1: BlendAlpha1::Input,
+                color2: BlendColor::Memory,
+                alpha2: BlendAlpha2::Memory,
+            },
+            _ => BlendMode::ZERO,
+        },
+        blend_cycle2: match cycle {
+            2 => BlendMode {
+                color1: BlendColor::Input,
+                alpha1: BlendAlpha1::Input,
+                color2: BlendColor::Memory,
+                alpha2: BlendAlpha2::Memory,
+            },
+            _ => BlendMode::ZERO,
+        },
+    }
 }
 
 #[allow(non_snake_case)]
-const fn GBL_c2(m1a: u32, m1b: u32, m2a: u32, m2b: u32) -> u32 {
-    (m1a) << 28 | (m1b) << 24 | (m2a) << 20 | (m2b) << 16
+const fn RM_OPA_SURF(cycle: u32) -> RenderMode {
+    RenderMode {
+        flags: RenderModeFlags::FORCE_BLEND,
+        cvg_dst: CvgDst::Clamp,
+        z_mode: ZMode::Opaque,
+        blend_cycle1: match cycle {
+            1 => BlendMode {
+                color1: BlendColor::Input,
+                alpha1: BlendAlpha1::Zero,
+                color2: BlendColor::Input,
+                alpha2: BlendAlpha2::One,
+            },
+            _ => BlendMode::ZERO,
+        },
+        blend_cycle2: match cycle {
+            2 => BlendMode {
+                color1: BlendColor::Input,
+                alpha1: BlendAlpha1::Zero,
+                color2: BlendColor::Input,
+                alpha2: BlendAlpha2::One,
+            },
+            _ => BlendMode::ZERO,
+        },
+    }
 }
 
-#[allow(non_snake_case)]
-const fn RM_AA_OPA_SURF(clk: u8) -> u32 {
-    // TODO: better way to do something like this?
-    let cvg_dst = CvgDst::Clamp;
-    let zmode = ZMode::Opaque;
+pub const G_RM_AA_OPA_SURF: u32 = RM_AA_OPA_SURF(1).to_w();
+pub const G_RM_AA_OPA_SURF2: u32 = RM_AA_OPA_SURF(2).to_w();
 
-    RenderModeFlags::ANTI_ALIASING.bits() as u32
-        | RenderModeFlags::IMAGE_READ.bits() as u32
-        | cvg_dst.raw_gbi_value()
-        | zmode.raw_gbi_value()
-        | RenderModeFlags::ALPHA_CVG_SEL.bits() as u32
-        | match clk {
-            1 => GBL_c1(
-                BlendColor::Input as u32,
-                BlendAlpha1::Input as u32,
-                BlendColor::Memory as u32,
-                BlendAlpha2::Memory as u32,
-            ),
-            2 => GBL_c2(
-                BlendColor::Input as u32,
-                BlendAlpha1::Input as u32,
-                BlendColor::Memory as u32,
-                BlendAlpha2::Memory as u32,
-            ),
-            _ => 0, // This should really panic.. but in a const we can't do that.
-        }
-}
-
-#[allow(non_snake_case)]
-const fn RM_OPA_SURF(clk: u8) -> u32 {
-    // TODO: better way to do something like this?
-    let cvg_dst = CvgDst::Clamp;
-    let zmode = ZMode::Opaque;
-
-    cvg_dst.raw_gbi_value()
-        | RenderModeFlags::FORCE_BLEND.bits() as u32
-        | zmode.raw_gbi_value()
-        | match clk {
-            1 => GBL_c1(
-                BlendColor::Input as u32,
-                BlendAlpha1::Zero as u32,
-                BlendColor::Input as u32,
-                BlendAlpha2::One as u32,
-            ),
-            2 => GBL_c2(
-                BlendColor::Input as u32,
-                BlendAlpha1::Zero as u32,
-                BlendColor::Input as u32,
-                BlendAlpha2::One as u32,
-            ),
-            _ => 0, // This should really panic.. but in a const we can't do that.
-        }
-}
-
-pub const G_RM_AA_OPA_SURF: u32 = RM_AA_OPA_SURF(1);
-pub const G_RM_AA_OPA_SURF2: u32 = RM_AA_OPA_SURF(2);
-
-pub const G_RM_OPA_SURF: u32 = RM_OPA_SURF(1);
-pub const G_RM_OPA_SURF2: u32 = RM_OPA_SURF(2);
+pub const G_RM_OPA_SURF: u32 = RM_OPA_SURF(1).to_w();
+pub const G_RM_OPA_SURF2: u32 = RM_OPA_SURF(2).to_w();

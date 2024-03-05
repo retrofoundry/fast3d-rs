@@ -15,19 +15,28 @@ impl RenderMode {
         flags: RenderModeFlags::empty(),
         cvg_dst: CvgDst::Clamp,
         z_mode: ZMode::Opaque,
-        blend_cycle1: BlendMode {
-            color1: BlendColor::Input,
-            alpha1: BlendAlpha1::Input,
-            color2: BlendColor::Input,
-            alpha2: BlendAlpha2::OneMinusAlpha,
-        },
-        blend_cycle2: BlendMode {
-            color1: BlendColor::Input,
-            alpha1: BlendAlpha1::Input,
-            color2: BlendColor::Input,
-            alpha2: BlendAlpha2::OneMinusAlpha,
-        },
+        blend_cycle1: BlendMode::ZERO,
+        blend_cycle2: BlendMode::ZERO,
     };
+
+    pub const fn to_w(&self) -> u32 {
+        let mut w1 = self.flags.bits() as u32;
+
+        w1 |= self.cvg_dst.raw_gbi_value() << 8;
+        w1 |= self.z_mode.raw_gbi_value() << 10;
+
+        w1 |= (self.blend_cycle1.color1 as u32) << 30;
+        w1 |= (self.blend_cycle1.alpha1 as u32) << 26;
+        w1 |= (self.blend_cycle1.color2 as u32) << 22;
+        w1 |= (self.blend_cycle1.alpha2 as u32) << 18;
+
+        w1 |= (self.blend_cycle2.color1 as u32) << 28;
+        w1 |= (self.blend_cycle2.alpha1 as u32) << 24;
+        w1 |= (self.blend_cycle2.color2 as u32) << 20;
+        w1 |= (self.blend_cycle2.alpha2 as u32) << 16;
+
+        w1
+    }
 }
 
 impl Default for RenderMode {
@@ -57,6 +66,12 @@ impl TryFrom<u32> for RenderMode {
                 alpha2: (((w1 >> 16) & 0x3) as u8).try_into().map_err(|_| {})?,
             },
         })
+    }
+}
+
+impl From<RenderMode> for u32 {
+    fn from(val: RenderMode) -> Self {
+        val.to_w()
     }
 }
 
@@ -120,6 +135,15 @@ pub struct BlendMode {
     pub alpha1: BlendAlpha1,
     pub color2: BlendColor,
     pub alpha2: BlendAlpha2,
+}
+
+impl BlendMode {
+    pub const ZERO: Self = Self {
+        color1: BlendColor::Input,
+        alpha1: BlendAlpha1::Input,
+        color2: BlendColor::Input,
+        alpha2: BlendAlpha2::OneMinusAlpha,
+    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, TryFromPrimitive)]
