@@ -1,12 +1,20 @@
 use crate::defines::color_combiner::CombineParams;
-use crate::defines::{GfxCommand, OtherModeH, OtherModeL, Vertex};
-use crate::gbi::{rdp, shiftl, BOWTIE_VAL};
+use crate::defines::{
+    ComponentSize, GfxCommand, ImageFormat, OtherModeH, OtherModeL, TextureShift, TextureTile,
+    Vertex, WrapMode,
+};
+use crate::gbi::{
+    gsDPLoadSync, gsDPPipeSync, rdp,
+    rdp::{gsDPSetTextureImage, gsDPSetTile},
+    shiftl, BOWTIE_VAL, CALC_DXT, G_TEXTURE_IMAGE_FRAC,
+};
 
 #[cfg(feature = "f3dex2")]
 use crate::defines::f3dex2::OpCode;
 
 #[cfg(not(feature = "f3dex2"))]
 use crate::defines::f3d::OpCode;
+use crate::rdp::{gsDPLoadBlock, gsDPSetTileSize};
 
 #[allow(non_snake_case)]
 pub fn gsDPPipelineMode(mode: u32) -> GfxCommand {
@@ -88,6 +96,71 @@ pub fn gsDPSetTextureConvert(convert: u32) -> GfxCommand {
         3,
         convert as usize,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(non_snake_case)]
+pub fn gsDPLoadTextureBlock(
+    tex_image: usize,
+    format: ImageFormat,
+    size: ComponentSize,
+    width: u32,
+    height: u32,
+    pal: u32,
+    cm_s: WrapMode,
+    cm_t: WrapMode,
+    mask_s: u32,
+    mask_t: u32,
+    shift_s: TextureShift,
+    shift_t: TextureShift,
+) -> Vec<GfxCommand> {
+    vec![
+        gsDPSetTextureImage(format, size.load_block(), 1, tex_image),
+        gsDPSetTile(
+            format,
+            size.load_block(),
+            0,
+            0,
+            TextureTile::LOADTILE,
+            0,
+            cm_t,
+            mask_t,
+            shift_t,
+            cm_s,
+            mask_s,
+            shift_s,
+        ),
+        gsDPLoadSync(),
+        gsDPLoadBlock(
+            TextureTile::LOADTILE,
+            0,
+            0,
+            (((width * height) + size.increment()) >> size.shift()) - 1,
+            CALC_DXT(width, size.bytes()),
+        ),
+        gsDPPipeSync(),
+        gsDPSetTile(
+            format,
+            size,
+            ((width * size.line_bytes()) + 7) >> 3,
+            0,
+            TextureTile::RENDERTILE,
+            pal,
+            cm_t,
+            mask_t,
+            shift_t,
+            cm_s,
+            mask_s,
+            shift_s,
+        ),
+        gsDPSetTileSize(
+            TextureTile::RENDERTILE,
+            0,
+            0,
+            (width - 1) << G_TEXTURE_IMAGE_FRAC,
+            (height - 1) << G_TEXTURE_IMAGE_FRAC,
+        ),
+    ]
 }
 
 #[allow(non_snake_case)]
@@ -174,13 +247,13 @@ pub fn gsSP1Triangle(v0: u8, v1: u8, v2: u8, flag: u8) -> GfxCommand {
 
 #[cfg(feature = "f3dex2")]
 #[allow(non_snake_case)]
-pub fn gsSPTexture(s: u16, t: u16, level: u8, tile: u8, on: bool) -> GfxCommand {
+pub fn gsSPTexture(s: u16, t: u16, level: u8, tile: TextureTile, on: bool) -> GfxCommand {
     let mut word: usize = 0x0;
 
     word |= shiftl(OpCode::TEXTURE.bits() as u32, 24, 8);
     word |= shiftl(BOWTIE_VAL, 16, 8);
     word |= shiftl(level as u32, 11, 3);
-    word |= shiftl(tile as u32, 8, 3);
+    word |= shiftl(tile.bits() as u32, 8, 3);
     word |= shiftl(on as u32, 1, 7);
 
     let mut w1: usize = 0x0;

@@ -1,5 +1,5 @@
 [package]
-name = "fast3d-example"
+name = "fast3d-examples"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -7,28 +7,43 @@ description = "Common example code"
 homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true
-license-file.workspace = true
+license.workspace = true
 publish = false
 
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[[bin]]
+name = "fast3d-examples"
+path = "src/main.rs"
+test = false
+
+[features]
+webgl = ["wgpu/webgl"]
+
 [dependencies]
-bytemuck.workspace = true
-glam.workspace = true
+cfg-if = "1"
+fast3d.workspace = true
+fast3d-gbi.workspace = true
+fast3d-wgpu.workspace = true
 log.workspace = true
-wgpu.workspace = true
-env_logger.workspace = true
-winit.workspace = true
+pigment64.workspace = true
 pollster.workspace = true
+web-time = "0.2.4"
+wgpu.workspace = true
+winit.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-executor.workspace = true
+env_logger.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook.workspace = true
 console_log.workspace = true
+fern = "0.6"
 js-sys.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
-#hal = { workspace = true, optional = true }
 # We need these features in the framework examples and tests
 web-sys = { workspace = true, features = [
     "Location",
@@ -36,7 +51,12 @@ web-sys = { workspace = true, features = [
     "RequestInit",
     "RequestMode",
     "Request",
+    "ImageData",
     "Response",
+    "HtmlImageElement",
     "WebGl2RenderingContext",
-    "CanvasRenderingContext2d"
+    "CanvasRenderingContext2d",
 ] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test.workspace = true

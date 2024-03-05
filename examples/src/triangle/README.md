@@ -10,4 +10,4 @@ cargo run --bin triangle
 
 ## Screenshots
 
-![Square example](./screenshot.png)
+![Square example](screenshot.png)

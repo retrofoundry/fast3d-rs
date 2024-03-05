@@ -1,13 +1,13 @@
-use f3dwgpu::WgpuRenderer;
+mod resources;
+
 use fast3d::rdp::{OutputDimensions, SCREEN_HEIGHT, SCREEN_WIDTH};
 use fast3d::{RenderData, RCP};
-use fast3d_gbi::defines::color_combiner::G_CC_SHADE;
 use fast3d_gbi::defines::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
 use fast3d_gbi::defines::{
-    AlphaCompare, ColorDither, ColorVertex, ComponentSize, CycleType,
+    AlphaCompare, ColorDither, CombineParams, ComponentSize, CycleType,
     GeometryModes as SharedGeometryModes, GfxCommand, ImageFormat, Matrix, PipelineMode,
-    ScissorMode, TextureConvert, TextureDetail, TextureFilter, TextureLOD, TextureLUT, Vertex,
-    Viewport, G_MAXZ,
+    ScissorMode, TextureConvert, TextureDetail, TextureFilter, TextureLOD, TextureLUT,
+    TextureShift, TextureTile, Vertex, Viewport, WrapMode, G_MAXZ,
 };
 use fast3d_gbi::dma::{gsSPDisplayList, gsSPMatrix, gsSPViewport};
 use fast3d_gbi::gbi::{
@@ -17,55 +17,22 @@ use fast3d_gbi::gbi::{
 use fast3d_gbi::gu::{guOrtho, guRotate};
 use fast3d_gbi::rdp::{gsDPFillRectangle, gsDPSetColorImage, gsDPSetFillColor, gsDPSetScissor};
 use fast3d_gbi::rsp::{
-    gsDPPipelineMode, gsDPSetAlphaCompare, gsDPSetColorDither, gsDPSetCombineKey,
-    gsDPSetCombineMode, gsDPSetCycleType, gsDPSetRenderMode, gsDPSetTextureConvert,
-    gsDPSetTextureDetail, gsDPSetTextureFilter, gsDPSetTextureLOD, gsDPSetTextureLUT,
-    gsDPSetTexturePersp, gsSP1Triangle, gsSPClearGeometryMode, gsSPSetGeometryMode, gsSPTexture,
-    gsSPVertex,
+    gsDPLoadTextureBlock, gsDPPipelineMode, gsDPSetAlphaCompare, gsDPSetColorDither,
+    gsDPSetCombineKey, gsDPSetCombineMode, gsDPSetCycleType, gsDPSetRenderMode,
+    gsDPSetTextureConvert, gsDPSetTextureDetail, gsDPSetTextureFilter, gsDPSetTextureLOD,
+    gsDPSetTextureLUT, gsDPSetTexturePersp, gsSP1Triangle, gsSPClearGeometryMode,
+    gsSPSetGeometryMode, gsSPTexture, gsSPVertex,
 };
-use pigment64::color::Color;
-use std::{future::Future, pin::Pin, task};
-use winit::dpi::LogicalSize;
+use fast3d_wgpu::WgpuRenderer;
+use resources::{BRICK_TEX, SHADE_VTX, TEX_VTX};
+use std::iter;
+use wgpu::StoreOp;
+use winit::event::KeyEvent;
+use winit::keyboard::{Key, NamedKey};
 
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-
-fn create_vertices() -> Vec<Vertex> {
-    vec![
-        Vertex {
-            color: ColorVertex::new([-64, 64, -5], [0, 0], Color::RGBA(0, 0xFF, 0, 0xFF)),
-        },
-        Vertex {
-            color: ColorVertex::new([64, 64, -5], [0, 0], Color::RGBA(0, 0, 0, 0xFF)),
-        },
-        Vertex {
-            color: ColorVertex::new([64, -64, -5], [0, 0], Color::RGBA(0, 0, 0xFF, 0xFF)),
-        },
-        Vertex {
-            color: ColorVertex::new([-64, -64, -5], [0, 0], Color::RGBA(0xFF, 0, 0, 0xFF)),
-        },
-    ]
-}
-
-/// A wrapper for `pop_error_scope` futures that panics if an error occurs.
-///
-/// Given a future `inner` of an `Option<E>` for some error type `E`,
-/// wait for the future to be ready, and panic if its value is `Some`.
-///
-/// This can be done simpler with `FutureExt`, but we don't want to add
-/// a dependency just for this small case.
-struct ErrorFuture<F> {
-    inner: F,
-}
-impl<F: Future<Output = Option<wgpu::Error>>> Future for ErrorFuture<F> {
-    type Output = ();
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<()> {
-        let inner = unsafe { self.map_unchecked_mut(|me| &mut me.inner) };
-        inner.poll(cx).map(|error| {
-            if let Some(e) = error {
-                panic!("Rendering {e}");
-            }
-        })
-    }
+enum RenderMode {
+    Shade,
+    Texture,
 }
 
 struct Example<'a> {
@@ -73,16 +40,19 @@ struct Example<'a> {
     render_data: RenderData,
     renderer: WgpuRenderer<'a>,
 
-    depth_texture: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
     surface_format: wgpu::TextureFormat,
 
-    vertex_data: Vec<Vertex>,
     viewport: Viewport,
     frame_count: f32,
     rsp_color_fb: [u16; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize],
+
+    render_mode: RenderMode,
 }
 
 impl<'a> Example<'a> {
+    const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
     fn create_depth_texture(
         config: &wgpu::SurfaceConfiguration,
         device: &wgpu::Device,
@@ -96,7 +66,7 @@ impl<'a> Example<'a> {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
+            format: Self::DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             label: None,
             view_formats: &[],
@@ -122,7 +92,7 @@ impl<'a> Example<'a> {
             gsDPSetTexturePersp(true),
             gsDPSetTextureFilter(TextureFilter::Bilerp.raw_gbi_value()),
             gsDPSetTextureConvert(TextureConvert::Filt.raw_gbi_value()),
-            gsDPSetCombineMode(G_CC_SHADE),
+            gsDPSetCombineMode(CombineParams::SHADE),
             gsDPSetCombineKey(false),
             gsDPSetAlphaCompare(AlphaCompare::None.raw_gbi_value()),
             gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2),
@@ -144,7 +114,7 @@ impl<'a> Example<'a> {
                     | SharedGeometryModes::TEXTURE_GEN_LINEAR.bits()
                     | SharedGeometryModes::LOD.bits(),
             ),
-            gsSPTexture(0, 0, 0, 0, false),
+            gsSPTexture(0, 0, 0, TextureTile::RENDERTILE, false),
             gsSPSetGeometryMode(
                 SharedGeometryModes::SHADE.bits() | GeometryModes::SHADING_SMOOTH.bits(),
             ),
@@ -156,8 +126,8 @@ impl<'a> Example<'a> {
         vec![
             gsDPSetCycleType(CycleType::Fill.raw_gbi_value()),
             gsDPSetColorImage(
-                ImageFormat::Rgba as u32,
-                ComponentSize::Bits16 as u32,
+                ImageFormat::Rgba,
+                ComponentSize::Bits16,
                 SCREEN_WIDTH as u32,
                 rsp_color_fb,
             ),
@@ -170,7 +140,7 @@ impl<'a> Example<'a> {
         ]
     }
 
-    fn generate_triangle_dl(
+    fn generate_shaded_triangle_dl(
         projection_mtx_ptr: *mut Matrix,
         modelview_mtx_ptr: *mut Matrix,
         triangle_vertices: &[Vertex],
@@ -200,15 +170,69 @@ impl<'a> Example<'a> {
             gsSPEndDisplayList(),
         ]
     }
+
+    fn generate_tex_triangle_dl(
+        projection_mtx_ptr: *mut Matrix,
+        modelview_mtx_ptr: *mut Matrix,
+        triangle_vertices: &[Vertex],
+    ) -> Vec<GfxCommand> {
+        let mut commands = vec![
+            gsSPMatrix(
+                projection_mtx_ptr,
+                (MatrixMode::PROJECTION.bits()
+                    | MatrixOperation::LOAD.bits()
+                    | MatrixOperation::NOPUSH.bits()) as u32,
+            ),
+            gsSPMatrix(
+                modelview_mtx_ptr,
+                (MatrixMode::MODELVIEW.bits()
+                    | MatrixOperation::LOAD.bits()
+                    | MatrixOperation::NOPUSH.bits()) as u32,
+            ),
+            gsDPPipeSync(),
+            gsDPSetCycleType(CycleType::OneCycle.raw_gbi_value()),
+            gsDPSetRenderMode(G_RM_AA_OPA_SURF, G_RM_AA_OPA_SURF2),
+            gsSPClearGeometryMode(
+                SharedGeometryModes::SHADE.bits() | GeometryModes::SHADING_SMOOTH.bits(),
+            ),
+            gsSPTexture(0x8000, 0x8000, 0, TextureTile::RENDERTILE, true),
+            gsDPSetCombineMode(CombineParams::DECAL_RGB),
+            gsDPSetTextureFilter(TextureFilter::Bilerp.raw_gbi_value()),
+        ];
+
+        commands.extend(gsDPLoadTextureBlock(
+            BRICK_TEX.as_ptr() as usize,
+            ImageFormat::Rgba,
+            ComponentSize::Bits16,
+            32,
+            32,
+            0,
+            WrapMode::MirrorRepeat,
+            WrapMode::MirrorRepeat,
+            5,
+            5,
+            TextureShift::NOLOD,
+            TextureShift::NOLOD,
+        ));
+
+        commands.extend(vec![
+            gsSPVertex(triangle_vertices, 4, 0),
+            gsSP1Triangle(0, 1, 2, 0),
+            gsSP1Triangle(0, 2, 3, 0),
+            gsSPTexture(0, 0, 0, TextureTile::RENDERTILE, false),
+            gsSPEndDisplayList(),
+        ]);
+
+        commands
+    }
 }
 
-impl fast3d_example::framework::Example for Example<'static> {
+impl crate::framework::Example for Example<'static> {
     fn init(
         config: &wgpu::SurfaceConfiguration,
         _adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
-        _content_size: winit::dpi::PhysicalSize<u32>,
     ) -> Self {
         let mut rcp = RCP::default();
 
@@ -239,13 +263,13 @@ impl fast3d_example::framework::Example for Example<'static> {
             render_data: RenderData::default(),
             renderer: WgpuRenderer::new(device, [config.width, config.height]),
 
-            depth_texture: Self::create_depth_texture(config, device),
+            depth_view: Self::create_depth_texture(config, device),
             surface_format: config.format,
 
-            vertex_data: create_vertices(),
             viewport,
             frame_count: 0.0,
             rsp_color_fb: [0; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize],
+            render_mode: RenderMode::Shade,
         }
     }
 
@@ -263,17 +287,24 @@ impl fast3d_example::framework::Example for Example<'static> {
         self.rcp.rdp.output_dimensions = dimensions;
     }
 
-    fn update(&mut self, _event: winit::event::WindowEvent) {
-        //empty
+    fn update(&mut self, event: winit::event::WindowEvent) {
+        if let winit::event::WindowEvent::KeyboardInput {
+            event:
+                KeyEvent {
+                    logical_key: Key::Named(NamedKey::Space),
+                    ..
+                },
+            ..
+        } = event
+        {
+            self.render_mode = match self.render_mode {
+                RenderMode::Shade => RenderMode::Texture,
+                RenderMode::Texture => RenderMode::Shade,
+            };
+        }
     }
 
-    fn render(
-        &mut self,
-        view: &wgpu::TextureView,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        _spawner: &fast3d_example::framework::Spawner,
-    ) {
+    fn render(&mut self, view: &wgpu::TextureView, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.renderer.update_frame_count();
         self.frame_count += 1.0;
 
@@ -301,8 +332,14 @@ impl fast3d_example::framework::Example for Example<'static> {
         );
         guRotate(modelview_mtx_ptr, self.frame_count, 0.0, 1.0, 0.0);
 
-        let triangle_dl =
-            Self::generate_triangle_dl(projection_mtx_ptr, modelview_mtx_ptr, &self.vertex_data);
+        let triangle_dl = match self.render_mode {
+            RenderMode::Shade => {
+                Self::generate_shaded_triangle_dl(projection_mtx_ptr, modelview_mtx_ptr, &SHADE_VTX)
+            }
+            RenderMode::Texture => {
+                Self::generate_tex_triangle_dl(projection_mtx_ptr, modelview_mtx_ptr, &TEX_VTX)
+            }
+        };
 
         let commands_dl = [
             gsSPDisplayList(&rdp_init_dl),
@@ -318,54 +355,52 @@ impl fast3d_example::framework::Example for Example<'static> {
 
         let draw_commands_ptr = commands_dl.as_ptr();
 
-        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Game Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: true,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.depth_texture,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: true,
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Game Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-        });
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-        // Run the RCP
-        self.rcp
-            .process_dl(draw_commands_ptr as usize, &mut self.render_data);
+            // Run the RCP
+            self.rcp
+                .process_dl(draw_commands_ptr as usize, &mut self.render_data);
 
-        // Process the RCP output
-        self.renderer
-            .process_rcp_output(device, queue, self.surface_format, &mut self.render_data);
+            // Process the RCP output
+            self.renderer.process_rcp_output(
+                device,
+                queue,
+                self.surface_format,
+                &mut self.render_data,
+            );
 
-        // Draw the RCP output
-        self.renderer.draw(&mut rpass);
+            // Draw the RCP output
+            self.renderer.draw(&mut pass);
+        }
 
         // Clear the draw calls
         self.render_data.clear_draw_calls();
 
-        drop(rpass);
-        queue.submit(Some(encoder.finish()));
+        queue.submit(iter::once(encoder.finish()));
     }
 }
 
-fn main() {
-    fast3d_example::framework::run::<Example>(
-        "triangle",
-        #[cfg(not(target_arch = "wasm32"))]
-        Some(LogicalSize {
-            width: 800,
-            height: 600,
-        }),
-        #[cfg(target_arch = "wasm32")]
-        None,
-    );
+pub fn main() {
+    crate::framework::run::<Example>("triangle");
 }

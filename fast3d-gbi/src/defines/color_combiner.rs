@@ -1,7 +1,5 @@
 use bitflags::bitflags;
 
-pub const G_CC_SHADE: CombineParams = CombineParams::SHADE;
-
 // TODO: Replace with the new getter on GfxCommand
 pub fn get_cmd(val: usize, start_bit: u32, num_bits: u32) -> usize {
     (val >> start_bit) & ((1 << num_bits) - 1)
@@ -65,6 +63,13 @@ impl ColorCombinePass {
         b: ColorCombinerMux::ZERO,
         c: ColorCombinerMux::ZERO,
         d: ColorCombinerMux::SHADE,
+    };
+
+    pub const DECAL_RGB: Self = Self {
+        a: ColorCombinerMux::COMBINED,
+        b: ColorCombinerMux::COMBINED,
+        c: ColorCombinerMux::COMBINED,
+        d: ColorCombinerMux::TEXEL0,
     };
 
     // grab property by index
@@ -181,31 +186,19 @@ impl CombineParams {
         },
     };
 
+    // typical cycle 1 modes
     pub const SHADE: Self = Self {
-        c0: ColorCombinePass {
-            a: ColorCombinerMux::COMBINED,
-            b: ColorCombinerMux::COMBINED,
-            c: ColorCombinerMux::COMBINED,
-            d: ColorCombinerMux::SHADE,
-        },
-        a0: AlphaCombinePass {
-            a: AlphaCombinerMux::COMBINED,
-            b: AlphaCombinerMux::COMBINED,
-            c: AlphaCombinerMux::COMBINED,
-            d: AlphaCombinerMux::SHADE,
-        },
-        c1: ColorCombinePass {
-            a: ColorCombinerMux::COMBINED,
-            b: ColorCombinerMux::COMBINED,
-            c: ColorCombinerMux::COMBINED,
-            d: ColorCombinerMux::SHADE,
-        },
-        a1: AlphaCombinePass {
-            a: AlphaCombinerMux::COMBINED,
-            b: AlphaCombinerMux::COMBINED,
-            c: AlphaCombinerMux::COMBINED,
-            d: AlphaCombinerMux::SHADE,
-        },
+        c0: ColorCombinePass::SHADE,
+        a0: AlphaCombinePass::SHADE,
+        c1: ColorCombinePass::SHADE,
+        a1: AlphaCombinePass::SHADE,
+    };
+
+    pub const DECAL_RGB: Self = Self {
+        c0: ColorCombinePass::DECAL_RGB,
+        a0: AlphaCombinePass::SHADE,
+        c1: ColorCombinePass::DECAL_RGB,
+        a1: AlphaCombinePass::SHADE,
     };
 
     pub fn decode(w0: usize, w1: usize) -> Self {
