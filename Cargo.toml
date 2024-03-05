@@ -5,11 +5,10 @@ members = [
     "fast3d-gbi",
     "fast3d-glium-renderer",
     "fast3d-wgpu-renderer",
-    "examples/*",
-    "run-wasm",
+    "examples",
 ]
 default-members = [
-    "examples/*",
+    "examples",
     "fast3d",
     "fast3d-gbi",
     "fast3d-glium-renderer",
@@ -25,14 +24,15 @@ homepage = "https://crates.io/crates/fast3d"
 repository = "https://github.com/retrofoundry/fast3d-rs"
 keywords = ["n64", "gbi", "graphics", "rendering", "fast3d"]
 readme = "README.md"
+license = "MIT"
 license-file = "LICENSE"
 
-[workspace.dependencies.f3dglium]
+[workspace.dependencies.fast3d-glium]
 package = "fast3d-glium-renderer"
 path = "./fast3d-glium-renderer"
 version = "0.5.0"
 
-[workspace.dependencies.f3dwgpu]
+[workspace.dependencies.fast3d-wgpu]
 package = "fast3d-wgpu-renderer"
 path = "./fast3d-wgpu-renderer"
 version = "0.5.0"
@@ -43,7 +43,7 @@ glam = { version = "0.25.0", features = ["approx", "bytemuck"] }
 log = "0.4"
 fast3d-gbi = { version = "0.5.0", path = "fast3d-gbi" }
 fast3d = { version = "0.5.0", path = "./fast3d" }
-fast3d-example = { version = "0.5.0", path = "./examples/common" }
+#fast3d-example = { version = "0.5.0", path = "./examples/common" }
 rustc-hash = "1.1"
 wgpu = { version = "0.19.3", features = ["glsl"] }
 naga = "0.19.2"

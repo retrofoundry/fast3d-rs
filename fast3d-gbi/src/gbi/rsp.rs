@@ -3,9 +3,11 @@ use crate::defines::{
     ComponentSize, GfxCommand, ImageFormat, OtherModeH, OtherModeL, TextureShift, TextureTile,
     Vertex, WrapMode,
 };
-use crate::gbi::{gsDPLoadSync, gsDPPipeSync, rdp, rdp::{gsDPSetTextureImage, gsDPSetTile}, shiftl, BOWTIE_VAL, CALC_DXT, G_TEXTURE_IMAGE_FRAC};
-use bitflags::Flags;
-use num_enum::TryFromPrimitive;
+use crate::gbi::{
+    gsDPLoadSync, gsDPPipeSync, rdp,
+    rdp::{gsDPSetTextureImage, gsDPSetTile},
+    shiftl, BOWTIE_VAL, CALC_DXT, G_TEXTURE_IMAGE_FRAC,
+};
 
 #[cfg(feature = "f3dex2")]
 use crate::defines::f3dex2::OpCode;

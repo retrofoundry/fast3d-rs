@@ -1,6 +1,5 @@
 use crate::defines::color_combiner::{AlphaCombinerMux, ColorCombinerMux, CombineParams};
 use crate::gbi::{shiftl, G_TX_LDBLK_MAX_TXL};
-use bitflags::Flags;
 
 use crate::defines::{
     ComponentSize, GfxCommand, ImageFormat, OpCode as SharedOpCode, TextureShift, TextureTile,

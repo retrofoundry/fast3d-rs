@@ -1,18 +1,12 @@
-#[cfg(target_arch = "wasm32")]
-use std::str::FromStr;
 use std::sync::Arc;
 use wgpu::{Instance, Surface};
-#[cfg(target_arch = "wasm32")]
-use web_sys::{ImageBitmapRenderingContext, OffscreenCanvas};
-use winit::dpi::{PhysicalSize};
 use winit::{
-    event::{WindowEvent},
-    event_loop::{EventLoop},
+    dpi::PhysicalSize,
+    event::{Event, KeyEvent, StartCause, WindowEvent},
+    event_loop::{EventLoop, EventLoopWindowTarget},
+    keyboard::{Key, NamedKey},
+    window::Window,
 };
-use winit::event::{Event, KeyEvent, StartCause};
-use winit::event_loop::EventLoopWindowTarget;
-use winit::keyboard::{Key, NamedKey};
-use winit::window::Window;
 
 pub trait Example: 'static + Sized {
     const SRGB: bool = false;
@@ -53,12 +47,7 @@ pub trait Example: 'static + Sized {
 
     fn update(&mut self, event: WindowEvent);
 
-    fn render(
-        &mut self,
-        view: &wgpu::TextureView,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    );
+    fn render(&mut self, view: &wgpu::TextureView, device: &wgpu::Device, queue: &wgpu::Queue);
 }
 
 struct EventLoopWrapper {
@@ -359,7 +348,7 @@ async fn start<E: Example>(title: &str) {
     log::info!("Entering event loop...");
     // On native this is a result, but on wasm it's a unit type.
     #[allow(clippy::let_unit_value)]
-        let _ = (event_loop_function)(
+    let _ = (event_loop_function)(
         window_loop.event_loop,
         move |event: Event<()>, target: &EventLoopWindowTarget<()>| {
             match event {
@@ -392,10 +381,10 @@ async fn start<E: Example>(title: &str) {
                     }
                     WindowEvent::KeyboardInput {
                         event:
-                        KeyEvent {
-                            logical_key: Key::Named(NamedKey::Escape),
-                            ..
-                        },
+                            KeyEvent {
+                                logical_key: Key::Named(NamedKey::Escape),
+                                ..
+                            },
                         ..
                     }
                     | WindowEvent::CloseRequested => {
@@ -404,10 +393,10 @@ async fn start<E: Example>(title: &str) {
                     #[cfg(not(target_arch = "wasm32"))]
                     WindowEvent::KeyboardInput {
                         event:
-                        KeyEvent {
-                            logical_key: Key::Character(s),
-                            ..
-                        },
+                            KeyEvent {
+                                logical_key: Key::Character(s),
+                                ..
+                            },
                         ..
                     } if s == "r" => {
                         println!("{:#?}", context.instance.generate_report());

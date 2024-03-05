@@ -9,6 +9,7 @@ fast3d-rs is a library written in Rust for rendering N64 graphics API commands.
 - [x] OpenGL rendering
 
 ## How to Use
+
 Add this library to your project and one of the following renderers: `fast3d-wgpu-renderer` or `fast3d-glium-renderer`.
 
 The library consists of three main components:
@@ -24,14 +25,18 @@ _Looking for a solution that includes this, windowing, audio and controller inpu
 
 ## Examples
 
-### Triangle
+You can run our examples using the following command:
+
 ```bash
-cargo run --bin triangle
+cargo run --bin fast3d-examples <example>
 ```
 
 To run on web (requires browser with WebGPU support) you can use:
+
 ```bash
-RUSTFLAGS=--cfg=web_sys_unstable_apis cargo run-wasm --bin triangle
+cargo xtask run-wasm --bin fast3d-examples
+# to run on webgl
+cargo xtask run-wasm --bin fast3d-examples --features webgl
 ```
 
 ## Community

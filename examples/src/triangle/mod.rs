@@ -1,7 +1,5 @@
 mod resources;
 
-use crate::resources::{BRICK_TEX, SHADE_VTX, TEX_VTX};
-use f3dwgpu::WgpuRenderer;
 use fast3d::rdp::{OutputDimensions, SCREEN_HEIGHT, SCREEN_WIDTH};
 use fast3d::{RenderData, RCP};
 use fast3d_gbi::defines::f3dex2::{GeometryModes, MatrixMode, MatrixOperation};
@@ -25,35 +23,11 @@ use fast3d_gbi::rsp::{
     gsDPSetTextureLUT, gsDPSetTexturePersp, gsSP1Triangle, gsSPClearGeometryMode,
     gsSPSetGeometryMode, gsSPTexture, gsSPVertex,
 };
-use std::{future::Future, pin::Pin, task};
+use fast3d_wgpu::WgpuRenderer;
+use resources::{BRICK_TEX, SHADE_VTX, TEX_VTX};
 use wgpu::StoreOp;
-use winit::dpi::LogicalSize;
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
-
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-
-/// A wrapper for `pop_error_scope` futures that panics if an error occurs.
-///
-/// Given a future `inner` of an `Option<E>` for some error type `E`,
-/// wait for the future to be ready, and panic if its value is `Some`.
-///
-/// This can be done simpler with `FutureExt`, but we don't want to add
-/// a dependency just for this small case.
-struct ErrorFuture<F> {
-    inner: F,
-}
-impl<F: Future<Output = Option<wgpu::Error>>> Future for ErrorFuture<F> {
-    type Output = ();
-    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<()> {
-        let inner = unsafe { self.map_unchecked_mut(|me| &mut me.inner) };
-        inner.poll(cx).map(|error| {
-            if let Some(e) = error {
-                panic!("Rendering {e}");
-            }
-        })
-    }
-}
 
 enum RenderMode {
     Shade,
@@ -65,7 +39,7 @@ struct Example<'a> {
     render_data: RenderData,
     renderer: WgpuRenderer<'a>,
 
-    depth_texture: wgpu::TextureView,
+    forward_depth: wgpu::TextureView,
     surface_format: wgpu::TextureFormat,
 
     viewport: Viewport,
@@ -76,6 +50,8 @@ struct Example<'a> {
 }
 
 impl<'a> Example<'a> {
+    const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
     fn create_depth_texture(
         config: &wgpu::SurfaceConfiguration,
         device: &wgpu::Device,
@@ -89,7 +65,7 @@ impl<'a> Example<'a> {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
+            format: Self::DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             label: None,
             view_formats: &[],
@@ -250,7 +226,7 @@ impl<'a> Example<'a> {
     }
 }
 
-impl fast3d_example::framework::Example for Example<'static> {
+impl crate::framework::Example for Example<'static> {
     fn init(
         config: &wgpu::SurfaceConfiguration,
         _adapter: &wgpu::Adapter,
@@ -286,7 +262,7 @@ impl fast3d_example::framework::Example for Example<'static> {
             render_data: RenderData::default(),
             renderer: WgpuRenderer::new(device, [config.width, config.height]),
 
-            depth_texture: Self::create_depth_texture(config, device),
+            forward_depth: Self::create_depth_texture(config, device),
             surface_format: config.format,
 
             viewport,
@@ -314,10 +290,10 @@ impl fast3d_example::framework::Example for Example<'static> {
         match event {
             winit::event::WindowEvent::KeyboardInput {
                 event:
-                KeyEvent {
-                    logical_key: Key::Named(NamedKey::Space),
-                    ..
-                },
+                    KeyEvent {
+                        logical_key: Key::Named(NamedKey::Space),
+                        ..
+                    },
                 ..
             } => {
                 self.render_mode = match self.render_mode {
@@ -329,12 +305,7 @@ impl fast3d_example::framework::Example for Example<'static> {
         }
     }
 
-    fn render(
-        &mut self,
-        view: &wgpu::TextureView,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) {
+    fn render(&mut self, view: &wgpu::TextureView, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.renderer.update_frame_count();
         self.frame_count += 1.0;
 
@@ -396,10 +367,10 @@ impl fast3d_example::framework::Example for Example<'static> {
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.depth_texture,
+                view: &self.forward_depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: StoreOp::Store,
+                    store: StoreOp::Discard,
                 }),
                 stencil_ops: None,
             }),
@@ -426,6 +397,6 @@ impl fast3d_example::framework::Example for Example<'static> {
     }
 }
 
-fn main() {
-    fast3d_example::framework::run::<Example>("triangle");
+pub fn main() {
+    crate::framework::run::<Example>("triangle");
 }
