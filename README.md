@@ -31,12 +31,10 @@ You can run our examples using the following command:
 cargo run --bin fast3d-examples <example>
 ```
 
-To run on web (requires browser with WebGPU support) you can use:
+To run on web:
 
 ```bash
-cargo xtask run-wasm --bin fast3d-examples
-# to run on webgl
-cargo xtask run-wasm --bin fast3d-examples --features webgl
+cargo xtask run-wasm
 ```
 
 ## Community

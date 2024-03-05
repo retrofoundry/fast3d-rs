@@ -515,7 +515,7 @@ impl ComponentSize {
             Self::Bits8 => ComponentSize::Bits16,
             Self::Bits16 => ComponentSize::Bits16,
             Self::Bits32 => ComponentSize::Bits32,
-            Self::DD => unimplemented!()
+            Self::DD => unimplemented!(),
         }
     }
 

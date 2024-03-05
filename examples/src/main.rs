@@ -7,14 +7,12 @@ struct ExampleDesc {
     webgpu: bool,
 }
 
-const EXAMPLES: &[ExampleDesc] = &[
-    ExampleDesc {
-        name: "triangle",
-        function: fast3d_examples::triangle::main,
-        webgl: true,
-        webgpu: true,
-    }
-];
+const EXAMPLES: &[ExampleDesc] = &[ExampleDesc {
+    name: "triangle",
+    function: fast3d_examples::triangle::main,
+    webgl: true,
+    webgpu: true,
+}];
 
 fn get_example_name() -> Option<String> {
     cfg_if::cfg_if! {
@@ -52,7 +50,7 @@ fn print_examples() {
                 "href",
                 &format!("?backend={backend}&example={}", example.name),
             )
-                .unwrap();
+            .unwrap();
             link.set_class_name("example-link");
 
             let item = document.create_element("div").unwrap();
