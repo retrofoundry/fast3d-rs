@@ -18,6 +18,9 @@ wgpu.workspace = true
 env_logger.workspace = true
 winit.workspace = true
 pollster.workspace = true
+cfg-if = "1"
+web-time = "0.2.4"
+getrandom = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 async-executor.workspace = true
@@ -36,7 +39,9 @@ web-sys = { workspace = true, features = [
     "RequestInit",
     "RequestMode",
     "Request",
+    "ImageData",
     "Response",
+    "HtmlImageElement",
     "WebGl2RenderingContext",
-    "CanvasRenderingContext2d"
+    "CanvasRenderingContext2d",
 ] }

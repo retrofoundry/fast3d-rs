@@ -26,7 +26,10 @@ use fast3d_gbi::rsp::{
     gsSPSetGeometryMode, gsSPTexture, gsSPVertex,
 };
 use std::{future::Future, pin::Pin, task};
+use wgpu::StoreOp;
 use winit::dpi::LogicalSize;
+use winit::event::KeyEvent;
+use winit::keyboard::{Key, NamedKey};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -253,7 +256,6 @@ impl fast3d_example::framework::Example for Example<'static> {
         _adapter: &wgpu::Adapter,
         device: &wgpu::Device,
         _queue: &wgpu::Queue,
-        _content_size: winit::dpi::PhysicalSize<u32>,
     ) -> Self {
         let mut rcp = RCP::default();
 
@@ -311,12 +313,11 @@ impl fast3d_example::framework::Example for Example<'static> {
     fn update(&mut self, event: winit::event::WindowEvent) {
         match event {
             winit::event::WindowEvent::KeyboardInput {
-                input:
-                    winit::event::KeyboardInput {
-                        state: winit::event::ElementState::Pressed,
-                        virtual_keycode: Some(winit::event::VirtualKeyCode::Space),
-                        ..
-                    },
+                event:
+                KeyEvent {
+                    logical_key: Key::Named(NamedKey::Space),
+                    ..
+                },
                 ..
             } => {
                 self.render_mode = match self.render_mode {
@@ -333,7 +334,6 @@ impl fast3d_example::framework::Example for Example<'static> {
         view: &wgpu::TextureView,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        _spawner: &fast3d_example::framework::Spawner,
     ) {
         self.renderer.update_frame_count();
         self.frame_count += 1.0;
@@ -392,17 +392,19 @@ impl fast3d_example::framework::Example for Example<'static> {
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: true,
+                    store: StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &self.depth_texture,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.0),
-                    store: true,
+                    store: StoreOp::Store,
                 }),
                 stencil_ops: None,
             }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
         });
 
         // Run the RCP
@@ -425,14 +427,5 @@ impl fast3d_example::framework::Example for Example<'static> {
 }
 
 fn main() {
-    fast3d_example::framework::run::<Example>(
-        "triangle",
-        #[cfg(not(target_arch = "wasm32"))]
-        Some(LogicalSize {
-            width: 800,
-            height: 600,
-        }),
-        #[cfg(target_arch = "wasm32")]
-        None,
-    );
+    fast3d_example::framework::run::<Example>("triangle");
 }
