@@ -23,22 +23,12 @@ test = false
 webgl = ["wgpu/webgl"]
 
 [dependencies]
-bytemuck.workspace = true
 cfg-if = "1"
-#encase = { workspace = true, features = ["glam"] }
 fast3d.workspace = true
 fast3d-gbi.workspace = true
 fast3d-wgpu.workspace = true
-flume = "0.11"
-getrandom = "0.2"
-glam.workspace = true
-ktx2 = "0.3"
 log.workspace = true
-nanorand = { version = "0.7", default-features = false, features = ["wyrand"] }
-noise = { version = "0.8", git = "https://github.com/Razaekel/noise-rs.git", rev = "c6942d4fb70af26db4441edcf41f90fa115333f2" }
-obj = "0.10"
 pigment64.workspace = true
-png = "0.17.11"
 pollster.workspace = true
 web-time = "0.2.4"
 wgpu.workspace = true
@@ -54,7 +44,6 @@ fern = "0.6"
 js-sys.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
-#hal = { workspace = true, optional = true }
 # We need these features in the framework examples and tests
 web-sys = { workspace = true, features = [
     "Location",

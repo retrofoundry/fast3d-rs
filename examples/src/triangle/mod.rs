@@ -25,6 +25,7 @@ use fast3d_gbi::rsp::{
 };
 use fast3d_wgpu::WgpuRenderer;
 use resources::{BRICK_TEX, SHADE_VTX, TEX_VTX};
+use std::iter;
 use wgpu::StoreOp;
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
@@ -39,7 +40,7 @@ struct Example<'a> {
     render_data: RenderData,
     renderer: WgpuRenderer<'a>,
 
-    forward_depth: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
     surface_format: wgpu::TextureFormat,
 
     viewport: Viewport,
@@ -262,7 +263,7 @@ impl crate::framework::Example for Example<'static> {
             render_data: RenderData::default(),
             renderer: WgpuRenderer::new(device, [config.width, config.height]),
 
-            forward_depth: Self::create_depth_texture(config, device),
+            depth_view: Self::create_depth_texture(config, device),
             surface_format: config.format,
 
             viewport,
@@ -356,44 +357,49 @@ impl crate::framework::Example for Example<'static> {
 
         let draw_commands_ptr = commands_dl.as_ptr();
 
-        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Game Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &self.forward_depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: StoreOp::Discard,
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Game Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-        // Run the RCP
-        self.rcp
-            .process_dl(draw_commands_ptr as usize, &mut self.render_data);
+            // Run the RCP
+            self.rcp
+                .process_dl(draw_commands_ptr as usize, &mut self.render_data);
 
-        // Process the RCP output
-        self.renderer
-            .process_rcp_output(device, queue, self.surface_format, &mut self.render_data);
+            // Process the RCP output
+            self.renderer.process_rcp_output(
+                device,
+                queue,
+                self.surface_format,
+                &mut self.render_data,
+            );
 
-        // Draw the RCP output
-        self.renderer.draw(&mut rpass);
+            // Draw the RCP output
+            self.renderer.draw(&mut pass);
+        }
 
         // Clear the draw calls
         self.render_data.clear_draw_calls();
 
-        drop(rpass);
-        queue.submit(Some(encoder.finish()));
+        queue.submit(iter::once(encoder.finish()));
     }
 }
 
