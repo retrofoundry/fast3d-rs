@@ -17,7 +17,7 @@ jobs:
     - name: Run cargo clippy
       run: cargo clippy --all -- -D warnings
   macos-check:
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
     - uses: actions/checkout@v2
     - name: Test
