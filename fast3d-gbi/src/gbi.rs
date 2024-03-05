@@ -46,66 +46,124 @@ fn gsDPNoParam(command: u32) -> GfxCommand {
     GfxCommand::new(shiftl(command, 24, 8), 0x0)
 }
 
-// MARK: - OtherMode L Helpers
+// MARK: - Render Modes
 
 #[allow(non_snake_case)]
 const fn RM_AA_OPA_SURF(cycle: u8) -> RenderMode {
+    let blend_mode = BlendMode {
+        color1: BlendColor::Input,
+        alpha1: BlendAlpha1::Input,
+        color2: BlendColor::Memory,
+        alpha2: BlendAlpha2::Memory,
+    };
+
     RenderMode {
         flags: RenderModeFlags::ANTI_ALIASING
             .union(RenderModeFlags::IMAGE_READ)
             .union(RenderModeFlags::ALPHA_CVG_SEL),
         cvg_dst: CvgDst::Clamp,
         z_mode: ZMode::Opaque,
-        blend_cycle1: match cycle {
-            1 => BlendMode {
-                color1: BlendColor::Input,
-                alpha1: BlendAlpha1::Input,
-                color2: BlendColor::Memory,
-                alpha2: BlendAlpha2::Memory,
-            },
-            _ => BlendMode::ZERO,
+        blend_cycle1: if cycle == 1 {
+            blend_mode
+        } else {
+            BlendMode::ZERO
         },
-        blend_cycle2: match cycle {
-            2 => BlendMode {
-                color1: BlendColor::Input,
-                alpha1: BlendAlpha1::Input,
-                color2: BlendColor::Memory,
-                alpha2: BlendAlpha2::Memory,
-            },
-            _ => BlendMode::ZERO,
+        blend_cycle2: if cycle == 2 {
+            blend_mode
+        } else {
+            BlendMode::ZERO
         },
     }
 }
 
 #[allow(non_snake_case)]
 const fn RM_OPA_SURF(cycle: u32) -> RenderMode {
+    let blend_mode = BlendMode {
+        color1: BlendColor::Input,
+        alpha1: BlendAlpha1::Zero,
+        color2: BlendColor::Input,
+        alpha2: BlendAlpha2::One,
+    };
+
     RenderMode {
         flags: RenderModeFlags::FORCE_BLEND,
         cvg_dst: CvgDst::Clamp,
         z_mode: ZMode::Opaque,
-        blend_cycle1: match cycle {
-            1 => BlendMode {
-                color1: BlendColor::Input,
-                alpha1: BlendAlpha1::Zero,
-                color2: BlendColor::Input,
-                alpha2: BlendAlpha2::One,
-            },
-            _ => BlendMode::ZERO,
+        blend_cycle1: if cycle == 1 {
+            blend_mode
+        } else {
+            BlendMode::ZERO
         },
-        blend_cycle2: match cycle {
-            2 => BlendMode {
-                color1: BlendColor::Input,
-                alpha1: BlendAlpha1::Zero,
-                color2: BlendColor::Input,
-                alpha2: BlendAlpha2::One,
-            },
-            _ => BlendMode::ZERO,
+        blend_cycle2: if cycle == 2 {
+            blend_mode
+        } else {
+            BlendMode::ZERO
+        },
+    }
+}
+
+#[allow(non_snake_case)]
+const fn RM_RA_OPA_SURF(cycle: u32) -> RenderMode {
+    let blend_mode = BlendMode {
+        color1: BlendColor::Input,
+        alpha1: BlendAlpha1::Input,
+        color2: BlendColor::Memory,
+        alpha2: BlendAlpha2::Memory,
+    };
+
+    RenderMode {
+        flags: RenderModeFlags::ANTI_ALIASING.union(RenderModeFlags::ALPHA_CVG_SEL),
+        cvg_dst: CvgDst::Clamp,
+        z_mode: ZMode::Opaque,
+        blend_cycle1: if cycle == 1 {
+            blend_mode
+        } else {
+            BlendMode::ZERO
+        },
+        blend_cycle2: if cycle == 2 {
+            blend_mode
+        } else {
+            BlendMode::ZERO
+        },
+    }
+}
+
+#[allow(non_snake_case)]
+const fn RM_AA_XLU_SURF(cycle: u32) -> RenderMode {
+    let blend_mode = BlendMode {
+        color1: BlendColor::Input,
+        alpha1: BlendAlpha1::Input,
+        color2: BlendColor::Memory,
+        alpha2: BlendAlpha2::OneMinusAlpha,
+    };
+
+    RenderMode {
+        flags: RenderModeFlags::ANTI_ALIASING
+            .union(RenderModeFlags::IMAGE_READ)
+            .union(RenderModeFlags::CLEAR_ON_CVG)
+            .union(RenderModeFlags::FORCE_BLEND),
+        cvg_dst: CvgDst::Wrap,
+        z_mode: ZMode::Opaque,
+        blend_cycle1: if cycle == 1 {
+            blend_mode
+        } else {
+            BlendMode::ZERO
+        },
+        blend_cycle2: if cycle == 2 {
+            blend_mode
+        } else {
+            BlendMode::ZERO
         },
     }
 }
 
 pub const G_RM_AA_OPA_SURF: u32 = RM_AA_OPA_SURF(1).to_w();
 pub const G_RM_AA_OPA_SURF2: u32 = RM_AA_OPA_SURF(2).to_w();
+pub const G_RM_AA_XLU_SURF: u32 = RM_AA_XLU_SURF(1).to_w();
+pub const G_RM_AA_XLU_SURF2: u32 = RM_AA_XLU_SURF(2).to_w();
+
+pub const G_RM_RA_OPA_SURF: u32 = RM_RA_OPA_SURF(1).to_w();
+pub const G_RM_RA_OPA_SURF2: u32 = RM_RA_OPA_SURF(2).to_w();
 
 pub const G_RM_OPA_SURF: u32 = RM_OPA_SURF(1).to_w();
 pub const G_RM_OPA_SURF2: u32 = RM_OPA_SURF(2).to_w();
