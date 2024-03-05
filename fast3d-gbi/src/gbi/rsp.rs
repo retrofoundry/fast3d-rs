@@ -98,6 +98,7 @@ pub fn gsDPSetTextureConvert(convert: u32) -> GfxCommand {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 pub fn gsDPLoadTextureBlock(
     tex_image: usize,
