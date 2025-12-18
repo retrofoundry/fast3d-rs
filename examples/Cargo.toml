@@ -3,21 +3,16 @@ name = "fast3d-examples"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
-description = "Common example code"
+description = "Fast3D examples"
 homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true
 license.workspace = true
 publish = false
 
-[lib]
-path = "src/lib.rs"
-harness = false
-
-[[bin]]
-name = "fast3d-examples"
-path = "src/main.rs"
-test = false
+[[example]]
+name = "triangle"
+path = "triangle/main.rs"
 
 [features]
 webgl = ["wgpu/webgl"]
@@ -44,7 +39,6 @@ fern = "0.6"
 js-sys.workspace = true
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
-# We need these features in the framework examples and tests
 web-sys = { workspace = true, features = [
     "Location",
     "Blob",

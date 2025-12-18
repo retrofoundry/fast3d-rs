@@ -387,7 +387,7 @@ impl<'a> WgpuRenderer<'a> {
         queue.write_texture(
             device_texture.as_image_copy(),
             &texture.data,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bytes_per_row),
                 rows_per_image: None,
@@ -458,13 +458,24 @@ impl<'a> WgpuRenderer<'a> {
         program.init();
         program.preprocess(&ShaderVersion::GLSL440);
 
+        // Convert HashMap to Vec of tuples for wgpu 25.0 API
+        let defines_vec: Vec<(String, String)> = program
+            .defines
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let defines_refs: Vec<(&str, &str)> = defines_vec
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
         program.compiled_vertex_program =
             Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: None,
                 source: wgpu::ShaderSource::Glsl {
                     shader: Cow::Borrowed(&program.preprocessed_vertex),
                     stage: naga::ShaderStage::Vertex,
-                    defines: program.defines.clone(),
+                    defines: &defines_refs,
                 },
             }));
 
@@ -474,7 +485,7 @@ impl<'a> WgpuRenderer<'a> {
                 source: wgpu::ShaderSource::Glsl {
                     shader: Cow::Borrowed(&program.preprocessed_frag),
                     stage: naga::ShaderStage::Fragment,
-                    defines: program.defines.clone(),
+                    defines: &defines_refs,
                 },
             }));
 
@@ -876,13 +887,15 @@ impl<'a> WgpuRenderer<'a> {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: program.program.compiled_vertex_program.as_ref().unwrap(),
-                entry_point: "main",
+                entry_point: Some("main"),
                 buffers: &[program.vertex_buf_layout.clone()],
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: program.program.compiled_fragment_program.as_ref().unwrap(),
-                entry_point: "main",
+                entry_point: Some("main"),
                 targets: &[Some(color_target_states)],
+                compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 cull_mode: face_to_wgpu(cull_mode),
@@ -891,6 +904,7 @@ impl<'a> WgpuRenderer<'a> {
             depth_stencil,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
+            cache: None,
         });
 
         self.pipeline_cache.insert(pipeline_id, pipeline);
