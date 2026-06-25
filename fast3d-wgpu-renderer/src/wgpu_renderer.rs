@@ -842,23 +842,23 @@ impl<'a> WgpuRenderer<'a> {
         }
 
         // Create the pipeline layout
-        let mut bind_group_layout_entries = vec![
-            &program.vertex_uniform_bind_group_layout,
-            &program.fragment_uniform_bind_group_layout,
+        let mut bind_group_layout_entries: Vec<Option<&wgpu::BindGroupLayout>> = vec![
+            Some(&program.vertex_uniform_bind_group_layout),
+            Some(&program.fragment_uniform_bind_group_layout),
         ];
 
         if program.program.uses_texture_0() {
-            bind_group_layout_entries.push(&self.texture_bind_group_layout);
+            bind_group_layout_entries.push(Some(&self.texture_bind_group_layout));
         }
 
         if program.program.uses_texture_1() {
-            bind_group_layout_entries.push(&self.texture_bind_group_layout);
+            bind_group_layout_entries.push(Some(&self.texture_bind_group_layout));
         }
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Pipeline Layout"),
             bind_group_layouts: &bind_group_layout_entries,
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         // Create color target state
@@ -871,8 +871,8 @@ impl<'a> WgpuRenderer<'a> {
         // Depth stencil state
         let depth_stencil = depth_stencil.map(|ds| wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: ds.depth_write_enabled,
-            depth_compare: compare_function_to_wgpu(ds.depth_compare),
+            depth_write_enabled: Some(ds.depth_write_enabled),
+            depth_compare: Some(compare_function_to_wgpu(ds.depth_compare)),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState {
                 constant: 0,
@@ -903,7 +903,7 @@ impl<'a> WgpuRenderer<'a> {
             },
             depth_stencil,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 

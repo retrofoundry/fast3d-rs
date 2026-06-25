@@ -58,7 +58,13 @@ struct State {
 
 impl State {
     async fn new(window: Arc<Window>) -> State {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            backend_options: wgpu::BackendOptions::default(),
+            display: None,
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+        });
         let surface = instance.create_surface(window.clone()).unwrap();
 
         let adapter = instance
@@ -70,7 +76,14 @@ impl State {
             .unwrap();
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                memory_hints: wgpu::MemoryHints::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .unwrap();
 
@@ -279,10 +292,11 @@ impl State {
     }
 
     fn render(&mut self) {
-        let surface_texture = self
-            .surface
-            .get_current_texture()
-            .expect("failed to acquire next swapchain texture");
+        let surface_texture = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            other => panic!("failed to acquire next swapchain texture: {other:?}"),
+        };
 
         let texture_view = surface_texture
             .texture
@@ -341,6 +355,7 @@ impl State {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &texture_view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
@@ -356,6 +371,7 @@ impl State {
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         // Run the RCP

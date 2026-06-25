@@ -44,9 +44,9 @@ log = "0.4"
 fast3d-gbi = { version = "0.6.0", path = "fast3d-gbi" }
 fast3d = { version = "0.6.0", path = "./fast3d" }
 rustc-hash = "1.1"
-wgpu = { version = "25.0", features = ["glsl"] }
-wgpu-hal = "25.0"
-naga = "25.0"
+wgpu = { version = "29.0", features = ["glsl"] }
+wgpu-hal = "29.0"
+naga = "29.0"
 glium = "0.34.0"
 env_logger = "0.11.3"
 winit = { version = "0.29.13", features = [
