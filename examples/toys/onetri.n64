@@ -1,0 +1,21 @@
+// onetri — the SDK's simplest gfx sample: an untextured Gouraud quad spinning about Z.
+Mtx proj = scale(0.0078125)
+Mtx model = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx { -48,  48, 0, 0, 0, 0,   0, 255,   0, 255 }
+Vtx { -48, -48, 0, 0, 0, 0, 255,   0,   0, 255 }
+Vtx {  48, -48, 0, 0, 0, 0,   0,   0, 255, 255 }
+Vtx {  48,  48, 0, 0, 0, 0,   0,   0,   0, 255 }
+update {
+  guRotate(model, time * 60, 0, 0, 1)
+}
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+gsDPSetOtherMode_H(G_CYC_1CYCLE)
+gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE)
+gsSPVertex(verts, 4, 0)
+gsSP2Triangles(0, 1, 2, 0, 0, 2, 3, 0)
+gsSPEndDisplayList()

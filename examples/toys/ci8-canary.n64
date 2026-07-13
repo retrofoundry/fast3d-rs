@@ -1,0 +1,29 @@
+// ci8-canary — CI8 combine-route canary: TEXEL0_ALPHA (index 8, color_c slot) routes texel
+// alpha into RGB output. Output = (ONE−0)×TEXEL0_ALPHA+0 = texel.a as grayscale.
+// Palette has alternating a1 (0/1): even-index entries opaque (white output), odd transparent
+// (black output). Golden must show non-uniform alternating bands — NOT solid white.
+// Validates the TEXEL0_ALPHA→color path with CI8+TLUT is wired (guards the IA gap).
+Texture tex = { 32, 32, CI8 }
+Mtx proj = scale(0.0078125)
+Mtx model = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx { -48, -48, 0, 0,    0,    0, 255,255,255,255 }
+Vtx {  48, -48, 0, 0, 1024,    0, 255,255,255,255 }
+Vtx {  48,  48, 0, 0, 1024, 1024, 255,255,255,255 }
+Vtx { -48,  48, 0, 0,    0, 1024, 255,255,255,255 }
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+gsDPSetOtherMode_H(G_CYC_1CYCLE)
+gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+gsDPSetOtherMode_H(14, 2, 0x8000)
+gsDPSetCombineLERP(0, 0, 0, 0, 0, 0, 0, 0, ONE, 0, 8, 0, 0, 0, 0, SHADE)
+gsDPSetPrimColor(0, 0, 255, 255, 255, 255)
+gsDPSetEnvColor(0, 0, 0, 255)
+gsDPLoadTextureBlock(tex, G_IM_FMT_CI, G_IM_SIZ_8b, 32, 32)
+gsSPTexture(0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON)
+gsSPVertex(verts, 4, 0)
+gsSP1Triangle(0, 1, 2, 0)
+gsSP1Triangle(0, 2, 3, 0)
+gsSPEndDisplayList()

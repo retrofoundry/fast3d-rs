@@ -1,0 +1,39 @@
+// tron — overlapping translucent neon panels demonstrating XLU blending.
+// Two semi-transparent quads (SHADE alpha=128/255≈0.5) overlap in the center band;
+// the overlap shows a blended mix of cyan + magenta — not either color alone.
+// G_RM_AA_ZB_XLU_SURF: anti-aliased, Z-tested (no Z-write), canonical B=1MA lerp.
+// Phase B gate: proves translucent XLU blending through both dual-source and AlphaOver paths.
+Mtx proj = scale(0.0078125)
+Mtx model = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+// Panel 1 — cyan neon (R=0,G=220,B=255), alpha=128 (≈0.5). Spans left + center.
+Vtx { -128, -128, 0, 0, 0, 0,   0, 220, 255, 128 }
+Vtx {   43, -128, 0, 0, 0, 0,   0, 220, 255, 128 }
+Vtx {   43,  128, 0, 0, 0, 0,   0, 220, 255, 128 }
+Vtx { -128,  128, 0, 0, 0, 0,   0, 220, 255, 128 }
+// Panel 2 — magenta neon (R=255,G=0,B=220), alpha=128 (≈0.5). Spans center + right.
+Vtx {  -43, -128, 0, 0, 0, 0, 255,   0, 220, 128 }
+Vtx {  128, -128, 0, 0, 0, 0, 255,   0, 220, 128 }
+Vtx {  128,  128, 0, 0, 0, 0, 255,   0, 220, 128 }
+Vtx {  -43,  128, 0, 0, 0, 0, 255,   0, 220, 128 }
+update {
+  guRotate(model, time * 30, 0, 0, 1)
+}
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+gsDPSetOtherMode_H(G_CYC_1CYCLE)
+// XLU surface: anti-aliased, Z-tested (not Z-written), translucent lerp.
+gsDPSetRenderMode(G_RM_AA_ZB_XLU_SURF, G_RM_AA_ZB_XLU_SURF2)
+// SHADE combiner: fragment color = SHADE (vertex color), fragment alpha = SHADE (vertex alpha).
+// Vertex alpha ≈ 0.5 drives the XLU blender — both panels are semi-transparent.
+gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE)
+gsSPVertex(verts, 8, 0)
+// Panel 1 (cyan) — drawn first.
+gsSP1Triangle(0, 1, 2, 0)
+gsSP1Triangle(0, 2, 3, 0)
+// Panel 2 (magenta) — blends over Panel 1 in the overlap band (x=-43..43).
+gsSP1Triangle(4, 5, 6, 0)
+gsSP1Triangle(4, 6, 7, 0)
+gsSPEndDisplayList()

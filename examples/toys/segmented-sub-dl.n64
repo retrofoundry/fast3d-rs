@@ -1,0 +1,37 @@
+// segmented-sub-dl — two checker-textured quads via gsSPSegment + gsSPDisplayList sub-DL reuse, placed left and right with matrix push/pop.
+Texture tex = { 32, 32, RGBA16 }
+Mtx proj = scale(0.0078125)
+Mtx base = identity()
+Mtx left = translate(-64, 0, 0)
+Mtx right = translate(64, 0, 0)
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx { -32,  32, 0, 0,    0,    0, 255,255,255,255 }
+Vtx { -32, -32, 0, 0,    0, 1024, 255,255,255,255 }
+Vtx {  32, -32, 0, 0, 1024, 1024, 255,255,255,255 }
+Vtx {  32,  32, 0, 0, 1024,    0, 255,255,255,255 }
+Gfx quad[] = {
+  gsSPVertex(verts, 4, 0)
+  gsSP2Triangles(0, 1, 2, 0, 0, 2, 3, 0)
+  gsSPEndDisplayList()
+}
+Gfx main[] = {
+  gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+  gsSPMatrix(base, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+  gsSPViewport(vp)
+  gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH | G_CULL_BACK)
+  gsDPSetOtherMode_H(G_CYC_1CYCLE)
+  gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+  gsDPSetCombineLERP(TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE, TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE)
+  gsDPSetPrimColor(0, 0, 255, 255, 255, 255)
+  gsDPSetEnvColor(0, 0, 0, 255)
+  gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, 32, 32)
+  gsSPTexture(0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON)
+  gsSPSegment(6, quad)
+  gsSPMatrix(left, G_MTX_MODELVIEW | G_MTX_MUL | G_MTX_PUSH)
+  gsSPDisplayList(seg(6, 0))
+  gsSPPopMatrix(1)
+  gsSPMatrix(right, G_MTX_MODELVIEW | G_MTX_MUL | G_MTX_PUSH)
+  gsSPDisplayList(seg(6, 0))
+  gsSPPopMatrix(1)
+  gsSPEndDisplayList()
+}

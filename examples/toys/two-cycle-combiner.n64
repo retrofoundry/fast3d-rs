@@ -1,0 +1,20 @@
+// two-cycle-combiner — 2-cycle COMBINED routing: cycle 0 passes the SHADE gradient into COMBINED,
+// cycle 1 tints it by PRIMITIVE (warm orange), producing a vivid Gouraud quad.
+Mtx proj  = scale(0.015625)
+Mtx model = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx { -48, -48, 0, 0, 0, 0,   0,   0, 255, 255 }
+Vtx {  48, -48, 0, 0, 0, 0, 255, 255, 255, 255 }
+Vtx {  48,  48, 0, 0, 0, 0,   0, 255,   0, 255 }
+Vtx { -48,  48, 0, 0, 0, 0, 255,   0,   0, 255 }
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH | G_ZBUFFER)
+gsDPSetOtherMode_H(G_CYC_2CYCLE)
+gsDPSetRenderMode(G_RM_AA_ZB_OPA_SURF, G_RM_AA_ZB_OPA_SURF2)
+gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, COMBINED, 0, PRIMITIVE, 0, 0, 0, 0, COMBINED)
+gsDPSetPrimColor(0, 0, 255, 160, 64, 255)
+gsSPVertex(verts, 4, 0)
+gsSP2Triangles(0, 1, 2, 0, 0, 2, 3, 0)
+gsSPEndDisplayList()

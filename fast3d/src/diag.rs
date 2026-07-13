@@ -1,0 +1,252 @@
+//! Structured, `Copy` diagnostics for the DL walk (spec §3.6). Every legacy string diagnostic
+//! becomes a `DiagKind` variant; the human string is rendered on demand via `Display`.
+
+/// A diagnostic emitted during a display-list walk. `at` is the command's byte address in the DL
+/// address space (a physical RDRAM offset for `RdramImage`, a raw host pointer for `HostRam`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub at: u64,
+    pub kind: DiagKind,
+}
+
+/// The kind of a diagnostic. `Copy` (no per-diag allocation). `#[non_exhaustive]`: the walk's
+/// internal set may grow. The variable-length unwired-selector list is a `Copy` bitmask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DiagKind {
+    UnknownOpcode(u8),
+    RunawayDl {
+        cap: u64,
+    },
+    DlPastRdram,
+    TruncatedRect {
+        fill: bool,
+    },
+    DrawBeforeCimg,
+    RenderModeNeverSet,
+    VtxOutOfRange {
+        count: u32,
+        end: u32,
+    },
+    UnhandledMovemem(u8),
+    UnhandledMoveword(u8),
+    NonCanonicalBlend,
+    StrayRdphalf,
+    NoTextureLoaded,
+    /// CA/CB/CC/CD/AA/AB/AC/AD combiner-slot bitmask (bit i = slot i, see `SEL_SLOTS`).
+    UnwiredSelector {
+        slots: u16,
+    },
+}
+
+/// Combiner selector slot names, in bit order (bit 0 = CA … bit 7 = AD). Shared with
+/// `combiner::CycleSel::unwired_mask` (which produces the mask this decodes).
+const SEL_SLOTS: [&str; 8] = ["CA", "CB", "CC", "CD", "AA", "AB", "AC", "AD"];
+
+fn unwired_slot_names(slots: u16) -> Vec<&'static str> {
+    (0..8)
+        .filter(|i| slots & (1 << i) != 0)
+        .map(|i| SEL_SLOTS[i])
+        .collect()
+}
+
+impl DiagKind {
+    /// Severity is a pure function of kind (no stored field to desync). Every variant that
+    /// drops/aborts draw data is `Error`; only cosmetic ones are `Warn` (spec §3.6).
+    pub fn severity(&self) -> Severity {
+        match self {
+            DiagKind::UnknownOpcode(_)
+            | DiagKind::RunawayDl { .. }
+            | DiagKind::DlPastRdram
+            | DiagKind::TruncatedRect { .. }
+            | DiagKind::DrawBeforeCimg
+            | DiagKind::VtxOutOfRange { .. }
+            | DiagKind::NoTextureLoaded
+            | DiagKind::UnwiredSelector { .. } => Severity::Error,
+            DiagKind::RenderModeNeverSet
+            | DiagKind::UnhandledMovemem(_)
+            | DiagKind::UnhandledMoveword(_)
+            | DiagKind::NonCanonicalBlend
+            | DiagKind::StrayRdphalf => Severity::Warn,
+        }
+    }
+}
+
+impl std::fmt::Display for DiagKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DiagKind::UnknownOpcode(op) => write!(f, "unknown opcode 0x{op:02X}"),
+            DiagKind::RunawayDl { cap } => {
+                write!(f, "runaway DL: exceeded {cap} command dispatches")
+            }
+            DiagKind::DlPastRdram => write!(f, "DL ran past RDRAM"),
+            DiagKind::TruncatedRect { fill } => {
+                write!(
+                    f,
+                    "truncated {} continuation",
+                    if *fill { "FILLRECT" } else { "TEXRECT" }
+                )
+            }
+            DiagKind::DrawBeforeCimg => write!(f, "draw before first CIMG"),
+            DiagKind::RenderModeNeverSet => {
+                write!(
+                    f,
+                    "geometry drawn but render mode never set (other_mode_l == 0)"
+                )
+            }
+            DiagKind::VtxOutOfRange { count, end } => {
+                write!(f, "G_VTX out of range: count={count}, end={end}")
+            }
+            DiagKind::UnhandledMovemem(idx) => write!(f, "unhandled MOVEMEM index 0x{idx:02X}"),
+            DiagKind::UnhandledMoveword(ty) => write!(f, "unhandled G_MOVEWORD type 0x{ty:02X}"),
+            DiagKind::NonCanonicalBlend => {
+                write!(
+                    f,
+                    "non-canonical blended render mode clamps to AlphaOver fallback"
+                )
+            }
+            DiagKind::StrayRdphalf => write!(f, "stray RDPHALF — rect decode desync"),
+            DiagKind::NoTextureLoaded => {
+                write!(
+                    f,
+                    "no texture loaded (tmem is empty; LoadBlock not executed)"
+                )
+            }
+            DiagKind::UnwiredSelector { slots } => {
+                write!(
+                    f,
+                    "combiner selector not implemented: {:?}",
+                    unwired_slot_names(*slots)
+                )
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} @ {:#018x}", self.kind, self.at)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    Warn,
+    Error,
+}
+
+/// A destination for streamed diagnostics. `process_dl` streams into a caller-supplied `&mut dyn`.
+pub trait DiagSink {
+    fn emit(&mut self, diag: Diagnostic);
+}
+impl DiagSink for Vec<Diagnostic> {
+    fn emit(&mut self, d: Diagnostic) {
+        self.push(d);
+    }
+}
+/// Discards diagnostics (helix: `&mut NopSink`).
+pub struct NopSink;
+impl DiagSink for NopSink {
+    fn emit(&mut self, _: Diagnostic) {}
+}
+/// Routes each diagnostic to `log` at a level chosen by its severity (uses `Display for Diagnostic`,
+/// which already appends `@ {addr}` — do NOT append it again).
+pub struct LogSink;
+impl DiagSink for LogSink {
+    fn emit(&mut self, d: Diagnostic) {
+        match d.kind.severity() {
+            Severity::Error => log::error!("{d}"),
+            Severity::Warn => log::warn!("{d}"),
+        }
+    }
+}
+
+/// A `Copy` rollup returned by `process_dl` so a `NopSink` caller still learns the outcome.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DlSummary {
+    pub commands: u32,
+    pub tris: u32,
+    pub warns: u32,
+    pub errors: u32,
+    pub dropped_runs: u32,
+    pub renderable: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn severity_maps_every_variant_per_spec() {
+        for k in [
+            DiagKind::UnknownOpcode(0),
+            DiagKind::RunawayDl { cap: 1 },
+            DiagKind::DlPastRdram,
+            DiagKind::TruncatedRect { fill: false },
+            DiagKind::TruncatedRect { fill: true },
+            DiagKind::DrawBeforeCimg,
+            DiagKind::VtxOutOfRange { count: 1, end: 2 },
+            DiagKind::NoTextureLoaded,
+            DiagKind::UnwiredSelector { slots: 0b0100 },
+        ] {
+            assert_eq!(k.severity(), Severity::Error, "{k} must be Error");
+        }
+        for k in [
+            DiagKind::RenderModeNeverSet,
+            DiagKind::UnhandledMovemem(0),
+            DiagKind::UnhandledMoveword(0),
+            DiagKind::NonCanonicalBlend,
+            DiagKind::StrayRdphalf,
+        ] {
+            assert_eq!(k.severity(), Severity::Warn, "{k} must be Warn");
+        }
+        assert!(Severity::Warn < Severity::Error, "Severity is Ord");
+    }
+
+    #[test]
+    fn display_renders_kind_alone_and_diagnostic_with_address() {
+        assert_eq!(
+            DiagKind::UnknownOpcode(0xAB).to_string(),
+            "unknown opcode 0xAB"
+        );
+        assert_eq!(
+            DiagKind::UnwiredSelector { slots: 0b0100 }.to_string(),
+            "combiner selector not implemented: [\"CC\"]"
+        );
+        let d = Diagnostic {
+            at: 0x1234,
+            kind: DiagKind::DrawBeforeCimg,
+        };
+        assert_eq!(d.to_string(), "draw before first CIMG @ 0x0000000000001234");
+    }
+
+    #[test]
+    fn vec_and_nop_sinks_behave() {
+        let mut v: Vec<Diagnostic> = Vec::new();
+        v.emit(Diagnostic {
+            at: 4,
+            kind: DiagKind::DlPastRdram,
+        });
+        assert_eq!(
+            v,
+            vec![Diagnostic {
+                at: 4,
+                kind: DiagKind::DlPastRdram
+            }]
+        );
+        NopSink.emit(Diagnostic {
+            at: 0,
+            kind: DiagKind::DlPastRdram,
+        });
+        LogSink.emit(Diagnostic {
+            at: 0,
+            kind: DiagKind::StrayRdphalf,
+        });
+    }
+
+    #[test]
+    fn summary_defaults_are_zeroed() {
+        assert_eq!(DlSummary::default().commands, 0);
+        assert!(!DlSummary::default().renderable);
+    }
+}

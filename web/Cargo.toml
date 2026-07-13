@@ -1,0 +1,20 @@
+[package]
+name = "web"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fast3d = { path = "../fast3d" }
+wgpu.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+console_error_panic_hook.workspace = true
+serde.workspace = true
+serde-wasm-bindgen.workspace = true
+
+[dependencies.web-sys]
+workspace = true
+features = ["HtmlCanvasElement"]

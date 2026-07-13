@@ -1,75 +1,28 @@
 [workspace]
 resolver = "2"
-members = [
-    "fast3d",
-    "fast3d-gbi",
-    "fast3d-glium-renderer",
-    "fast3d-wgpu-renderer",
-    "examples",
-]
-default-members = [
-    "examples",
-    "fast3d",
-    "fast3d-gbi",
-    "fast3d-glium-renderer",
-    "fast3d-wgpu-renderer",
-]
+members = ["fast3d", "web"]
 
 [workspace.package]
 edition = "2021"
-version = "0.6.0"
+version = "1.0.0"
 authors = ["fast3d-rs developers"]
-description = "A Rust library for N64 Fast3D Graphics Rendering"
+description = "Accurate N64 F3DEX2 HLE + wgpu renderer"
 homepage = "https://crates.io/crates/fast3d"
 repository = "https://github.com/retrofoundry/fast3d-rs"
 keywords = ["n64", "gbi", "graphics", "rendering", "fast3d"]
 readme = "README.md"
 license = "MIT"
-license-file = "LICENSE"
-
-[workspace.dependencies.fast3d-glium]
-package = "fast3d-glium-renderer"
-path = "./fast3d-glium-renderer"
-version = "0.6.0"
-
-[workspace.dependencies.fast3d-wgpu]
-package = "fast3d-wgpu-renderer"
-path = "./fast3d-wgpu-renderer"
-version = "0.6.0"
 
 [workspace.dependencies]
-bytemuck = { version = "1.13.1", features = ["derive"] }
-glam = { version = "0.25.0", features = ["approx", "bytemuck"] }
+wgpu = "29.0"
+bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"
-fast3d-gbi = { version = "0.6.0", path = "fast3d-gbi" }
-fast3d = { version = "0.6.0", path = "./fast3d" }
-rustc-hash = "1.1"
-wgpu = { version = "29.0", features = ["glsl"] }
-wgpu-hal = "29.0"
-naga = "29.0"
-glium = "0.34.0"
-env_logger = "0.11.3"
-winit = { version = "0.29.13", features = [
-    "x11",
-    "wayland",
-    "wayland-dlopen",
-    "wayland-csd-adwaita",
-] }
-pollster = "0.3.0"
-lru = "0.12.3"
-num_enum = "0.7.0"
-bitflags = "2.3.3"
-async-executor = "1"
-pigment64 = "0.4.3"
-nohash-hasher = "0.2.0"
-
-# wasm32 dependencies
-console_error_panic_hook = "0.1.7"
-console_log = "1"
-js-sys = "0.3.64"
-wasm-bindgen = "0.2.87"
-wasm-bindgen-futures = "0.4.34"
-wasm-bindgen-test = "0.3"
-web-sys = "0.3.64"
-
-[patch.crates-io]
+# wasm-bindgen MUST equal the Nix wasm-bindgen-cli version EXACTLY (0.2.108).
+# The trio below is the lockstep-consistent set for wasm-bindgen 0.2.108 (matches wgpu 29.0.3).
+wasm-bindgen = "=0.2.108"
+wasm-bindgen-futures = "=0.4.58"
+js-sys = "=0.3.85"
+web-sys = "=0.3.85"
+console_error_panic_hook = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"

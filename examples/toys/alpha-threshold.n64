@@ -1,0 +1,42 @@
+// alpha-threshold — G_AC_THRESHOLD alpha-compare demo (Phase D).
+//
+// A full-screen textured quad where Gouraud vertex alpha varies left→right:
+//   left  (world x < 0): vertex alpha=0   → combiner alpha ≈ 0.25 < 0.502 → DISCARDED (background)
+//   right (world x > 0): vertex alpha=255 → combiner alpha ≈ 0.75 > 0.502 → KEPT (textured surface)
+//
+// Threshold = gsDPSetBlendColor(0,0,0,128) → blendColor.a = 128/255 ≈ 0.502.
+// This is DISTINCT from CVG_X_ALPHA (fixed 0.125): here the threshold is the gsDPSetBlendColor alpha.
+// The alpha-compare mode is set via: gsDPSetRenderMode → OPA_SURF bits[3:31], then
+//   gsDPSetOtherMode_L(0, 2, 1) OR's in AC_THRESHOLD (=1) into bits[0:1].
+// The decoder sees other_mode_l & 0x3 == 1 → alpha_compare = Threshold → alpha_mode=2.
+Texture tex = { 4, 4, RGBA16 }
+Mtx proj = scale(0.0078125)
+Mtx model = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+// Left vertices: alpha=0 (combiner alpha < blendColor.a=0.502 → sub-threshold → discarded)
+Vtx { -128, -128, 0, 0,   0,   0, 255,255,255,  0 }
+Vtx {  128, -128, 0, 0, 128,   0, 255,255,255,255 }
+Vtx {  128,  128, 0, 0, 128, 128, 255,255,255,255 }
+Vtx { -128,  128, 0, 0,   0, 128, 255,255,255,  0 }
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+gsDPSetOtherMode_H(G_CYC_1CYCLE)
+// Set base render mode (OPA_SURF, bits[3:31]), then OR in AC_THRESHOLD (=1) into bits[0:1].
+// Result: other_mode_l & 0x3 == AC_THRESHOLD (1) → decode_render_mode → alpha_compare=Threshold.
+gsDPSetRenderMode(G_RM_AA_ZB_OPA_SURF, G_RM_AA_ZB_OPA_SURF2)
+gsDPSetOtherMode_L(0, 2, 1)
+// Threshold = blendColor.a = 128/255 ≈ 0.502 (set by gsDPSetBlendColor, consumed by alpha_mode=2).
+gsDPSetBlendColor(0, 0, 0, 128)
+// Combiner: color = TEXEL0 × SHADE (texture tinted by vertex shade), alpha = SHADE.a (vertex alpha).
+// Combiner alpha = SHADE.a is what the THRESHOLD gate tests against blendColor.a.
+gsDPSetCombineLERP(TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE, TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE)
+gsDPSetPrimColor(0, 0, 255, 255, 255, 255)
+gsDPSetEnvColor(0, 0, 0, 255)
+gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, 4, 4)
+gsSPTexture(0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON)
+gsSPVertex(verts, 4, 0)
+gsSP1Triangle(0, 1, 2, 0)
+gsSP1Triangle(0, 2, 3, 0)
+gsSPEndDisplayList()
