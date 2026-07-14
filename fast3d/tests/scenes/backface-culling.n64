@@ -1,0 +1,20 @@
+// backface-culling — a triangle culled when it turns away (G_CULL_BACK): spins about Y, vanishing when back-facing.
+Mtx proj = scale(0.015625)
+Mtx model = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx {   0,  48, 0, 0, 0, 0,  80, 220, 100, 255 }
+Vtx { -48, -48, 0, 0, 0, 0,  80, 220, 100, 255 }
+Vtx {  48, -48, 0, 0, 0, 0,  80, 220, 100, 255 }
+update {
+  guRotate(model, time * 45, 0, 1, 0)
+}
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH | G_CULL_BACK)
+gsDPSetOtherMode_H(G_CYC_1CYCLE)
+gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE)
+gsSPVertex(verts, 3, 0)
+gsSP1Triangle(0, 1, 2, 0)
+gsSPEndDisplayList()

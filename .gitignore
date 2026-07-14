@@ -13,3 +13,9 @@ Cargo.lock
 .DS_Store
 /.idea
 /.vscode
+.devenv/
+.direnv/
+node_modules/
+dist/
+/web-app/src/wasm
+/web-app/package-lock.json

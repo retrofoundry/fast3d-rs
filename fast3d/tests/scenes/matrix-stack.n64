@@ -1,0 +1,30 @@
+// matrix-stack — three flat-shaded siblings placed via gsSPMatrix PUSH/MUL, drawn, then gsSPPopMatrix.
+Mtx proj = scale(0.0078125)
+Mtx base = identity()
+Mtx left = translate(-60, 0, 0)
+Mtx mid = translate(0, 0, 0)
+Mtx right = translate(60, 0, 0)
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx {   0,  20, 0, 0, 0, 0, 255, 80, 80, 255 }
+Vtx { -20, -20, 0, 0, 0, 0, 255, 80, 80, 255 }
+Vtx {  20, -20, 0, 0, 0, 0, 255, 80, 80, 255 }
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(base, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+gsDPSetOtherMode_H(G_CYC_1CYCLE)
+gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE)
+gsSPMatrix(left, G_MTX_MODELVIEW | G_MTX_MUL | G_MTX_PUSH)
+gsSPVertex(verts, 3, 0)
+gsSP1Triangle(0, 1, 2, 0)
+gsSPPopMatrix(1)
+gsSPMatrix(mid, G_MTX_MODELVIEW | G_MTX_MUL | G_MTX_PUSH)
+gsSPVertex(verts, 3, 0)
+gsSP1Triangle(0, 1, 2, 0)
+gsSPPopMatrix(1)
+gsSPMatrix(right, G_MTX_MODELVIEW | G_MTX_MUL | G_MTX_PUSH)
+gsSPVertex(verts, 3, 0)
+gsSP1Triangle(0, 1, 2, 0)
+gsSPPopMatrix(1)
+gsSPEndDisplayList()
