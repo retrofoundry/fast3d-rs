@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["fast3d", "web"]
+members = ["fast3d"]
 
 [workspace.package]
 edition = "2021"
@@ -17,12 +17,3 @@ license = "MIT"
 wgpu = "29.0"
 bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"
-# wasm-bindgen MUST equal the Nix wasm-bindgen-cli version EXACTLY (0.2.108).
-# The trio below is the lockstep-consistent set for wasm-bindgen 0.2.108 (matches wgpu 29.0.3).
-wasm-bindgen = "=0.2.108"
-wasm-bindgen-futures = "=0.4.58"
-js-sys = "=0.3.85"
-web-sys = "=0.3.85"
-console_error_panic_hook = "0.1"
-serde = { version = "1", features = ["derive"] }
-serde-wasm-bindgen = "0.6"

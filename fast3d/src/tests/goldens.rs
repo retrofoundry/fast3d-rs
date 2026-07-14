@@ -1,10 +1,10 @@
 //! Headless golden-image harness for the renderer.
 //!
-//! Each test renders a toy scene offscreen and compares the pixel output to a committed golden
+//! Each test renders a test scene offscreen and compares the pixel output to a committed golden
 //! (`.bin` raw-RGBA8 file).  Running with `UPDATE_GOLDENS=1` writes a new golden instead of
 //! comparing.
 //!
-//! `render_toy_to_rgba8` is the shared render path: it ports the manual headless flow from
+//! `render_scene_to_rgba8` is the shared render path: it ports the manual headless flow from
 //! `tests/render.rs` (RSP-process compute pass + textured raster pass + `copy_texture_to_buffer`
 //! readback).  It does NOT use `SceneRenderer::render` because that path provides no pixel
 //! readback API.
@@ -34,7 +34,7 @@ fn address_mode(wrap: u8) -> wgpu::AddressMode {
 /// Maximum per-channel absolute difference allowed in golden comparisons.
 const TOL: u8 = 2;
 
-/// Seed source — mirrors `examples/toys/textured-quad.n64` but uses a 4×4 texture so the
+/// Seed source — mirrors `tests/scenes/textured-quad.n64` but uses a 4×4 texture so the
 /// golden file is small (64×64 × 4 bytes = 16 KiB).  No `update {}` block: time-invariant.
 const RGBA16_QUAD_SRC: &str = r#"
 Texture tex = { 4, 4, RGBA16 }
@@ -90,7 +90,7 @@ const RGBA16_QUAD_TEX: &[u8] = &[
 /// `TexturedPipeline::new` reads `DUAL_SOURCE_BLENDING` from the device features to select
 /// between the dual-source primary blend and the B3 AlphaOver/Replace fallback pipelines.
 #[allow(clippy::too_many_arguments)] // test helper: all 8 params are logically distinct
-fn render_toy_with_device(
+fn render_scene_with_device(
     src: &str,
     tex_native: &[u8],
     w: u32,
@@ -489,12 +489,12 @@ fn render_toy_with_device(
     finish_readback(readback, &device, bytes_per_row, w, h)
 }
 
-/// Render a `.n64` toy source using the primary headless device (dual-source when available)
+/// Render a `.n64` test scene source using the primary headless device (dual-source when available)
 /// and explicit sampler address modes.
 ///
-/// Thin wrapper around `render_toy_with_device` that creates the primary `(device, queue)`.
-/// Called by `render_toy_to_rgba8` (ClampToEdge) and the wrap/mirror golden tests.
-fn render_toy_to_rgba8_addr(
+/// Thin wrapper around `render_scene_with_device` that creates the primary `(device, queue)`.
+/// Called by `render_scene_to_rgba8` (ClampToEdge) and the wrap/mirror golden tests.
+fn render_scene_to_rgba8_addr(
     src: &str,
     tex_native: &[u8],
     w: u32,
@@ -503,21 +503,21 @@ fn render_toy_to_rgba8_addr(
     addr_v: wgpu::AddressMode,
 ) -> Vec<u8> {
     let (device, queue, _dual_source) = headless_device();
-    render_toy_with_device(src, tex_native, w, h, addr_u, addr_v, device, queue)
+    render_scene_with_device(src, tex_native, w, h, addr_u, addr_v, device, queue)
 }
 
-/// Render a `.n64` toy source through the **forced-fallback device** (dual-source disabled),
+/// Render a `.n64` test scene source through the **forced-fallback device** (dual-source disabled),
 /// exercising the B3 AlphaOver/Replace pipelines deterministically.
 ///
 /// Uses `headless_device_forced_fallback()` which requests `Features::empty()` even when the
 /// adapter supports `DUAL_SOURCE_BLENDING`.  `TexturedPipeline::new` then builds only the
 /// AlphaOver/Replace fallback pipelines — the dual-source WGSL module is never compiled.
 ///
-/// [IMP13] Called for every AlphaOver-expressible toy each CI run so the fallback module +
+/// [IMP13] Called for every AlphaOver-expressible scene each CI run so the fallback module +
 /// pipelines are compiled and rendered (a web-only fallback break cannot ship green).
-fn render_toy_to_rgba8_forced_fallback(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
+fn render_scene_to_rgba8_forced_fallback(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
     let (device, queue) = headless_device_forced_fallback();
-    render_toy_with_device(
+    render_scene_with_device(
         src,
         tex_native,
         w,
@@ -529,20 +529,20 @@ fn render_toy_to_rgba8_forced_fallback(src: &str, tex_native: &[u8], w: u32, h: 
     )
 }
 
-/// Render a `.n64` toy source to an RGBA8 pixel buffer with a ClampToEdge sampler.
+/// Render a `.n64` test scene source to an RGBA8 pixel buffer with a ClampToEdge sampler.
 ///
-/// Thin wrapper around `render_toy_to_rgba8_addr` that fixes `addr_u = addr_v = ClampToEdge`
+/// Thin wrapper around `render_scene_to_rgba8_addr` that fixes `addr_u = addr_v = ClampToEdge`
 /// so all existing golden tests are byte-identical regardless of the material's wrap_s/wrap_t.
 ///
-/// `tex_native` = RGBA8 source bytes.  For RGBA16 toys the assembler encodes RGBA8→RGBA16
+/// `tex_native` = RGBA8 source bytes.  For RGBA16 scenes the assembler encodes RGBA8→RGBA16
 /// internally; other formats (I8/I4/IA/CI) are embedded by the assembler's own encoder.
 /// `w`, `h` = render-target dimensions (pixels).  Returns `w × h × 4` raw RGBA8 bytes,
 /// row-major, no row padding.
 ///
 /// Ported from the manual headless flow in `tests/render.rs`.  Does NOT use
 /// `SceneRenderer::render` (that path provides no pixel readback).
-fn render_toy_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
-    render_toy_to_rgba8_addr(
+fn render_scene_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
+    render_scene_to_rgba8_addr(
         src,
         tex_native,
         w,
@@ -700,7 +700,6 @@ const RAMP_TEX: &[u8] = &[
 /// 2. Alpha canary (ci8-canary): alternating a1 means TEXEL0_ALPHA→color renders alternating
 ///    white/black bands — not solid white, so it catches the "palette all-opaque" false pass.
 ///
-/// This is the single source of truth; `ci8_tex.bin` in web-app/src is generated from it.
 const fn gen_ci8_tex() -> [u8; 32 * 32 * 4] {
     let mut data = [0u8; 32 * 32 * 4];
     let mut row = 0usize;
@@ -797,7 +796,7 @@ gsSPEndDisplayList()
 /// not noise, not a blank clear colour.
 #[test]
 fn golden_rgba16_quad() {
-    let px = render_toy_to_rgba8(RGBA16_QUAD_SRC, RGBA16_QUAD_TEX, 64, 64);
+    let px = render_scene_to_rgba8(RGBA16_QUAD_SRC, RGBA16_QUAD_TEX, 64, 64);
     compare_or_write("rgba16-quad", &px, 64, 64);
 }
 
@@ -809,7 +808,7 @@ fn golden_rgba16_quad() {
 /// A row-scrambled output (bands out of order) would indicate the linear-TMEM bet failed.
 #[test]
 fn golden_i8_ramp() {
-    let px = render_toy_to_rgba8(I8_RAMP_SRC, RAMP_TEX, 64, 64);
+    let px = render_scene_to_rgba8(I8_RAMP_SRC, RAMP_TEX, 64, 64);
     compare_or_write("i8-ramp", &px, 64, 64);
 }
 
@@ -820,7 +819,7 @@ fn golden_i8_ramp() {
 /// Row-scramble or banding differences indicate a nibble-order or TMEM layout bug.
 #[test]
 fn golden_i4_ramp() {
-    let px = render_toy_to_rgba8(I4_RAMP_SRC, RAMP_TEX, 64, 64);
+    let px = render_scene_to_rgba8(I4_RAMP_SRC, RAMP_TEX, 64, 64);
     compare_or_write("i4-ramp", &px, 64, 64);
 }
 
@@ -914,7 +913,7 @@ gsSPEndDisplayList()
 /// per texel, so nibble-order is irrelevant — no swizzle risk.
 #[test]
 fn golden_ia16_ramp() {
-    let px = render_toy_to_rgba8(IA16_RAMP_SRC, RAMP_TEX, 64, 64);
+    let px = render_scene_to_rgba8(IA16_RAMP_SRC, RAMP_TEX, 64, 64);
     compare_or_write("ia16-ramp", &px, 64, 64);
 }
 
@@ -924,7 +923,7 @@ fn golden_ia16_ramp() {
 /// Unit tests cover alpha decode. Swizzle: IA8 is 1-byte/texel, no nibble order.
 #[test]
 fn golden_ia8_ramp() {
-    let px = render_toy_to_rgba8(IA8_RAMP_SRC, RAMP_TEX, 64, 64);
+    let px = render_scene_to_rgba8(IA8_RAMP_SRC, RAMP_TEX, 64, 64);
     compare_or_write("ia8-ramp", &px, 64, 64);
 }
 
@@ -936,7 +935,7 @@ fn golden_ia8_ramp() {
 /// the intensity bands are visible and row-distinct.
 #[test]
 fn golden_ia4_ramp() {
-    let px = render_toy_to_rgba8(IA4_RAMP_SRC, RAMP_TEX, 64, 64);
+    let px = render_scene_to_rgba8(IA4_RAMP_SRC, RAMP_TEX, 64, 64);
     compare_or_write("ia4-ramp", &px, 64, 64);
 }
 
@@ -1024,7 +1023,7 @@ gsSPEndDisplayList()
 /// render that would fill the outer ~50 % of the quad with the clamped edge colour.
 #[test]
 fn golden_wrap_repeat() {
-    let px = render_toy_to_rgba8_addr(
+    let px = render_scene_to_rgba8_addr(
         WRAP_REPEAT_SRC,
         WRAP_TEX,
         64,
@@ -1042,7 +1041,7 @@ fn golden_wrap_repeat() {
 /// both WRAP (which repeats R|G||R|G) and CLAMP.
 #[test]
 fn golden_mirror_repeat() {
-    let px = render_toy_to_rgba8_addr(
+    let px = render_scene_to_rgba8_addr(
         MIRROR_REPEAT_SRC,
         WRAP_TEX,
         64,
@@ -1051,46 +1050,6 @@ fn golden_mirror_repeat() {
         address_mode(1),
     );
     compare_or_write("mirror-repeat", &px, 64, 64);
-}
-
-/// Source-sync enforcement: `web-app/src/ci8_tex.bin` must be a parseBin-compatible headered file.
-///
-/// Format: 8-byte LE header (w=32 u32, h=32 u32) followed by CI8_TEX bytes.
-/// Run with `UPDATE_GOLDENS=1` to regenerate ci8_tex.bin when CI8_TEX changes.
-/// The web toys (ci8-ramp, ci8-canary) load ci8_tex.bin directly via the .bin loader so
-/// alpha-as-data (alternating a1 for the canary) survives to the renderer.
-#[test]
-fn ci8_tex_source_sync() {
-    let path = format!("{}/../web-app/src/ci8_tex.bin", env!("CARGO_MANIFEST_DIR"));
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        let mut headered = Vec::with_capacity(8 + CI8_TEX.len());
-        headered.extend_from_slice(&32u32.to_le_bytes()); // w
-        headered.extend_from_slice(&32u32.to_le_bytes()); // h
-        headered.extend_from_slice(CI8_TEX);
-        std::fs::write(&path, &headered).unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
-        eprintln!("ci8_tex.bin written: {path} ({} bytes)", headered.len());
-        return;
-    }
-    let bin = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("ci8_tex.bin missing ({path}): {e}\nRun UPDATE_GOLDENS=1"));
-    assert_eq!(
-        bin.len(),
-        8 + CI8_TEX.len(),
-        "ci8_tex.bin size mismatch (expected 8-byte header + {} body bytes)",
-        CI8_TEX.len()
-    );
-    let w = u32::from_le_bytes(bin[0..4].try_into().unwrap());
-    let h = u32::from_le_bytes(bin[4..8].try_into().unwrap());
-    assert_eq!(
-        (w, h),
-        (32, 32),
-        "ci8_tex.bin header must encode (w=32, h=32)"
-    );
-    assert_eq!(
-        &bin[8..],
-        CI8_TEX,
-        "ci8_tex.bin body drifted from CI8_TEX const; re-run UPDATE_GOLDENS=1 to sync"
-    );
 }
 
 /// Golden test for CI8 color-indexed format — vertical ramp via RGBA16 palette.
@@ -1102,7 +1061,7 @@ fn ci8_tex_source_sync() {
 /// bands out of order, immediately visible.
 #[test]
 fn golden_ci8_ramp() {
-    let px = render_toy_to_rgba8(CI8_RAMP_SRC, CI8_TEX, 64, 64);
+    let px = render_scene_to_rgba8(CI8_RAMP_SRC, CI8_TEX, 64, 64);
     compare_or_write("ci8-ramp", &px, 64, 64);
 }
 
@@ -1115,7 +1074,7 @@ fn golden_ci8_ramp() {
 /// false pass matching the broken IA state; do not bake if white.
 #[test]
 fn golden_ci8_canary() {
-    let px = render_toy_to_rgba8(CI8_CANARY_SRC, CI8_TEX, 64, 64);
+    let px = render_scene_to_rgba8(CI8_CANARY_SRC, CI8_TEX, 64, 64);
     // Verify the canary output is NOT solid white (which would indicate tex_enable=false bug).
     let max_r = px.chunks(4).map(|p| p[0]).max().unwrap_or(0);
     let min_r = px.chunks(4).map(|p| p[0]).min().unwrap_or(255);
@@ -1135,12 +1094,11 @@ fn golden_ci8_canary() {
 /// distinct rainbow color. Even-indexed cells are opaque (alpha=255, palette a1=1) and
 /// odd-indexed cells are transparent (alpha=0, palette a1=0). This alternating alpha makes
 /// the texture serve both roles:
-/// 1. Grid toy (MODULATE combiner, SHADE alpha): all 16 cells render with their palette RGB;
+/// 1. Grid scene (MODULATE combiner, SHADE alpha): all 16 cells render with their palette RGB;
 ///    flat regions make palette-index scrambles immediately visible.
-/// 2. Canary toy (TEXEL0_ALPHA→color): even cells → white, odd cells → black; non-uniform
+/// 2. Canary scene (TEXEL0_ALPHA→color): even cells → white, odd cells → black; non-uniform
 ///    output validates the TEXEL0_ALPHA→color path with CI4+TLUT (guards the IA gap).
 ///
-/// This is the single source of truth; `ci4_tex.bin` in web-app/src is generated from it.
 const fn gen_ci4_tex() -> [u8; 32 * 32 * 4] {
     // 16 rainbow colors spread across the hue wheel; even indices opaque, odd transparent.
     #[rustfmt::skip]
@@ -1250,82 +1208,6 @@ gsSP1Triangle(0, 2, 3, 0)
 gsSPEndDisplayList()
 "#;
 
-/// Source-sync enforcement: `web-app/src/ci4_tex.bin` must be a parseBin-compatible headered file.
-///
-/// Format: 8-byte LE header (w=32 u32, h=32 u32) followed by CI4_TEX bytes.
-/// Run with `UPDATE_GOLDENS=1` to regenerate ci4_tex.bin when CI4_TEX changes.
-/// The web toys (ci4-grid, ci4-canary) load ci4_tex.bin directly via the .bin loader so
-/// alpha-as-data (alternating a1 for the canary) survives to the renderer.
-#[test]
-fn ci4_tex_source_sync() {
-    let path = format!("{}/../web-app/src/ci4_tex.bin", env!("CARGO_MANIFEST_DIR"));
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        let mut headered = Vec::with_capacity(8 + CI4_TEX.len());
-        headered.extend_from_slice(&32u32.to_le_bytes()); // w
-        headered.extend_from_slice(&32u32.to_le_bytes()); // h
-        headered.extend_from_slice(CI4_TEX);
-        std::fs::write(&path, &headered).unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
-        eprintln!("ci4_tex.bin written: {path} ({} bytes)", headered.len());
-        return;
-    }
-    let bin = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("ci4_tex.bin missing ({path}): {e}\nRun UPDATE_GOLDENS=1"));
-    assert_eq!(
-        bin.len(),
-        8 + CI4_TEX.len(),
-        "ci4_tex.bin size mismatch (expected 8-byte header + {} body bytes)",
-        CI4_TEX.len()
-    );
-    let w = u32::from_le_bytes(bin[0..4].try_into().unwrap());
-    let h = u32::from_le_bytes(bin[4..8].try_into().unwrap());
-    assert_eq!(
-        (w, h),
-        (32, 32),
-        "ci4_tex.bin header must encode (w=32, h=32)"
-    );
-    assert_eq!(
-        &bin[8..],
-        CI4_TEX,
-        "ci4_tex.bin body drifted from CI4_TEX const; re-run UPDATE_GOLDENS=1 to sync"
-    );
-}
-
-/// Source-sync enforcement: `web-app/src/quad_tex.bin` must be a parseBin-compatible headered file.
-///
-/// Format: 8-byte LE header (w=4 u32, h=4 u32) followed by RGBA16_QUAD_TEX bytes.
-/// Run with `UPDATE_GOLDENS=1` to regenerate quad_tex.bin when RGBA16_QUAD_TEX changes.
-/// The web toys (multi-material, alpha-threshold) load quad_tex.bin directly via the .bin loader
-/// so alpha-as-data (α=0 rows for the cutout hole) survives to the renderer unchanged.
-#[test]
-fn quad_tex_source_sync() {
-    let path = format!("{}/../web-app/src/quad_tex.bin", env!("CARGO_MANIFEST_DIR"));
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        let mut headered = Vec::with_capacity(8 + RGBA16_QUAD_TEX.len());
-        headered.extend_from_slice(&4u32.to_le_bytes()); // w
-        headered.extend_from_slice(&4u32.to_le_bytes()); // h
-        headered.extend_from_slice(RGBA16_QUAD_TEX);
-        std::fs::write(&path, &headered).unwrap_or_else(|e| panic!("failed to write {path}: {e}"));
-        eprintln!("quad_tex.bin written: {path} ({} bytes)", headered.len());
-        return;
-    }
-    let bin = std::fs::read(&path)
-        .unwrap_or_else(|e| panic!("quad_tex.bin missing ({path}): {e}\nRun UPDATE_GOLDENS=1"));
-    assert_eq!(
-        bin.len(),
-        8 + RGBA16_QUAD_TEX.len(),
-        "quad_tex.bin size mismatch (expected 8-byte header + {} body bytes)",
-        RGBA16_QUAD_TEX.len()
-    );
-    let w = u32::from_le_bytes(bin[0..4].try_into().unwrap());
-    let h = u32::from_le_bytes(bin[4..8].try_into().unwrap());
-    assert_eq!((w, h), (4, 4), "quad_tex.bin header must encode (w=4, h=4)");
-    assert_eq!(
-        &bin[8..],
-        RGBA16_QUAD_TEX,
-        "quad_tex.bin body drifted from RGBA16_QUAD_TEX const; re-run UPDATE_GOLDENS=1 to sync"
-    );
-}
-
 /// Golden test for CI4 color-indexed format — 4×4 rainbow grid via RGBA16 palette.
 ///
 /// The MODULATE combiner with white shade passes through the palette colors; the 4×4 grid
@@ -1335,7 +1217,7 @@ fn quad_tex_source_sync() {
 /// (odd indices, a1=0) render fully opaque with their palette RGB.
 #[test]
 fn golden_ci4_grid() {
-    let px = render_toy_to_rgba8(CI4_GRID_SRC, CI4_TEX, 64, 64);
+    let px = render_scene_to_rgba8(CI4_GRID_SRC, CI4_TEX, 64, 64);
     compare_or_write("ci4-grid", &px, 64, 64);
 }
 
@@ -1348,7 +1230,7 @@ fn golden_ci4_grid() {
 /// TEXEL0_ALPHA is not wired for CI4+TLUT — a false pass; do not bake if white.
 #[test]
 fn golden_ci4_canary() {
-    let px = render_toy_to_rgba8(CI4_CANARY_SRC, CI4_TEX, 64, 64);
+    let px = render_scene_to_rgba8(CI4_CANARY_SRC, CI4_TEX, 64, 64);
     // Verify the canary output is NOT solid white (which would indicate tex_enable=false bug).
     let max_r = px.chunks(4).map(|p| p[0]).max().unwrap_or(0);
     let min_r = px.chunks(4).map(|p| p[0]).min().unwrap_or(255);
@@ -1398,8 +1280,8 @@ gsSPEndDisplayList()
 /// Placed before golden_multi_material so a failing blend assertion stops the run early.
 #[test]
 fn alphaover_pipeline_blends_translucent_over_background() {
-    // 1×1 white placeholder; the XLU toy has no gsDPLoadTextureBlock so tex_enable=false.
-    let px = render_toy_to_rgba8(XLU_QUAD_SRC, &[255, 255, 255, 255], 32, 32);
+    // 1×1 white placeholder; the XLU scene has no gsDPLoadTextureBlock so tex_enable=false.
+    let px = render_scene_to_rgba8(XLU_QUAD_SRC, &[255, 255, 255, 255], 32, 32);
     // Center pixel of the 32×32 render: row 16, col 16.
     let c = ((16 * 32 + 16) * 4) as usize;
     // AlphaOver result ≈ 134; Replace result = 255.
@@ -1413,7 +1295,7 @@ fn alphaover_pipeline_blends_translucent_over_background() {
 
 // ── Multi-material golden ─────────────────────────────────────────────────────────────────────────
 
-const MULTI_MATERIAL_SRC: &str = include_str!("../../../examples/toys/multi-material.n64");
+const MULTI_MATERIAL_SRC: &str = include_str!("../../tests/scenes/multi-material.n64");
 
 /// Golden test for multi-material per-run binding — Phase A gate.
 ///
@@ -1430,7 +1312,7 @@ const MULTI_MATERIAL_SRC: &str = include_str!("../../../examples/toys/multi-mate
 #[test]
 fn golden_multi_material() {
     // 3 regions render 3 distinct materials (not the old flat collapse).
-    let px = render_toy_to_rgba8(MULTI_MATERIAL_SRC, RGBA16_QUAD_TEX, 96, 96);
+    let px = render_scene_to_rgba8(MULTI_MATERIAL_SRC, RGBA16_QUAD_TEX, 96, 96);
     // Canary: left-third center pixel vs. centre-third center pixel must differ.
     // For a 96×96 image, sample row 48:
     //   left-third   center x ≈ 16  → pixel byte offset (48*96 + 16)*4
@@ -1494,7 +1376,7 @@ fn golden_multi_material() {
 #[test]
 fn golden_multi_material_cutout_shows_hole() {
     // The cutout region must show BACKGROUND through a sub-threshold hole (not opaque texels).
-    let px = render_toy_to_rgba8(MULTI_MATERIAL_SRC, RGBA16_QUAD_TEX, 96, 96);
+    let px = render_scene_to_rgba8(MULTI_MATERIAL_SRC, RGBA16_QUAD_TEX, 96, 96);
     // Sample a pixel inside the cutout region's hole (right quad, upper area → texture rows 2-3, α=0).
     let hole = (20 * 96 + 80) * 4usize;
     assert!(
@@ -1518,11 +1400,11 @@ fn golden_multi_material_cutout_shows_hole() {
     compare_or_write("multi-material", &px, 96, 96); // regenerate after wiring the cutout
 }
 
-// ── Tron toy + Phase B forced-fallback CI gate ────────────────────────────────────────────────────
+// ── Tron scene + Phase B forced-fallback CI gate ─────────────────────────────────────────────────
 
-const TRON_SRC: &str = include_str!("../../../examples/toys/tron.n64");
+const TRON_SRC: &str = include_str!("../../tests/scenes/tron.n64");
 
-/// Golden test for the `tron` toy — overlapping translucent neon panels.
+/// Golden test for the `tron` scene — overlapping translucent neon panels.
 ///
 /// Two semi-transparent quads (cyan + magenta, SHADE alpha=128/255≈0.5, G_RM_AA_ZB_XLU_SURF)
 /// overlap in the center band.  The overlap must show a BLENDED MIX of both panel colors:
@@ -1537,7 +1419,7 @@ const TRON_SRC: &str = include_str!("../../../examples/toys/tron.n64");
 /// Rendered via the PRIMARY path (`headless_device` — dual-source when available).
 #[test]
 fn golden_tron() {
-    let px = render_toy_to_rgba8(TRON_SRC, &[], 96, 96);
+    let px = render_scene_to_rgba8(TRON_SRC, &[], 96, 96);
     // Inspect the overlap region: pixel at (row=48, col=48) is inside the cyan+magenta overlap
     // band (x=-43..43 → pixels≈32..64).  Expected ≈ (131, 58, 177).
     let row = 48usize;
@@ -1572,7 +1454,7 @@ fn golden_tron() {
 /// `tron-fallback.bin` golden is an additional regression guard for the fallback alpha too.
 #[test]
 fn golden_tron_forced_fallback() {
-    let px = render_toy_to_rgba8_forced_fallback(TRON_SRC, &[], 96, 96);
+    let px = render_scene_to_rgba8_forced_fallback(TRON_SRC, &[], 96, 96);
     // Cross-check RGB against the PRIMARY golden (IMP13). Alpha intentionally differs:
     // dual-source preserves dst.a=255 from clear; AlphaOver writes src.a≈128.
     let primary_path = format!("{}/goldens/tron.bin", env!("CARGO_MANIFEST_DIR"));
@@ -1598,7 +1480,7 @@ fn golden_tron_forced_fallback() {
     compare_or_write("tron-fallback", &px, 96, 96);
 }
 
-/// Forced-fallback re-render of `multi-material` — [IMP13] second AlphaOver-expressible toy.
+/// Forced-fallback re-render of `multi-material` — [IMP13] second AlphaOver-expressible scene.
 ///
 /// Re-renders `multi-material` through `headless_device_forced_fallback()` and asserts the
 /// output is IDENTICAL (within TOL=2) to the primary `multi-material` golden.  The XLU center
@@ -1607,14 +1489,14 @@ fn golden_tron_forced_fallback() {
 /// produced a correct result — a web-only regression cannot ship green.
 #[test]
 fn golden_multi_material_forced_fallback() {
-    let px = render_toy_to_rgba8_forced_fallback(MULTI_MATERIAL_SRC, RGBA16_QUAD_TEX, 96, 96);
+    let px = render_scene_to_rgba8_forced_fallback(MULTI_MATERIAL_SRC, RGBA16_QUAD_TEX, 96, 96);
     // Compare against the PRIMARY multi-material golden (not a separate fallback file).
     compare_or_write("multi-material", &px, 96, 96);
 }
 
 // ── Fog golden ───────────────────────────────────────────────────────────────────────────────────
 
-const FOGWORLD_SRC: &str = include_str!("../../../examples/toys/fogworld.n64");
+const FOGWORLD_SRC: &str = include_str!("../../tests/scenes/fogworld.n64");
 
 /// Golden test for the fogworld fog demo — proves the G_RM_FOG_SHADE_A + G_CYC_2CYCLE pipeline.
 ///
@@ -1626,7 +1508,7 @@ const FOGWORLD_SRC: &str = include_str!("../../../examples/toys/fogworld.n64");
 ///   near (y=60, x=70): ≥ 1 channel differs from fog_color by > 40 (crisp surface)
 #[test]
 fn golden_fogworld() {
-    let px = render_toy_to_rgba8(FOGWORLD_SRC, &[], 96, 96);
+    let px = render_scene_to_rgba8(FOGWORLD_SRC, &[], 96, 96);
     compare_or_write("fogworld", &px, 96, 96);
     // MIN6: assert the fog gradient at two sample points.
     let far = ((30 * 96 + 30) * 4) as usize; // distant quad — heavily fogged
@@ -1650,11 +1532,11 @@ fn golden_fogworld() {
     );
 }
 
-// ── Alpha-threshold toy (Phase D Task D2) ────────────────────────────────────────────────────────
+// ── Alpha-threshold scene (Phase D Task D2) ──────────────────────────────────────────────────────
 
-const ALPHA_THRESHOLD_SRC: &str = include_str!("../../../examples/toys/alpha-threshold.n64");
+const ALPHA_THRESHOLD_SRC: &str = include_str!("../../tests/scenes/alpha-threshold.n64");
 
-/// Golden test for the `alpha-threshold` toy — G_AC_THRESHOLD alpha-compare gate (Phase D, D2).
+/// Golden test for the `alpha-threshold` scene — G_AC_THRESHOLD alpha-compare gate (Phase D, D2).
 ///
 /// A full-screen textured quad with Gouraud vertex alpha varying left→right:
 ///   left (x=0..31)  vertex alpha ≈ 0..127 → combiner alpha < 0.502 → DISCARDED (background)
@@ -1668,7 +1550,7 @@ const ALPHA_THRESHOLD_SRC: &str = include_str!("../../../examples/toys/alpha-thr
 /// BLOCKED if whole quad shows (THRESHOLD path broken) or none shows (discard always fires).
 #[test]
 fn golden_alpha_threshold() {
-    let px = render_toy_to_rgba8(ALPHA_THRESHOLD_SRC, RGBA16_QUAD_TEX, 64, 64);
+    let px = render_scene_to_rgba8(ALPHA_THRESHOLD_SRC, RGBA16_QUAD_TEX, 64, 64);
     compare_or_write("alpha-threshold", &px, 64, 64);
     // MIN7: assert the THRESHOLD gate (combiner-α < blendColor.a). A sub-threshold texel must show
     // BACKGROUND (discarded); a supra-threshold texel must show the texel — mirrors D1's cutout hole.
@@ -1692,16 +1574,16 @@ fn golden_alpha_threshold() {
     );
 }
 
-// ── Decal toy (Phase E Task E2) ────────────────────────────────────────────────────────────────
+// ── Decal scene (Phase E Task E2) ─────────────────────────────────────────────────────────────
 
-const DECAL_SRC: &str = include_str!("../../../examples/toys/decal.n64");
+const DECAL_SRC: &str = include_str!("../../tests/scenes/decal.n64");
 
-/// Colors authored in `examples/toys/decal.n64` (RGBA8 byte values).
+/// Colors authored in `tests/scenes/decal.n64` (RGBA8 byte values).
 const DECAL_BASE_RGB: [u8; 3] = [40, 40, 200]; // blue base quad
 const DECAL_DECAL_RGB: [u8; 3] = [240, 220, 40]; // yellow coplanar decal
 const OCCLUDER_RGB: [u8; 3] = [220, 40, 40]; // red nearer quad
 
-/// Golden test for the `decal` toy — in-shader ZMODE_DEC occlusion + coplanar discard (Phase E, E2).
+/// Golden test for the `decal` scene — in-shader ZMODE_DEC occlusion + coplanar discard (Phase E, E2).
 ///
 /// A blue base quad fills the screen; a coplanar yellow decal covers the top half; a NEARER red
 /// quad covers the upper-right quadrant. The decal fragment samples the depth the opaque pass
@@ -1714,7 +1596,7 @@ const OCCLUDER_RGB: [u8; 3] = [220, 40, 40]; // red nearer quad
 /// the base (coplanar/z-fight broken).
 #[test]
 fn golden_decal() {
-    let px = render_toy_to_rgba8(DECAL_SRC, &[], 96, 96);
+    let px = render_scene_to_rgba8(DECAL_SRC, &[], 96, 96);
     compare_or_write("decal", &px, 96, 96);
 
     // (1) Occlusion: a pixel under the nearer red quad (upper-right) where the decal would be must
@@ -1823,8 +1705,8 @@ gsSPEndDisplayList()
 /// in-shader tolerance must distinguish front (within dz) from behind (beyond epsilon).
 #[test]
 fn decal_coplanar_tolerance_boundary() {
-    let shown = render_toy_to_rgba8(DECAL_IN_FRONT_SRC, &[], 48, 48);
-    let hidden = render_toy_to_rgba8(DECAL_BEHIND_SRC, &[], 48, 48);
+    let shown = render_scene_to_rgba8(DECAL_IN_FRONT_SRC, &[], 48, 48);
+    let hidden = render_scene_to_rgba8(DECAL_BEHIND_SRC, &[], 48, 48);
     let c = ((24 * 48 + 24) * 4) as usize;
     assert_ne!(
         &shown[c..c + 3],
@@ -1840,11 +1722,11 @@ fn decal_coplanar_tolerance_boundary() {
     );
 }
 
-// ── High-poly toy (Phase F Task F1) ──────────────────────────────────────────────────────────────
+// ── High-poly scene (Phase F Task F1) ────────────────────────────────────────────────────────────
 
-const HIGH_POLY_SRC: &str = include_str!("../../../examples/toys/high-poly.n64");
+const HIGH_POLY_SRC: &str = include_str!("../../tests/scenes/high-poly.n64");
 
-/// Golden test for the `high-poly` toy — multi-batch vertex-loading guard (Phase F, F1).
+/// Golden test for the `high-poly` scene — multi-batch vertex-loading guard (Phase F, F1).
 ///
 /// 5 × `gsSPVertex(verts,28,0)` reloads accumulate 140 global entries (indices 0-139, > 127) of
 /// the blue 4×7 grid mesh; the 6th batch (`gsSPVertex(verts,31,0)`) loads the red marker verts at
@@ -1864,7 +1746,7 @@ const HIGH_POLY_SRC: &str = include_str!("../../../examples/toys/high-poly.n64")
 /// (0,50,200) and the dark background (≈13,13,20) fail `R>200`, so either regression is caught.
 #[test]
 fn golden_high_poly() {
-    let px = render_toy_to_rgba8(HIGH_POLY_SRC, &[], 96, 96);
+    let px = render_scene_to_rgba8(HIGH_POLY_SRC, &[], 96, 96);
     compare_or_write("high-poly", &px, 96, 96);
     // Marker triangle (red, from the post-127 batch — global 168-170) must appear at (10,10).
     // A slot-resolution regression would resolve the marker slots to a lower global (a BLUE mesh
@@ -1884,7 +1766,7 @@ fn golden_high_poly() {
 //
 // These route through `SceneRenderer::render` (the facade paired path) via `common::render_to_pixels`
 // — the FB-pool + per-pair-pass + scanout-blit pipeline — unlike the older goldens, which use the
-// manual `render_toy_with_device` raster path. The 2D toys are 64×64 (`w*4 = 256`, readback-aligned).
+// manual `render_scene_with_device` raster path. The 2D scenes are 64×64 (`w*4 = 256`, readback-aligned).
 
 /// Build a hand-crafted single-`FramebufferPair` scene with one `FillRect` op (no materials, no
 /// triangles) over an `fb_w × fb_h` CIMG. The fill resolves through `CombinerUniform::fill_rect`.
@@ -1939,7 +1821,7 @@ fn tex1x1_material(rgba: [u8; 4]) -> crate::hle::Material {
 
 /// Hand-computed EXACT cross-check (no golden file): proves the rect clip-space mapping, the
 /// exclusive lower-right `+1`, the scissor clamp, the FillRect flat-PRIM combine, and the COPY
-/// TEXRECT TEXEL0-passthrough all land byte-exactly — BEFORE any `UPDATE_GOLDENS` blesses the toys.
+/// TEXRECT TEXEL0-passthrough all land byte-exactly — BEFORE any `UPDATE_GOLDENS` blesses the scenes.
 #[test]
 fn golden_2d_rect_geometry_exact() {
     use crate::render::SceneRenderer;
@@ -2071,14 +1953,14 @@ fn clear_color_rgb_local() -> [u8; 3] {
     ]
 }
 
-/// Toy 1 — `fill-texrect`: FILL clears the 64×64 CIMG to blue, then a COPY TEXRECT blits the
+/// Scene 1 — `fill-texrect`: FILL clears the 64×64 CIMG to blue, then a COPY TEXRECT blits the
 /// 4×4 `quad_tex` checker over the whole surface. The checker maps row-0-at-top (verified against
 /// the texel alpha pattern: rows 0–1 α=255, rows 2–3 α=0 → a 4-px vertical period).
 #[test]
 fn golden_2d_fill_texrect() {
     use crate::render::SceneRenderer;
     let (device, queue, dual) = headless_device();
-    let scene = common::scene_from_toy("fill-texrect.n64", RGBA16_QUAD_TEX, 4, 4);
+    let scene = common::scene_from_source("fill-texrect.n64", RGBA16_QUAD_TEX, 4, 4);
     let mut sr = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, dual);
     let buf = common::render_to_pixels(&device, &queue, &mut sr, &scene, 64, 64);
     // Hand cross-check the vertical orientation via the texel alpha period (dtdy=1024 → 1 texel/px):
@@ -2100,13 +1982,13 @@ fn golden_2d_fill_texrect() {
     compare_or_write("2d-fill-texrect", &buf, 64, 64);
 }
 
-/// Toy 2 — `hud-over-3d`: a Gouraud 3D quad in the center, then a COPY TEXRECT HUD in the
+/// Scene 2 — `hud-over-3d`: a Gouraud 3D quad in the center, then a COPY TEXRECT HUD in the
 /// top-left 16×16 corner. Verifies tris + rects coexist in one pair and the HUD lands top-left.
 #[test]
 fn golden_2d_hud_over_3d() {
     use crate::render::SceneRenderer;
     let (device, queue, dual) = headless_device();
-    let scene = common::scene_from_toy("hud-over-3d.n64", RGBA16_QUAD_TEX, 4, 4);
+    let scene = common::scene_from_source("hud-over-3d.n64", RGBA16_QUAD_TEX, 4, 4);
     let mut sr = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, dual);
     let buf = common::render_to_pixels(&device, &queue, &mut sr, &scene, 64, 64);
     // Top-left corner = HUD checker (came from a copy texrect; texels there are α=0, B/Y/R/G).
@@ -2129,14 +2011,14 @@ fn golden_2d_hud_over_3d() {
     compare_or_write("2d-hud-over-3d", &buf, 64, 64);
 }
 
-/// Toy 4 — `texrectflip`: COPY TEXRECT with S/T axes swapped (`gsSPTextureRectangleFlip`). The
+/// Scene 4 — `texrectflip`: COPY TEXRECT with S/T axes swapped (`gsSPTextureRectangleFlip`). The
 /// flipped UVs transpose the checker vs `fill-texrect`'s un-flipped layout.
 #[test]
 fn golden_2d_texrectflip() {
     use crate::render::SceneRenderer;
     let (device, queue, dual) = headless_device();
-    let flip = common::scene_from_toy("texrectflip.n64", RGBA16_QUAD_TEX, 4, 4);
-    let plain = common::scene_from_toy("fill-texrect.n64", RGBA16_QUAD_TEX, 4, 4);
+    let flip = common::scene_from_source("texrectflip.n64", RGBA16_QUAD_TEX, 4, 4);
+    let plain = common::scene_from_source("fill-texrect.n64", RGBA16_QUAD_TEX, 4, 4);
     let mut sr = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, dual);
     let buf = common::render_to_pixels(&device, &queue, &mut sr, &flip, 64, 64);
     let buf_plain = common::render_to_pixels(&device, &queue, &mut sr, &plain, 64, 64);
@@ -2162,7 +2044,7 @@ fn golden_2d_texrectflip() {
 fn golden_2d_bgra8_present_cover() {
     use crate::render::SceneRenderer;
     let (device, queue, dual) = headless_device();
-    let scene = common::scene_from_toy("fill-texrect.n64", RGBA16_QUAD_TEX, 4, 4);
+    let scene = common::scene_from_source("fill-texrect.n64", RGBA16_QUAD_TEX, 4, 4);
 
     let mut sr_rgba = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, dual);
     let rgba = common::render_to_pixels(&device, &queue, &mut sr_rgba, &scene, 64, 64);
@@ -2189,7 +2071,7 @@ fn golden_2d_bgra8_present_cover() {
     }
 }
 
-/// Toy 3 — `offscreen-then-sample`: two `FramebufferPair`s. Pair 0 (scratch 0x00200000) is filled
+/// Scene 3 — `offscreen-then-sample`: two `FramebufferPair`s. Pair 0 (scratch 0x00200000) is filled
 /// orange via FILLRECT (RGBA16 0xFB81 → R=255, G=115, B=0, A=255). Pair 1 (scanout 0x00100000)
 /// uses a COPY TEXRECT with `fb_source = Some(0x00200000)` to sample the scratch buffer into the
 /// scanout via the FB-as-texture alias (spec §2.4, Task 10 Step 1).
@@ -2205,7 +2087,7 @@ fn golden_2d_offscreen_then_sample() {
     let (device, queue, dual) = headless_device();
     // No RDRAM texture: the scratch fill color is decoded from the FILLRECT color register, not
     // from RDRAM bytes. A 1×1 placeholder satisfies assemble_with_texture's texture argument.
-    let scene = common::scene_from_toy("offscreen-then-sample.n64", &[255u8; 4], 1, 1);
+    let scene = common::scene_from_source("offscreen-then-sample.n64", &[255u8; 4], 1, 1);
     let mut sr = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, dual);
     let buf = common::render_to_pixels(&device, &queue, &mut sr, &scene, 64, 64);
 
@@ -2237,7 +2119,7 @@ fn golden_2d_offscreen_then_sample() {
 ///   Even screen rows (0,2,4,...): texrow 0 → opaque red  → rendered color = (255,0,0)
 ///   Odd  screen rows (1,3,5,...): texrow 1 → transparent → AlphaOver shows background
 ///
-/// Used exclusively by `golden_2d_alpha_texrect_over_bg` (no web toy needed).
+/// Used exclusively by `golden_2d_alpha_texrect_over_bg` (no separate scene fixture needed).
 #[rustfmt::skip]
 const ALPHA_TEXRECT_TEX: &[u8] = &[
     255, 0, 0, 255,  255, 0, 0, 255, // row 0: red opaque  (α=255)
@@ -2251,7 +2133,7 @@ const ALPHA_TEXRECT_TEX: &[u8] = &[
 /// Pass 2 — 1-CYCLE XLU: G_RM_AA_ZB_XLU_SURF has FORCE_BL → fallback_class = AlphaOver.
 ///   Combiner: (0-0)*0 + TEXEL0 = pure TEXEL0 passthrough (RGB and alpha).
 ///
-/// This is a renderer-test-only fixture (not a web toy).
+/// This is a renderer-test-only fixture (not a shared scene file).
 const ALPHA_TEXRECT_OVER_BG_SRC: &str = r#"
 Texture tex = { 2, 2, RGBA16 }
 gsDPSetColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00100000)
@@ -2271,7 +2153,7 @@ gsSPEndDisplayList()
 "#;
 
 /// Assemble a scene from an inline source string for renderer-test-only fixtures.
-/// Mirrors `common::scene_from_toy` but takes a source string instead of a file path.
+/// Mirrors `common::scene_from_source` but takes a source string instead of a file path.
 fn scene_from_src_str(src: &str, tex_rgba8: &[u8], tex_w: u32, tex_h: u32) -> crate::hle::Scene {
     let img = crate::asm::assemble_with_texture(src, tex_rgba8, tex_w, tex_h)
         .unwrap_or_else(|d| panic!("assembly failed: {d:?}"));
@@ -2293,7 +2175,7 @@ fn scene_from_src_str(src: &str, tex_rgba8: &[u8], tex_w: u32, tex_h: u32) -> cr
 ///   Transparent pixels get REPLACED with the combiner output (red) ignoring α → odd rows
 ///   are red, NOT green. The `odd_pix[1] > 200` assertion fails → regression detected.
 ///
-/// **Byte-identity:** existing COPY/FILL toys are unaffected (Replace paths unchanged).
+/// **Byte-identity:** existing COPY/FILL scenes are unaffected (Replace paths unchanged).
 #[test]
 fn golden_2d_alpha_texrect_over_bg() {
     use crate::render::SceneRenderer;
@@ -2702,14 +2584,14 @@ fn golden_paired_decal_respects_op_order() {
 
 // ── Pair-less facade characterization goldens (Phase 1) ─────────────────────────────────────────
 // These route through `SceneRenderer::render`'s PAIR-LESS branch (empty `framebuffer_pairs`) via
-// `common::render_to_pixels`, unlike the 21 tier-1/2D goldens (manual `render_toy_with_device`).
+// `common::render_to_pixels`, unlike the 21 tier-1/2D goldens (manual `render_scene_with_device`).
 // Captured against the current straight-to-target output; the Phase-1 internal-FB rework must keep
 // them byte-identical (the present blit at 1:1 is an identity resample).
 
 #[test]
 fn golden_pairless_flat_color() {
     let (device, queue, dual) = headless_device();
-    let scene = common::scene_from_toy("flat-color.n64", &[255u8; 4], 1, 1);
+    let scene = common::scene_from_source("flat-color.n64", &[255u8; 4], 1, 1);
     assert!(
         scene.framebuffer_pairs.is_empty(),
         "flat-color must be a pair-less scene"
@@ -2724,7 +2606,7 @@ fn golden_pairless_flat_color() {
 fn golden_pairless_chrome_icosphere() {
     let (device, queue, dual) = headless_device();
     let env = common::solid_env_texture([200, 100, 50]);
-    let scene = common::scene_from_toy("chrome-icosphere.n64", &env, 32, 32);
+    let scene = common::scene_from_source("chrome-icosphere.n64", &env, 32, 32);
     assert!(
         scene.framebuffer_pairs.is_empty()
             && scene.render_modes.iter().any(|r| r.z_test || r.z_write),

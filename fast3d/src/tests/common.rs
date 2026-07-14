@@ -7,7 +7,7 @@
 //! `tests/*.rs` can `mod common;` and reuse these helpers. Each `tests/*.rs` is its own crate,
 //! so we cannot import `render.rs`'s private helpers — the minimal harness is copied here.
 //!
-//! `goldens.rs` includes this module too (for `scene_from_toy` + `render_to_pixels` on the 2D
+//! `goldens.rs` includes this module too (for `scene_from_source` + `render_to_pixels` on the 2D
 //! goldens) but uses only a subset of these helpers, so the unused-in-that-binary ones would warn.
 
 use crate::hle::Scene;
@@ -43,15 +43,21 @@ pub fn ref_uv(scene: &Scene, i: usize) -> [f32; 2] {
     [st[0] * s[0] / tw, st[1] * s[1] / th]
 }
 
-/// Read an assembled toy from `examples/toys/<name>` and interpret it to a `hle::Scene`, mirroring
-/// how `render.rs`'s toy tests build their scenes (`assemble_with_texture` → `interpret_rdram`).
+/// Read an assembled test scene from `tests/scenes/<name>` and interpret it to a `hle::Scene`,
+/// mirroring how `render.rs`'s scene tests build their scenes (`assemble_with_texture` →
+/// `interpret_rdram`).
 ///
 /// `tex_rgba8` / `tex_w` / `tex_h` are the texture bytes uploaded into the assembled image (the
-/// same texture the HLE decodes into `material.texture`); for untextured toys pass a 1×1 white
+/// same texture the HLE decodes into `material.texture`); for untextured scenes pass a 1×1 white
 /// placeholder.
-pub fn scene_from_toy(name: &str, tex_rgba8: &[u8], tex_w: u32, tex_h: u32) -> crate::hle::Scene {
-    let toys_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys");
-    let src = std::fs::read_to_string(toys_dir.join(name))
+pub fn scene_from_source(
+    name: &str,
+    tex_rgba8: &[u8],
+    tex_w: u32,
+    tex_h: u32,
+) -> crate::hle::Scene {
+    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
+    let src = std::fs::read_to_string(scenes_dir.join(name))
         .unwrap_or_else(|e| panic!("{name} must exist: {e}"));
     let img = crate::asm::assemble_with_texture(&src, tex_rgba8, tex_w, tex_h)
         .unwrap_or_else(|_| panic!("{name} must assemble"));
@@ -96,7 +102,7 @@ pub fn render_to_pixels(
 
 /// Like [`render_to_pixels`] but renders into a target of the given `format` and returns its raw
 /// bytes (4 B/px). Used to headlessly cover the `Bgra8Unorm` present path: the bytes come back in
-/// the format's native channel order (B,G,R,A for `Bgra8Unorm`). Both 2D toys are 64 wide, so
+/// the format's native channel order (B,G,R,A for `Bgra8Unorm`). Both 2D scenes are 64 wide, so
 /// `bytes_per_row = w*4 = 256` is already 256-byte-aligned — no readback row padding needed.
 pub fn render_to_pixels_fmt(
     device: &wgpu::Device,

@@ -125,13 +125,13 @@ fn no_cull_bits_records_none_run() {
     assert_eq!(s.indices, vec![0, 1, 2]);
 }
 
-// Real-toy lock for spec Testing item 2 part 1: the two culling toys each emit one Cull run.
+// Real-scene lock for spec Testing item 2 part 1: the two culling scenes each emit one Cull run.
 #[test]
-fn cull_toys_emit_single_cull_run() {
-    let toys = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys");
+fn cull_scenes_emit_single_cull_run() {
+    let scenes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
     let white = vec![255u8; 32 * 32 * 4];
     for name in ["backface-culling.n64", "segmented-sub-dl.n64"] {
-        let src = std::fs::read_to_string(toys.join(name)).unwrap();
+        let src = std::fs::read_to_string(scenes.join(name)).unwrap();
         let img = crate::asm::assemble_with_texture(&src, &white, 32, 32).unwrap();
         let r = interpret_rdram(&img.rdram, img.entry_addr);
         assert!(r.diags.is_empty(), "{name}: {:?}", r.diags);

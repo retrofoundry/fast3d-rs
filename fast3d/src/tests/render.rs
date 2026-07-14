@@ -854,7 +854,7 @@ fn run_compute_outputs(
         bytemuck::bytes_of(&crate::render::RspProcessParams {
             vertex_count: n,
             // Mirror the real renderer (lib.rs): the per-vertex `fog` flag gates the fog write, so
-            // the fog scale/offset must be the scene's real values for fogged toys (e.g. fogworld).
+            // the fog scale/offset must be the scene's real values for fogged scenes (e.g. fogworld).
             fog_enable: u32::from(scene.fog_enable),
             fog_mul: scene.fog_mul as f32,
             fog_offset: scene.fog_offset as f32,
@@ -1026,12 +1026,12 @@ fn ref_color(scene: &crate::hle::Scene, i: usize) -> [f32; 4] {
 }
 
 #[test]
-fn compute_outputs_match_oracle_for_every_toy() {
+fn compute_outputs_match_oracle_for_every_scene() {
     let (device, queue, _dual_source) = headless_device();
-    let toys_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys");
+    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
     let white = vec![255u8; 32 * 32 * 4];
     let mut checked = 0;
-    for entry in std::fs::read_dir(&toys_dir).expect("examples/toys") {
+    for entry in std::fs::read_dir(&scenes_dir).expect("tests/scenes") {
         let path = entry.unwrap().path();
         if path.extension().and_then(|e| e.to_str()) != Some("n64") {
             continue;
@@ -1042,7 +1042,7 @@ fn compute_outputs_match_oracle_for_every_toy() {
         let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
         assert!(r.diags.is_empty(), "{name}: {:?}", r.diags);
         // Regression guard: chrome-icosphere must actually exercise texgen (else this golden test
-        // could "pass" on a toy whose texgen silently broke into the normal st path).
+        // could "pass" on a scene whose texgen silently broke into the normal st path).
         if name == "chrome-icosphere.n64" {
             assert!(
                 r.scene.texgen_mode.iter().any(|&m| m != 0),
@@ -1087,7 +1087,10 @@ fn compute_outputs_match_oracle_for_every_toy() {
         }
         checked += 1;
     }
-    assert!(checked >= 6, "expected the gallery toys, checked {checked}");
+    assert!(
+        checked >= 6,
+        "expected the gallery scenes, checked {checked}"
+    );
 }
 
 /// FIX 3 — focused kernel-math GPU test: diffuse lighting color output.
@@ -1315,7 +1318,7 @@ fn kernel_lit_color_two_directional_lights_plus_ambient() {
 }
 
 /// Focused texgen-math GPU test (Step 9): proves the kernel's spherical + F3DEX2 cubic fold and
-/// the texgen ST-prefold INDEPENDENTLY of the kernel scale, since at the T3 commit no gallery toy
+/// the texgen ST-prefold INDEPENDENTLY of the kernel scale, since at the T3 commit no gallery scene
 /// exercises the golden texgen branch.
 ///
 /// Scene: identity modelview, `sc = tc = 0xFFFF`. Vertices have an s8 normal facing the S-axis
@@ -1677,9 +1680,9 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     // A 1×1 white texture is needed because gsDPSetOtherMode_H / gsDPSetCombineLERP require
     // a texture context even when the combiner uses SHADE only (no actual texture sampling).
     let white1x1 = vec![255u8; 4];
-    let toys_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys");
-    let src =
-        std::fs::read_to_string(toys_dir.join("morphcube.n64")).expect("morphcube.n64 must exist");
+    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
+    let src = std::fs::read_to_string(scenes_dir.join("morphcube.n64"))
+        .expect("morphcube.n64 must exist");
     let tex = Some((white1x1.as_slice(), 1u32, 1u32));
 
     let radius = |p: &[f32; 3]| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
@@ -1771,8 +1774,8 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
 fn perspective_cube_mvp_differs_between_frames() {
     // Dummy 1×1 texture needed for gsDPSetOtherMode_H / gsDPSetCombineLERP.
     let white1x1 = vec![255u8; 4];
-    let toys_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys");
-    let src = std::fs::read_to_string(toys_dir.join("perspective-cube.n64"))
+    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
+    let src = std::fs::read_to_string(scenes_dir.join("perspective-cube.n64"))
         .expect("perspective-cube.n64 must exist");
     let tex = Some((white1x1.as_slice(), 1u32, 1u32));
 
@@ -1820,9 +1823,9 @@ fn perspective_cube_mvp_differs_between_frames() {
     );
 }
 
-/// Toy-driven DECAL pixel test — chrome-icosphere end-to-end through the combiner/rasterizer.
+/// Scene-driven DECAL pixel test — chrome-icosphere end-to-end through the combiner/rasterizer.
 ///
-/// This is the first test that runs a REAL toy (chrome-icosphere.n64) end-to-end through:
+/// This is the first test that runs a REAL scene (chrome-icosphere.n64) end-to-end through:
 ///   assemble → crate::hle::interpret → CombinerUniform::from_run → RspProcessPipeline → TexturedPipeline
 ///   → readback → pixel assert.
 ///
@@ -1859,14 +1862,14 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
         .flat_map(|_| [200u8, 100, 50, 255])
         .collect();
 
-    // Assemble the chrome-icosphere toy with the synthetic env texture.
-    let toys_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys");
-    let src = std::fs::read_to_string(toys_dir.join("chrome-icosphere.n64"))
+    // Assemble the chrome-icosphere scene with the synthetic env texture.
+    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
+    let src = std::fs::read_to_string(scenes_dir.join("chrome-icosphere.n64"))
         .expect("chrome-icosphere.n64 must exist");
     let img = crate::asm::assemble_with_texture(&src, &env_rgba8, TEX_W, TEX_H)
         .expect("chrome-icosphere.n64 must assemble");
 
-    // HLE interpret: the toy must produce a material with tex_enable=true.
+    // HLE interpret: the scene must produce a material with tex_enable=true.
     let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
     assert!(
         r.diags.is_empty(),
@@ -1884,7 +1887,7 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
         "chrome-icosphere material must have tex_enable=true (DECAL uses TEXEL0)"
     );
 
-    // Build CombinerUniform from the real toy material (not hand-constructed).
+    // Build CombinerUniform from the real scene material (not hand-constructed).
     let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0.0; 4]);
 
     // Run the RSP-process compute pass to get GPU-transformed OutVertex positions, colors, and UVs.
@@ -2008,7 +2011,7 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
 
     let data = slice.get_mapped_range();
 
-    // Sample the center pixel (32, 32).  The toy projects a sphere that covers the center of the
+    // Sample the center pixel (32, 32).  The scene projects a sphere that covers the center of the
     // 64×64 target when rendered at t=0 (identity model rotation).
     //
     // DECAL combiner: out = TEXEL0 = the sampled env texel.
@@ -2043,9 +2046,9 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
     );
 }
 
-/// Toy-driven flat-color PRIM pixel test — end-to-end through the combiner/rasterizer.
+/// Scene-driven flat-color PRIM pixel test — end-to-end through the combiner/rasterizer.
 ///
-/// The toy `flat-color.n64` uses:
+/// The scene `flat-color.n64` uses:
 ///   gsDPSetCombineLERP(0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE, 0, 0, 0, PRIMITIVE, 0, 0, 0, SHADE)
 ///   gsDPSetPrimColor(0, 0, 64, 200, 255, 255)
 ///
@@ -2062,13 +2065,13 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
     // No texture needed for flat-color (combiner uses PRIMITIVE, not TEXEL0); pass a 1×1 white
     // placeholder so gsDPLoadTextureBlock (if any) assembles without error.
     let white1x1 = vec![255u8; 4];
-    let toys_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys");
-    let src = std::fs::read_to_string(toys_dir.join("flat-color.n64"))
+    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
+    let src = std::fs::read_to_string(scenes_dir.join("flat-color.n64"))
         .expect("flat-color.n64 must exist");
     let img = crate::asm::assemble_with_texture(&src, &white1x1, 1, 1)
         .expect("flat-color.n64 must assemble");
 
-    // HLE interpret: the toy must produce a material.
+    // HLE interpret: the scene must produce a material.
     let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
     assert!(
         r.diags.is_empty(),
@@ -2082,7 +2085,7 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
 
     let mat = &r.scene.materials[0];
 
-    // Build CombinerUniform from the real toy material.
+    // Build CombinerUniform from the real scene material.
     let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0.0; 4]);
 
     // Run the RSP-process compute pass to get GPU-transformed OutVertex positions and colors.
@@ -2202,7 +2205,7 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
 
     let data = slice.get_mapped_range();
 
-    // Sample the center pixel (32, 32).  The toy projects a full-screen quad covering the center.
+    // Sample the center pixel (32, 32).  The scene projects a full-screen quad covering the center.
     //
     // Hand-computed expected value from gsDPSetPrimColor(0, 0, 64, 200, 255, 255):
     //   PRIM = (R=64, G=200, B=255, A=255)
@@ -2235,9 +2238,9 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
     );
 }
 
-/// cycle_type:1 pixel test — toy-driven, exercises the 2-cycle COMBINED selector path.
+/// cycle_type:1 pixel test — scene-driven, exercises the 2-cycle COMBINED selector path.
 ///
-/// The toy `two-cycle-combiner.n64` renders a static, textureless quad filling most of a 64×64
+/// The scene `two-cycle-combiner.n64` renders a static, textureless quad filling most of a 64×64
 /// target.  The quad has vivid corner SHADE colors and a warm-orange PRIM tint:
 ///   TL=red(255,0,0), TR=green(0,255,0), BL=blue(0,0,255), BR=white(255,255,255)
 ///   PRIM=(255,160,64,255)
@@ -2275,15 +2278,15 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
 fn cycle_type_1_two_cycle_combiner_pixel() {
     let (device, queue, _dual_source) = headless_device();
 
-    // Assemble the toy (no actual texture needed; the combine is textureless).
+    // Assemble the scene (no actual texture needed; the combine is textureless).
     let white1x1 = vec![255u8; 4];
-    let toys_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys");
-    let src = std::fs::read_to_string(toys_dir.join("two-cycle-combiner.n64"))
+    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
+    let src = std::fs::read_to_string(scenes_dir.join("two-cycle-combiner.n64"))
         .expect("two-cycle-combiner.n64 must exist");
     let img = crate::asm::assemble_with_texture(&src, &white1x1, 1, 1)
         .expect("two-cycle-combiner.n64 must assemble");
 
-    // HLE interpret: extract material (toy-driven — exercises the real cycle_type/combine-word path).
+    // HLE interpret: extract material (scene-driven — exercises the real cycle_type/combine-word path).
     let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
     assert!(
         r.diags.is_empty(),
@@ -2292,10 +2295,10 @@ fn cycle_type_1_two_cycle_combiner_pixel() {
     );
     let mat = &r.scene.materials[0];
 
-    // Build CombinerUniform from the toy's material — NOT a hand-constructed uniform.
+    // Build CombinerUniform from the scene's material — NOT a hand-constructed uniform.
     let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0.0; 4]);
 
-    // Primary assertion: the toy must have set 2-cycle mode.
+    // Primary assertion: the scene must have set 2-cycle mode.
     assert_eq!(
         u.cycle_type, 1,
         "two-cycle-combiner must produce cycle_type==1"
@@ -2360,7 +2363,7 @@ fn cycle_type_1_two_cycle_combiner_pixel() {
         mapped_at_creation: false,
     });
 
-    // Placeholder 1×1 white texture (tex_enable=0 from the textureless toy).
+    // Placeholder 1×1 white texture (tex_enable=0 from the textureless scene).
     let tex_rgba8 = vec![255u8, 255, 255, 255];
 
     let pipeline = TexturedPipeline::new(&device, format, DEPTH_FORMAT);
@@ -2489,7 +2492,7 @@ const RGBA16_QUAD_TEX: &[u8] = &[
 
 /// Full-pipeline render helper used by the A8a smoke test.
 /// Assembles, HLE-interprets, RSP-computes, then rasterises with split bind groups.
-fn render_toy_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
+fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
     let pixel_count = tex_native.len() / 4;
     let tex_side = (pixel_count as f64).sqrt() as u32;
 
@@ -2764,7 +2767,7 @@ fn render_toy_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> 
 /// gates the A8a bind-group split and new draw() signature.
 #[test]
 fn single_run_path_renders_textured_center() {
-    let px = render_toy_to_rgba8(RGBA16_QUAD_SRC, RGBA16_QUAD_TEX, 64, 64);
+    let px = render_source_to_rgba8(RGBA16_QUAD_SRC, RGBA16_QUAD_TEX, 64, 64);
     let c = ((32 * 64 + 32) * 4) as usize;
     assert!(
         px[c] > 16 || px[c + 1] > 16 || px[c + 2] > 32,

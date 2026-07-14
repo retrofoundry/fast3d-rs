@@ -1,7 +1,7 @@
 // rsp_process.wgsl — per-vertex RSP transform (F3DEX2 RSP-process stage). Writes pos + color + uv.
 // pos: clip = mvp*v (transpose-on-upload reproduces CPU row-vector), w==0 guard, viewport fold.
 // uv: (s*sc)/DIVISOR / max(tile,1) — F3DEX2 texcoord scale/divisor; the /tile
-// normalize is the n64-toys step matching hle set_vertex.
+// normalize is the extra step matching hle set_vertex.
 // color: diffuse lighting (light_count>0) or cn RGBA passthrough (unlit).
 
 const FB_WIDTH:  f32 = 320.0;

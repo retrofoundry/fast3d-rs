@@ -5,7 +5,7 @@ use crate::tests::common;
 
 use crate::render::{headless_device, SceneRenderer};
 use crate::ClearPolicy;
-use common::{dl_2d_fill, dl_2d_fill_rect, pixel, scene_from_toy}; // B1: no `solid_env_texture` (unused → -D warnings error)
+use common::{dl_2d_fill, dl_2d_fill_rect, pixel, scene_from_source}; // B1: no `solid_env_texture` (unused → -D warnings error)
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -95,12 +95,12 @@ fn store_to_pixels(
     (addr, out)
 }
 
-/// A pair-less flat-3D walk lands in the store keyed by its color image (sentinel 0 for a toy that
-/// never sets CIMG), `has_fb` reports it, and `scanout` blits it 1:1 (PRIM=(64,200,255)).
+/// A pair-less flat-3D walk lands in the store keyed by its color image (sentinel 0 for a scene
+/// that never sets CIMG), `has_fb` reports it, and `scanout` blits it 1:1 (PRIM=(64,200,255)).
 #[test]
 fn pairless_walk_stores_and_scans_out() {
     let (device, queue, dual) = headless_device();
-    let scene = scene_from_toy("flat-color.n64", &[255u8; 4], 1, 1);
+    let scene = scene_from_source("flat-color.n64", &[255u8; 4], 1, 1);
     assert!(
         scene.framebuffer_pairs.is_empty(),
         "flat-color is pair-less"
@@ -159,7 +159,7 @@ fn draw_nothing_walk_returns_none_and_touches_nothing() {
 #[test]
 fn store_fb_recreates_on_resize() {
     let (device, queue, dual) = headless_device();
-    let scene = scene_from_toy("perspective-cube.n64", &[255u8; 4], 1, 1);
+    let scene = scene_from_source("perspective-cube.n64", &[255u8; 4], 1, 1);
     assert!(
         scene.framebuffer_pairs.is_empty(),
         "perspective-cube must be pair-less (no SetColorImage)"

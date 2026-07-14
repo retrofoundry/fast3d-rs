@@ -3,17 +3,17 @@ use crate::tests::common;
 use std::fs;
 use std::path::PathBuf;
 
-fn toys_dir() -> PathBuf {
-    // crates/hle -> repo root -> examples/toys
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/toys")
+fn scenes_dir() -> PathBuf {
+    // fast3d/ crate root -> tests/scenes
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes")
 }
 
 #[test]
-fn every_curated_toy_assembles_and_renders_clean() {
-    // 32x32 white RGBA8 — >= every toy's declared texture dims (2x2 or 32x32).
+fn every_curated_scene_assembles_and_renders_clean() {
+    // 32x32 white RGBA8 — >= every scene's declared texture dims (2x2 or 32x32).
     let white = vec![255u8; 32 * 32 * 4];
     let mut checked = 0;
-    for entry in fs::read_dir(toys_dir()).expect("examples/toys must exist") {
+    for entry in fs::read_dir(scenes_dir()).expect("tests/scenes must exist") {
         let path = entry.unwrap().path();
         if path.extension().and_then(|e| e.to_str()) != Some("n64") {
             continue;
@@ -24,7 +24,7 @@ fn every_curated_toy_assembles_and_renders_clean() {
             .unwrap_or_else(|d| panic!("{name}: assemble failed: {d:?}"));
         let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
         assert!(r.diags.is_empty(), "{name}: interp diags: {:?}", r.diags);
-        // 2D toys (those that open a framebuffer pair via gsDPSetColorImage) may have no
+        // 2D scenes (those that open a framebuffer pair via gsDPSetColorImage) may have no
         // flat triangle indices and no 3D vertex buffer — skip the 3D-only assertions.
         let is_2d = !r.scene.framebuffer_pairs.is_empty();
         if !is_2d {
@@ -33,7 +33,7 @@ fn every_curated_toy_assembles_and_renders_clean() {
                 "{name}: materials empty (would not render)"
             );
             assert!(!r.scene.indices.is_empty(), "{name}: drew no triangles");
-            // Every 3D curated toy must land on-screen after the perspective divide (NDC x,y
+            // Every 3D curated scene must land on-screen after the perspective divide (NDC x,y
             // in [-1,1]) with w>0 (in front of the camera) and depth in [0,1].
             for i in 0..r.scene.raw_pos.len() {
                 let p = common::ref_pos(&r.scene, i);
@@ -54,5 +54,5 @@ fn every_curated_toy_assembles_and_renders_clean() {
         }
         checked += 1;
     }
-    assert_eq!(checked, 32, "expected 32 curated toys, found {checked}");
+    assert_eq!(checked, 32, "expected 32 curated scenes, found {checked}");
 }

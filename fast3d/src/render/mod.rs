@@ -1584,7 +1584,7 @@ impl SceneRenderer {
     }
 
     /// Build the facade. `color_format` is the render target's format; `(w, h)` sizes the depth
-    /// buffer used by `G_ZBUFFER` toys. Lifts web `init`'s pipeline/depth/sampler/uniform creation.
+    /// buffer used by `G_ZBUFFER` scenes. Lifts web `init`'s pipeline/depth/sampler/uniform creation.
     /// `_dual_source` is unused here — each `TexturedPipeline` derives its own dual-source flag
     /// from the device's enabled features (B3/B4); kept as a parameter for call-site stability.
     pub fn new(
@@ -2584,7 +2584,7 @@ impl SceneRenderer {
     ///      `fallback_class` logic and the `fb_source` alias).
     ///
     /// ORDERING ASSUMPTION (documented known limitation): this is faithful when the pair's ops are
-    /// 3D-opaque < 3D-decal < 2D-rects (true for sm64 + the toys). A rect ordered BETWEEN the two
+    /// 3D-opaque < 3D-decal < 2D-rects (true for sm64 + the test scenes). A rect ordered BETWEEN the two
     /// tri groups would be reordered (drawn after both); decal scenes never interleave that way.
     /// Each pass sets the scissor per-draw from the op's active scissor, so mid-pair `SetScissor`
     /// still applies to the correct draws regardless of which pass they land in.
@@ -2691,7 +2691,7 @@ impl SceneRenderer {
 
         // Render segments in order. Depth is CLEARED on the first write segment and LOADED on later
         // ones (so a write segment after a decal group preserves the accumulated depth). Color uses
-        // the caller's `color_load` on the first segment and LOAD thereafter. (sm64/toys always open
+        // the caller's `color_load` on the first segment and LOAD thereafter. (sm64/test scenes always open
         // with opaque geometry, so the first segment is a write segment that clears depth before any
         // decal samples it.)
         let mut depth_cleared = false;

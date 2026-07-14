@@ -23,7 +23,7 @@ pub fn encode_i8_texel(r: u8, g: u8, b: u8, _a: u8) -> u8 {
 /// Pack two 4-bit intensity nibbles into one byte.
 /// **High nibble = even column (t0), low nibble = odd column (t1)** — matches `decode_i4`.
 /// TODO: row-align nibbles for odd-width textures (N64 TMEM starts each row on a byte boundary;
-/// this flat-stream packing only matches hardware for even widths — all current toys are even).
+/// this flat-stream packing only matches hardware for even widths — all current test scenes are even).
 pub fn encode_i4_pair(t0_i4: u8, t1_i4: u8) -> u8 {
     (t0_i4 << 4) | (t1_i4 & 0xF)
 }

@@ -1,8 +1,8 @@
 //! End-to-end native integration test: crate::asm::assemble_with_texture -> crate::hle::interpret -> crate::render::CombinerUniform::from_run.
 use crate::tests::common;
 
-/// Textured-quad source — reads from the shared examples/toys/ file (single source of truth).
-const SAMPLE_SOURCE_RUST: &str = include_str!("../../../examples/toys/textured-quad.n64");
+/// Textured-quad source — reads from the shared tests/scenes/ file (single source of truth).
+const SAMPLE_SOURCE_RUST: &str = include_str!("../../tests/scenes/textured-quad.n64");
 
 /// Build a non-symmetric 32x32 RGBA8 default texture.
 /// Top half: warm orange (200, 100, 50, 255); bottom half: cool blue (50, 100, 200, 255).
@@ -143,8 +143,8 @@ fn e2e_textured_quad_pipeline() {
     );
 }
 
-/// Segmented sub-DL source — reads from the shared examples/toys/ file (single source of truth).
-const SEGMENTED_SUB_DL_SAMPLE: &str = include_str!("../../../examples/toys/segmented-sub-dl.n64");
+/// Segmented sub-DL source — reads from the shared tests/scenes/ file (single source of truth).
+const SEGMENTED_SUB_DL_SAMPLE: &str = include_str!("../../tests/scenes/segmented-sub-dl.n64");
 
 #[test]
 fn segmented_sub_dl_draws_two_culled_objects() {

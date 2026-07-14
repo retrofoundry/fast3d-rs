@@ -1,7 +1,7 @@
 // ia4-ramp — IA4 (4-bit intensity+alpha) texture format demo: via G_IM_FMT_IA / G_IM_SIZ_4b.
 // The RGBA8 source texture is converted to 3-bit intensity + 1-bit alpha by the assembler.
 // Combiner: (ONE - 0) * TEXEL0_ALPHA + 0  →  alpha channel rendered as grayscale (RGB output).
-// 1-bit alpha → two hard bands vertically (top = black/0, bottom = white/255), distinct from I toys.
+// 1-bit alpha → two hard bands vertically (top = black/0, bottom = white/255), distinct from I-format scenes.
 Texture tex = { 32, 32, IA4 }
 Mtx proj = scale(0.0078125)
 Mtx model = identity()

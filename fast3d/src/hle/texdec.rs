@@ -95,7 +95,7 @@ pub fn decode_i8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 /// I4 expansion: `(i4 << 4) | i4`, broadcast to RGBA.
 ///
 /// TODO: row-align nibbles for odd-width textures (N64 TMEM starts each row on a byte boundary;
-/// this flat-stream packing only matches hardware for even widths — all current toys are even).
+/// this flat-stream packing only matches hardware for even widths — all current test scenes are even).
 pub fn decode_i4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];

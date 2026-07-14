@@ -1168,7 +1168,7 @@ mod rect_encoding_tests {
     #[test]
     fn interpret_color_image_defaults_to_sentinel_when_no_cimg() {
         // A pair-less DL that never sets a color image leaves scene.color_image at the default
-        // sentinel (addr 0) — the normal case for flat-3D toys.
+        // sentinel (addr 0) — the normal case for flat-3D scenes.
         let mut b = Vec::new();
         push(&mut b, enddl());
         let r = run(&b, GbiUcode::F3dex2);

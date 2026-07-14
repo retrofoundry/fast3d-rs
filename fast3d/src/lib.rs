@@ -36,7 +36,7 @@ pub use hardware::{Hardware, Rdram, RdramImage, ViRegisters};
 /// How internal framebuffers are cleared across frames (spec §4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClearPolicy {
-    /// Clear each framebuffer on first touch every frame — toy/no-VI consumers (web, goldens).
+    /// Clear each framebuffer on first touch every frame — simple/no-VI consumers (web, goldens).
     PerFrame,
     /// N64-faithful: clear only when a framebuffer texture is newly created or resized; Load
     /// thereafter (a HUD-only repaint keeps last frame's 3D underneath). Live-VI game consumers.
@@ -757,7 +757,7 @@ mod begin_frame_tests {
     fn begin_frame_clears_retained_frame_scenes() {
         let src = std::fs::read_to_string(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../examples/toys/flat-color.n64"),
+                .join("tests/scenes/flat-color.n64"),
         )
         .unwrap();
         let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();
@@ -810,7 +810,7 @@ mod begin_frame_tests {
     fn process_dl_draw_nothing_keeps_last_good_scanout_addr() {
         let src = std::fs::read_to_string(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../examples/toys/flat-color.n64"),
+                .join("tests/scenes/flat-color.n64"),
         )
         .unwrap();
         let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();
@@ -1291,7 +1291,7 @@ mod debugger_present_tests {
     fn debugger_composites_over_scanout_without_erasing_the_game() {
         let src = std::fs::read_to_string(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../examples/toys/flat-color.n64"),
+                .join("tests/scenes/flat-color.n64"),
         )
         .unwrap();
         let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();

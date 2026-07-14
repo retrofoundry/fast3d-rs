@@ -25,7 +25,7 @@ mod renderer_present;
 mod renderer_process_dl;
 mod rsp_tests;
 mod run_split;
-mod toy_gallery;
+mod scene_walk;
 
 // `HostRam`-dependent → 64-bit non-wasm only (preserves host_mem.rs:14 / dlmemory_equivalence.rs:13).
 // `feature = "asm"` already comes from the root tree gate; only the EXTRA conditions survive here.

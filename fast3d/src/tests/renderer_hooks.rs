@@ -31,8 +31,7 @@ fn cfg() -> RendererConfig {
 
 fn flat_color_hw() -> (ImgHw, u64) {
     let src = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/toys/flat-color.n64"),
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes/flat-color.n64"),
     )
     .unwrap();
     let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();

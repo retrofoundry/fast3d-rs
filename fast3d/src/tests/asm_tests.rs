@@ -260,7 +260,7 @@ fn ci8_index_roundtrips_through_decode() {
     );
 }
 
-/// CI8 assembler verify: `assemble_with_texture` for a CI8 toy must produce an RDRAM image that
+/// CI8 assembler verify: `assemble_with_texture` for a CI8 test scene must produce an RDRAM image that
 /// contains (a) the correct CI8 palette (RGBA16 entries at stride 8), (b) the CI8 index data
 /// at tex_addr, and (c) a G_LOADTLUT command (opcode 0xF0) in the display list.
 #[test]
