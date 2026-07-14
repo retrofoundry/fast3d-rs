@@ -5,8 +5,8 @@
 
 /// Format + size descriptor for N64 texture tile.
 ///
-/// `fmt` matches the GBI `G_IM_FMT_*` constants (0=RGBA, 3=IA, 4=I).
-/// `siz` matches `G_IM_SIZ_*` constants (0=4b, 1=8b, 2=16b).
+/// `fmt` matches the GBI `G_IM_FMT_*` constants (0=RGBA, 2=CI, 3=IA, 4=I).
+/// `siz` matches `G_IM_SIZ_*` constants (0=4b, 1=8b, 2=16b, 3=32b).
 pub struct FormatInfo {
     pub fmt: u8,
     pub siz: u8,
@@ -19,11 +19,13 @@ impl FormatInfo {
     /// - siz=0 (4b):  ceil(w*h / 2)  — 2 texels per byte  (I4, IA4)
     /// - siz=1 (8b):  w*h             — 1 byte per texel   (I8, IA8)
     /// - siz=2 (16b): w*h*2           — 2 bytes per texel  (RGBA16, IA16)
+    /// - siz=3 (32b): w*h*4           — 4 bytes per texel  (RGBA32)
     pub fn tmem_bytes(&self, w: u32, h: u32) -> usize {
         let texels = (w * h) as usize;
         match self.siz {
             0 => texels.div_ceil(2),
             1 => texels,
+            3 => texels * 4,
             _ => texels * 2,
         }
     }
@@ -37,6 +39,7 @@ impl FormatInfo {
     /// - `(3, 1)` → IA8 intensity+alpha
     /// - `(3, 0)` → IA4 intensity+alpha
     /// - `(0, 2)` → RGBA16 (delegates to `combiner::decode_rgba16` for byte-identity)
+    /// - `(0, 3)` → RGBA32 (direct 8-bit-per-channel copy)
     /// - other    → warn + RGBA16 fallback (NOT silent)
     ///
     /// `tlut`/`palette`/`tlut_fmt` carry TLUT state for CI formats (Task 3); non-CI ignore them.
@@ -56,6 +59,7 @@ impl FormatInfo {
             (3, 1) => decode_ia8(src, w, h),
             (3, 0) => decode_ia4(src, w, h),
             (0, 2) => crate::hle::combiner::decode_rgba16(src),
+            (0, 3) => decode_rgba32(src, w, h),
             (2, 1) => decode_ci8(src, w, h, tlut, tlut_fmt),
             (2, 0) => decode_ci4(src, w, h, tlut, palette, tlut_fmt),
             (f, s) => {
@@ -176,6 +180,29 @@ pub fn decode_ia4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
         let i8 = (i_raw << 4) | (i_raw << 1) | (i_raw >> 2);
         let a = if nibble & 1 != 0 { 255 } else { 0 };
         out[i * 4..i * 4 + 4].copy_from_slice(&[i8, i8, i8, a]);
+    }
+    out
+}
+
+/// Decode RGBA32 (8-bit per channel, 4 bytes/texel) TMEM bytes to RGBA8.
+///
+/// Each 4-byte texel is stored `R G B A` in memory (RT64 `RGBA32ToFloat4`:
+/// `(r<<24)|(g<<16)|(b<<8)|a`). All four channels are already 8-bit, so decode is a direct
+/// copy with **no expansion** — the one N64 texture format that needs no bit-replication.
+///
+/// fast3d's linear-TMEM model decodes the LoadBlock'd source bytes directly, so it sidesteps
+/// RGBA32's authentic dual-TMEM-bank split (RG in the low bank, BA in the high bank) — RT64
+/// needs that split only because it models real TMEM banks; here the source bytes are contiguous.
+pub fn decode_rgba32(src: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let n = (w * h) as usize;
+    let mut out = vec![0u8; n * 4];
+    for i in 0..n {
+        let base = i * 4;
+        let r = src.get(base).copied().unwrap_or(0);
+        let g = src.get(base + 1).copied().unwrap_or(0);
+        let b = src.get(base + 2).copied().unwrap_or(0);
+        let a = src.get(base + 3).copied().unwrap_or(0);
+        out[base..base + 4].copy_from_slice(&[r, g, b, a]);
     }
     out
 }
@@ -306,6 +333,27 @@ mod tests {
         assert_eq!(FormatInfo { fmt: 4, siz: 1 }.tmem_bytes(4, 4), 16); // I8:  w*h
         assert_eq!(FormatInfo { fmt: 4, siz: 0 }.tmem_bytes(4, 4), 8); //  I4:  ceil(w*h/2)
         assert_eq!(FormatInfo { fmt: 0, siz: 2 }.tmem_bytes(4, 4), 32); // RGBA16: w*h*2
+        assert_eq!(FormatInfo { fmt: 0, siz: 3 }.tmem_bytes(4, 4), 64); // RGBA32: w*h*4
+    }
+
+    #[test]
+    fn rgba32_direct_copy_and_dispatch() {
+        // RGBA32 is 8-bit-per-channel: decode is an identity copy, R G B A order preserved.
+        // 2×2 with per-texel-distinct bytes so a channel/texel swap would show up.
+        let src: Vec<u8> = (0u8..16).collect(); // w*h*4 = 16 bytes
+        assert_eq!(decode_rgba32(&src, 2, 2), src);
+        // Dispatch (0,3) routes to decode_rgba32 (not the RGBA16 fallback).
+        assert_eq!(
+            FormatInfo { fmt: 0, siz: 3 }.decode(&src, 2, 2, &[], 0, 0),
+            src
+        );
+    }
+
+    #[test]
+    fn rgba32_short_src_zero_pads() {
+        // Contract: output is always w*h*4 bytes even when src is short (zero-padded tail).
+        let out = decode_rgba32(&[0xAA, 0xBB], 1, 1);
+        assert_eq!(out, vec![0xAA, 0xBB, 0x00, 0x00]);
     }
 
     #[test]
