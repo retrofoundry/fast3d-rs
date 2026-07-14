@@ -1,39 +1,27 @@
 [package]
 name = "fast3d"
 version.workspace = true
-authors.workspace = true
 edition.workspace = true
+authors.workspace = true
 description.workspace = true
-homepage.workspace = true
 repository.workspace = true
 keywords.workspace = true
-license-file.workspace = true
-readme.workspace = true
-
-[lib]
-crate-type = ["lib", "cdylib"]
-
-[features]
-default = ["f3dex2"]
-
-f3d = []
-f3dex2 = []
-f3dex2e = ["gbifloats", "f3dex2"]
-f3dzex2 = ["f3dex2"]
-
-gbifloats = []
+license.workspace = true
 
 [dependencies]
+wgpu.workspace = true
 bytemuck.workspace = true
-glam.workspace = true
 log.workspace = true
-rustc-hash.workspace = true
-lru.workspace = true
-num_enum.workspace = true
-bitflags.workspace = true
-fast3d-gbi.workspace = true
-pigment64.workspace = true
-nohash-hasher.workspace = true
+egui = { version = "0.35", optional = true }
+egui-wgpu = { version = "0.35", optional = true }
 
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "0.3.0"
+[dev-dependencies]
+wgpu = { version = "29.0", features = ["wgsl"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster = "0.3"
+
+[features]
+default = ["asm"]
+asm = []
+debug-ui = ["dep:egui", "dep:egui-wgpu"]

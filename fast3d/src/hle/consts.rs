@@ -1,0 +1,214 @@
+#![allow(dead_code)]
+
+pub mod rdp {
+    // RDP opcodes (top byte of w0, bits [31:24]).
+    pub const G_NOOP: u8 = 0x00;
+    pub const G_SETTIMG: u8 = 0xFD;
+    pub const G_SETCOMBINE: u8 = 0xFC;
+    pub const G_SETENVCOLOR: u8 = 0xFB;
+    pub const G_SETPRIMCOLOR: u8 = 0xFA;
+    pub const G_SETTILE: u8 = 0xF5;
+    pub const G_LOADBLOCK: u8 = 0xF3;
+    pub const G_LOADTLUT: u8 = 0xF0;
+    // --- other_mode_l render-flag bit masks (libultra gbi.h) ---
+    pub const AC_NONE: u32 = 0;
+    pub const AC_THRESHOLD: u32 = 1;
+    pub const AC_DITHER: u32 = 3;
+    pub const AA_EN: u32 = 0x0008;
+    pub const Z_CMP: u32 = 0x0010;
+    pub const Z_UPD: u32 = 0x0020;
+    pub const IM_RD: u32 = 0x0040;
+    pub const CLR_ON_CVG: u32 = 0x0080;
+    pub const ZMODE_MASK: u32 = 0x0C00;
+    pub const ZMODE_OPA: u32 = 0x0000;
+    pub const ZMODE_INTER: u32 = 0x0400;
+    pub const ZMODE_XLU: u32 = 0x0800;
+    pub const ZMODE_DEC: u32 = 0x0C00;
+    pub const CVG_X_ALPHA: u32 = 0x1000;
+    pub const ALPHA_CVG_SEL: u32 = 0x2000;
+    pub const FORCE_BL: u32 = 0x4000;
+    // --- blender selector codes (§4.2) ---
+    pub const CLR_IN: u32 = 0;
+    pub const CLR_MEM: u32 = 1;
+    pub const CLR_BL: u32 = 2;
+    pub const CLR_FOG: u32 = 3;
+    pub const A_IN: u32 = 0;
+    pub const A_FOG: u32 = 1;
+    pub const A_SHADE: u32 = 2;
+    pub const A_0: u32 = 3;
+    pub const B_1MA: u32 = 0;
+    pub const B_A_MEM: u32 = 1;
+    pub const B_1: u32 = 2;
+    pub const B_0: u32 = 3;
+    /// GBL_c1(p,a,m,b) = p<<30 | a<<26 | m<<22 | b<<18 (cycle-1 blender mux).
+    pub const fn gbl_c1(p: u32, a: u32, m: u32, b: u32) -> u32 {
+        (p << 30) | (a << 26) | (m << 22) | (b << 18)
+    }
+    /// GBL_c2(p,a,m,b) = p<<28 | a<<24 | m<<20 | b<<16 (cycle-2 blender mux).
+    pub const fn gbl_c2(p: u32, a: u32, m: u32, b: u32) -> u32 {
+        (p << 28) | (a << 24) | (m << 20) | (b << 16)
+    }
+    // CVG_DST coverage-destination modes (libultra gbi.h) — needed for the exact §4.5 low words.
+    pub const CVG_DST_WRAP: u32 = 0x0100;
+    pub const CVG_DST_FULL: u32 = 0x0200;
+    pub const CVG_DST_SAVE: u32 = 0x0300;
+    // --- G_RM_* render-mode presets (libultra gbi.h, low word verified against spec §4.5) ---
+    pub const G_RM_OPA_SURF: u32 = IM_RD | FORCE_BL | gbl_c1(CLR_IN, A_0, CLR_IN, B_1); // low 0x4040
+    pub const G_RM_OPA_SURF2: u32 = gbl_c2(CLR_IN, A_0, CLR_IN, B_1);
+    pub const G_RM_AA_ZB_OPA_SURF: u32 = AA_EN
+        | Z_CMP
+        | Z_UPD
+        | IM_RD
+        | ALPHA_CVG_SEL
+        | ZMODE_OPA
+        | gbl_c1(CLR_IN, A_IN, CLR_MEM, B_1MA); // low 0x2078 (NO CLR_ON_CVG)
+    pub const G_RM_AA_ZB_OPA_SURF2: u32 = gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA);
+    pub const G_RM_AA_ZB_XLU_SURF: u32 = AA_EN
+        | Z_CMP
+        | IM_RD
+        | CVG_DST_WRAP
+        | CLR_ON_CVG
+        | FORCE_BL
+        | ZMODE_XLU
+        | gbl_c1(CLR_IN, A_IN, CLR_MEM, B_1MA); // low 0x49D8 (INCLUDES CVG_DST_WRAP)
+    pub const G_RM_AA_ZB_XLU_SURF2: u32 = gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA);
+    pub const G_RM_AA_ZB_TEX_EDGE: u32 = AA_EN
+        | Z_CMP
+        | Z_UPD
+        | IM_RD
+        | CVG_X_ALPHA
+        | ALPHA_CVG_SEL
+        | ZMODE_OPA
+        | gbl_c1(CLR_IN, A_IN, CLR_MEM, B_1MA); // low 0x3078 (NO CLR_ON_CVG)
+    pub const G_RM_AA_ZB_TEX_EDGE2: u32 = gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA);
+    pub const G_RM_CLD_SURF: u32 =
+        IM_RD | CVG_DST_SAVE | FORCE_BL | ZMODE_OPA | gbl_c1(CLR_IN, A_IN, CLR_MEM, B_1MA); // low 0x4340 (ZMODE_OPA, no Z bits)
+    pub const G_RM_CLD_SURF2: u32 = gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA);
+    pub const G_RM_AA_ZB_OPA_DECAL: u32 = AA_EN
+        | Z_CMP
+        | IM_RD
+        | CVG_DST_WRAP
+        | ALPHA_CVG_SEL
+        | ZMODE_DEC
+        | gbl_c1(CLR_IN, A_IN, CLR_MEM, B_1MA); // low 0x2D58
+    pub const G_RM_AA_ZB_OPA_DECAL2: u32 = gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA);
+    pub const G_RM_AA_ZB_XLU_DECAL: u32 = AA_EN
+        | Z_CMP
+        | IM_RD
+        | CVG_DST_WRAP
+        | CLR_ON_CVG
+        | FORCE_BL
+        | ZMODE_DEC
+        | gbl_c1(CLR_IN, A_IN, CLR_MEM, B_1MA); // low 0x4DD8
+    pub const G_RM_AA_ZB_XLU_DECAL2: u32 = gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA);
+    /// G_RM_FOG_SHADE_A: cycle-1 fog blender (CLR_FOG*A_SHADE + CLR_IN*(1-A_SHADE)).
+    /// Used as mode1 in gsDPSetRenderMode with a 2-cycle OPA_SURF mode2.
+    pub const G_RM_FOG_SHADE_A: u32 = gbl_c1(CLR_FOG, A_SHADE, CLR_IN, B_1MA);
+    // othermode_H TextureLUT field (bits [15:14]).
+    pub const G_MDSFT_TEXTLUT: u32 = 14;
+    pub const G_TT_NONE: u8 = 0;
+    pub const G_TT_RGBA16: u8 = 2;
+    pub const G_TT_IA16: u8 = 3;
+    pub const G_SETTILESIZE: u8 = 0xF2;
+    pub const G_RDPLOADSYNC: u8 = 0xE6;
+    pub const G_RDPPIPESYNC: u8 = 0xE7;
+    pub const G_RDPTILESYNC: u8 = 0xE8;
+    pub const G_RDPFULLSYNC: u8 = 0xE9;
+    pub const G_RDPSETOTHERMODE: u8 = 0xEF;
+    /// G_SETFOGCOLOR (0xF8): sets the scene-global fog RGBA color. Deferred from A1 to C1.
+    pub const G_SETFOGCOLOR: u8 = 0xF8;
+    /// G_SETBLENDCOLOR (0xF9): sets the blend-color register RGBA8 (used by CLR_BL blender selector
+    /// and THRESHOLD alpha-compare; Phase D wires the HLE handler and renderer uniform).
+    pub const G_SETBLENDCOLOR: u8 = 0xF9;
+    // --- 2D / framebuffer RDP opcodes ---
+    pub const G_TEXRECT: u8 = 0xE4;
+    pub const G_TEXRECTFLIP: u8 = 0xE5;
+    pub const G_FILLRECT: u8 = 0xF6;
+    pub const G_SETFILLCOLOR: u8 = 0xF7;
+    pub const G_SETSCISSOR: u8 = 0xED;
+    pub const G_SETCIMG: u8 = 0xFF;
+    pub const G_SETZIMG: u8 = 0xFE;
+    pub const G_RDPHALF_1: u8 = 0xE1;
+    pub const G_RDPHALF_2: u8 = 0xF1;
+    /// G_CYC_COPY (2): copy-mode cycle type (SETOTHERMODE_H CYC field value).
+    pub const G_CYC_COPY: u32 = 2;
+}
+
+pub mod rsp_f3dex2 {
+    // RSP F3DEX2 opcodes (top byte of w0, bits [31:24]).
+    pub const G_VTX: u8 = 0x01;
+    pub const G_TRI1: u8 = 0x05;
+    pub const G_TRI2: u8 = 0x06;
+    pub const G_GEOMETRYMODE: u8 = 0xD9;
+    pub const G_MTX: u8 = 0xDA;
+    pub const G_MOVEMEM: u8 = 0xDC;
+    pub const G_ENDDL: u8 = 0xDF;
+    pub const G_TEXTURE: u8 = 0xD7;
+    pub const G_SETOTHERMODE_H: u8 = 0xE3;
+    /// G_SETOTHERMODE_L (0xE2): RSP bit-field write into other_mode_l (sibling of G_SETOTHERMODE_H).
+    pub const G_SETOTHERMODE_L: u8 = 0xE2;
+    /// G_MOVEWORD sub-type selecting the fog word (gSPFogPosition).
+    pub const G_MW_FOG: u8 = 0x08;
+    /// Byte-offset within the fog word.
+    pub const G_MWO_FOG: u8 = 0x00;
+    pub const G_DL: u8 = 0xDE;
+    pub const G_MOVEWORD: u8 = 0xDB;
+    pub const G_POPMTX: u8 = 0xD8;
+    /// G_MOVEWORD sub-type selecting the segment table (F3DEX2 microcode).
+    pub const G_MW_SEGMENT: u8 = 0x06;
+    /// G_MOVEWORD sub-type selecting the perspective-normalize coefficient (libultra gbi.h).
+    pub const G_MW_PERSPNORM: u8 = 0x0E;
+    /// G_MOVEWORD sub-type selecting the clip ratio (libultra gbi.h).
+    pub const G_MW_CLIP: u8 = 0x04;
+
+    // G_MOVEMEM index for the viewport (F3DEX2_G_MV_VIEWPORT).
+    pub const G_MV_VIEWPORT: u8 = 0x08;
+    /// F3DEX2 G_MOVEMEM index for lights (per-light DMEM stride 0x18; slots 0/1 = LookAt).
+    pub const G_MV_LIGHT: u8 = 0x0A;
+    /// G_MOVEWORD index/offset for the directional light count (gSPNumLights(n) => n*24).
+    pub const G_MW_NUMLIGHT: u8 = 0x02;
+    /// G_MOVEWORD byte-offset within the numlight word (always 0x00 for F3DEX2).
+    pub const G_MWO_NUMLIGHT: u8 = 0x00;
+
+    // G_MTX param bits (post-XOR logical values; F3DEX2 microcode).
+    pub const G_MTX_MODELVIEW: u8 = 0x00;
+    pub const G_MTX_PROJECTION: u8 = 0x04;
+    pub const G_MTX_MUL: u8 = 0x00;
+    pub const G_MTX_LOAD: u8 = 0x02;
+    pub const G_MTX_NOPUSH: u8 = 0x00;
+    pub const G_MTX_PUSH: u8 = 0x01;
+
+    // Geometry-mode flags (F3DEX2 values).
+    pub const G_SHADE: u32 = 0x0000_0004;
+    pub const G_CULL_FRONT: u32 = 0x0000_0200;
+    pub const G_CULL_BACK: u32 = 0x0000_0400;
+    pub const G_CULL_BOTH: u32 = 0x0000_0600;
+    pub const G_FOG: u32 = 0x0001_0000;
+    pub const G_LIGHTING: u32 = 0x0002_0000;
+    pub const G_SHADING_SMOOTH: u32 = 0x0020_0000;
+    pub const G_CLIPPING: u32 = 0x0080_0000;
+    /// Enable the Z-buffer (F3DEX2 gbi.h `G_ZBUFFER`).
+    pub const G_ZBUFFER: u32 = 0x0000_0001;
+    /// Enable texture-coordinate generation / spherical reflection mapping (F3DEX2 `G_TEXTURE_GEN`).
+    pub const G_TEXTURE_GEN: u32 = 0x0004_0000;
+    /// Linear texture-coordinate generation (F3DEX2 `G_TEXTURE_GEN_LINEAR`).
+    pub const G_TEXTURE_GEN_LINEAR: u32 = 0x0008_0000;
+}
+
+pub use rdp::*;
+pub use rsp_f3dex2::*;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn submodules_and_glob_agree() {
+        assert_eq!(super::rdp::G_SETTIMG, 0xFD);
+        assert_eq!(super::rdp::G_SETCOMBINE, 0xFC);
+        assert_eq!(super::rsp_f3dex2::G_TEXTURE, 0xD7);
+        assert_eq!(super::rsp_f3dex2::G_SETOTHERMODE_H, 0xE3);
+        assert_eq!(super::G_VTX, 0x01);
+        assert_eq!(super::G_ENDDL, 0xDF);
+        assert_eq!(super::G_NOOP, 0x00);
+        assert_eq!(super::G_SETTIMG, 0xFD);
+    }
+}

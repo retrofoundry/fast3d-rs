@@ -1,0 +1,27 @@
+// wrap-repeat — WRAP sampler demo: G_TX_WRAP on both S and T axes.
+// UVs span [0,2] (S/T = 0..2048 on a 32×32 tile), producing 2×2 tiling of the checker texture.
+// Explicitly sets cms=cmt=0 (G_TX_WRAP) and masks=maskt=5 (log2 32) in gsDPLoadTextureBlock
+// to exercise the wgpu Repeat address-mode path in the sampler pool.
+Texture tex = { 32, 32, RGBA16 }
+Mtx proj = scale(0.0078125)
+Mtx model = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx { -48, -48, 0, 0,    0,    0, 255,255,255,255 }
+Vtx {  48, -48, 0, 0, 2048,    0, 255,255,255,255 }
+Vtx {  48,  48, 0, 0, 2048, 2048, 255,255,255,255 }
+Vtx { -48,  48, 0, 0,    0, 2048, 255,255,255,255 }
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+gsDPSetOtherMode_H(G_CYC_1CYCLE)
+gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+gsDPSetCombineLERP(TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE, TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE)
+gsDPSetPrimColor(0, 0, 255, 255, 255, 255)
+gsDPSetEnvColor(0, 0, 0, 255)
+gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, 32, 32, 0, 5, 0, 5)
+gsSPTexture(0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON)
+gsSPVertex(verts, 4, 0)
+gsSP1Triangle(0, 1, 2, 0)
+gsSP1Triangle(0, 2, 3, 0)
+gsSPEndDisplayList()

@@ -1,0 +1,37 @@
+// hud-over-3d — CIMG-first composite: a Gouraud-shaded quad (3D scene pass in 1-cycle mode),
+// followed by a COPY-cycle TEXRECT overlaying the quad_tex checker as a HUD element.
+//
+// The display list opens with gsDPSetColorImage (required for framebuffer-pair recording),
+// draws the 3D geometry under G_CYC_1CYCLE, then switches to G_CYC_COPY and issues a
+// gsSPTextureRectangle — demonstrating the CIMG-first / depth-off HUD overlay pattern.
+//
+// Scanout CIMG: 64×64 RGBA16 at 0x00100000.
+Texture tex = { 4, 4, RGBA16 }
+Mtx proj = scale(0.0078125)
+Mtx model = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx { -48, -48, 0, 0, 0, 0, 255,   0,   0, 255 }
+Vtx {  48, -48, 0, 0, 0, 0,   0, 255,   0, 255 }
+Vtx {  48,  48, 0, 0, 0, 0,   0,   0, 255, 255 }
+Vtx { -48,  48, 0, 0, 0, 0, 255, 255,   0, 255 }
+update {
+  guRotate(model, time * 45, 0, 1, 0)
+}
+gsDPSetColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00100000)
+gsDPSetScissor(0, 0, 0, 256, 256)
+// --- 3D scene pass (G_CYC_1CYCLE) ---
+gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+gsDPSetOtherMode_H(G_CYC_1CYCLE)
+gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE)
+gsSPVertex(verts, 4, 0)
+gsSP2Triangles(0, 1, 2, 0, 0, 2, 3, 0)
+// --- 2D HUD overlay (G_CYC_COPY, depth disabled) ---
+// TEXRECT covers a 16×16-pixel corner (sub-pixel coords: 16×4=64).
+gsDPSetOtherMode_H(G_CYC_COPY)
+gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, 4, 4)
+gsSPTextureRectangle(0, 0, 64, 64, 0, 0, 0, 1024, 1024)
+gsSPEndDisplayList()

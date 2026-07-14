@@ -1,0 +1,24 @@
+// offscreen-then-sample — off-screen render to a scratch 64×64 CIMG, then sample
+// that result as a TEXRECT source onto the scanout 64×64 CIMG.
+//
+// Two framebuffer pairs (two gsDPSetColorImage boundaries):
+//   Pair 0 — scratch at 0x00200000: FILL mode paints it orange (RGBA16 0xFB81 × 2).
+//   Pair 1 — scanout at 0x00100000: COPY mode samples the scratch buffer via
+//             gsDPSetTextureImage(scratch addr) + SetTile + SetTileSize + TEXRECT.
+//
+// This tests the off-screen FB → texture-source → blit pipeline (Task 8/9).
+// The line parameter for SetTile = (64 × 2 B/texel) / 8 B/word = 16 TMEM words/row.
+// Tile size lrs/lrt = (64 − 1) × 4 = 252 in 10.2 fixed-point.
+gsDPSetColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00200000)
+gsDPSetScissor(0, 0, 0, 256, 256)
+gsDPSetOtherMode_H(G_CYC_FILL)
+gsDPSetFillColor(0xFB81FB81)
+gsDPFillRectangle(0, 0, 256, 256)
+gsDPSetColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00100000)
+gsDPSetScissor(0, 0, 0, 256, 256)
+gsDPSetOtherMode_H(G_CYC_COPY)
+gsDPSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00200000)
+gsDPSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 16, 0, G_TX_RENDERTILE, 0, 2, 0, 0, 2, 0, 0)
+gsDPSetTileSize(G_TX_RENDERTILE, 0, 0, 252, 252)
+gsSPTextureRectangle(0, 0, 256, 256, 0, 0, 0, 1024, 1024)
+gsSPEndDisplayList()

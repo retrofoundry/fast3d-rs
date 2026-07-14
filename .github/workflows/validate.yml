@@ -7,43 +7,44 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-jobs:    
-  rustfmt-check:
+jobs:
+  # Compile-only checks (fmt + clippy). No GPU adapter needed, so these run on Linux.
+  lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Run cargo fmt
-      run: cargo fmt --all -- --check
-    - name: Run cargo clippy
-      run: cargo clippy --all -- -D warnings
-  macos-check:
-    runs-on: macos-14
-    steps:
-    - uses: actions/checkout@v2
-    - name: Test
-      run: cargo test
-  ubuntu-check:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Test
-      run: cargo test
-  windows-check:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Test
-      run: cargo test
-  wasm-check:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v2
-    - name: Install wasm-pack
-      uses: taiki-e/install-action@v2
-      with:
-        tool: wasm-pack
-    - name: Test
-      run: |
-        cd fast3d
-        wasm-pack test --headless --chrome
+      - uses: actions/checkout@v4
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy (default)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: clippy (--no-default-features)
+        run: cargo clippy -p fast3d --no-default-features --all-targets -- -D warnings
+      - name: clippy (--features debug-ui)
+        run: cargo clippy -p fast3d --features debug-ui --all-targets -- -D warnings
 
+  # The GPU/render tests (goldens, framebuffer store, hooks, debugger) need a real wgpu
+  # adapter. macOS runners have Metal and Windows runners have WARP (software D3D); Linux
+  # runners have no adapter, so the render suite is not exercised there (it is compiled by
+  # `lint`). Web/WebGPU behaviour is verified in-browser by the consumer app.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: test (default)
+        run: cargo test --workspace
+      - name: test (--features debug-ui)
+        run: cargo test -p fast3d --features debug-ui
+      - name: test (--no-default-features)
+        run: cargo test -p fast3d --no-default-features
+
+  # Prove the library stays wasm-compatible (catches a native-only API / dep regression).
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build for wasm32
+        run: cargo build -p fast3d --target wasm32-unknown-unknown

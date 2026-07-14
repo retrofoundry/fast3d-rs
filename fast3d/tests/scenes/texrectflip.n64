@@ -1,0 +1,15 @@
+// texrectflip — 2D demo: gsSPTextureRectangleFlip maps the quad_tex 4×4 checker
+// with the S and T axes swapped (flip=true), rotating the pattern 90° on screen.
+//
+// Uses G_CYC_COPY mode and a 64×64 RGBA16 scanout CIMG.
+// TextureRectangleFlip differs from TextureRectangle only in the GBI opcode:
+//   G_TEXRECTFLIP (0xE5) vs G_TEXRECT (0xE4) — identical parameter encoding.
+//
+// Scanout CIMG: 64×64 RGBA16 at 0x00100000 (w×4=256 sub-pixel width).
+Texture tex = { 4, 4, RGBA16 }
+gsDPSetColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00100000)
+gsDPSetScissor(0, 0, 0, 256, 256)
+gsDPSetOtherMode_H(G_CYC_COPY)
+gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, 4, 4)
+gsSPTextureRectangleFlip(0, 0, 256, 256, 0, 0, 0, 1024, 1024)
+gsSPEndDisplayList()
