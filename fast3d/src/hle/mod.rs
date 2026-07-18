@@ -10,6 +10,7 @@ pub mod math;
 pub mod mem;
 pub mod rdp;
 pub mod rsp;
+pub mod rsp_f3d;
 pub mod rsp_f3dex2;
 pub mod texdec;
 pub mod tmem;

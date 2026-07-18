@@ -1,18 +1,18 @@
-//! Microcode-variant descriptor: the opcode→handler table (Task 1), plus symbolic
-//! constants (Task 2) and the data format (Task 4). Selected by an M-free `GbiUcode`
-//! so consumers pick a ucode with no backend in scope.
+//! Microcode-variant descriptor: the opcode→handler table (Task 1) plus symbolic
+//! constants (Task 2). Selected by an M-free `GbiUcode` so consumers pick a ucode with
+//! no backend in scope. The vertex/matrix data format (fixed vs float) is orthogonal to
+//! the microcode and is supplied by the caller, not derived here.
 use crate::hle::interp::{unknown, Handler};
 use crate::hle::mem::{GbiDataFormat, Rdram};
 
 mod detect;
+mod f3d;
 pub(crate) mod f3dex2;
-mod f3dex2e;
 pub use detect::detect_from_ucode_hash;
 
 /// Per-ucode symbolic constants. `Copy`, M-free. Every field except `mtx_param_xor`
-/// is sourced FROM `crate::hle::consts::*`. F3DEX2 and F3DEX2E are IDENTICAL here (every SP
-/// constant is gated on `#ifdef F3DEX_GBI_2`, never `_2E`); the struct is the seam
-/// where a future F3D/S2DEX module supplies different values.
+/// is sourced from the selected microcode's constants module; original F3D supplies its
+/// distinct values through the same seam as F3DEX2.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GbiConstants {
     pub g_dl: u8,
@@ -44,31 +44,25 @@ pub struct GbiConstants {
 /// Identity of a microcode variant. M-free.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum GbiUcode {
-    /// Authentic fixed-point F3DEX2 — the web/RdramImage default.
+    /// Authentic F3DEX2 — the web/RdramImage default.
     #[default]
     F3dex2,
-    /// GBI_FLOATS PC ports (sm64, wafel): float matrices + float verts.
-    F3dex2e,
+    /// Original F3D microcode.
+    F3d,
 }
 
 impl GbiUcode {
     pub(crate) fn install<M: Rdram>(self, table: &mut [Handler<M>; 256]) {
         match self {
             GbiUcode::F3dex2 => f3dex2::install_f3dex2(table),
-            GbiUcode::F3dex2e => f3dex2e::install_f3dex2e(table),
+            GbiUcode::F3d => f3d::install_f3d(table),
         }
     }
 
     pub fn constants(self) -> GbiConstants {
         match self {
-            GbiUcode::F3dex2 | GbiUcode::F3dex2e => f3dex2::F3DEX2_CONSTS,
-        }
-    }
-
-    pub fn data_format(self) -> GbiDataFormat {
-        match self {
-            GbiUcode::F3dex2 => GbiDataFormat::Fixed,
-            GbiUcode::F3dex2e => GbiDataFormat::Float,
+            GbiUcode::F3dex2 => f3dex2::F3DEX2_CONSTS,
+            GbiUcode::F3d => f3d::F3D_CONSTS,
         }
     }
 }
@@ -82,13 +76,13 @@ pub(crate) struct Gbi<M: Rdram> {
 }
 
 impl<M: Rdram> Gbi<M> {
-    pub(crate) fn new(ucode: GbiUcode) -> Self {
+    pub(crate) fn new(ucode: GbiUcode, data_format: GbiDataFormat) -> Self {
         let mut table = [unknown::<M> as Handler<M>; 256];
         ucode.install(&mut table);
         Gbi {
             table,
             consts: ucode.constants(),
-            data_format: ucode.data_format(),
+            data_format,
         }
     }
 }
@@ -128,15 +122,34 @@ mod tests {
     }
 
     #[test]
-    fn f3dex2_and_f3dex2e_share_sp_constants() {
-        assert_eq!(GbiUcode::F3dex2.constants(), GbiUcode::F3dex2e.constants());
-    }
+    fn f3d_consts_match_original_microcode() {
+        use crate::hle::consts::rsp_f3d as f3d;
 
-    #[test]
-    fn ucode_data_format_mapping() {
-        use crate::hle::mem::GbiDataFormat;
-        assert_eq!(GbiUcode::F3dex2.data_format(), GbiDataFormat::Fixed);
-        assert_eq!(GbiUcode::F3dex2e.data_format(), GbiDataFormat::Float);
+        let c = GbiUcode::F3d.constants();
+        assert_eq!(c.g_dl, f3d::G_DL);
+        assert_eq!(c.g_enddl, f3d::G_ENDDL);
+        assert_eq!(c.mtx_param_xor, 0x00);
+        assert_eq!(c.g_mtx_projection, f3d::G_MTX_PROJECTION);
+        assert_eq!(c.g_mtx_load, f3d::G_MTX_LOAD);
+        assert_eq!(c.g_mtx_push, f3d::G_MTX_PUSH);
+        assert_eq!(c.g_mv_viewport, f3d::G_MV_VIEWPORT);
+        assert_eq!(c.g_mv_light, f3d::G_MV_LIGHT);
+        assert_eq!(c.g_mw_segment, f3d::G_MW_SEGMENT);
+        assert_eq!(c.g_mw_perspnorm, f3d::G_MW_PERSPNORM);
+        assert_eq!(c.g_mw_clip, f3d::G_MW_CLIP);
+        assert_eq!(c.g_mw_numlight, f3d::G_MW_NUMLIGHT);
+        assert_eq!(c.g_mw_fog, f3d::G_MW_FOG);
+        assert_eq!(c.g_fog_geom, f3d::G_FOG);
+        assert_eq!(c.g_clipping, f3d::G_CLIPPING);
+        assert_eq!(c.g_lighting, f3d::G_LIGHTING);
+        assert_eq!(c.g_texture_gen, f3d::G_TEXTURE_GEN);
+        assert_eq!(c.g_texture_gen_linear, f3d::G_TEXTURE_GEN_LINEAR);
+        assert_eq!(c.g_cull_front, f3d::G_CULL_FRONT);
+        assert_eq!(c.g_cull_back, f3d::G_CULL_BACK);
+        assert_eq!(c.g_cull_both, f3d::G_CULL_BOTH);
+
+        assert_eq!(c.g_dl, 0x06);
+        assert_eq!(c.g_cull_front, 0x0000_1000);
     }
 
     /// Pre-refactor construction: exactly what `build_f3dex2_table` did inline.
@@ -150,21 +163,100 @@ mod tests {
     // T-parity: Gbi::new(F3dex2) is byte-for-byte the pre-refactor table.
     #[test]
     fn f3dex2_table_matches_reference() {
-        let built = Gbi::<RdramImage<'static>>::new(GbiUcode::F3dex2).table;
+        let built = Gbi::<RdramImage<'static>>::new(GbiUcode::F3dex2, GbiDataFormat::Fixed).table;
         let reference = reference_f3dex2();
         for i in 0..256 {
             assert_eq!(built[i] as usize, reference[i] as usize, "slot 0x{i:02X}");
         }
     }
 
-    // T-compose: F3DEX2E's override slot is empty — its table equals F3DEX2's.
-    // Goes red intentionally when the 2D slice adds a single-word override.
     #[test]
-    fn f3dex2e_table_equals_f3dex2() {
-        let a = Gbi::<RdramImage<'static>>::new(GbiUcode::F3dex2).table;
-        let b = Gbi::<RdramImage<'static>>::new(GbiUcode::F3dex2e).table;
-        for i in 0..256 {
-            assert_eq!(a[i] as usize, b[i] as usize, "slot 0x{i:02X}");
+    fn f3d_table_installs_phase3_handlers() {
+        use crate::hle::consts::{rdp, rsp_f3d};
+
+        let built = Gbi::<RdramImage<'static>>::new(GbiUcode::F3d, GbiDataFormat::Fixed).table;
+        let f3dex2 = Gbi::<RdramImage<'static>>::new(GbiUcode::F3dex2, GbiDataFormat::Fixed).table;
+        let unknown = unknown::<RdramImage<'static>> as Handler<RdramImage<'static>>;
+
+        for op in [
+            rdp::G_SETCOMBINE,
+            rdp::G_SETTILE,
+            rdp::G_SETTILESIZE,
+            rdp::G_LOADBLOCK,
+            rdp::G_LOADTILE,
+            rdp::G_LOADTLUT,
+            rdp::G_SETPRIMCOLOR,
+            rdp::G_SETENVCOLOR,
+            rdp::G_SETFOGCOLOR,
+            rdp::G_SETBLENDCOLOR,
+            rdp::G_RDPLOADSYNC,
+            rdp::G_RDPPIPESYNC,
+            rdp::G_RDPTILESYNC,
+            rdp::G_RDPFULLSYNC,
+            rdp::G_RDPSETOTHERMODE,
+            rdp::G_SETCIMG,
+            rdp::G_SETZIMG,
+            rdp::G_SETSCISSOR,
+            rdp::G_SETFILLCOLOR,
+            rdp::G_RDPHALF_1,
+            rdp::G_RDPHALF_2,
+        ] {
+            assert_ne!(
+                built[op as usize] as usize, unknown as usize,
+                "slot 0x{op:02X}"
+            );
+            assert_eq!(
+                built[op as usize] as usize, f3dex2[op as usize] as usize,
+                "shared RDP slot 0x{op:02X}"
+            );
+        }
+
+        let no_op = built[rsp_f3d::G_SPNOOP as usize] as usize;
+        for op in [
+            rsp_f3d::G_MTX,
+            rsp_f3d::G_VTX,
+            rsp_f3d::G_TRI1,
+            rsp_f3d::G_QUAD,
+            rsp_f3d::G_SETGEOMETRYMODE,
+            rsp_f3d::G_CLEARGEOMETRYMODE,
+            rsp_f3d::G_MOVEMEM,
+            rsp_f3d::G_SETOTHERMODE_L,
+            rsp_f3d::G_SETOTHERMODE_H,
+            rsp_f3d::G_TEXTURE,
+            rsp_f3d::G_MOVEWORD,
+            rsp_f3d::G_POPMTX,
+        ] {
+            assert_ne!(
+                built[op as usize] as usize, no_op,
+                "implemented slot 0x{op:02X}"
+            );
+            assert_ne!(
+                built[op as usize] as usize, unknown as usize,
+                "implemented slot 0x{op:02X}"
+            );
+        }
+
+        for op in [
+            rsp_f3d::G_SPNOOP,
+            rsp_f3d::G_DL,
+            rsp_f3d::G_SPRITE2D_BASE,
+            rsp_f3d::G_RDPHALF_2,
+            rsp_f3d::G_RDPHALF_1,
+            rsp_f3d::G_ENDDL,
+            rsp_f3d::G_CULLDL,
+            rsp_f3d::G_RDPNOOP,
+        ] {
+            assert_eq!(built[op as usize] as usize, no_op, "stub slot 0x{op:02X}");
+        }
+
+        assert_ne!(built[rdp::G_SETTIMG as usize] as usize, unknown as usize);
+        assert_ne!(built[rdp::G_SETTIMG as usize] as usize, no_op);
+
+        for op in [0x05, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF] {
+            assert_eq!(
+                built[op] as usize, unknown as usize,
+                "F3DEX2-only slot 0x{op:02X}"
+            );
         }
     }
 }

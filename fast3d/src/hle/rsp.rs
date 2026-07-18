@@ -31,6 +31,7 @@ pub struct TextureState {
 
 pub struct Rsp {
     cache_global_index: [u32; RSP_MAX_VERTICES],
+    used: [bool; RSP_MAX_VERTICES],
     model_stack: [Mat4; RSP_MATRIX_STACK_SIZE],
     model_stack_size: usize,
     viewproj: Mat4,
@@ -48,6 +49,7 @@ pub struct Rsp {
     cur_viewport_index: u32,
     texcoord_table: Vec<[f32; 2]>,
     cur_texcoord_index: u32,
+    modify_unit_texcoord_index: Option<u32>,
     // Light state (dir camera-space s8/127, col u8/255).
     pub lights: [([f32; 3], [f32; 3]); 8],
     pub ambient_col: [f32; 3],
@@ -75,6 +77,7 @@ impl Default for Rsp {
     fn default() -> Self {
         Rsp {
             cache_global_index: [0u32; RSP_MAX_VERTICES],
+            used: [false; RSP_MAX_VERTICES],
             model_stack: [identity(); RSP_MATRIX_STACK_SIZE],
             model_stack_size: 1,
             viewproj: identity(),
@@ -96,6 +99,7 @@ impl Default for Rsp {
             // Default entry 0 = zero scale (sc=tc=0).
             texcoord_table: vec![[0.0, 0.0]],
             cur_texcoord_index: 0,
+            modify_unit_texcoord_index: None,
             lights: [([0.0; 3], [0.0; 3]); 8],
             ambient_col: [0.0; 3],
             num_dir: 0,
@@ -182,14 +186,28 @@ impl Rsp {
         self.recompute_mvp();
     }
 
+    /// F3D G_MV_MATRIX_1: overwrite the current MVP with a full matrix loaded directly from
+    /// RDRAM. The matrix stacks remain unchanged, so the next matrix operation recomputes from
+    /// their state.
+    pub fn force_matrix<M: Rdram>(&mut self, mem: &M, addr: u64) {
+        self.mvp = mem.read_matrix(addr, self.data_format);
+        if self.mvp_table.last() != Some(&self.mvp) {
+            self.mvp_table.push(self.mvp);
+        }
+        self.cur_mvp_index = (self.mvp_table.len() - 1) as u32;
+    }
+
     /// G_POPMTX: pop `count` modelview frames, never below 1.
     pub fn pop_matrix(&mut self, count: u32) {
+        let old_size = self.model_stack_size;
         for _ in 0..count {
             if self.model_stack_size > 1 {
                 self.model_stack_size -= 1;
             }
         }
-        self.recompute_mvp();
+        if self.model_stack_size != old_size {
+            self.recompute_mvp();
+        }
     }
 
     /// G_GEOMETRYMODE: mode = (mode & offMask) | onMask.
@@ -338,7 +356,10 @@ impl Rsp {
             let slot = (dst + i) as usize;
             let gi = scene.raw_pos.len() as u32;
             self.cache_global_index[slot] = gi;
+            self.used[slot] = false;
             scene.raw_pos.push(v.pos);
+            scene.modify_flags.push(0);
+            scene.modify_screen.push([0.0; 4]);
             scene.mtx_index.push(self.cur_mvp_index);
             scene.viewport_index.push(self.cur_viewport_index);
             scene.raw_st.push([v.st[0] as f32, v.st[1] as f32]);
@@ -356,6 +377,79 @@ impl Rsp {
             } else {
                 0
             });
+        }
+    }
+
+    fn modify_unit_texcoord_index(&mut self) -> u32 {
+        if let Some(index) = self.modify_unit_texcoord_index {
+            return index;
+        }
+        self.texcoord_table.push([1.0, 1.0]);
+        self.texgen_scale_table.push([0.0, 0.0]);
+        let index = (self.texcoord_table.len() - 1) as u32;
+        self.modify_unit_texcoord_index = Some(index);
+        index
+    }
+
+    /// gSPModifyVertex (F3D G_MW_POINTS). `attr` is `where % 40` and `value` is w1.
+    pub fn modify_vertex(&mut self, dst_index: u32, attr: u32, value: u32, scene: &mut Scene) {
+        let slot = dst_index as usize;
+        if slot >= RSP_MAX_VERTICES {
+            return;
+        }
+        let mut gi = self.cache_global_index[slot] as usize;
+        if gi >= scene.raw_pos.len() {
+            return;
+        }
+
+        // RT64 copy-on-use: a modify must not edit a vertex row already recorded by a draw.
+        // Intentional RT64 divergence: carry modify state into the clone, matching in-place DMEM writes.
+        if self.used[slot] {
+            let next = scene.raw_pos.len();
+            scene.raw_pos.push(scene.raw_pos[gi]);
+            scene.raw_st.push(scene.raw_st[gi]);
+            scene.mtx_index.push(scene.mtx_index[gi]);
+            scene.viewport_index.push(scene.viewport_index[gi]);
+            scene.texcoord_index.push(scene.texcoord_index[gi]);
+            scene.cn.push(scene.cn[gi]);
+            scene.light_index.push(scene.light_index[gi]);
+            scene.light_count.push(scene.light_count[gi]);
+            scene.texgen_mode.push(scene.texgen_mode[gi]);
+            scene.fog.push(scene.fog[gi]);
+            scene.lookat_index.push(scene.lookat_index[gi]);
+            scene.modify_flags.push(scene.modify_flags[gi]);
+            scene.modify_screen.push(scene.modify_screen[gi]);
+            self.cache_global_index[slot] = next as u32;
+            self.used[slot] = false;
+            gi = next;
+        }
+
+        match attr {
+            0x10 => {
+                scene.cn[gi] = u32::from_le_bytes(value.to_be_bytes());
+                scene.light_index[gi] = 0;
+                scene.light_count[gi] = 0;
+                scene.fog[gi] = 0;
+            }
+            0x14 => {
+                scene.raw_st[gi] = [
+                    (value >> 16) as i16 as f32 / 32.0,
+                    value as i16 as f32 / 32.0,
+                ];
+                scene.texcoord_index[gi] = self.modify_unit_texcoord_index();
+                scene.texgen_mode[gi] = 0;
+                scene.lookat_index[gi] = 0;
+            }
+            0x18 => {
+                scene.modify_screen[gi][0] = (value >> 16) as i16 as f32 / 4.0;
+                scene.modify_screen[gi][1] = value as i16 as f32 / 4.0;
+                scene.modify_flags[gi] |= 1;
+            }
+            0x1C => {
+                scene.modify_screen[gi][2] = value as f32 / 65536.0;
+                scene.modify_flags[gi] |= 2;
+            }
+            _ => {}
         }
     }
 
@@ -381,6 +475,9 @@ impl Rsp {
         // Cull-both: draw nothing.
         if cull == self.consts.g_cull_both {
             return;
+        }
+        for slot in [a, b, c] {
+            self.used[slot as usize] = true;
         }
         let (mut a, b, mut c) = (a, b, c);
         // Cull-front: swap a<->c so the single binary cull state culls front faces.
@@ -471,8 +568,26 @@ impl Rsp {
         rdp: &mut crate::hle::rdp::Rdp,
     ) {
         let length = p0_len_field + 1;
-        let off = 32 - p0_shift_field - length;
-        let mask = ((1u32 << length) - 1) << off;
+        let shift = 32 - p0_shift_field - length;
+        self.set_other_mode_l_raw(shift, length, data, rdp);
+    }
+
+    /// SetOtherMode_L bit-field update with a raw least-significant-bit shift and bit length.
+    pub fn set_other_mode_l_raw(
+        &mut self,
+        shift: u32,
+        length: u32,
+        data: u32,
+        rdp: &mut crate::hle::rdp::Rdp,
+    ) {
+        if length == 0 || length > 32 || shift > 32 - length {
+            return;
+        }
+        let mask = if length == 32 {
+            u32::MAX
+        } else {
+            ((1u32 << length) - 1) << shift
+        };
         rdp.other_mode_l = (rdp.other_mode_l & !mask) | data;
     }
 
@@ -485,8 +600,26 @@ impl Rsp {
         rdp: &mut crate::hle::rdp::Rdp,
     ) {
         let length = p0_len_field + 1;
-        let off = 32 - p0_shift_field - length;
-        let mask = ((1u32 << length) - 1) << off;
+        let shift = 32 - p0_shift_field - length;
+        self.set_other_mode_h_raw(shift, length, data, rdp);
+    }
+
+    /// SetOtherMode_H bit-field update with a raw least-significant-bit shift and bit length.
+    pub fn set_other_mode_h_raw(
+        &mut self,
+        shift: u32,
+        length: u32,
+        data: u32,
+        rdp: &mut crate::hle::rdp::Rdp,
+    ) {
+        if length == 0 || length > 32 || shift > 32 - length {
+            return;
+        }
+        let mask = if length == 32 {
+            u32::MAX
+        } else {
+            ((1u32 << length) - 1) << shift
+        };
         rdp.other_mode_h = (rdp.other_mode_h & !mask) | data;
     }
 
@@ -503,7 +636,12 @@ impl Rsp {
 
     /// G_MW_NUMLIGHT: w1 = n * 24 where n is the number of directional lights.
     pub fn set_num_lights(&mut self, w1: u32) {
-        self.num_dir = (w1 / 24).min(RSP_MAX_LIGHTS);
+        self.set_num_lights_direct(w1 / 24);
+    }
+
+    /// Set the directional-light count without applying a microcode-specific word transform.
+    pub fn set_num_lights_direct(&mut self, n: u32) {
+        self.num_dir = n.min(RSP_MAX_LIGHTS);
         self.light_version += 1;
     }
 
@@ -530,6 +668,22 @@ impl Rsp {
                 mem.read_i8(addr + 10) as f32 / 127.0,
             ];
             self.lights[light_idx as usize] = (dir, col);
+        }
+        self.light_version += 1;
+    }
+
+    /// F3D G_MW_LIGHTCOL: update one light's color from packed 0xRRGGBBAA while preserving its
+    /// direction. The ambient light occupies slot `num_dir`, matching `set_light`.
+    pub fn set_light_color(&mut self, light_idx: u32, rgba: u32) {
+        let col = [
+            ((rgba >> 24) & 0xFF) as f32 / 255.0,
+            ((rgba >> 16) & 0xFF) as f32 / 255.0,
+            ((rgba >> 8) & 0xFF) as f32 / 255.0,
+        ];
+        if light_idx == self.num_dir {
+            self.ambient_col = col;
+        } else if (light_idx as usize) < self.lights.len() {
+            self.lights[light_idx as usize].1 = col;
         }
         self.light_version += 1;
     }
@@ -770,7 +924,7 @@ mod consts_wired_tests {
     fn rsp_new_carries_data_format() {
         use crate::hle::mem::GbiDataFormat;
         assert_eq!(
-            Rsp::new(GbiUcode::F3dex2e.constants(), GbiDataFormat::Float).data_format,
+            Rsp::new(GbiUcode::F3dex2.constants(), GbiDataFormat::Float).data_format,
             GbiDataFormat::Float
         );
         assert_eq!(Rsp::default().data_format, GbiDataFormat::Fixed);
@@ -792,6 +946,18 @@ mod lights_load_tests {
             rsp.num_dir, RSP_MAX_LIGHTS,
             "num_dir must clamp to RSP_MAX_LIGHTS"
         );
+    }
+
+    #[test]
+    fn direct_num_lights_matches_f3dex2_encoded_path() {
+        let mut direct = Rsp::default();
+        let mut encoded = Rsp::default();
+
+        direct.set_num_lights_direct(3);
+        encoded.set_num_lights(3 * 24);
+
+        assert_eq!(direct.num_dir, encoded.num_dir);
+        assert_eq!(direct.light_version, encoded.light_version);
     }
 
     #[test]
@@ -832,6 +998,70 @@ mod lights_load_tests {
         let rda = RdramImage::new(&amb);
         rsp.set_light(&rda, 1, 0);
         assert_eq!(rsp.ambient_col, [16.0 / 255.0, 32.0 / 255.0, 48.0 / 255.0]);
+    }
+
+    #[test]
+    fn set_light_color_preserves_direction_and_updates_ambient() {
+        let mut rsp = Rsp::default();
+        rsp.set_num_lights_direct(1);
+        rsp.lights[0] = ([1.0, -0.5, 0.25], [0.0; 3]);
+        let version = rsp.light_version;
+
+        rsp.set_light_color(0, 0x1122_33FF);
+        assert_eq!(rsp.lights[0].0, [1.0, -0.5, 0.25]);
+        assert_eq!(rsp.lights[0].1, [17.0 / 255.0, 34.0 / 255.0, 51.0 / 255.0]);
+        assert_eq!(rsp.light_version, version + 1);
+
+        rsp.set_light_color(1, 0xA0B0_C0FF);
+        assert_eq!(
+            rsp.ambient_col,
+            [160.0 / 255.0, 176.0 / 255.0, 192.0 / 255.0]
+        );
+    }
+}
+
+#[cfg(all(test, feature = "asm"))]
+mod phase3_state_tests {
+    use super::*;
+    use crate::asm::encode::mtx_to_bytes;
+    use crate::hle::mem::RdramImage;
+    use crate::hle::rdp::Rdp;
+
+    #[test]
+    fn raw_and_transformed_other_mode_paths_are_equivalent() {
+        let mut raw_rsp = Rsp::default();
+        let mut transformed_rsp = Rsp::default();
+        let mut raw_rdp = Rdp::default();
+        let mut transformed_rdp = Rdp::default();
+        let cycle_type = 1u32 << 20;
+
+        raw_rsp.set_other_mode_h_raw(20, 2, cycle_type, &mut raw_rdp);
+        transformed_rsp.set_other_mode_h(10, 1, cycle_type, &mut transformed_rdp);
+        assert_eq!(raw_rdp.other_mode_h, transformed_rdp.other_mode_h);
+
+        let render_mode = 0x4411_2230;
+        raw_rsp.set_other_mode_l_raw(3, 29, render_mode, &mut raw_rdp);
+        transformed_rsp.set_other_mode_l(0, 28, render_mode, &mut transformed_rdp);
+        assert_eq!(raw_rdp.other_mode_l, transformed_rdp.other_mode_l);
+    }
+
+    #[test]
+    fn force_matrix_publishes_the_loaded_matrix() {
+        let forced = [
+            [2.0, 0.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0, 0.0],
+            [0.0, 0.0, 4.0, 0.0],
+            [5.0, 6.0, 7.0, 1.0],
+        ];
+        let bytes = mtx_to_bytes(forced);
+        let mem = RdramImage::new(&bytes);
+        let mut rsp = Rsp::default();
+        let mut scene = Scene::default();
+
+        rsp.force_matrix(&mem, 0);
+        rsp.finish(&mut scene);
+
+        assert_eq!(scene.mvp_table.last(), Some(&forced));
     }
 }
 

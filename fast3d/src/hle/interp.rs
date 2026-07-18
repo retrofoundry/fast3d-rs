@@ -87,9 +87,14 @@ pub struct InterpResult {
 /// self-branch loop quickly.
 const DISPATCH_CAP: u64 = 1 << 20;
 
-pub fn interpret<M: Rdram>(mem: M, entry: u64, ucode: crate::hle::gbi::GbiUcode) -> InterpResult {
+pub fn interpret<M: Rdram>(
+    mem: M,
+    entry: u64,
+    ucode: crate::hle::gbi::GbiUcode,
+    data_format: crate::hle::mem::GbiDataFormat,
+) -> InterpResult {
     let mut mem = mem;
-    let gbi = crate::hle::gbi::Gbi::<M>::new(ucode);
+    let gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
     let mut rsp = crate::hle::rsp::Rsp::new(gbi.consts, gbi.data_format);
     let mut rdp = crate::hle::rdp::Rdp::default();
     let mut scene = Scene::default();
@@ -369,6 +374,7 @@ pub fn interpret_rdram(bytes: &[u8], entry_addr: u32) -> InterpResult {
         RdramImage::new(bytes),
         entry_addr as u64,
         crate::hle::gbi::GbiUcode::F3dex2,
+        crate::hle::mem::GbiDataFormat::Fixed,
     )
 }
 
@@ -642,6 +648,7 @@ mod task8_tests {
         };
         let table = crate::hle::gbi::Gbi::<crate::hle::mem::RdramImage>::new(
             crate::hle::gbi::GbiUcode::F3dex2,
+            crate::hle::mem::GbiDataFormat::Fixed,
         )
         .table;
         let mut cx = Ctx {
@@ -784,8 +791,8 @@ mod rect_encoding_tests {
     //! is a single-word `gsDPSetPrimColor` carrying 0xDEADBEEF: if the rect word-count were wrong
     //! the walk would land mid-stream and misread it, so asserting `rdp.prim` is the desync guard
     //! (interp.rs exposes no `pc`). Well-formed rect DLs consume their continuation words inline, so
-    //! the RDPHALF canary diag must be ABSENT. Float DLs use `GbiUcode::F3dex2e` over `RdramImage`
-    //! (`data_format` follows the ucode; a rect-only DL never trips RdramImage's Fixed-only assert).
+    //! the RDPHALF canary diag must be ABSENT. Float DLs use `GbiUcode::F3dex2` + `GbiDataFormat::Float` over `RdramImage`
+    //! (a rect-only DL never trips RdramImage's Fixed-only assert).
     use super::*;
     use crate::hle::consts::{
         G_ENDDL, G_FILLRECT, G_RDPHALF_1, G_RDPHALF_2, G_SETCIMG, G_SETFILLCOLOR, G_SETPRIMCOLOR,
@@ -820,7 +827,22 @@ mod rect_encoding_tests {
         )
     }
     fn run(buf: &[u8], ucode: GbiUcode) -> InterpResult {
-        interpret(crate::hle::mem::RdramImage::new(buf), 0, ucode)
+        interpret(
+            crate::hle::mem::RdramImage::new(buf),
+            0,
+            ucode,
+            crate::hle::mem::GbiDataFormat::Fixed,
+        )
+    }
+    /// `GBI_FLOATS` variant of `run`: F3DEX2 command table read with the float data layout —
+    /// the sm64/wafel PC-port path (formerly selected via the removed `F3dex2e` ucode).
+    fn run_float(buf: &[u8]) -> InterpResult {
+        interpret(
+            crate::hle::mem::RdramImage::new(buf),
+            0,
+            GbiUcode::F3dex2,
+            crate::hle::mem::GbiDataFormat::Float,
+        )
     }
 
     #[test]
@@ -976,7 +998,7 @@ mod rect_encoding_tests {
         ); // uly=7 (raw 28); dsdx=1024, dtdy=512
         push(&mut b, prim_sentinel());
         push(&mut b, enddl());
-        let r = run(&b, GbiUcode::F3dex2e);
+        let r = run_float(&b);
         assert!(r.diags.is_empty(), "diags: {:?}", r.diags);
         assert_eq!(
             r.scene.framebuffer_pairs[0].ops,
@@ -1014,7 +1036,7 @@ mod rect_encoding_tests {
         push(&mut b, ((G_RDPHALF_1 as u32) << 24, 0));
         push(&mut b, prim_sentinel());
         push(&mut b, enddl());
-        let r = run(&b, GbiUcode::F3dex2e);
+        let r = run_float(&b);
         assert!(r.diags.is_empty(), "diags: {:?}", r.diags);
         assert_eq!(
             r.scene.framebuffer_pairs[0].ops,
@@ -1195,7 +1217,12 @@ mod structured_diag_tests {
         let mut rdram = vec![0u8; 16];
         rdram[0] = 0xAB;
         rdram[8] = G_ENDDL;
-        let r = interpret(RdramImage::new(&rdram), 0, GbiUcode::F3dex2);
+        let r = interpret(
+            RdramImage::new(&rdram),
+            0,
+            GbiUcode::F3dex2,
+            crate::hle::mem::GbiDataFormat::Fixed,
+        );
         assert_eq!(
             r.diags,
             vec![Diagnostic {
@@ -1214,7 +1241,12 @@ mod structured_diag_tests {
             push(&mut rdram, (0xABu32 << 24, 0));
         }
         push(&mut rdram, ((G_ENDDL as u32) << 24, 0));
-        let r = interpret(RdramImage::new(&rdram), 0, GbiUcode::F3dex2);
+        let r = interpret(
+            RdramImage::new(&rdram),
+            0,
+            GbiUcode::F3dex2,
+            crate::hle::mem::GbiDataFormat::Fixed,
+        );
         let n = r
             .diags
             .iter()
@@ -1235,7 +1267,12 @@ mod structured_diag_tests {
             ((G_SETCIMG as u32) << 24 | (2 << 19) | 319, 0x10000),
         );
         push(&mut b, ((G_ENDDL as u32) << 24, 0));
-        let r = interpret(RdramImage::new(&b), 0, GbiUcode::F3dex2);
+        let r = interpret(
+            RdramImage::new(&b),
+            0,
+            GbiUcode::F3dex2,
+            crate::hle::mem::GbiDataFormat::Fixed,
+        );
         assert_eq!(r.commands, 2, "SETCIMG + ENDDL == 2 dispatches");
     }
 
@@ -1246,7 +1283,12 @@ mod structured_diag_tests {
         push(&mut b, (0, 0)); // TEXRECT continuation word 1
         push(&mut b, (0, 0)); // TEXRECT continuation word 2
         push(&mut b, ((G_ENDDL as u32) << 24, 0));
-        let r = interpret(RdramImage::new(&b), 0, GbiUcode::F3dex2);
+        let r = interpret(
+            RdramImage::new(&b),
+            0,
+            GbiUcode::F3dex2,
+            crate::hle::mem::GbiDataFormat::Fixed,
+        );
         assert!(r.diags.iter().any(|d| d.kind == DiagKind::DrawBeforeCimg));
         assert_eq!(r.dropped_runs, 1);
     }

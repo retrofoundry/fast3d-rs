@@ -88,6 +88,10 @@ pub struct Scene {
     // --- Compute-RSP SoA inputs (consumed by the GPU RSP-process pass) ---
     /// Object-space position per output vertex (untransformed).
     pub raw_pos: Vec<[f32; 3]>,
+    /// gSPModifyVertex screen override bits, index-parallel to `raw_pos`: bit 0 = XY, bit 1 = Z.
+    pub modify_flags: Vec<u32>,
+    /// gSPModifyVertex final screen target `[x_px, y_px, z_ndc, unused]`, index-parallel to `raw_pos`.
+    pub modify_screen: Vec<[f32; 4]>,
     /// Index into `mvp_table` of the MVP active when this vertex was loaded.
     pub mtx_index: Vec<u32>,
     /// Index into `viewport_table` of the viewport active when this vertex was loaded.

@@ -106,6 +106,239 @@ fn draw_tri_maps_cache_slots_to_global_indices() {
 }
 
 #[test]
+fn phase4_modify_vertex_rgba_patches_bytes_and_clears_lighting_and_fog() {
+    let bytes = vtx_bytes(0, 0, 0, 0xAA, 0xBB, 0xCC, 0xDD);
+    let rdram = RdramImage::new(&bytes);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    rsp.set_vertex(
+        &rdram,
+        0,
+        1,
+        0,
+        &crate::hle::rdp::Rdp::default(),
+        &mut scene,
+    );
+    scene.light_index[0] = 7;
+    scene.light_count[0] = 3;
+    scene.fog[0] = 1;
+
+    rsp.modify_vertex(0, 0x10, 0x1122_3344, &mut scene);
+
+    assert_eq!(scene.cn[0], 0x4433_2211);
+    assert_eq!(scene.light_index[0], 0);
+    assert_eq!(scene.light_count[0], 0);
+    assert_eq!(scene.fog[0], 0);
+}
+
+#[test]
+fn phase4_modify_vertex_st_uses_final_texel_space_unit_scale() {
+    let bytes = vtx_bytes(0, 0, 0, 255, 255, 255, 255);
+    let rdram = RdramImage::new(&bytes);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    rsp.set_vertex(
+        &rdram,
+        0,
+        1,
+        0,
+        &crate::hle::rdp::Rdp::default(),
+        &mut scene,
+    );
+    scene.texgen_mode[0] = 2;
+    scene.lookat_index[0] = 9;
+
+    rsp.modify_vertex(0, 0x14, 0xFFE0_0020, &mut scene);
+    rsp.finish(&mut scene);
+
+    assert_eq!(scene.raw_st[0], [-1.0, 1.0]);
+    let ti = scene.texcoord_index[0] as usize;
+    assert_eq!(scene.texcoord_table[ti], [1.0, 1.0]);
+    assert_eq!(scene.texgen_scale_table[ti], [0.0, 0.0]);
+    assert_eq!(scene.texgen_mode[0], 0);
+    assert_eq!(scene.lookat_index[0], 0);
+}
+
+#[test]
+fn phase4_modify_vertex_screen_fields_accumulate_flags_and_values() {
+    let bytes = vtx_bytes(0, 0, 0, 255, 255, 255, 255);
+    let rdram = RdramImage::new(&bytes);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    rsp.set_vertex(
+        &rdram,
+        0,
+        1,
+        0,
+        &crate::hle::rdp::Rdp::default(),
+        &mut scene,
+    );
+
+    rsp.modify_vertex(0, 0x18, 0x0080_0040, &mut scene);
+    rsp.modify_vertex(0, 0x1C, 0x0000_8000, &mut scene);
+
+    assert_eq!(scene.modify_flags[0], 3);
+    assert_eq!(scene.modify_screen[0], [32.0, 16.0, 0.5, 0.0]);
+}
+
+#[test]
+fn phase4_modify_vertex_after_draw_copies_row_without_retroactive_edit() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&vtx_bytes(0, 0, 0, 10, 20, 30, 40));
+    bytes.extend_from_slice(&vtx_bytes(1, 0, 0, 50, 60, 70, 80));
+    bytes.extend_from_slice(&vtx_bytes(0, 1, 0, 90, 100, 110, 120));
+    let rdram = RdramImage::new(&bytes);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    rsp.set_vertex(
+        &rdram,
+        0,
+        3,
+        0,
+        &crate::hle::rdp::Rdp::default(),
+        &mut scene,
+    );
+    rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None);
+    let original_cn = scene.cn[0];
+
+    rsp.modify_vertex(0, 0x10, 0xA1B2_C3D4, &mut scene);
+    rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None);
+
+    assert_eq!(scene.indices, vec![0, 1, 2, 3, 1, 2]);
+    assert_eq!(scene.cn[0], original_cn);
+    assert_eq!(scene.cn[3], 0xD4C3_B2A1);
+    assert_eq!(scene.raw_pos.len(), 4);
+    assert_eq!(scene.modify_flags.len(), 4);
+    assert_eq!(scene.modify_screen.len(), 4);
+}
+
+#[test]
+fn culled_triangle_does_not_make_later_modify_clone_vertex() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&vtx_bytes(0, 0, 0, 10, 20, 30, 40));
+    bytes.extend_from_slice(&vtx_bytes(1, 0, 0, 50, 60, 70, 80));
+    bytes.extend_from_slice(&vtx_bytes(0, 1, 0, 90, 100, 110, 120));
+    let rdram = RdramImage::new(&bytes);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    rsp.set_vertex(
+        &rdram,
+        0,
+        3,
+        0,
+        &crate::hle::rdp::Rdp::default(),
+        &mut scene,
+    );
+    rsp.modify_geometry_mode(u32::MAX, crate::hle::consts::G_CULL_BOTH);
+
+    rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None);
+    rsp.modify_vertex(0, 0x10, 0xA1B2_C3D4, &mut scene);
+
+    assert!(scene.indices.is_empty());
+    assert!(scene.draw_runs.is_empty());
+    assert_eq!(scene.raw_pos.len(), 3);
+    assert_eq!(scene.cn[0], 0xD4C3_B2A1);
+}
+
+fn phase4_prim_material(prim: [u8; 4]) -> crate::hle::Material {
+    crate::hle::Material {
+        texture: vec![255, 255, 255, 255],
+        tex_w: 1,
+        tex_h: 1,
+        selectors: crate::hle::combiner::decode_combine(0, 0xC3),
+        cycle_type: 0,
+        prim,
+        env: [0, 0, 0, 255],
+        blend_color: [0, 0, 0, 255],
+        tex_enable: false,
+        wrap_s: 2,
+        wrap_t: 2,
+        fmt: 0,
+        siz: 0,
+        tile_count: 1,
+        tex1: None,
+        prim_lod_frac: 0.0,
+        prim_min_level: 0.0,
+        lod: false,
+        num_levels: 1,
+        text_detail: 0,
+        mip_levels: Vec::new(),
+        detail_tex: None,
+    }
+}
+
+#[test]
+fn phase4_modify_vertex_screen_override_renders_requested_pixel_and_depth() {
+    const W: u32 = 64;
+    const H: u32 = 64;
+    let mut bytes = Vec::new();
+    for _ in 0..6 {
+        bytes.extend_from_slice(&vtx_bytes(0, 0, 0, 255, 255, 255, 255));
+    }
+    let rdram = RdramImage::new(&bytes);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    rsp.set_vertex(
+        &rdram,
+        0,
+        6,
+        0,
+        &crate::hle::rdp::Rdp::default(),
+        &mut scene,
+    );
+
+    let packed_xy = |x_px: i16, y_px: i16| {
+        let x = x_px.wrapping_mul(4) as u16 as u32;
+        let y = y_px.wrapping_mul(4) as u16 as u32;
+        (x << 16) | y
+    };
+    // Oversized background triangle covers the whole framebuffer at depth 0.75.
+    for (slot, [x, y]) in [[-320, -240], [960, -240], [-320, 720]]
+        .into_iter()
+        .enumerate()
+    {
+        rsp.modify_vertex(slot as u32, 0x18, packed_xy(x, y), &mut scene);
+        rsp.modify_vertex(slot as u32, 0x1C, 0x0000_C000, &mut scene);
+    }
+    // Foreground triangle surrounds N64 screen pixel (160,120), which maps to target pixel (32,32).
+    for (slot, [x, y]) in [[120, 80], [200, 80], [160, 160]].into_iter().enumerate() {
+        let slot = (slot + 3) as u32;
+        rsp.modify_vertex(slot, 0x18, packed_xy(x, y), &mut scene);
+        rsp.modify_vertex(slot, 0x1C, 0x0000_8000, &mut scene);
+    }
+    rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None);
+    rsp.draw_tri(3, 4, 5, 1, 0, &mut scene, None);
+    rsp.finish(&mut scene);
+
+    assert_eq!(scene.modify_flags, vec![3; 6]);
+    assert_eq!(scene.modify_screen[3], [120.0, 80.0, 0.5, 0.0]);
+    scene.materials = vec![
+        phase4_prim_material([255, 0, 0, 255]),
+        phase4_prim_material([0, 255, 0, 255]),
+    ];
+    scene.render_modes = vec![crate::hle::decode_render_mode(
+        crate::hle::consts::rdp::G_RM_AA_ZB_OPA_SURF,
+        0,
+        0,
+    )];
+
+    let (device, queue, dual) = crate::render::headless_device();
+    let mut renderer =
+        crate::render::SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, W, H, dual);
+    let pixels = common::render_to_pixels(&device, &queue, &mut renderer, &scene, W, H);
+    assert_eq!(
+        common::pixel(&pixels, W, 32, 32),
+        [0, 255, 0, 255],
+        "the Z=0.5 overridden triangle must win over the Z=0.75 background at its requested pixel"
+    );
+    assert_eq!(
+        common::pixel(&pixels, W, 4, 4),
+        [255, 0, 0, 255],
+        "a pixel outside the overridden foreground triangle must retain the background"
+    );
+}
+
+#[test]
 fn perspective_mvp_emits_clip_space_with_varying_w_and_depth_in_unit_range() {
     use crate::hle::rdp::Rdp;
     // Bake proj = perspective(90, 1, 1, 10) and view = lookat(eye (0,0,5) -> origin, up +Y).

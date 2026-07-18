@@ -23,6 +23,8 @@ use crate::scene::Scene;
 pub use diag::{DiagKind, DiagSink, Diagnostic, DlSummary, LogSink, NopSink, Severity};
 // ── New vNext public API (spec §3.6): microcode selector ──
 pub use microcode::{detect_microcode, Microcode};
+// ── Vertex/matrix data layout (`Fixed` N64 / `Float` GBI_FLOATS), orthogonal to the microcode ──
+pub use crate::hle::mem::GbiDataFormat as DataFormat;
 // ── New vNext public API (spec §3.5): render hooks ──
 #[cfg(feature = "debug-ui")]
 pub use debug::{DebugButton, DebugInput, DebugKey};
@@ -181,6 +183,8 @@ pub struct Renderer {
     pub(crate) last_scanout_addr: Option<u64>,
     pub(crate) last_backend_was_image: bool,
     pub(crate) surface_format: wgpu::TextureFormat,
+    /// Guest DL vertex/matrix layout, selected via `set_data_format`. Survives `reconfigure`.
+    data_format: DataFormat,
     /// Consumer render hook (P4). Declared BEFORE `queue`/`device` so it drops first (drop order ==
     /// field declaration order) — a hook's GPU resources release while the device is still alive.
     hook: Option<Box<dyn RenderHook>>,
@@ -228,6 +232,7 @@ impl Renderer {
             last_scanout_addr: None,
             last_backend_was_image: false,
             surface_format: render_fmt,
+            data_format: DataFormat::Fixed,
             hook: None,
             #[cfg(feature = "debug-ui")]
             debugger: crate::debug::Debugger::new(),
@@ -304,6 +309,7 @@ impl Renderer {
             last_scanout_addr: None,
             last_backend_was_image: false,
             surface_format: render_fmt,
+            data_format: DataFormat::Fixed,
             hook: None,
             #[cfg(feature = "debug-ui")]
             debugger: crate::debug::Debugger::new(),
@@ -321,6 +327,12 @@ impl Renderer {
     }
     pub fn queue(&self) -> &wgpu::Queue {
         &self.queue
+    }
+
+    /// Select how subsequent `process_dl` calls read guest vertices and matrices (default
+    /// `Fixed`). A per-consumer property — set once after construction, not per display list.
+    pub fn set_data_format(&mut self, data_format: DataFormat) {
+        self.data_format = data_format;
     }
 
     /// Window/drawable resized: reconfigure the owned surface only. Internal framebuffers are
@@ -399,7 +411,7 @@ impl Renderer {
         // walk — `present` gates VI-origin selection on this. RdramImage ⇒ true, HostRam ⇒ false.
         self.last_backend_was_image = mem.is_rdram_image();
 
-        let result = crate::hle::interpret(mem, entry, ucode.into());
+        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format);
 
         // Stream structured diags into the caller's sink, tallying severity for the rollup.
         let (mut warns, mut errors) = (0u32, 0u32);

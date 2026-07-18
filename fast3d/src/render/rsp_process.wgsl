@@ -9,6 +9,7 @@ const FB_HEIGHT: f32 = 240.0;
 
 // Must mirror RspProcessParams (lib.rs) exactly — 16 bytes.
 struct Params { vertex_count: u32, fog_enable: u32, fog_mul: f32, fog_offset: f32 };
+// Must mirror rsp_buffers::SrcVertex (render/mod.rs) exactly — 80 bytes.
 struct SrcVertex {
     pos: vec3<f32>,
     st: vec2<f32>,
@@ -21,6 +22,8 @@ struct SrcVertex {
     lookat_index: u32,
     texgen_mode: u32,
     fog: u32,
+    modify_flags: u32,
+    modify_screen: vec4<f32>,
 };
 struct GpuViewport { scale: vec4<f32>, trans: vec4<f32> };
 struct GpuTexcoord { scale_s: f32, scale_t: f32, texgen_scale_s: f32, texgen_scale_t: f32 };
@@ -61,6 +64,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         clip.z * vp.scale.z + w * vp.trans.z,
         w,
     );
+    // gSPModifyVertex screen overrides. Rebuild clip = ndc*w so the GPU's perspective divide
+    // lands on the requested pixel/depth while keeping the shader-computed w for correct UVs.
+    if ((v.modify_flags & 1u) != 0u) {
+        o.pos.x = (2.0 * v.modify_screen.x / FB_WIDTH - 1.0) * w;
+        o.pos.y = (1.0 - 2.0 * v.modify_screen.y / FB_HEIGHT) * w;
+    }
+    if ((v.modify_flags & 2u) != 0u) {
+        o.pos.z = v.modify_screen.z * w;
+    }
     // Prefolded scale (f64-computed CPU-side): one f32 multiply per axis (spec §2 Precision).
     o.uv = vec2<f32>(v.st.x * tc.scale_s, v.st.y * tc.scale_t);
 

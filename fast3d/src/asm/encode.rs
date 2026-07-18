@@ -310,6 +310,169 @@ pub fn gsp_fog_position(min: i32, max: i32) -> (u32, u32) {
     (w0, data)
 }
 
+pub fn gsp_vertex_f3d(v0: u8, n: u8, addr: u32) -> (u32, u32) {
+    let w0 = shiftl(rsp_f3d::G_VTX as u32, 24, 8)
+        | shiftl(n as u32 - 1, 20, 4)
+        | shiftl(v0 as u32, 16, 4);
+    (w0, addr)
+}
+
+pub fn gsp_1triangle_f3d(v0: u8, v1: u8, v2: u8) -> (u32, u32) {
+    let w0 = shiftl(rsp_f3d::G_TRI1 as u32, 24, 8);
+    let w1 =
+        shiftl(v0 as u32 * 10, 16, 8) | shiftl(v1 as u32 * 10, 8, 8) | shiftl(v2 as u32 * 10, 0, 8);
+    (w0, w1)
+}
+
+pub fn gsp_quad_f3d(v0: u8, v1: u8, v2: u8, v3: u8) -> (u32, u32) {
+    let w0 = shiftl(rsp_f3d::G_QUAD as u32, 24, 8);
+    let w1 = shiftl(v0 as u32 * 10, 24, 8)
+        | shiftl(v1 as u32 * 10, 16, 8)
+        | shiftl(v2 as u32 * 10, 8, 8)
+        | shiftl(v3 as u32 * 10, 0, 8);
+    (w0, w1)
+}
+
+pub fn gsp_matrix_f3d(addr: u32, proj: bool, load: bool, push: bool) -> (u32, u32) {
+    let params = (if proj {
+        rsp_f3d::G_MTX_PROJECTION
+    } else {
+        rsp_f3d::G_MTX_MODELVIEW
+    }) | (if load {
+        rsp_f3d::G_MTX_LOAD
+    } else {
+        rsp_f3d::G_MTX_MUL
+    }) | (if push {
+        rsp_f3d::G_MTX_PUSH
+    } else {
+        rsp_f3d::G_MTX_NOPUSH
+    });
+    let w0 = shiftl(rsp_f3d::G_MTX as u32, 24, 8) | shiftl(params as u32, 16, 8);
+    (w0, addr)
+}
+
+pub fn gsp_popmatrix_f3d() -> (u32, u32) {
+    (shiftl(rsp_f3d::G_POPMTX as u32, 24, 8), 0)
+}
+
+pub fn gsp_set_geometrymode_f3d(bits: u32) -> (u32, u32) {
+    (shiftl(rsp_f3d::G_SETGEOMETRYMODE as u32, 24, 8), bits)
+}
+
+pub fn gsp_clear_geometrymode_f3d(bits: u32) -> (u32, u32) {
+    (shiftl(rsp_f3d::G_CLEARGEOMETRYMODE as u32, 24, 8), bits)
+}
+
+pub fn gsp_texture_f3d(sc: u16, tc: u16, level: u32, tile: u32, on: bool) -> (u32, u32) {
+    let w0 = shiftl(rsp_f3d::G_TEXTURE as u32, 24, 8)
+        | shiftl(level, 11, 3)
+        | shiftl(tile, 8, 3)
+        | shiftl(on as u32, 0, 1);
+    let w1 = shiftl(sc as u32, 16, 16) | shiftl(tc as u32, 0, 16);
+    (w0, w1)
+}
+
+pub fn gsp_viewport_f3d(addr: u32) -> (u32, u32) {
+    let w0 =
+        shiftl(rsp_f3d::G_MOVEMEM as u32, 24, 8) | shiftl(rsp_f3d::G_MV_VIEWPORT as u32, 16, 8);
+    (w0, addr)
+}
+
+pub fn gsp_light_f3d(slot: u8, addr: u32) -> (u32, u32) {
+    let selector = rsp_f3d::G_MV_LIGHT as u32 + slot as u32 * 2;
+    let w0 = shiftl(rsp_f3d::G_MOVEMEM as u32, 24, 8) | shiftl(selector, 16, 8);
+    (w0, addr)
+}
+
+pub fn gsp_lookat_f3d(axis: u8, addr: u32) -> (u32, u32) {
+    let selector = if axis == 0 {
+        rsp_f3d::G_MV_LOOKATX
+    } else {
+        rsp_f3d::G_MV_LOOKATY
+    };
+    let w0 = shiftl(rsp_f3d::G_MOVEMEM as u32, 24, 8) | shiftl(selector as u32, 16, 8);
+    (w0, addr)
+}
+
+pub fn gsp_setothermode_h_f3d(shift: u32, length: u32, data: u32) -> (u32, u32) {
+    let w0 = shiftl(rsp_f3d::G_SETOTHERMODE_H as u32, 24, 8)
+        | shiftl(shift, 8, 8)
+        | shiftl(length, 0, 8);
+    (w0, data)
+}
+
+pub fn gsp_setothermode_l_f3d(shift: u32, length: u32, data: u32) -> (u32, u32) {
+    let w0 = shiftl(rsp_f3d::G_SETOTHERMODE_L as u32, 24, 8)
+        | shiftl(shift, 8, 8)
+        | shiftl(length, 0, 8);
+    (w0, data)
+}
+
+pub fn gdp_set_cycle_type_f3d(cyc: u32) -> (u32, u32) {
+    gsp_setothermode_h_f3d(20, 2, cyc << 20)
+}
+
+pub fn gdp_set_render_mode_f3d(mode1: u32, mode2: u32) -> (u32, u32) {
+    gsp_setothermode_l_f3d(3, 29, mode1 | mode2)
+}
+
+pub fn gsp_segment_f3d(seg: u8, value: u32) -> (u32, u32) {
+    let w0 = shiftl(rsp_f3d::G_MOVEWORD as u32, 24, 8)
+        | shiftl(seg as u32, 10, 4)
+        | shiftl(rsp_f3d::G_MW_SEGMENT as u32, 0, 8);
+    (w0, value)
+}
+
+pub fn gsp_numlights_f3d(n: u8) -> (u32, u32) {
+    let w0 =
+        shiftl(rsp_f3d::G_MOVEWORD as u32, 24, 8) | shiftl(rsp_f3d::G_MW_NUMLIGHT as u32, 0, 8);
+    let w1 = 0x8000_0000 + (n as u32 + 1) * 32;
+    (w0, w1)
+}
+
+pub fn gsp_fog_position_f3d(min: i32, max: i32) -> (u32, u32) {
+    let span = (max - min).max(1);
+    let fm = (128000 / span).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    let fo = (((500 - min) * 256) / span).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    let data = ((fm as u16 as u32) << 16) | (fo as u16 as u32);
+    let w0 = shiftl(rsp_f3d::G_MOVEWORD as u32, 24, 8) | shiftl(rsp_f3d::G_MW_FOG as u32, 0, 8);
+    (w0, data)
+}
+
+pub fn gsp_enddl_f3d() -> (u32, u32) {
+    (shiftl(rsp_f3d::G_ENDDL as u32, 24, 8), 0)
+}
+
+pub fn gsp_displaylist_f3d(addr: u32) -> (u32, u32) {
+    (shiftl(rsp_f3d::G_DL as u32, 24, 8), addr)
+}
+
+pub fn gsp_branchlist_f3d(addr: u32) -> (u32, u32) {
+    (shiftl(rsp_f3d::G_DL as u32, 24, 8) | shiftl(1, 16, 1), addr)
+}
+
+pub fn gsp_forcematrix_f3d(addr: u32) -> (u32, u32) {
+    let w0 =
+        shiftl(rsp_f3d::G_MOVEMEM as u32, 24, 8) | shiftl(rsp_f3d::G_MV_MATRIX_1 as u32, 16, 8);
+    (w0, addr)
+}
+
+pub fn gsp_lightcolor_f3d(idx: u8, rgba: u32) -> (u32, u32) {
+    let offset = idx as u32 * 32;
+    let w0 = shiftl(rsp_f3d::G_MOVEWORD as u32, 24, 8)
+        | shiftl(offset, 8, 16)
+        | shiftl(rsp_f3d::G_MW_LIGHTCOL as u32, 0, 8);
+    (w0, rgba)
+}
+
+pub fn gsp_modifyvertex_f3d(vtx: u8, r#where: u16, val: u32) -> (u32, u32) {
+    let offset = vtx as u32 * 40 + r#where as u32;
+    let w0 = shiftl(rsp_f3d::G_MOVEWORD as u32, 24, 8)
+        | shiftl(offset, 8, 16)
+        | shiftl(rsp_f3d::G_MW_POINTS as u32, 0, 8);
+    (w0, val)
+}
+
 /// On-disk N64 colored vertex (authentic libultra Vtx_t), 16 bytes, big-endian. No field swaps.
 #[derive(Clone, Copy, Debug)]
 pub struct VtxColored {
@@ -615,6 +778,156 @@ mod encode_tests {
                 (0xF510_1000, 0x0009_4250), // SetTile RENDERTILE line=8
                 (0xF200_0000, 0x0007_C07C), // SetTileSize lrs=lrt=124
             ]
+        );
+    }
+
+    #[test]
+    fn golden_vertex_f3d() {
+        assert_eq!(
+            gsp_vertex_f3d(5, 4, 0x0123_4567),
+            (0x0435_0000, 0x0123_4567)
+        );
+    }
+
+    #[test]
+    fn golden_1triangle_f3d() {
+        assert_eq!(gsp_1triangle_f3d(0, 1, 2), (0xBF00_0000, 0x0000_0A14));
+    }
+
+    #[test]
+    fn golden_quad_f3d() {
+        assert_eq!(gsp_quad_f3d(0, 1, 2, 3), (0xB500_0000, 0x000A_141E));
+    }
+
+    #[test]
+    fn golden_matrix_f3d() {
+        assert_eq!(
+            gsp_matrix_f3d(0x0123_4567, true, true, false),
+            (0x0103_0000, 0x0123_4567)
+        );
+    }
+
+    #[test]
+    fn golden_popmatrix_f3d() {
+        assert_eq!(gsp_popmatrix_f3d(), (0xBD00_0000, 0x0000_0000));
+    }
+
+    #[test]
+    fn golden_set_geometrymode_f3d() {
+        assert_eq!(
+            gsp_set_geometrymode_f3d(0x0082_1005),
+            (0xB700_0000, 0x0082_1005)
+        );
+    }
+
+    #[test]
+    fn golden_clear_geometrymode_f3d() {
+        assert_eq!(
+            gsp_clear_geometrymode_f3d(0x0001_2000),
+            (0xB600_0000, 0x0001_2000)
+        );
+    }
+
+    #[test]
+    fn golden_texture_f3d() {
+        assert_eq!(
+            gsp_texture_f3d(0xFFFF, 0xFFFF, 0, 0, true),
+            (0xBB00_0001, 0xFFFF_FFFF)
+        );
+    }
+
+    #[test]
+    fn golden_viewport_f3d() {
+        assert_eq!(gsp_viewport_f3d(0x0123_4567), (0x0380_0000, 0x0123_4567));
+    }
+
+    #[test]
+    fn golden_light_f3d() {
+        assert_eq!(gsp_light_f3d(3, 0x0123_4567), (0x038C_0000, 0x0123_4567));
+    }
+
+    #[test]
+    fn golden_lookat_f3d() {
+        assert_eq!(gsp_lookat_f3d(1, 0x0123_4567), (0x0382_0000, 0x0123_4567));
+    }
+
+    #[test]
+    fn golden_setothermode_h_f3d() {
+        assert_eq!(
+            gsp_setothermode_h_f3d(20, 2, 0x0010_0000),
+            (0xBA00_1402, 0x0010_0000)
+        );
+    }
+
+    #[test]
+    fn golden_setothermode_l_f3d() {
+        assert_eq!(
+            gsp_setothermode_l_f3d(3, 29, 0x4411_2233),
+            (0xB900_031D, 0x4411_2233)
+        );
+    }
+
+    #[test]
+    fn golden_cycle_type_f3d() {
+        assert_eq!(gdp_set_cycle_type_f3d(1), (0xBA00_1402, 0x0010_0000));
+    }
+
+    #[test]
+    fn golden_render_mode_f3d() {
+        assert_eq!(
+            gdp_set_render_mode_f3d(0x0011_2233, 0x4400_0000),
+            (0xB900_031D, 0x4411_2233)
+        );
+    }
+
+    #[test]
+    fn golden_segment_f3d() {
+        assert_eq!(gsp_segment_f3d(2, 0x0900_0000), (0xBC00_0806, 0x0900_0000));
+    }
+
+    #[test]
+    fn golden_numlights_f3d() {
+        assert_eq!(gsp_numlights_f3d(2), (0xBC00_0002, 0x8000_0060));
+    }
+
+    #[test]
+    fn golden_fog_position_f3d() {
+        assert_eq!(gsp_fog_position_f3d(900, 1000), (0xBC00_0008, 0x0500_FC00));
+    }
+
+    #[test]
+    fn golden_enddl_f3d() {
+        assert_eq!(gsp_enddl_f3d(), (0xB800_0000, 0x0000_0000));
+    }
+
+    #[test]
+    fn golden_displaylist_f3d() {
+        assert_eq!(gsp_displaylist_f3d(0x0123_4567), (0x0600_0000, 0x0123_4567));
+    }
+
+    #[test]
+    fn golden_branchlist_f3d() {
+        assert_eq!(gsp_branchlist_f3d(0x0123_4567), (0x0601_0000, 0x0123_4567));
+    }
+
+    #[test]
+    fn golden_forcematrix_f3d() {
+        assert_eq!(gsp_forcematrix_f3d(0x0123_4567), (0x039E_0000, 0x0123_4567));
+    }
+
+    #[test]
+    fn golden_lightcolor_f3d() {
+        assert_eq!(
+            gsp_lightcolor_f3d(3, 0x1122_33FF),
+            (0xBC00_600A, 0x1122_33FF)
+        );
+    }
+
+    #[test]
+    fn golden_modifyvertex_f3d() {
+        assert_eq!(
+            gsp_modifyvertex_f3d(3, 0x14, 0xFFE0_0020),
+            (0xBC00_8C0C, 0xFFE0_0020)
         );
     }
 }

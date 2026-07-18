@@ -14,7 +14,7 @@
 use crate::hle::HostRam;
 
 // Native data structs. `#[repr(C)]` field offsets match what `rsp.rs` reads via `read_unaligned`.
-// The Float layout (float matrices + 24-byte float vertices) is driven by the `GbiUcode::F3dex2e`
+// The Float layout (float matrices + 24-byte float vertices) is driven by the `DataFormat::Float`
 // arg passed to `interpret` below, not a backend default — the sm64 PC-port path.
 
 /// `GBI_FLOATS` colored vertex (24 B). Offsets MUST match the `HostRam` float `read_vertex`:
@@ -270,7 +270,12 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
     };
     let dl_ptr = dl.as_ptr() as u64;
     let host = unsafe { HostRam::new(frame) };
-    let res = interpret(host, dl_ptr, crate::hle::GbiUcode::F3dex2e);
+    let res = interpret(
+        host,
+        dl_ptr,
+        crate::hle::GbiUcode::F3dex2,
+        crate::DataFormat::Float,
+    );
 
     assert!(res.diags.is_empty(), "unexpected diags: {:?}", res.diags);
 

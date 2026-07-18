@@ -547,7 +547,12 @@ fn rdram_image_and_host_ptr_produce_identical_scene() {
         )
     };
     let host = unsafe { HostRam::new(frame_bytes) };
-    let res_host = interpret(host, entry_ptr, crate::hle::GbiUcode::F3dex2);
+    let res_host = interpret(
+        host,
+        entry_ptr,
+        crate::hle::GbiUcode::F3dex2,
+        crate::DataFormat::Fixed,
+    );
     assert!(
         res_host.diags.is_empty(),
         "host side unexpected diags: {:?}",

@@ -81,7 +81,7 @@ pub fn decode_render_mode(other_mode_l: u32, other_mode_h: u32, geom: u32) -> Re
         z_mode,
         // NOTE: `crate::hle::consts::G_FOG` is retained here (not threaded via GbiConstants) because this
         // is public API consumed cross-crate by the renderer, and the geom-mode G_FOG bit is
-        // ucode-invariant across F3D/F3DEX/F3DEX2/F3DEX2E. Kept in lockstep with the scene-fog read
+        // ucode-invariant across F3D/F3DEX/F3DEX2. Kept in lockstep with the scene-fog read
         // at interp.rs (`gbi.consts.g_fog_geom`). A future ucode that redefines G_FOG must update both.
         fog: (geom & crate::hle::consts::G_FOG != 0) || fog_from_mux,
         alpha_compare,

@@ -196,6 +196,82 @@ pub mod rsp_f3dex2 {
     pub const G_TEXTURE_GEN_LINEAR: u32 = 0x0008_0000;
 }
 
+pub mod rsp_f3d {
+    // RSP F3D opcodes (top byte of w0, bits [31:24]).
+    pub const G_SPNOOP: u8 = 0x00;
+    pub const G_MTX: u8 = 0x01;
+    pub const G_MOVEMEM: u8 = 0x03;
+    pub const G_VTX: u8 = 0x04;
+    pub const G_DL: u8 = 0x06;
+    pub const G_SPRITE2D_BASE: u8 = 0x09;
+    pub const G_RDPHALF_2: u8 = 0xB3;
+    pub const G_RDPHALF_1: u8 = 0xB4;
+    pub const G_QUAD: u8 = 0xB5;
+    pub const G_CLEARGEOMETRYMODE: u8 = 0xB6;
+    pub const G_SETGEOMETRYMODE: u8 = 0xB7;
+    pub const G_ENDDL: u8 = 0xB8;
+    pub const G_SETOTHERMODE_L: u8 = 0xB9;
+    pub const G_SETOTHERMODE_H: u8 = 0xBA;
+    pub const G_TEXTURE: u8 = 0xBB;
+    pub const G_MOVEWORD: u8 = 0xBC;
+    pub const G_POPMTX: u8 = 0xBD;
+    pub const G_CULLDL: u8 = 0xBE;
+    pub const G_TRI1: u8 = 0xBF;
+    pub const G_RDPNOOP: u8 = 0xC0;
+
+    // G_MTX parameter bits. Original F3D uses these directly, without an XOR.
+    pub const G_MTX_MODELVIEW: u8 = 0x00;
+    pub const G_MTX_PROJECTION: u8 = 0x01;
+    pub const G_MTX_MUL: u8 = 0x00;
+    pub const G_MTX_LOAD: u8 = 0x02;
+    pub const G_MTX_NOPUSH: u8 = 0x00;
+    pub const G_MTX_PUSH: u8 = 0x04;
+
+    // Geometry-mode flags (original F3D values).
+    pub const G_ZBUFFER: u32 = 0x0000_0001;
+    pub const G_TEXTURE_ENABLE: u32 = 0x0000_0002;
+    pub const G_SHADE: u32 = 0x0000_0004;
+    pub const G_SHADING_SMOOTH: u32 = 0x0000_0200;
+    pub const G_CULL_FRONT: u32 = 0x0000_1000;
+    pub const G_CULL_BACK: u32 = 0x0000_2000;
+    pub const G_CULL_BOTH: u32 = 0x0000_3000;
+    pub const G_FOG: u32 = 0x0001_0000;
+    pub const G_LIGHTING: u32 = 0x0002_0000;
+    pub const G_TEXTURE_GEN: u32 = 0x0004_0000;
+    pub const G_TEXTURE_GEN_LINEAR: u32 = 0x0008_0000;
+    pub const G_POINT_LIGHTING: u32 = 0x0040_0000;
+    pub const G_CLIPPING: u32 = 0x0080_0000;
+
+    // G_MOVEMEM selectors (original F3D values).
+    pub const G_MV_VIEWPORT: u8 = 0x80;
+    pub const G_MV_LOOKATY: u8 = 0x82;
+    pub const G_MV_LOOKATX: u8 = 0x84;
+    pub const G_MV_LIGHT: u8 = 0x86;
+    pub const G_MV_L0: u8 = 0x86;
+    pub const G_MV_L1: u8 = 0x88;
+    pub const G_MV_L2: u8 = 0x8A;
+    pub const G_MV_L3: u8 = 0x8C;
+    pub const G_MV_L4: u8 = 0x8E;
+    pub const G_MV_L5: u8 = 0x90;
+    pub const G_MV_L6: u8 = 0x92;
+    pub const G_MV_L7: u8 = 0x94;
+    pub const G_MV_TXTATT: u8 = 0x96;
+    pub const G_MV_MATRIX_2: u8 = 0x98;
+    pub const G_MV_MATRIX_3: u8 = 0x9A;
+    pub const G_MV_MATRIX_4: u8 = 0x9C;
+    pub const G_MV_MATRIX_1: u8 = 0x9E;
+
+    // G_MOVEWORD selectors (original F3D values).
+    pub const G_MW_MATRIX: u8 = 0x00;
+    pub const G_MW_NUMLIGHT: u8 = 0x02;
+    pub const G_MW_CLIP: u8 = 0x04;
+    pub const G_MW_SEGMENT: u8 = 0x06;
+    pub const G_MW_FOG: u8 = 0x08;
+    pub const G_MW_LIGHTCOL: u8 = 0x0A;
+    pub const G_MW_POINTS: u8 = 0x0C;
+    pub const G_MW_PERSPNORM: u8 = 0x0E;
+}
+
 pub use rdp::*;
 pub use rsp_f3dex2::*;
 
@@ -211,5 +287,46 @@ mod tests {
         assert_eq!(super::G_ENDDL, 0xDF);
         assert_eq!(super::G_NOOP, 0x00);
         assert_eq!(super::G_SETTIMG, 0xFD);
+    }
+
+    #[test]
+    fn f3d_constants_match_original_gbi_values() {
+        use super::rsp_f3d::*;
+
+        assert_eq!(G_SPNOOP, 0x00);
+        assert_eq!(G_MTX, 0x01);
+        assert_eq!(G_MOVEMEM, 0x03);
+        assert_eq!(G_VTX, 0x04);
+        assert_eq!(G_DL, 0x06);
+        assert_eq!(G_SPRITE2D_BASE, 0x09);
+        assert_eq!(G_RDPHALF_2, 0xB3);
+        assert_eq!(G_RDPHALF_1, 0xB4);
+        assert_eq!(G_QUAD, 0xB5);
+        assert_eq!(G_CLEARGEOMETRYMODE, 0xB6);
+        assert_eq!(G_SETGEOMETRYMODE, 0xB7);
+        assert_eq!(G_ENDDL, 0xB8);
+        assert_eq!(G_SETOTHERMODE_L, 0xB9);
+        assert_eq!(G_SETOTHERMODE_H, 0xBA);
+        assert_eq!(G_TEXTURE, 0xBB);
+        assert_eq!(G_MOVEWORD, 0xBC);
+        assert_eq!(G_POPMTX, 0xBD);
+        assert_eq!(G_CULLDL, 0xBE);
+        assert_eq!(G_TRI1, 0xBF);
+        assert_eq!(G_RDPNOOP, 0xC0);
+
+        assert_eq!(G_MTX_PROJECTION, 0x01);
+        assert_eq!(G_MTX_LOAD, 0x02);
+        assert_eq!(G_MTX_PUSH, 0x04);
+        assert_eq!(G_CULL_FRONT, 0x0000_1000);
+        assert_eq!(G_CULL_BACK, 0x0000_2000);
+        assert_eq!(G_CULL_BOTH, 0x0000_3000);
+
+        assert_eq!(G_MV_VIEWPORT, 0x80);
+        assert_eq!(G_MV_LIGHT, 0x86);
+        assert_eq!(G_MV_MATRIX_1, 0x9E);
+        assert_eq!(G_MW_SEGMENT, 0x06);
+        assert_eq!(G_MW_FOG, 0x08);
+        assert_eq!(G_MW_POINTS, 0x0C);
+        assert_eq!(G_MW_PERSPNORM, 0x0E);
     }
 }

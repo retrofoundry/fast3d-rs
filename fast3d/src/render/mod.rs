@@ -4171,9 +4171,10 @@ pub mod rsp_buffers {
         pub lookat_index: u32,
         pub texgen_mode: u32,
         pub fog: u32,
-        pub _pad1: u32,
+        pub modify_flags: u32,
+        pub modify_screen: [f32; 4],
     }
-    const _: () = assert!(std::mem::size_of::<SrcVertex>() == 64);
+    const _: () = assert!(std::mem::size_of::<SrcVertex>() == 80);
 
     /// Per-light GPU entry: 32 bytes (dir + col each vec4).
     #[repr(C)]
@@ -4221,7 +4222,8 @@ pub mod rsp_buffers {
                 lookat_index: scene.lookat_index.get(i).copied().unwrap_or(0),
                 texgen_mode: scene.texgen_mode.get(i).copied().unwrap_or(0),
                 fog: scene.fog.get(i).copied().unwrap_or(0),
-                _pad1: 0,
+                modify_flags: scene.modify_flags.get(i).copied().unwrap_or(0),
+                modify_screen: scene.modify_screen.get(i).copied().unwrap_or([0.0; 4]),
             })
             .collect()
     }
@@ -4326,6 +4328,8 @@ pub mod rsp_buffers {
                 cn: vec![0],
                 light_index: vec![0],
                 light_count: vec![0],
+                modify_flags: vec![3],
+                modify_screen: vec![[32.0, 16.0, 0.5, 0.0]],
                 mvp_table: vec![crate::hle::math::identity()],
                 viewport_table: vec![([160.0, 120.0, 0.5], [160.0, 120.0, 0.5])],
                 texcoord_table: vec![[0.0, 0.0], [0.25, 0.5]],
@@ -4336,10 +4340,24 @@ pub mod rsp_buffers {
             assert_eq!(sv[0].pos, [1.0, 2.0, 3.0]);
             assert_eq!(sv[0].st, [10.0, 20.0]);
             assert_eq!(sv[0].texcoord_index, 1);
-            assert_eq!(std::mem::size_of::<SrcVertex>(), 64);
+            assert_eq!(sv[0].modify_flags, 3);
+            assert_eq!(sv[0].modify_screen, [32.0, 16.0, 0.5, 0.0]);
+            assert_eq!(std::mem::size_of::<SrcVertex>(), 80);
             assert_eq!(texcoord_table(&scene)[1].scale_s, 0.25);
             assert_eq!(texcoord_table(&scene)[1].scale_t, 0.5);
             assert_eq!(std::mem::size_of::<GpuViewport>(), 32);
+        }
+
+        #[test]
+        fn phase4_rsp_process_shader_parses_and_validates() {
+            let module = wgpu::naga::front::wgsl::parse_str(include_str!("rsp_process.wgsl"))
+                .expect("rsp_process.wgsl must parse");
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .expect("rsp_process.wgsl must validate");
         }
     }
 }

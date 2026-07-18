@@ -1097,8 +1097,11 @@ mod tests {
         let mut rec = crate::hle::rsp::PairRec::default();
         let mut dropped = 0u32;
         let mut seen = [false; 256];
-        let table =
-            crate::hle::gbi::Gbi::<RdramImage>::new(crate::hle::gbi::GbiUcode::F3dex2).table;
+        let table = crate::hle::gbi::Gbi::<RdramImage>::new(
+            crate::hle::gbi::GbiUcode::F3dex2,
+            crate::hle::mem::GbiDataFormat::Fixed,
+        )
+        .table;
 
         for (w0, w1) in cmds {
             let cmd = Cmd {

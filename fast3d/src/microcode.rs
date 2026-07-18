@@ -5,18 +5,19 @@ use crate::hle::gbi::{detect_from_ucode_hash, GbiUcode};
 /// Which N64 graphics microcode a display list targets. An explicit per-`process_dl` argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Microcode {
-    /// Authentic fixed-point F3DEX2 (web / RdramImage default).
+    /// Authentic F3DEX2 (web / RdramImage default). PC ports (sm64/helix, wafel) that
+    /// emit `GBI_FLOATS` data also select this microcode and pair it with `DataFormat::Float`.
     #[default]
     F3dex2,
-    /// GBI_FLOATS PC ports (sm64/helix, wafel).
-    F3dex2e,
+    /// Original F3D microcode.
+    F3d,
 }
 
 impl From<Microcode> for GbiUcode {
     fn from(m: Microcode) -> Self {
         match m {
             Microcode::F3dex2 => GbiUcode::F3dex2,
-            Microcode::F3dex2e => GbiUcode::F3dex2e,
+            Microcode::F3d => GbiUcode::F3d,
         }
     }
 }
@@ -25,7 +26,7 @@ impl From<GbiUcode> for Microcode {
     fn from(u: GbiUcode) -> Self {
         match u {
             GbiUcode::F3dex2 => Microcode::F3dex2,
-            GbiUcode::F3dex2e => Microcode::F3dex2e,
+            GbiUcode::F3d => Microcode::F3d,
         }
     }
 }
@@ -43,8 +44,9 @@ mod tests {
     #[test]
     fn from_roundtrips_both_directions() {
         assert_eq!(GbiUcode::from(Microcode::F3dex2), GbiUcode::F3dex2);
-        assert_eq!(GbiUcode::from(Microcode::F3dex2e), GbiUcode::F3dex2e);
-        assert_eq!(Microcode::from(GbiUcode::F3dex2e), Microcode::F3dex2e);
+        assert_eq!(GbiUcode::from(Microcode::F3d), GbiUcode::F3d);
+        assert_eq!(Microcode::from(GbiUcode::F3dex2), Microcode::F3dex2);
+        assert_eq!(Microcode::from(GbiUcode::F3d), Microcode::F3d);
         assert_eq!(Microcode::default(), Microcode::F3dex2);
     }
 
@@ -56,8 +58,8 @@ mod tests {
             Some(Microcode::F3dex2)
         );
         assert_eq!(
-            detect_microcode(0xF3D2_E000_0000_0002),
-            Some(Microcode::F3dex2e)
+            detect_microcode(0xF3D0_0000_0000_0003),
+            Some(Microcode::F3d)
         );
         assert_eq!(detect_microcode(0xDEAD_BEEF), None);
     }
