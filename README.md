@@ -1,41 +1,44 @@
-# fast3d-rs
+# fast3d
 
-fast3d-rs is a library written in Rust for rendering N64 graphics API commands.
+**A standalone N64 F3DEX2 HLE + wgpu renderer** — hand it a display list from N64 memory and it
+draws the frame.
+
+fast3d walks F3DEX2 display lists through a high-level emulation of the N64 RCP and rasterizes them
+with wgpu, so the same renderer runs natively and on the web (WebGPU/wasm).
+
+## Use it
+
+```toml
+[dependencies]
+fast3d = "1.0"
+```
+
+Implement `Hardware` to expose N64 memory, then drive the frame loop:
+
+```rust
+// once
+let mut renderer = fast3d::Renderer::new(window, width, height, config).await?;
+
+// per frame
+renderer.begin_frame();
+renderer.process_dl(&hw, dl_entry, fast3d::Microcode::F3dex2, &mut diags);
+renderer.present(&hw)?;
+```
+
+- **`Hardware`** — your bridge to guest memory. `rdram()` returns an `Rdram` reader —
+  `RdramImage::new(&bytes)` (safe, borrowed) or `unsafe HostRam::new(..)` (raw pointer, native
+  64-bit only) — and `vi()` gives the VI registers that pick the scanout framebuffer.
+- **`begin_frame` → `process_dl` → `present`** — reset per-frame state, interpret one display list
+  into the internal framebuffer, then scan the VI framebuffer out to the owned surface (or
+  `present_to` a view you own).
+- **Supported microcodes** — `F3dex2` and `F3dex2e` (GBI_FLOATS / PC ports).
+
+Diagnostics stream through a `DiagSink` (`LogSink`, `NopSink`, or your own).
 
 ## Features
 
-- [x] F3DEX2 microcode supported (more coming)
-- [x] WGPU rendering
-- [x] OpenGL rendering
-
-## How to Use
-
-Add this library to your project and one of the following renderers: `fast3d-wgpu-renderer` or `fast3d-glium-renderer`.
-
-The library consists of three main components:
-
-- `RCP` - This represents the N64 RCP and provides a reset and a `process_dl` method.
-- `RenderData` - This is given to the RCP run command that collects draw data and textures for rendering with different renderers.
-- `WgpuRenderer` - This is a renderer that can be used to render data produced
-- `GliumRenderer` - This is a renderer that can be used to render data produced
-
-Check out the examples folder for some examples of how to use the library.
-
-_Looking for a solution that includes this, windowing, audio and controller input? Check out [Helix](https://github.com/retrofoundry/helix)!._
-
-## Examples
-
-You can run our examples using the following command:
-
-```bash
-cargo run --bin fast3d-examples <example>
-```
-
-To run on web:
-
-```bash
-cargo xtask run-wasm
-```
+- **`asm`** *(default)* — assemble display lists from text; not needed when you feed real game DLs.
+- **`debug-ui`** — an egui overlay showing per-frame scene and triangle counts.
 
 ## Community
 
