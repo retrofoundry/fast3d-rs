@@ -8,7 +8,10 @@ pub mod expr;
 pub mod gu;
 pub mod parser;
 
-pub use asm::{assemble, assemble_at, assemble_with_texture, Assembled, Image};
+pub use asm::{
+    assemble, assemble_at, assemble_at_with_textures, assemble_with_texture, texture_declarations,
+    Assembled, Image, TextureDecl, TextureDeclarations, TextureInput,
+};
 pub use parser::Diag;
 
 /// Returns true if the source animates over time: an `update` builder OR a `morph` weight that

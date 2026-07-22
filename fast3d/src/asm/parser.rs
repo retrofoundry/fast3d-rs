@@ -2,7 +2,7 @@
 
 use crate::asm::expr::{parse_expr, Expr};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diag {
     pub line: usize,
     pub msg: String,

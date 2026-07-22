@@ -2,7 +2,7 @@ use crate::asm::encode::*;
 use crate::asm::expr::EvalCtx;
 use crate::asm::gu::{gu_look_at, gu_mtx_ident, gu_perspective, gu_rotate, gu_scale, gu_translate};
 use crate::asm::parser::{extract_update, parse, AddrOperand, Diag, GuStmt, MtxInit, Stmt, VtxDef};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Encode a single RGBA8 texel to RGBA16 (5/5/5/1 big-endian, N64 RGBA16 format).
 pub fn encode_rgba16_texel(r: u8, g: u8, b: u8, a: u8) -> [u8; 2] {
@@ -22,8 +22,7 @@ pub fn encode_i8_texel(r: u8, g: u8, b: u8, _a: u8) -> u8 {
 
 /// Pack two 4-bit intensity nibbles into one byte.
 /// **High nibble = even column (t0), low nibble = odd column (t1)** — matches `decode_i4`.
-/// TODO: row-align nibbles for odd-width textures (N64 TMEM starts each row on a byte boundary;
-/// this flat-stream packing only matches hardware for even widths — all current test scenes are even).
+/// Image encoders must begin each odd-width row with a new pair.
 pub fn encode_i4_pair(t0_i4: u8, t1_i4: u8) -> u8 {
     (t0_i4 << 4) | (t1_i4 & 0xF)
 }
@@ -48,7 +47,6 @@ pub fn encode_ia8_texel(r: u8, g: u8, b: u8, a: u8) -> u8 {
 /// Encode a single RGBA8 texel to a 4-bit IA4 nibble.
 /// IA4 layout: bits [3:1] = 3-bit intensity, bit [0] = 1-bit alpha.
 /// Matches decode_ia4 expansion.
-/// TODO: odd-width row-alignment caveat (same as encode_i4_pair).
 pub fn encode_ia4_nibble(r: u8, g: u8, b: u8, a: u8) -> u8 {
     let i3 = encode_i8_texel(r, g, b, a) >> 5;
     let a1 = a >> 7;
@@ -57,31 +55,100 @@ pub fn encode_ia4_nibble(r: u8, g: u8, b: u8, a: u8) -> u8 {
 
 /// Pack two 4-bit IA4 nibbles into one byte.
 /// **High nibble = even column (t0), low nibble = odd column (t1)** — matches `decode_ia4`.
-/// TODO: row-align nibbles for odd-width textures.
+/// Image encoders must begin each odd-width row with a new pair.
 pub fn encode_ia4_pair(t0_ia4: u8, t1_ia4: u8) -> u8 {
     (t0_ia4 << 4) | (t1_ia4 & 0xF)
+}
+
+fn encode_4bit_flat<F>(rgba8: &[u8], encode: F) -> Vec<u8>
+where
+    F: Fn(u8, u8, u8, u8) -> u8,
+{
+    let num_pixels = rgba8.len() / 4;
+    let mut out = Vec::with_capacity(num_pixels.div_ceil(2));
+    let mut i = 0;
+    while i < num_pixels {
+        let first = i * 4;
+        let high = encode(
+            rgba8[first],
+            rgba8[first + 1],
+            rgba8[first + 2],
+            rgba8[first + 3],
+        );
+        let low = if i + 1 < num_pixels {
+            let second = first + 4;
+            encode(
+                rgba8[second],
+                rgba8[second + 1],
+                rgba8[second + 2],
+                rgba8[second + 3],
+            )
+        } else {
+            0
+        };
+        out.push((high << 4) | (low & 0x0f));
+        i += 2;
+    }
+    out
+}
+
+fn encode_4bit_rows<F>(rgba8: &[u8], width: u32, height: u32, encode: F) -> Vec<u8>
+where
+    F: Fn(u8, u8, u8, u8) -> u8,
+{
+    let width = width as usize;
+    let height = height as usize;
+    let mut out = Vec::with_capacity(width.div_ceil(2) * height);
+    for row in 0..height {
+        let row_start = row * width;
+        for column in (0..width).step_by(2) {
+            let first = (row_start + column) * 4;
+            let high = encode(
+                rgba8[first],
+                rgba8[first + 1],
+                rgba8[first + 2],
+                rgba8[first + 3],
+            );
+            let low = if column + 1 < width {
+                let second = first + 4;
+                encode(
+                    rgba8[second],
+                    rgba8[second + 1],
+                    rgba8[second + 2],
+                    rgba8[second + 3],
+                )
+            } else {
+                0
+            };
+            out.push((high << 4) | (low & 0x0f));
+        }
+    }
+    out
 }
 
 /// Parse a `Texture { w, h, FMT }` format string to `(fmt_code, siz_code)`.
 /// `"RGBA16"` → `(0, 2)`, `"I8"` → `(4, 1)`, `"I4"` → `(4, 0)`,
 /// `"IA16"` → `(3, 2)`, `"IA8"` → `(3, 1)`, `"IA4"` → `(3, 0)`,
 /// `"CI8"` → `(2, 1)`, `"CI4"` → `(2, 0)`.
-/// Unknown strings warn and fall back to RGBA16.
-fn parse_tex_fmt(s: &str) -> (u32, u32) {
+fn try_parse_tex_fmt(s: &str) -> Option<(u32, u32)> {
     match s {
-        "RGBA16" => (0, 2),
-        "I8" => (4, 1),
-        "I4" => (4, 0),
-        "IA16" => (3, 2),
-        "IA8" => (3, 1),
-        "IA4" => (3, 0),
-        "CI8" => (2, 1),
-        "CI4" => (2, 0),
-        _ => {
-            eprintln!("asm: unknown texture format '{s}'; defaulting to RGBA16");
-            (0, 2)
-        }
+        "RGBA16" => Some((0, 2)),
+        "I8" => Some((4, 1)),
+        "I4" => Some((4, 0)),
+        "IA16" => Some((3, 2)),
+        "IA8" => Some((3, 1)),
+        "IA4" => Some((3, 0)),
+        "CI8" => Some((2, 1)),
+        "CI4" => Some((2, 0)),
+        _ => None,
     }
+}
+
+fn parse_tex_fmt(s: &str) -> (u32, u32) {
+    try_parse_tex_fmt(s).unwrap_or_else(|| {
+        eprintln!("asm: unknown texture format '{s}'; defaulting to RGBA16");
+        (0, 2)
+    })
 }
 
 /// Nearest-color Euclidean distance: find the closest palette entry for each RGBA8 pixel.
@@ -157,6 +224,31 @@ pub fn encode_ci4(rgba8: &[u8], palette: &[[u8; 4]]) -> Vec<u8> {
         let idx1 = if i + 1 < n { indices[i + 1] & 0xF } else { 0 };
         out.push((idx0 << 4) | idx1);
         i += 2;
+    }
+    out
+}
+
+fn encode_ci4_rows(rgba8: &[u8], palette: &[[u8; 4]], width: u32, height: u32) -> Vec<u8> {
+    assert!(
+        palette.len() <= 16,
+        "CI4 palette must have at most 16 entries, got {}",
+        palette.len()
+    );
+    let indices = quantize(rgba8, palette);
+    let width = width as usize;
+    let height = height as usize;
+    let mut out = Vec::with_capacity(width.div_ceil(2) * height);
+    for row in 0..height {
+        let row_start = row * width;
+        for column in (0..width).step_by(2) {
+            let high = indices[row_start + column] & 0x0f;
+            let low = if column + 1 < width {
+                indices[row_start + column + 1] & 0x0f
+            } else {
+                0
+            };
+            out.push((high << 4) | low);
+        }
     }
     out
 }
@@ -356,9 +448,337 @@ fn group_blocks<'a>(
     out
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TextureInput<'a> {
+    pub name: &'a str,
+    pub rgba8: &'a [u8],
+    pub width: u32,
+    pub height: u32,
+}
+
+enum TextureInputs<'a> {
+    None,
+    Legacy(&'a [u8]),
+    Named(&'a [TextureInput<'a>]),
+}
+
+struct EncodedTextures {
+    first_addr: u32,
+    addresses: HashMap<String, u32>,
+    ci_palettes: HashMap<String, (u32, u32)>,
+}
+
+fn checked_rgba_len(width: u32, height: u32) -> Option<usize> {
+    usize::try_from(width)
+        .ok()?
+        .checked_mul(usize::try_from(height).ok()?)?
+        .checked_mul(4)
+}
+
+fn align_to_8(rdram: &mut Vec<u8>) {
+    while !rdram.len().is_multiple_of(8) {
+        rdram.push(0);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TextureEncodingLayout {
+    Flat,
+    Rows { width: u32, height: u32 },
+}
+
+/// Append one RGBA8 input in the selected N64 texture format. For CI formats, the returned tuple
+/// identifies the separately aligned packed RGBA16 palette block.
+fn encode_texture_data(
+    rdram: &mut Vec<u8>,
+    rgba8: &[u8],
+    layout: TextureEncodingLayout,
+    tex_fmt: u32,
+    tex_siz: u32,
+    line: usize,
+    diags: &mut Vec<Diag>,
+) -> Option<(u32, u32)> {
+    match (tex_fmt, tex_siz) {
+        (2, 1) => match build_palette_ci8(rgba8) {
+            Ok(palette) => {
+                let count = palette.len() as u32;
+                rdram.extend_from_slice(&encode_ci8(rgba8, &palette));
+                align_to_8(rdram);
+                let palette_addr = rdram.len() as u32;
+                for color in &palette {
+                    rdram.extend_from_slice(&encode_rgba16_texel(
+                        color[0], color[1], color[2], color[3],
+                    ));
+                }
+                Some((palette_addr, count))
+            }
+            Err(msg) => {
+                diags.push(Diag { line, msg });
+                None
+            }
+        },
+        (2, 0) => match build_palette_ci4(rgba8) {
+            Ok(palette) => {
+                let count = palette.len() as u32;
+                let encoded = match layout {
+                    TextureEncodingLayout::Flat => encode_ci4(rgba8, &palette),
+                    TextureEncodingLayout::Rows { width, height } => {
+                        encode_ci4_rows(rgba8, &palette, width, height)
+                    }
+                };
+                rdram.extend_from_slice(&encoded);
+                align_to_8(rdram);
+                let palette_addr = rdram.len() as u32;
+                for color in &palette {
+                    rdram.extend_from_slice(&encode_rgba16_texel(
+                        color[0], color[1], color[2], color[3],
+                    ));
+                }
+                Some((palette_addr, count))
+            }
+            Err(msg) => {
+                diags.push(Diag { line, msg });
+                None
+            }
+        },
+        (4, 1) => {
+            for pixel in rgba8.chunks_exact(4) {
+                rdram.push(encode_i8_texel(pixel[0], pixel[1], pixel[2], pixel[3]));
+            }
+            None
+        }
+        (4, 0) => {
+            let encode = |r, g, b, a| encode_i8_texel(r, g, b, a) >> 4;
+            let encoded = match layout {
+                TextureEncodingLayout::Flat => encode_4bit_flat(rgba8, encode),
+                TextureEncodingLayout::Rows { width, height } => {
+                    encode_4bit_rows(rgba8, width, height, encode)
+                }
+            };
+            rdram.extend_from_slice(&encoded);
+            None
+        }
+        (3, 2) => {
+            for pixel in rgba8.chunks_exact(4) {
+                rdram.extend_from_slice(&encode_ia16_texel(pixel[0], pixel[1], pixel[2], pixel[3]));
+            }
+            None
+        }
+        (3, 1) => {
+            for pixel in rgba8.chunks_exact(4) {
+                rdram.push(encode_ia8_texel(pixel[0], pixel[1], pixel[2], pixel[3]));
+            }
+            None
+        }
+        (3, 0) => {
+            let encoded = match layout {
+                TextureEncodingLayout::Flat => encode_4bit_flat(rgba8, encode_ia4_nibble),
+                TextureEncodingLayout::Rows { width, height } => {
+                    encode_4bit_rows(rgba8, width, height, encode_ia4_nibble)
+                }
+            };
+            rdram.extend_from_slice(&encoded);
+            None
+        }
+        _ => {
+            for pixel in rgba8.chunks_exact(4) {
+                rdram.extend_from_slice(&encode_rgba16_texel(
+                    pixel[0], pixel[1], pixel[2], pixel[3],
+                ));
+            }
+            None
+        }
+    }
+}
+
+fn encode_textures(
+    stmts: &[(usize, Stmt)],
+    inputs: TextureInputs<'_>,
+    rdram: &mut Vec<u8>,
+    diags: &mut Vec<Diag>,
+) -> EncodedTextures {
+    match inputs {
+        TextureInputs::None => EncodedTextures {
+            first_addr: 0,
+            addresses: HashMap::new(),
+            ci_palettes: HashMap::new(),
+        },
+        TextureInputs::Legacy(rgba8) => {
+            // Apply the first declared format to the shared input, preserving the historical API.
+            let format = stmts
+                .iter()
+                .find_map(|(_, statement)| match statement {
+                    Stmt::Texture(definition) => Some(definition.fmt.as_str()),
+                    _ => None,
+                })
+                .unwrap_or("RGBA16");
+            let (tex_fmt, tex_siz) = parse_tex_fmt(format);
+            let first_addr = rdram.len() as u32;
+            let palette = encode_texture_data(
+                rdram,
+                rgba8,
+                TextureEncodingLayout::Flat,
+                tex_fmt,
+                tex_siz,
+                0,
+                diags,
+            );
+            align_to_8(rdram);
+
+            let mut addresses = HashMap::new();
+            let mut ci_palettes = HashMap::new();
+            for (_, statement) in stmts {
+                if let Stmt::Texture(definition) = statement {
+                    addresses.insert(definition.name.clone(), first_addr);
+                    if let Some(palette) = palette {
+                        ci_palettes.insert(definition.name.clone(), palette);
+                    }
+                }
+            }
+            EncodedTextures {
+                first_addr,
+                addresses,
+                ci_palettes,
+            }
+        }
+        TextureInputs::Named(inputs) => {
+            let declarations: Vec<_> = stmts
+                .iter()
+                .filter_map(|(line, statement)| match statement {
+                    Stmt::Texture(definition) => Some((*line, definition)),
+                    _ => None,
+                })
+                .collect();
+            let mut declaration_names = HashSet::new();
+            for (line, declaration) in &declarations {
+                if !declaration_names.insert(declaration.name.as_str()) {
+                    diags.push(Diag {
+                        line: *line,
+                        msg: format!("duplicate texture declaration: {}", declaration.name),
+                    });
+                }
+            }
+
+            let mut inputs_by_name = HashMap::new();
+            for input in inputs {
+                if inputs_by_name.insert(input.name, input).is_some() {
+                    diags.push(Diag {
+                        line: 0,
+                        msg: format!("duplicate texture input: {}", input.name),
+                    });
+                }
+                if !declaration_names.contains(input.name) {
+                    diags.push(Diag {
+                        line: 0,
+                        msg: format!("undeclared texture input: {}", input.name),
+                    });
+                }
+            }
+
+            for (line, declaration) in &declarations {
+                let Some(input) = inputs_by_name.get(declaration.name.as_str()) else {
+                    diags.push(Diag {
+                        line: *line,
+                        msg: format!("missing texture input: {}", declaration.name),
+                    });
+                    continue;
+                };
+                if declaration.width == 0
+                    || declaration.height == 0
+                    || input.width == 0
+                    || input.height == 0
+                {
+                    diags.push(Diag {
+                        line: *line,
+                        msg: format!("texture `{}` has zero dimensions", declaration.name),
+                    });
+                }
+                if declaration.width != input.width || declaration.height != input.height {
+                    diags.push(Diag {
+                        line: *line,
+                        msg: format!(
+                            "texture `{}` declares {}x{}, but input is {}x{}",
+                            declaration.name,
+                            declaration.width,
+                            declaration.height,
+                            input.width,
+                            input.height
+                        ),
+                    });
+                }
+                match checked_rgba_len(declaration.width, declaration.height) {
+                    Some(expected) if input.rgba8.len() != expected => diags.push(Diag {
+                        line: *line,
+                        msg: format!(
+                            "texture `{}` expected {expected} RGBA8 bytes, got {}",
+                            declaration.name,
+                            input.rgba8.len()
+                        ),
+                    }),
+                    None => diags.push(Diag {
+                        line: *line,
+                        msg: format!("texture `{}` dimensions are too large", declaration.name),
+                    }),
+                    _ => {}
+                }
+                if try_parse_tex_fmt(&declaration.fmt).is_none() {
+                    diags.push(Diag {
+                        line: *line,
+                        msg: format!("unknown texture format: {}", declaration.fmt),
+                    });
+                }
+            }
+
+            if !diags.is_empty() {
+                return EncodedTextures {
+                    first_addr: 0,
+                    addresses: HashMap::new(),
+                    ci_palettes: HashMap::new(),
+                };
+            }
+
+            let mut encoded = EncodedTextures {
+                first_addr: 0,
+                addresses: HashMap::new(),
+                ci_palettes: HashMap::new(),
+            };
+            for (line, declaration) in declarations {
+                align_to_8(rdram);
+                let address = rdram.len() as u32;
+                if encoded.addresses.is_empty() {
+                    encoded.first_addr = address;
+                }
+                let input = inputs_by_name[declaration.name.as_str()];
+                let (tex_fmt, tex_siz) = try_parse_tex_fmt(&declaration.fmt)
+                    .expect("named texture formats were validated before encoding");
+                let palette = encode_texture_data(
+                    rdram,
+                    input.rgba8,
+                    TextureEncodingLayout::Rows {
+                        width: input.width,
+                        height: input.height,
+                    },
+                    tex_fmt,
+                    tex_siz,
+                    line,
+                    diags,
+                );
+                encoded.addresses.insert(declaration.name.clone(), address);
+                if let Some(palette) = palette {
+                    encoded
+                        .ci_palettes
+                        .insert(declaration.name.clone(), palette);
+                }
+                align_to_8(rdram);
+            }
+            encoded
+        }
+    }
+}
+
 fn assemble_inner(
     source: &str,
-    tex: Option<(&[u8], u32, u32)>,
+    textures: TextureInputs<'_>,
     overrides: &HashMap<String, [[f32; 4]; 4]>,
     vtx_overrides: &HashMap<String, Vec<u8>>,
 ) -> Result<Image, Vec<Diag>> {
@@ -545,196 +965,9 @@ fn assemble_inner(
         }
     }
 
-    // --- data: optional texture ---
-    // Resolve the texture format by scanning for the first Texture statement; the format string
-    // lives in Stmt::Texture(td).fmt, so we scan stmts here rather than deep inside the loop.
-    let tex_fmt_str: &str = stmts
-        .iter()
-        .find_map(|(_l, s)| {
-            if let Stmt::Texture(td) = s {
-                Some(td.fmt.as_str())
-            } else {
-                None
-            }
-        })
-        .unwrap_or("RGBA16");
-    let (tex_fmt, tex_siz) = parse_tex_fmt(tex_fmt_str);
-
-    // CI palette info (CI8 and CI4): maps texture name → (pal_addr, palette_entry_count).
-    // Populated when tex_fmt==2, tex_siz∈{0,1}; used by emit_stmt via EmitCtx.ci_pal.
-    let mut ci_pal_map: HashMap<String, (u32, u32)> = HashMap::new();
-
-    let (tex_addr, tex_name_map) = if let Some((rgba8, _w, _h)) = tex {
-        let tex_addr = rdram.len() as u32;
-        let num_pixels = rgba8.len() / 4;
-        match (tex_fmt, tex_siz) {
-            (2, 1) => {
-                // CI8: quantize source to palette indices; emit index data then palette block.
-                match build_palette_ci8(rgba8) {
-                    Ok(palette) => {
-                        let count = palette.len() as u32;
-                        // Emit CI8 index bytes (1 byte/texel).
-                        let indices = encode_ci8(rgba8, &palette);
-                        rdram.extend_from_slice(&indices);
-                        // Align to 8 bytes before palette block.
-                        while !rdram.len().is_multiple_of(8) {
-                            rdram.push(0);
-                        }
-                        // Emit palette: PACKED layout — count*2 bytes, contiguous big-endian RGBA16.
-                        // Hardware-accurate RDRAM representation of gsDPLoadTLUT palettes (real N64
-                        // / sm64 DLs store packed palettes). load_tlut DMA-expands packed→stride-8
-                        // TMEM on load, so decode_ci8's `index<<3` lookup works correctly.
-                        let pal_addr_val = rdram.len() as u32;
-                        for c in &palette {
-                            let e = encode_rgba16_texel(c[0], c[1], c[2], c[3]);
-                            rdram.push(e[0]);
-                            rdram.push(e[1]);
-                        }
-                        // Register palette addr+count for every Texture decl of this format.
-                        for (_, s) in &stmts {
-                            if let Stmt::Texture(td) = s {
-                                ci_pal_map.insert(td.name.clone(), (pal_addr_val, count));
-                            }
-                        }
-                    }
-                    Err(msg) => {
-                        diags.push(Diag { line: 0, msg });
-                    }
-                }
-            }
-            (2, 0) => {
-                // CI4: quantize source to ≤16-color palette indices; emit packed nibble data then
-                // palette block. Same PACKED palette layout as CI8 (count*2 bytes, no stride-8
-                // padding in RDRAM). load_tlut DMA-expands packed→stride-8 TMEM on load.
-                match build_palette_ci4(rgba8) {
-                    Ok(palette) => {
-                        let count = palette.len() as u32;
-                        // Emit CI4 packed nibble data (2 texels/byte, high nibble = even column).
-                        let encoded = encode_ci4(rgba8, &palette);
-                        rdram.extend_from_slice(&encoded);
-                        // Align to 8 bytes before palette block.
-                        while !rdram.len().is_multiple_of(8) {
-                            rdram.push(0);
-                        }
-                        // Emit palette: PACKED layout — count*2 bytes, contiguous big-endian RGBA16.
-                        // Hardware-accurate RDRAM representation: load_tlut DMA-expands to stride-8.
-                        let pal_addr_val = rdram.len() as u32;
-                        for c in &palette {
-                            let e = encode_rgba16_texel(c[0], c[1], c[2], c[3]);
-                            rdram.push(e[0]);
-                            rdram.push(e[1]);
-                        }
-                        // Register palette addr+count for every Texture decl of this format.
-                        for (_, s) in &stmts {
-                            if let Stmt::Texture(td) = s {
-                                ci_pal_map.insert(td.name.clone(), (pal_addr_val, count));
-                            }
-                        }
-                    }
-                    Err(msg) => {
-                        diags.push(Diag { line: 0, msg });
-                    }
-                }
-            }
-            (4, 1) => {
-                // I8: 1 byte per texel (luminance).
-                for i in 0..num_pixels {
-                    let r = rgba8[i * 4];
-                    let g = rgba8[i * 4 + 1];
-                    let b = rgba8[i * 4 + 2];
-                    let a = rgba8[i * 4 + 3];
-                    rdram.push(encode_i8_texel(r, g, b, a));
-                }
-            }
-            (4, 0) => {
-                // I4: 2 texels per byte, high nibble = even column.
-                // Odd total texel count: zero-pad the final nibble.
-                let mut i = 0;
-                while i < num_pixels {
-                    let r0 = rgba8[i * 4];
-                    let g0 = rgba8[i * 4 + 1];
-                    let b0 = rgba8[i * 4 + 2];
-                    let a0 = rgba8[i * 4 + 3];
-                    let t0_i4 = encode_i8_texel(r0, g0, b0, a0) >> 4;
-                    let t1_i4 = if i + 1 < num_pixels {
-                        let r1 = rgba8[(i + 1) * 4];
-                        let g1 = rgba8[(i + 1) * 4 + 1];
-                        let b1 = rgba8[(i + 1) * 4 + 2];
-                        let a1 = rgba8[(i + 1) * 4 + 3];
-                        encode_i8_texel(r1, g1, b1, a1) >> 4
-                    } else {
-                        0 // zero-pad final nibble for odd widths
-                    };
-                    rdram.push(encode_i4_pair(t0_i4, t1_i4));
-                    i += 2;
-                }
-            }
-            (3, 2) => {
-                // IA16: 2 bytes per texel [intensity, alpha].
-                for i in 0..num_pixels {
-                    let r = rgba8[i * 4];
-                    let g = rgba8[i * 4 + 1];
-                    let b = rgba8[i * 4 + 2];
-                    let a = rgba8[i * 4 + 3];
-                    rdram.extend_from_slice(&encode_ia16_texel(r, g, b, a));
-                }
-            }
-            (3, 1) => {
-                // IA8: 1 byte per texel (high nibble = I4, low nibble = A4).
-                for i in 0..num_pixels {
-                    let r = rgba8[i * 4];
-                    let g = rgba8[i * 4 + 1];
-                    let b = rgba8[i * 4 + 2];
-                    let a = rgba8[i * 4 + 3];
-                    rdram.push(encode_ia8_texel(r, g, b, a));
-                }
-            }
-            (3, 0) => {
-                // IA4: 2 texels per byte, high nibble = even column.
-                let mut i = 0;
-                while i < num_pixels {
-                    let r0 = rgba8[i * 4];
-                    let g0 = rgba8[i * 4 + 1];
-                    let b0 = rgba8[i * 4 + 2];
-                    let a0 = rgba8[i * 4 + 3];
-                    let t0_ia4 = encode_ia4_nibble(r0, g0, b0, a0);
-                    let t1_ia4 = if i + 1 < num_pixels {
-                        let r1 = rgba8[(i + 1) * 4];
-                        let g1 = rgba8[(i + 1) * 4 + 1];
-                        let b1 = rgba8[(i + 1) * 4 + 2];
-                        let a1 = rgba8[(i + 1) * 4 + 3];
-                        encode_ia4_nibble(r1, g1, b1, a1)
-                    } else {
-                        0
-                    };
-                    rdram.push(encode_ia4_pair(t0_ia4, t1_ia4));
-                    i += 2;
-                }
-            }
-            _ => {
-                // RGBA16 (and any unrecognised format): 2 bytes per texel.
-                for i in 0..num_pixels {
-                    let r = rgba8[i * 4];
-                    let g = rgba8[i * 4 + 1];
-                    let b = rgba8[i * 4 + 2];
-                    let a = rgba8[i * 4 + 3];
-                    rdram.extend_from_slice(&encode_rgba16_texel(r, g, b, a));
-                }
-            }
-        }
-        while !rdram.len().is_multiple_of(8) {
-            rdram.push(0);
-        }
-        let mut map: HashMap<String, u32> = HashMap::new();
-        for (_l, s) in &stmts {
-            if let Stmt::Texture(td) = s {
-                map.insert(td.name.clone(), tex_addr);
-            }
-        }
-        (tex_addr, Some(map))
-    } else {
-        (0u32, None)
-    };
+    // --- data: optional textures ---
+    let has_texture_inputs = !matches!(textures, TextureInputs::None);
+    let encoded_textures = encode_textures(&stmts, textures, &mut rdram, &mut diags);
 
     // --- command blocks: group, pre-size + assign addresses (main first), then emit ---
     let blocks = group_blocks(&stmts, &mut diags);
@@ -758,9 +991,9 @@ fn assemble_inner(
         vtx_addr,
         vp_addr,
         block_addr: &block_addr,
-        tex: tex_name_map.as_ref(),
+        tex: has_texture_inputs.then_some(&encoded_textures.addresses),
         persp_norm: &mtx_persp_norm,
-        ci_pal: &ci_pal_map,
+        ci_pal: &encoded_textures.ci_palettes,
     };
     for (name, blk) in &blocks {
         // The pre-sized layout only holds when nothing has been diagnosed: a diagnosed command
@@ -784,7 +1017,7 @@ fn assemble_inner(
         entry_addr,
         vtx_addr,
         vp_addr,
-        tex_addr,
+        tex_addr: encoded_textures.first_addr,
         light_addr: first_light_addr,
         lookat_addr: first_lookat_addr,
     })
@@ -796,6 +1029,51 @@ fn assemble_inner(
 pub struct Assembled {
     pub image: Image,
     pub is_time_variant: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureDecl {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub format: String,
+    pub line: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureDeclarations {
+    pub declarations: Vec<TextureDecl>,
+    pub diagnostics: Vec<Diag>,
+}
+
+pub fn texture_declarations(source: &str) -> TextureDeclarations {
+    let (cleaned, _, mut diagnostics) = extract_update(source);
+    let (statements, mut parser_diagnostics) = parse(&cleaned);
+    diagnostics.append(&mut parser_diagnostics);
+
+    let mut seen = HashSet::new();
+    let mut declarations = Vec::new();
+    for (line, statement) in statements {
+        if let Stmt::Texture(definition) = statement {
+            if !seen.insert(definition.name.clone()) {
+                diagnostics.push(Diag {
+                    line,
+                    msg: format!("duplicate texture declaration: {}", definition.name),
+                });
+            }
+            declarations.push(TextureDecl {
+                name: definition.name,
+                width: definition.width,
+                height: definition.height,
+                format: definition.fmt,
+                line,
+            });
+        }
+    }
+    TextureDeclarations {
+        declarations,
+        diagnostics,
+    }
 }
 
 fn eval_gu(s: &GuStmt, ctx: &EvalCtx) -> [[f32; 4]; 4] {
@@ -855,12 +1133,10 @@ fn morph_vertex_bytes(a: &VtxDef, b: &VtxDef, w: f32) -> [u8; 16] {
     bytes
 }
 
-/// Assemble `source` at playback `time` (seconds). Evaluates the `update` block, baking the
-/// resulting matrices over their declared initializers. `frame = floor(time*60)`.
-pub fn assemble_at(
+fn assemble_at_internal(
     source: &str,
     time: f32,
-    tex: Option<(&[u8], u32, u32)>,
+    textures: TextureInputs<'_>,
 ) -> Result<Assembled, Vec<Diag>> {
     let (cleaned, gu_stmts, mut diags) = extract_update(source);
     let ctx = EvalCtx {
@@ -966,7 +1242,7 @@ pub fn assemble_at(
         vtx_overrides.insert(m.pool.clone(), bytes);
     }
 
-    match assemble_inner(&cleaned, tex, &overrides, &vtx_overrides) {
+    match assemble_inner(&cleaned, textures, &overrides, &vtx_overrides) {
         Ok(image) if diags.is_empty() => Ok(Assembled {
             image,
             is_time_variant,
@@ -977,6 +1253,29 @@ pub fn assemble_at(
             Err(diags)
         }
     }
+}
+
+/// Assemble `source` at playback `time` (seconds). Evaluates the `update` block, baking the
+/// resulting matrices over their declared initializers. `frame = floor(time*60)`.
+pub fn assemble_at(
+    source: &str,
+    time: f32,
+    tex: Option<(&[u8], u32, u32)>,
+) -> Result<Assembled, Vec<Diag>> {
+    let inputs = match tex {
+        Some((rgba8, _, _)) => TextureInputs::Legacy(rgba8),
+        None => TextureInputs::None,
+    };
+    assemble_at_internal(source, time, inputs)
+}
+
+/// Assemble `source` with one exact RGBA8 input for each named `Texture` declaration.
+pub fn assemble_at_with_textures(
+    source: &str,
+    time: f32,
+    textures: &[TextureInput<'_>],
+) -> Result<Assembled, Vec<Diag>> {
+    assemble_at_internal(source, time, TextureInputs::Named(textures))
 }
 
 /// Assemble a display-list source into a unified RDRAM image. Texture statements are diagnosed
