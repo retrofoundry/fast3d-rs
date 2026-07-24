@@ -23,6 +23,8 @@ pub fn encode_i8_texel(r: u8, g: u8, b: u8, _a: u8) -> u8 {
 /// Pack two 4-bit intensity nibbles into one byte.
 /// **High nibble = even column (t0), low nibble = odd column (t1)** — matches `decode_i4`.
 /// Image encoders must begin each odd-width row with a new pair.
+// Kept for in-crate encoding tests; production encoding uses the row-aware helper.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn encode_i4_pair(t0_i4: u8, t1_i4: u8) -> u8 {
     (t0_i4 << 4) | (t1_i4 & 0xF)
 }
@@ -56,6 +58,8 @@ pub fn encode_ia4_nibble(r: u8, g: u8, b: u8, a: u8) -> u8 {
 /// Pack two 4-bit IA4 nibbles into one byte.
 /// **High nibble = even column (t0), low nibble = odd column (t1)** — matches `decode_ia4`.
 /// Image encoders must begin each odd-width row with a new pair.
+// Kept for in-crate encoding tests; production encoding uses the row-aware helper.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn encode_ia4_pair(t0_ia4: u8, t1_ia4: u8) -> u8 {
     (t0_ia4 << 4) | (t1_ia4 & 0xF)
 }
@@ -1023,14 +1027,6 @@ fn assemble_inner(
     })
 }
 
-/// Assemble result carrying the RDRAM image plus whether the source animates over time
-/// (an `update` builder reads `time`/`frame`). The host loops iff `is_time_variant`.
-#[derive(Clone, Debug)]
-pub struct Assembled {
-    pub image: Image,
-    pub is_time_variant: bool,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextureDecl {
     pub name: String,
@@ -1040,19 +1036,37 @@ pub struct TextureDecl {
     pub line: usize,
 }
 
+/// Assembly-free analysis of a display-list source: what it declares, and which runtime inputs it
+/// reads. This states *facts about the source* — it prescribes nothing about how a host should
+/// behave. Cheap enough to call whenever the source text changes.
+///
+/// When `diagnostics` is non-empty the source did not parse cleanly, and the other fields describe
+/// only what was successfully recovered. In particular `references_time == false` then means "no
+/// time reference was recognized", **not** "the source is static" — a half-written `update` block
+/// may not have parsed at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TextureDeclarations {
-    pub declarations: Vec<TextureDecl>,
+pub struct Analysis {
+    /// Every `Texture` declaration, in source order. Duplicates are retained and also diagnosed.
+    pub textures: Vec<TextureDecl>,
+    /// True if an `update` builder or a `morph` weight reads `time`/`frame`.
+    pub references_time: bool,
     pub diagnostics: Vec<Diag>,
 }
 
-pub fn texture_declarations(source: &str) -> TextureDeclarations {
-    let (cleaned, _, mut diagnostics) = extract_update(source);
+/// Analyze `source` without assembling it. See [`Analysis`] for the best-effort semantics when the
+/// source does not parse cleanly.
+pub fn analyze(source: &str) -> Analysis {
+    let (cleaned, gu_stmts, mut diagnostics) = extract_update(source);
     let (statements, mut parser_diagnostics) = parse(&cleaned);
     diagnostics.append(&mut parser_diagnostics);
 
+    let references_time = gu_stmts.iter().any(|(_, s)| s.references_time())
+        || statements
+            .iter()
+            .any(|(_, s)| matches!(s, Stmt::Morph(m) if m.weight.references_time()));
+
     let mut seen = HashSet::new();
-    let mut declarations = Vec::new();
+    let mut textures = Vec::new();
     for (line, statement) in statements {
         if let Stmt::Texture(definition) = statement {
             if !seen.insert(definition.name.clone()) {
@@ -1061,7 +1075,7 @@ pub fn texture_declarations(source: &str) -> TextureDeclarations {
                     msg: format!("duplicate texture declaration: {}", definition.name),
                 });
             }
-            declarations.push(TextureDecl {
+            textures.push(TextureDecl {
                 name: definition.name,
                 width: definition.width,
                 height: definition.height,
@@ -1070,8 +1084,10 @@ pub fn texture_declarations(source: &str) -> TextureDeclarations {
             });
         }
     }
-    TextureDeclarations {
-        declarations,
+
+    Analysis {
+        textures,
+        references_time,
         diagnostics,
     }
 }
@@ -1137,7 +1153,7 @@ fn assemble_at_internal(
     source: &str,
     time: f32,
     textures: TextureInputs<'_>,
-) -> Result<Assembled, Vec<Diag>> {
+) -> Result<Image, Vec<Diag>> {
     let (cleaned, gu_stmts, mut diags) = extract_update(source);
     let ctx = EvalCtx {
         time,
@@ -1168,10 +1184,6 @@ fn assemble_at_internal(
             _ => None,
         })
         .collect();
-
-    // Time-variance: an update builder OR any morph weight reading `time`/`frame`.
-    let is_time_variant = gu_stmts.iter().any(|(_, s)| s.references_time())
-        || morphs.iter().any(|(_, m)| m.weight.references_time());
 
     let mut overrides: HashMap<String, [[f32; 4]; 4]> = HashMap::new();
     for (line, s) in &gu_stmts {
@@ -1243,10 +1255,7 @@ fn assemble_at_internal(
     }
 
     match assemble_inner(&cleaned, textures, &overrides, &vtx_overrides) {
-        Ok(image) if diags.is_empty() => Ok(Assembled {
-            image,
-            is_time_variant,
-        }),
+        Ok(image) if diags.is_empty() => Ok(image),
         Ok(_) => Err(diags),
         Err(mut e) => {
             diags.append(&mut e);
@@ -1261,7 +1270,7 @@ pub fn assemble_at(
     source: &str,
     time: f32,
     tex: Option<(&[u8], u32, u32)>,
-) -> Result<Assembled, Vec<Diag>> {
+) -> Result<Image, Vec<Diag>> {
     let inputs = match tex {
         Some((rgba8, _, _)) => TextureInputs::Legacy(rgba8),
         None => TextureInputs::None,
@@ -1274,14 +1283,14 @@ pub fn assemble_at_with_textures(
     source: &str,
     time: f32,
     textures: &[TextureInput<'_>],
-) -> Result<Assembled, Vec<Diag>> {
+) -> Result<Image, Vec<Diag>> {
     assemble_at_internal(source, time, TextureInputs::Named(textures))
 }
 
 /// Assemble a display-list source into a unified RDRAM image. Texture statements are diagnosed
 /// (use [`assemble_with_texture`] for those).
 pub fn assemble(source: &str) -> Result<Image, Vec<Diag>> {
-    assemble_at(source, 0.0, None).map(|a| a.image)
+    assemble_at(source, 0.0, None)
 }
 
 /// Assemble a display list source that references a texture, embedding the RGBA8 pixel data into
@@ -1293,7 +1302,7 @@ pub fn assemble_with_texture(
     tex_w: u32,
     tex_h: u32,
 ) -> Result<Image, Vec<Diag>> {
-    assemble_at(source, 0.0, Some((rgba8, tex_w, tex_h))).map(|a| a.image)
+    assemble_at(source, 0.0, Some((rgba8, tex_w, tex_h)))
 }
 
 /// Emit one command statement's word(s) into `rdram`, resolving symbol/segment operands. Texture
@@ -1959,28 +1968,22 @@ Gfx main[] = { gsSPVertex(verts, 1, 0) gsSP1Triangle(0,0,0,0) gsSPEndDisplayList
 ";
         let asm = crate::asm::assemble_at(src, std::f32::consts::FRAC_PI_2, None).unwrap();
         assert!(
-            asm.is_time_variant,
+            crate::asm::analyze(src).references_time,
             "morph weight reads time -> must be time-variant"
         );
-        let v = asm.image.vtx_addr as usize;
-        let x = i16::from_be_bytes([asm.image.rdram[v], asm.image.rdram[v + 1]]);
-        let y = i16::from_be_bytes([asm.image.rdram[v + 2], asm.image.rdram[v + 3]]);
+        let v = asm.vtx_addr as usize;
+        let x = i16::from_be_bytes([asm.rdram[v], asm.rdram[v + 1]]);
+        let y = i16::from_be_bytes([asm.rdram[v + 2], asm.rdram[v + 3]]);
         assert!(
             (x - 20).abs() <= 1 && (y - 20).abs() <= 1,
             "pos lerp: got ({x},{y})"
         );
-        let nx = asm.image.rdram[v + 12] as i8;
-        let ny = asm.image.rdram[v + 13] as i8;
+        let nx = asm.rdram[v + 12] as i8;
+        let ny = asm.rdram[v + 13] as i8;
         assert!(
             (nx as i32 - 90).abs() <= 3 && (ny as i32 - 90).abs() <= 3,
             "normal renorm ~0.707*127=90: got ({nx},{ny})"
         );
-    }
-
-    #[test]
-    fn source_with_morph_is_time_variant() {
-        let src = "VtxSet a = { VtxN { 0,0,0,0,0,0,127,0,0,255 } }\nVtxSet b = { VtxN { 1,0,0,0,0,0,127,0,0,255 } }\nmorph v = lerp(a, b, (1 - cos(time)) / 2)\n";
-        assert!(crate::asm::source_is_time_variant(src));
     }
 
     // ---- 2D / framebuffer round-trip tests (Task 5) ----

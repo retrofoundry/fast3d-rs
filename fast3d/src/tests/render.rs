@@ -1738,10 +1738,10 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     // t=0: weight = (1-cos(0))/2 = 0.0 → pure cube.
     let asm0 = crate::asm::assemble_at(&src, 0.0, tex).expect("morphcube assembles at t=0");
     assert!(
-        asm0.is_time_variant,
+        crate::asm::analyze(&src).references_time,
         "morphcube morph weight reads time — must be time-variant"
     );
-    let r0 = crate::hle::interpret_rdram(&asm0.image.rdram, asm0.image.entry_addr);
+    let r0 = crate::hle::interpret_rdram(&asm0.rdram, asm0.entry_addr);
     assert!(r0.diags.is_empty(), "t=0 interp diags: {:?}", r0.diags);
     assert!(!r0.scene.raw_pos.is_empty(), "t=0: no vertices");
 
@@ -1764,7 +1764,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     // t=PI: weight = (1-cos(PI))/2 = 1.0 → FULL morph → sphere.
     let asm_full = crate::asm::assemble_at(&src, std::f32::consts::PI, tex)
         .expect("morphcube assembles at t=PI (full morph)");
-    let r_full = crate::hle::interpret_rdram(&asm_full.image.rdram, asm_full.image.entry_addr);
+    let r_full = crate::hle::interpret_rdram(&asm_full.rdram, asm_full.entry_addr);
     assert!(
         r_full.diags.is_empty(),
         "t=PI interp diags: {:?}",
@@ -1792,7 +1792,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     let t_half = std::f32::consts::FRAC_PI_2;
     let asm_half =
         crate::asm::assemble_at(&src, t_half, tex).expect("morphcube assembles at t=PI/2");
-    let r_half = crate::hle::interpret_rdram(&asm_half.image.rdram, asm_half.image.entry_addr);
+    let r_half = crate::hle::interpret_rdram(&asm_half.rdram, asm_half.entry_addr);
     assert!(
         r_half.diags.is_empty(),
         "t=PI/2 interp diags: {:?}",
@@ -1829,15 +1829,15 @@ fn perspective_cube_mvp_differs_between_frames() {
     // t=0: model = identity (guRotate at time=0 is no-op rotation by 0°).
     let asm0 = crate::asm::assemble_at(&src, 0.0, tex).expect("perspective-cube assembles at t=0");
     assert!(
-        asm0.is_time_variant,
+        crate::asm::analyze(&src).references_time,
         "perspective-cube update block reads time — must be time-variant"
     );
-    let r0 = crate::hle::interpret_rdram(&asm0.image.rdram, asm0.image.entry_addr);
+    let r0 = crate::hle::interpret_rdram(&asm0.rdram, asm0.entry_addr);
     assert!(r0.diags.is_empty(), "t=0 interp diags: {:?}", r0.diags);
 
     // t=2.0s: model has rotated 2*45=90° about Y — the MVP will differ from the t=0 case.
     let asm2 = crate::asm::assemble_at(&src, 2.0, tex).expect("perspective-cube assembles at t=2");
-    let r2 = crate::hle::interpret_rdram(&asm2.image.rdram, asm2.image.entry_addr);
+    let r2 = crate::hle::interpret_rdram(&asm2.rdram, asm2.entry_addr);
     assert!(r2.diags.is_empty(), "t=2 interp diags: {:?}", r2.diags);
 
     // The MVP tables from the two frames must differ (rotation changed the model matrix).

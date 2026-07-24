@@ -17,8 +17,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy (default)
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: clippy (--no-default-features)
-        run: cargo clippy -p fast3d --no-default-features --all-targets -- -D warnings
+      - name: clippy (--all-features)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: clippy (--features debug-ui)
         run: cargo clippy -p fast3d --features debug-ui --all-targets -- -D warnings
 
@@ -38,8 +38,8 @@ jobs:
         run: cargo test --workspace
       - name: test (--features debug-ui)
         run: cargo test -p fast3d --features debug-ui
-      - name: test (--no-default-features)
-        run: cargo test -p fast3d --no-default-features
+      - name: test (--all-features)
+        run: cargo test --workspace --all-features
 
   # Prove the library stays wasm-compatible (catches a native-only API / dep regression).
   wasm:

@@ -1,6 +1,6 @@
+#![cfg(feature = "asm")]
 use fast3d::asm::{
-    assemble_at, assemble_at_with_textures, assemble_with_texture, texture_declarations,
-    TextureInput,
+    analyze, assemble_at, assemble_at_with_textures, assemble_with_texture, TextureInput,
 };
 
 fn input<'a>(name: &'a str, rgba8: &'a [u8], width: u32, height: u32) -> TextureInput<'a> {
@@ -17,21 +17,21 @@ fn discovers_named_textures_in_source_order() {
     let source = "Texture grass = { 32, 16, RGBA16 }\n\
                   invalid source\n\
                   Texture mask = { 8, 8, IA8 }\n";
-    let out = texture_declarations(source);
-    assert_eq!(out.declarations.len(), 2);
-    assert_eq!(out.declarations[0].name, "grass");
-    assert_eq!(out.declarations[0].width, 32);
-    assert_eq!(out.declarations[0].height, 16);
-    assert_eq!(out.declarations[0].format, "RGBA16");
-    assert_eq!(out.declarations[0].line, 1);
-    assert_eq!(out.declarations[1].name, "mask");
-    assert_eq!(out.declarations[1].line, 3);
+    let out = analyze(source);
+    assert_eq!(out.textures.len(), 2);
+    assert_eq!(out.textures[0].name, "grass");
+    assert_eq!(out.textures[0].width, 32);
+    assert_eq!(out.textures[0].height, 16);
+    assert_eq!(out.textures[0].format, "RGBA16");
+    assert_eq!(out.textures[0].line, 1);
+    assert_eq!(out.textures[1].name, "mask");
+    assert_eq!(out.textures[1].line, 3);
     assert!(!out.diagnostics.is_empty());
 }
 
 #[test]
 fn duplicate_declarations_are_diagnosed() {
-    let out = texture_declarations("Texture tex = { 1, 1, RGBA16 }\nTexture tex = { 1, 1, I8 }\n");
+    let out = analyze("Texture tex = { 1, 1, RGBA16 }\nTexture tex = { 1, 1, I8 }\n");
     assert!(out.diagnostics.iter().any(|diag| {
         diag.msg.contains("duplicate texture declaration") && diag.msg.contains("tex")
     }));
@@ -54,16 +54,16 @@ fn named_inputs_get_distinct_addresses_and_formats() {
         &[input("color", &red, 1, 1), input("intensity", &white, 1, 1)],
     )
     .unwrap();
-    let commands = &assembled.image.rdram[assembled.image.entry_addr as usize..];
+    let commands = &assembled.rdram[assembled.entry_addr as usize..];
     let color_addr = u32::from_be_bytes(commands[4..8].try_into().unwrap());
     let intensity_addr = u32::from_be_bytes(commands[12..16].try_into().unwrap());
     assert_ne!(color_addr, intensity_addr);
     assert_eq!(
-        &assembled.image.rdram[color_addr as usize..color_addr as usize + 2],
+        &assembled.rdram[color_addr as usize..color_addr as usize + 2],
         &[0xf8, 0x01]
     );
-    assert_eq!(assembled.image.rdram[intensity_addr as usize], 255);
-    assert_eq!(assembled.image.tex_addr, color_addr);
+    assert_eq!(assembled.rdram[intensity_addr as usize], 255);
+    assert_eq!(assembled.tex_addr, color_addr);
 }
 
 #[test]
@@ -156,17 +156,17 @@ fn named_ci_textures_get_independent_palettes() {
         &[input("red", &red, 1, 1), input("green", &green, 1, 1)],
     )
     .unwrap();
-    let commands = &assembled.image.rdram[assembled.image.entry_addr as usize..];
+    let commands = &assembled.rdram[assembled.entry_addr as usize..];
     let red_palette = u32::from_be_bytes(commands[4..8].try_into().unwrap()) as usize;
     let green_palette =
         u32::from_be_bytes(commands[11 * 8 + 4..12 * 8].try_into().unwrap()) as usize;
     assert_ne!(red_palette, green_palette);
     assert_eq!(
-        &assembled.image.rdram[red_palette..red_palette + 2],
+        &assembled.rdram[red_palette..red_palette + 2],
         &[0xf8, 0x01]
     );
     assert_eq!(
-        &assembled.image.rdram[green_palette..green_palette + 2],
+        &assembled.rdram[green_palette..green_palette + 2],
         &[0x07, 0xc1]
     );
 }
@@ -210,9 +210,9 @@ fn legacy_texture_assembly_keeps_golden_bytes() {
         0xff, 0xf8, 0x01, 0x00, 0x3f, 0x00, 0x00, 0x00, 0x00, 0xdf, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00,
     ];
-    assert_eq!(assembled.image.rdram, expected);
-    assert_eq!(assembled.image.tex_addr, 16);
-    assert_eq!(assembled.image.entry_addr, 24);
+    assert_eq!(assembled.rdram, expected);
+    assert_eq!(assembled.tex_addr, 16);
+    assert_eq!(assembled.entry_addr, 24);
     assert_eq!(
         assemble_with_texture(source, &rgba8, 2, 1).unwrap().rdram,
         expected
@@ -253,9 +253,7 @@ fn i4_packs_each_odd_width_row_on_a_new_byte() {
         0x00, 0x00, 0x00, 0xff, 0x11, 0x11, 0x11, 0xff, 0x22, 0x22, 0x22, 0xff, 0x33, 0x33, 0x33,
         0xff, 0x44, 0x44, 0x44, 0xff, 0x55, 0x55, 0x55, 0xff,
     ];
-    let image = assemble_at_with_textures(source, 0.0, &[input("tex", &rgba, 3, 2)])
-        .unwrap()
-        .image;
+    let image = assemble_at_with_textures(source, 0.0, &[input("tex", &rgba, 3, 2)]).unwrap();
     let start = image.tex_addr as usize;
     assert_eq!(&image.rdram[start..start + 4], &[0x01, 0x20, 0x34, 0x50]);
 }
@@ -267,9 +265,7 @@ fn ia4_packs_each_odd_width_row_on_a_new_byte() {
         0x00, 0x00, 0x00, 0xff, 0x11, 0x11, 0x11, 0xff, 0x22, 0x22, 0x22, 0xff, 0x33, 0x33, 0x33,
         0xff, 0x44, 0x44, 0x44, 0xff, 0x55, 0x55, 0x55, 0xff,
     ];
-    let image = assemble_at_with_textures(source, 0.0, &[input("tex", &rgba, 3, 2)])
-        .unwrap()
-        .image;
+    let image = assemble_at_with_textures(source, 0.0, &[input("tex", &rgba, 3, 2)]).unwrap();
     let start = image.tex_addr as usize;
     assert_eq!(&image.rdram[start..start + 4], &[0x11, 0x30, 0x35, 0x50]);
 }
@@ -281,9 +277,7 @@ fn ci4_packs_each_odd_width_row_on_a_new_byte() {
         0x00, 0x00, 0x00, 0xff, 0x11, 0x11, 0x11, 0xff, 0x22, 0x22, 0x22, 0xff, 0x33, 0x33, 0x33,
         0xff, 0x44, 0x44, 0x44, 0xff, 0x55, 0x55, 0x55, 0xff,
     ];
-    let image = assemble_at_with_textures(source, 0.0, &[input("tex", &rgba, 3, 2)])
-        .unwrap()
-        .image;
+    let image = assemble_at_with_textures(source, 0.0, &[input("tex", &rgba, 3, 2)]).unwrap();
     let start = image.tex_addr as usize;
     assert_eq!(&image.rdram[start..start + 4], &[0x01, 0x20, 0x34, 0x50]);
 }

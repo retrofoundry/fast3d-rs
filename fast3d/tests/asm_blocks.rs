@@ -1,5 +1,5 @@
 #![cfg(feature = "asm")]
-use fast3d::asm::asm::assemble;
+use fast3d::asm::assemble;
 
 fn word(rdram: &[u8], off: usize) -> (u32, u32) {
     (

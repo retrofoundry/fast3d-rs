@@ -1,8 +1,7 @@
-//! `fast3d` — N64 F3DEX2 HLE + wgpu renderer. Single-crate merge of the former `gbi-consts`, `hle`,
-//! `renderer`, and `gbi` crates. P2 is a structural merge only: every item stays `pub`, the
-//! pre-merge flat APIs are preserved via the module tree (`fast3d::hle::…`, `fast3d::render::…`,
-//! `fast3d::asm::…`) and the crate-root re-exports below. The `asm` assembler is a default-on
-//! cargo feature.
+//! `fast3d` — N64 F3DEX2 HLE + wgpu renderer. The renderer is the default product. The
+//! assembler is available through the opt-in `asm` cargo feature. Its supported items are
+//! re-exported at `fast3d::asm::*`; `fast3d::asm::encode` and `fast3d::asm::gu` are its only
+//! public submodules.
 
 #[cfg(feature = "asm")]
 pub mod asm;

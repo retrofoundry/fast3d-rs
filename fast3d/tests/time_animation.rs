@@ -1,5 +1,5 @@
 #![cfg(feature = "asm")]
-use fast3d::asm::{assemble, assemble_at, source_is_time_variant};
+use fast3d::asm::{analyze, assemble, assemble_at};
 
 const SPIN: &str = "\
 Mtx model = identity()
@@ -20,27 +20,22 @@ gsSPEndDisplayList()
 fn animated_source_differs_over_time_and_is_flagged() {
     let a0 = assemble_at(SPIN, 0.0, None).unwrap();
     let a1 = assemble_at(SPIN, 1.0, None).unwrap();
-    assert!(a0.is_time_variant);
-    assert_ne!(
-        a0.image.rdram, a1.image.rdram,
-        "matrix should change with time"
-    );
+    assert_ne!(a0.rdram, a1.rdram, "matrix should change with time");
 }
 
 #[test]
 fn static_source_is_time_invariant_and_stable() {
     let a0 = assemble_at(STATIC, 0.0, None).unwrap();
     let a1 = assemble_at(STATIC, 5.0, None).unwrap();
-    assert!(!a0.is_time_variant);
-    assert_eq!(a0.image.rdram, a1.image.rdram);
+    assert_eq!(a0.rdram, a1.rdram);
 }
 
 #[test]
 fn assemble_equals_assemble_at_zero() {
     let legacy = assemble(STATIC).unwrap();
     let at0 = assemble_at(STATIC, 0.0, None).unwrap();
-    assert_eq!(legacy.rdram, at0.image.rdram);
-    assert_eq!(legacy.entry_addr, at0.image.entry_addr);
+    assert_eq!(legacy.rdram, at0.rdram);
+    assert_eq!(legacy.entry_addr, at0.entry_addr);
 }
 
 #[test]
@@ -55,10 +50,9 @@ fn update_targeting_undeclared_matrix_is_error() {
 }
 
 #[test]
-fn source_is_time_variant_works_on_animated_and_static() {
-    // B4: source_is_time_variant should return true for animated, false for static.
-    assert!(source_is_time_variant(SPIN));
-    assert!(!source_is_time_variant(STATIC));
+fn analyze_reports_time_variance_for_animated_and_static() {
+    assert!(analyze(SPIN).references_time);
+    assert!(!analyze(STATIC).references_time);
 }
 
 #[test]

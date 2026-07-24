@@ -64,7 +64,7 @@ impl Expr {
         }
     }
 
-    /// True if this expression reads `time` or `frame` (drives `is_time_variant`).
+    /// True if this expression reads `time` or `frame`.
     pub fn references_time(&self) -> bool {
         match self {
             Expr::Time | Expr::Frame => true,
