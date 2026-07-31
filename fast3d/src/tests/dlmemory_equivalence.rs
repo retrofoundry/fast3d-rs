@@ -140,7 +140,7 @@ fn push(buf: &mut Vec<u8>, (w0, w1): (u32, u32)) {
 }
 
 fn encode_rdram_image() -> (Vec<u8>, u32) {
-    use crate::asm::encode::*;
+    use n64_gbi::encode::*;
 
     // Pre-size with DATA_SIZE bytes of data, then append commands.
     let mut rdram = vec![0u8; DATA_SIZE];
@@ -231,16 +231,16 @@ fn encode_rdram_image() -> (Vec<u8>, u32) {
     let entry = rdram.len() as u32;
 
     // Combiner: MODULATE (TEXEL0 * SHADE).
-    let crgb = crate::asm::encode::CcPass {
+    let crgb = n64_gbi::encode::CcPass {
         a: 1,
-        b: crate::asm::encode::ZERO_C,
+        b: n64_gbi::encode::ZERO_C,
         c: 4,
-        d: crate::asm::encode::ZERO_C,
+        d: n64_gbi::encode::ZERO_C,
     };
-    let calpha = crate::asm::encode::CcPass {
-        a: crate::asm::encode::ZERO_A,
-        b: crate::asm::encode::ZERO_A,
-        c: crate::asm::encode::ZERO_A,
+    let calpha = n64_gbi::encode::CcPass {
+        a: n64_gbi::encode::ZERO_A,
+        b: n64_gbi::encode::ZERO_A,
+        c: n64_gbi::encode::ZERO_A,
         d: 4,
     };
     let combine = gdp_set_combine_lerp(crgb, calpha, crgb, calpha);
@@ -325,9 +325,9 @@ fn encode_rdram_image() -> (Vec<u8>, u32) {
 /// so the segment-1 + offset arithmetic produces consistent results across backends.
 #[allow(clippy::type_complexity)]
 fn build_host_dl() -> (Vec<[usize; 2]>, u64, Vec<u8>) {
-    use crate::asm::encode::*;
     use crate::hle::consts::rsp_f3dex2::{G_MOVEMEM, G_MV_LIGHT, G_MW_NUMLIGHT};
     use crate::hle::consts::{G_LIGHTING, G_MTX as G_MTX_OP};
+    use n64_gbi::encode::*;
 
     // Build the host data buffer at the same relative offsets as RDRAM.
     let mut hdata = vec![0u8; DATA_SIZE];

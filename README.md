@@ -1,9 +1,9 @@
 # fast3d
 
-**A standalone N64 F3DEX2 HLE + wgpu renderer** — hand it a display list from N64 memory and it
+**A standalone N64 HLE + wgpu renderer** — hand it a display list from N64 memory and it
 draws the frame.
 
-fast3d walks F3DEX2 display lists through a high-level emulation of the N64 RCP and rasterizes them
+fast3d walks N64 display lists through a high-level emulation of the RCP and rasterizes them
 with wgpu, so the same renderer runs natively and on the web (WebGPU/wasm).
 
 ## Use it
@@ -45,6 +45,13 @@ Diagnostics stream through a `DiagSink` (`LogSink`, `NopSink`, or your own).
   `fast3d::asm::analyze(source)` inspects a source without assembling it, reporting its texture
   declarations and whether it reads `time`/`frame`.
 - **`debug-ui`** — an egui overlay showing per-frame scene and triangle counts.
+
+## Layout
+
+- `fast3d/` — the HLE interpreter, wgpu renderer, and `Renderer` facade.
+- `n64-gbi/` — dependency leaf: GBI/RDP/RSP vocabulary, command encoders, libultra `gu` math,
+  and the literal conformance vectors. No dependencies. Consumers that produce or inspect
+  display lists should depend on this directly rather than on `fast3d`.
 
 ## Community
 

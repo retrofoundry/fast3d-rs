@@ -342,11 +342,11 @@ fn phase4_modify_vertex_screen_override_renders_requested_pixel_and_depth() {
 fn perspective_mvp_emits_clip_space_with_varying_w_and_depth_in_unit_range() {
     use crate::hle::rdp::Rdp;
     // Bake proj = perspective(90, 1, 1, 10) and view = lookat(eye (0,0,5) -> origin, up +Y).
-    let (proj, _pn) = crate::asm::gu::gu_perspective(90.0, 1.0, 1.0, 10.0, 1.0);
-    let view = crate::asm::gu::gu_look_at(0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+    let (proj, _pn) = n64_gbi::gu::gu_perspective(90.0, 1.0, 1.0, 10.0, 1.0);
+    let view = n64_gbi::gu::gu_look_at(0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
     let mut rdram_bytes = Vec::new();
-    rdram_bytes.extend_from_slice(&crate::asm::encode::mtx_to_bytes(proj)); // proj @ 0
-    rdram_bytes.extend_from_slice(&crate::asm::encode::mtx_to_bytes(view)); // view @ 64
+    rdram_bytes.extend_from_slice(&n64_gbi::encode::mtx_to_bytes(proj)); // proj @ 0
+    rdram_bytes.extend_from_slice(&n64_gbi::encode::mtx_to_bytes(view)); // view @ 64
     rdram_bytes.extend_from_slice(&vtx_bytes(0, 0, 0, 255, 255, 255, 255)); // origin @ 128
     rdram_bytes.extend_from_slice(&vtx_bytes(0, 0, 3, 255, 255, 255, 255)); // nearer @ 144
     let rdram = RdramImage::new(&rdram_bytes);
@@ -393,19 +393,19 @@ fn soa_raw_inputs_and_per_vertex_state_indices_track_mid_dl_matrices() {
     // and the mvp_table entries they point at must equal the active mvp at each load.
     let mut rdram_bytes = Vec::new();
     // proj = scale(2) at off 0, modelA = translate(10,0,0) at 64, modelB = translate(-10,0,0) at 128
-    rdram_bytes.extend_from_slice(&crate::asm::encode::mtx_to_bytes([
+    rdram_bytes.extend_from_slice(&n64_gbi::encode::mtx_to_bytes([
         [2.0, 0.0, 0.0, 0.0],
         [0.0, 2.0, 0.0, 0.0],
         [0.0, 0.0, 2.0, 0.0],
         [0.0, 0.0, 0.0, 1.0],
     ]));
-    rdram_bytes.extend_from_slice(&crate::asm::encode::mtx_to_bytes([
+    rdram_bytes.extend_from_slice(&n64_gbi::encode::mtx_to_bytes([
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],
         [10.0, 0.0, 0.0, 1.0],
     ]));
-    rdram_bytes.extend_from_slice(&crate::asm::encode::mtx_to_bytes([
+    rdram_bytes.extend_from_slice(&n64_gbi::encode::mtx_to_bytes([
         [1.0, 0.0, 0.0, 0.0],
         [0.0, 1.0, 0.0, 0.0],
         [0.0, 0.0, 1.0, 0.0],

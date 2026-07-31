@@ -4,6 +4,16 @@ use crate::asm::asm::{
     Image,
 };
 
+#[test]
+fn parser_accepts_gsdp_set_render_mode_preset() {
+    let img = crate::asm::assemble(
+        "gsDPSetRenderMode(G_RM_AA_ZB_OPA_SURF, G_RM_AA_ZB_OPA_SURF2)\ngsSPEndDisplayList()",
+    )
+    .expect("assemble");
+    // first command opcode byte is G_SETOTHERMODE_L (0xE2).
+    assert_eq!(img.rdram[img.entry_addr as usize], 0xE2);
+}
+
 const SRC: &str = "\
 Mtx p = scale(0.015625)
 Mtx m = identity()

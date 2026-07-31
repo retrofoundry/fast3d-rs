@@ -1,7 +1,7 @@
-//! F3DEX2 HLE interpreter: binary GBI image -> draw calls.
+//! HLE interpreter: binary GBI image -> draw calls.
 pub mod blender;
 pub mod combiner;
-pub mod consts;
+pub use n64_gbi::consts;
 pub mod gbi;
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 pub mod host_mem;

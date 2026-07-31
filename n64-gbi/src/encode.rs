@@ -1,4 +1,4 @@
-use crate::hle::consts::*;
+use crate::consts::*;
 
 #[inline]
 fn shiftl(value: u32, shift: u32, width: u32) -> u32 {
@@ -734,24 +734,14 @@ mod encode_tests {
 
     #[test]
     fn render_mode_encodes_to_set_other_mode_l() {
-        use crate::hle::consts::rdp::*;
-        use crate::hle::consts::rsp_f3dex2::G_SETOTHERMODE_L;
+        use crate::consts::rdp::*;
+        use crate::consts::rsp_f3dex2::G_SETOTHERMODE_L;
         let (w0, w1) = gdp_set_other_mode_l(3, 29, G_RM_AA_ZB_OPA_SURF | G_RM_AA_ZB_OPA_SURF2);
         assert_eq!((w0 >> 24) as u8, G_SETOTHERMODE_L);
         // shift field = 32 - 3 - 29 = 0; length-1 = 28.
         assert_eq!((w0 >> 8) & 0xFF, 0);
         assert_eq!(w0 & 0xFF, 28);
         assert_eq!(w1, G_RM_AA_ZB_OPA_SURF | G_RM_AA_ZB_OPA_SURF2);
-    }
-
-    #[test]
-    fn parser_accepts_gsdp_set_render_mode_preset() {
-        let img = crate::asm::assemble(
-            "gsDPSetRenderMode(G_RM_AA_ZB_OPA_SURF, G_RM_AA_ZB_OPA_SURF2)\ngsSPEndDisplayList()",
-        )
-        .expect("assemble");
-        // first command opcode byte is G_SETOTHERMODE_L (0xE2).
-        assert_eq!(img.rdram[img.entry_addr as usize], 0xE2);
     }
 
     #[test]

@@ -9,6 +9,7 @@ keywords.workspace = true
 license.workspace = true
 
 [dependencies]
+n64-gbi.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 log.workspace = true

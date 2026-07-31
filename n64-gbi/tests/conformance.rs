@@ -1,5 +1,9 @@
-#![cfg(feature = "asm")]
-use fast3d::asm::encode::*;
+//! Conformance vectors: expected command words derived from the libultra `gs*` macros.
+//!
+//! Keep every expectation a literal. Encoder-vs-interpreter round trips prove nothing about
+//! opcode identity — both sides read the same `consts`.
+
+use n64_gbi::encode::*;
 
 #[test]
 fn vtx_words_match_libultra() {
@@ -169,7 +173,7 @@ fn gsp_segment_packs_type_and_segment_index() {
 
 #[test]
 fn golden_sp_popmatrix() {
-    use fast3d::asm::encode::gsp_popmatrix;
+    use n64_gbi::encode::gsp_popmatrix;
     // F3DEX2 decodes count = w1 >> 6; w0 carries only the opcode.
     assert_eq!(gsp_popmatrix(1), (0xD800_0000, 0x0000_0040));
     assert_eq!(gsp_popmatrix(2), (0xD800_0000, 0x0000_0080));
@@ -177,7 +181,7 @@ fn golden_sp_popmatrix() {
 
 #[test]
 fn golden_sp_2triangles() {
-    use fast3d::asm::encode::gsp_2triangles;
+    use n64_gbi::encode::gsp_2triangles;
     // libultra arg order (v00,v01,v02, v10,v11,v12); index*2 byte-packed like G_TRI1.
     // A=(0,1,2) -> w0=0x06000204 ; B=(0,2,3) -> w1=0x00000406 ; decodes to [0,1,2,0,2,3].
     assert_eq!(gsp_2triangles(0, 1, 2, 0, 2, 3), (0x0600_0204, 0x0000_0406));

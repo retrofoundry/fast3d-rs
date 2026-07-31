@@ -171,7 +171,7 @@ pub fn gu_look_at_reflect(a: [f32; 9]) -> ([i8; 3], [i8; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asm::encode::mtx_to_bytes;
+    use crate::encode::mtx_to_bytes;
 
     fn approx(m: &Mtx4, want: &Mtx4) {
         for i in 0..4 {

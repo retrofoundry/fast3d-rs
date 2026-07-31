@@ -267,7 +267,7 @@ mod mem_tests {
             [0.0, 0.0, 1.0, 0.0],
             [1.0, 2.0, 3.0, 1.0],
         ];
-        let bytes = crate::asm::encode::mtx_to_bytes(m);
+        let bytes = n64_gbi::encode::mtx_to_bytes(m);
         let r = RdramImage::new(&bytes);
         assert_eq!(Rdram::read_matrix(&r, 0, GbiDataFormat::Fixed), m);
     }

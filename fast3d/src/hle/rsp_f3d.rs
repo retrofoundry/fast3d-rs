@@ -237,7 +237,12 @@ fn set_texture_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 
 #[cfg(all(test, feature = "asm"))]
 mod phase2_tests {
-    use crate::asm::encode::{
+    use crate::hle::consts::{G_CULL_FRONT, G_FOG, G_RM_OPA_SURF, G_RM_OPA_SURF2};
+    use crate::hle::gbi::GbiUcode;
+    use crate::hle::interp::interpret;
+    use crate::hle::mem::RdramImage;
+    use crate::hle::{CullKind, DrawRun, InterpResult};
+    use n64_gbi::encode::{
         gdp_load_texture_block, gdp_set_combine_lerp, gdp_set_cycle_type, gdp_set_cycle_type_f3d,
         gdp_set_render_mode, gdp_set_render_mode_f3d, gsp_1triangle_f3d, gsp_2triangles,
         gsp_clear_geometrymode_f3d, gsp_enddl, gsp_enddl_f3d, gsp_matrix, gsp_matrix_f3d,
@@ -245,11 +250,6 @@ mod phase2_tests {
         gsp_vertex, gsp_vertex_f3d, gsp_viewport, gsp_viewport_f3d, mtx_to_bytes, CcPass,
         VtxColored, ZERO_A, ZERO_C,
     };
-    use crate::hle::consts::{G_CULL_FRONT, G_FOG, G_RM_OPA_SURF, G_RM_OPA_SURF2};
-    use crate::hle::gbi::GbiUcode;
-    use crate::hle::interp::interpret;
-    use crate::hle::mem::RdramImage;
-    use crate::hle::{CullKind, DrawRun, InterpResult};
 
     const VTX_ADDR: u32 = 0x40;
     const VIEWPORT_ADDR: u32 = 0x80;
@@ -528,14 +528,6 @@ mod phase2_tests {
 
 #[cfg(all(test, feature = "asm"))]
 mod phase3_tests {
-    use crate::asm::encode::{
-        gdp_load_texture_block, gdp_set_combine_lerp, gdp_set_cycle_type_f3d,
-        gdp_set_render_mode_f3d, gsp_1triangle_f3d, gsp_enddl_f3d, gsp_forcematrix_f3d,
-        gsp_light_f3d, gsp_lightcolor_f3d, gsp_lookat_f3d, gsp_matrix_f3d, gsp_modifyvertex_f3d,
-        gsp_numlights_f3d, gsp_popmatrix_f3d, gsp_segment_f3d, gsp_set_geometrymode_f3d,
-        gsp_texture_f3d, gsp_vertex_f3d, gsp_viewport_f3d, mtx_to_bytes, CcPass, VtxColored,
-        ZERO_A, ZERO_C,
-    };
     use crate::hle::consts::rsp_f3d::{
         G_MOVEWORD, G_MV_MATRIX_2, G_MV_MATRIX_3, G_MV_MATRIX_4, G_MW_PERSPNORM, G_POPMTX,
     };
@@ -544,6 +536,14 @@ mod phase3_tests {
     use crate::hle::interp::{interpret, InterpResult};
     use crate::hle::math::mul4;
     use crate::hle::mem::RdramImage;
+    use n64_gbi::encode::{
+        gdp_load_texture_block, gdp_set_combine_lerp, gdp_set_cycle_type_f3d,
+        gdp_set_render_mode_f3d, gsp_1triangle_f3d, gsp_enddl_f3d, gsp_forcematrix_f3d,
+        gsp_light_f3d, gsp_lightcolor_f3d, gsp_lookat_f3d, gsp_matrix_f3d, gsp_modifyvertex_f3d,
+        gsp_numlights_f3d, gsp_popmatrix_f3d, gsp_segment_f3d, gsp_set_geometrymode_f3d,
+        gsp_texture_f3d, gsp_vertex_f3d, gsp_viewport_f3d, mtx_to_bytes, CcPass, VtxColored,
+        ZERO_A, ZERO_C,
+    };
 
     const ENTRY: usize = 0x200;
     const G_CYC_2CYCLE: u32 = 1;
@@ -723,7 +723,7 @@ mod phase3_tests {
             bytes[VIEWPORT + i * 2..VIEWPORT + i * 2 + 2].copy_from_slice(&value.to_be_bytes());
         }
 
-        let fog = crate::asm::encode::gsp_fog_position_f3d(900, 1000);
+        let fog = n64_gbi::encode::gsp_fog_position_f3d(900, 1000);
         let result = run(
             bytes,
             &[
@@ -906,12 +906,6 @@ mod phase3_tests {
 
 #[cfg(all(test, feature = "asm"))]
 mod phase5_tests {
-    use crate::asm::encode::{
-        gdp_fill_rectangle, gdp_load_texture_block, gdp_set_color_image, gdp_set_combine_lerp,
-        gdp_set_fill_color, gdp_set_render_mode_f3d, gdp_set_scissor, gsp_1triangle_f3d,
-        gsp_branchlist_f3d, gsp_displaylist_f3d, gsp_enddl_f3d, gsp_segment_f3d,
-        gsp_texture_rectangle, gsp_vertex_f3d, CcPass, VtxColored, ZERO_A, ZERO_C,
-    };
     use crate::diag::DiagKind;
     use crate::hle::consts::rsp_f3d::{
         G_CULLDL, G_MOVEMEM, G_MOVEWORD, G_MV_MATRIX_2, G_MV_MATRIX_3, G_MV_MATRIX_4, G_MV_TXTATT,
@@ -923,6 +917,12 @@ mod phase5_tests {
     use crate::hle::interp::{interpret, InterpResult};
     use crate::hle::mem::RdramImage;
     use crate::hle::{Rect, SceneOp};
+    use n64_gbi::encode::{
+        gdp_fill_rectangle, gdp_load_texture_block, gdp_set_color_image, gdp_set_combine_lerp,
+        gdp_set_fill_color, gdp_set_render_mode_f3d, gdp_set_scissor, gsp_1triangle_f3d,
+        gsp_branchlist_f3d, gsp_displaylist_f3d, gsp_enddl_f3d, gsp_segment_f3d,
+        gsp_texture_rectangle, gsp_vertex_f3d, CcPass, VtxColored, ZERO_A, ZERO_C,
+    };
 
     const ENTRY: usize = 0x80;
     const TARGET: usize = 0x100;
@@ -1187,12 +1187,6 @@ mod phase5_tests {
 
 #[cfg(all(test, feature = "asm"))]
 mod phase6_tests {
-    use crate::asm::encode::{
-        gdp_load_texture_block, gdp_set_combine_lerp, gdp_set_cycle_type_f3d,
-        gdp_set_render_mode_f3d, gsp_1triangle_f3d, gsp_clear_geometrymode_f3d, gsp_enddl_f3d,
-        gsp_matrix_f3d, gsp_set_geometrymode_f3d, gsp_texture_f3d, gsp_vertex_f3d, mtx_to_bytes,
-        CcPass, VtxColored, ZERO_A, ZERO_C,
-    };
     use crate::diag::DiagKind;
     use crate::hle::consts::rsp_f3d::{
         G_CULL_BACK, G_LIGHTING, G_SHADE, G_SHADING_SMOOTH, G_TEXTURE_GEN, G_TEXTURE_GEN_LINEAR,
@@ -1201,6 +1195,12 @@ mod phase6_tests {
     use crate::hle::gbi::GbiUcode;
     use crate::hle::interp::interpret;
     use crate::hle::mem::RdramImage;
+    use n64_gbi::encode::{
+        gdp_load_texture_block, gdp_set_combine_lerp, gdp_set_cycle_type_f3d,
+        gdp_set_render_mode_f3d, gsp_1triangle_f3d, gsp_clear_geometrymode_f3d, gsp_enddl_f3d,
+        gsp_matrix_f3d, gsp_set_geometrymode_f3d, gsp_texture_f3d, gsp_vertex_f3d, mtx_to_bytes,
+        CcPass, VtxColored, ZERO_A, ZERO_C,
+    };
 
     const MATRIX_ADDR: usize = 0x000;
     const VERTEX_ADDR: usize = 0x040;

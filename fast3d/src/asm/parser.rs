@@ -660,7 +660,7 @@ fn parse_tile_token(tok: &str) -> Option<u32> {
 /// Parse a color-combiner mnemonic to a numeric selector index.
 /// Returns None if unrecognized (caller emits diag).
 fn parse_cc_mnemonic(tok: &str) -> Option<u32> {
-    use crate::asm::encode::{ZERO_A, ZERO_C};
+    use n64_gbi::encode::{ZERO_A, ZERO_C};
     match tok.trim() {
         "COMBINED" => Some(0),
         "TEXEL0" => Some(1),
@@ -2047,7 +2047,7 @@ pub fn parse(source: &str) -> (Vec<(usize, Stmt)>, Vec<Diag>) {
                             for (i, v) in vals.iter().enumerate() {
                                 a[i] = v.unwrap();
                             }
-                            let (s_axis, t_axis) = crate::asm::gu::gu_look_at_reflect(a);
+                            let (s_axis, t_axis) = n64_gbi::gu::gu_look_at_reflect(a);
                             stmts.push((
                                 n,
                                 Stmt::LookAt(LookAtDef {

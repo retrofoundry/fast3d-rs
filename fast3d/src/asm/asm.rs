@@ -1,7 +1,7 @@
-use crate::asm::encode::*;
 use crate::asm::expr::EvalCtx;
-use crate::asm::gu::{gu_look_at, gu_mtx_ident, gu_perspective, gu_rotate, gu_scale, gu_translate};
 use crate::asm::parser::{extract_update, parse, AddrOperand, Diag, GuStmt, MtxInit, Stmt, VtxDef};
+use n64_gbi::encode::*;
+use n64_gbi::gu::{gu_look_at, gu_mtx_ident, gu_perspective, gu_rotate, gu_scale, gu_translate};
 use std::collections::{HashMap, HashSet};
 
 /// Encode a single RGBA8 texel to RGBA16 (5/5/5/1 big-endian, N64 RGBA16 format).
@@ -1759,16 +1759,16 @@ mod asm_tests {
                    gsSPPerspNormalize(proj)\n\
                    gsSPEndDisplayList()\n";
         let img = assemble(src).unwrap();
-        let (m, pn) = crate::asm::gu::gu_perspective(90.0, 1.0, 1.0, 2.0, 1.0);
+        let (m, pn) = n64_gbi::gu::gu_perspective(90.0, 1.0, 1.0, 2.0, 1.0);
         assert_eq!(pn, 43690);
         // perspNorm command is the SECOND emitted word-pair (after gsSPMatrix). entry_addr points at
         // gsSPMatrix; +8 is gsSPPerspNormalize.
         let e = img.entry_addr as usize;
         let w0 = u32::from_be_bytes(img.rdram[e + 8..e + 12].try_into().unwrap());
         let w1 = u32::from_be_bytes(img.rdram[e + 12..e + 16].try_into().unwrap());
-        assert_eq!((w0, w1), crate::asm::encode::gsp_persp_normalize(pn));
+        assert_eq!((w0, w1), n64_gbi::encode::gsp_persp_normalize(pn));
         // sanity: the matrix is the gu_perspective bytes at proj_addr (data: default Vp(16) then Mtx).
-        let want = crate::asm::encode::mtx_to_bytes(m);
+        let want = n64_gbi::encode::mtx_to_bytes(m);
         let proj_addr = 16usize;
         assert_eq!(&img.rdram[proj_addr..proj_addr + 64], &want[..]);
     }

@@ -8,7 +8,7 @@ use crate::hle::interpret_rdram;
 /// The diagnostic is emitted by `build_material` inside `snapshot_run` at triangle-time
 /// (A7: post-walk `build_material` was removed; diagnostic now requires a triangle).
 fn build_textured_quad_dl_with_texel1() -> (Vec<u8>, u32) {
-    use crate::asm::encode::*;
+    use n64_gbi::encode::*;
 
     let mut rdram: Vec<u8> = Vec::new();
 
@@ -119,7 +119,7 @@ fn segment_store_then_resolve_masked_and_unmasked() {
 
 #[test]
 fn move_word_segment_sets_base_no_diag() {
-    use crate::asm::encode::{gsp_enddl, gsp_segment};
+    use n64_gbi::encode::{gsp_enddl, gsp_segment};
     let mut rdram = vec![0u8; 0x40];
     let (sw0, sw1) = gsp_segment(3, 0x0000_0008);
     rdram[0..4].copy_from_slice(&sw0.to_be_bytes());
@@ -144,7 +144,7 @@ fn move_word_non_segment_type_is_diagnosed() {
     let mut rdram = vec![0u8; 16];
     let w0 = ((0xDBu32) << 24) | (0x10u32 << 16);
     rdram[0..4].copy_from_slice(&w0.to_be_bytes());
-    let (ew0, ew1) = crate::asm::encode::gsp_enddl();
+    let (ew0, ew1) = n64_gbi::encode::gsp_enddl();
     rdram[8..12].copy_from_slice(&ew0.to_be_bytes());
     rdram[12..16].copy_from_slice(&ew1.to_be_bytes());
     let r = interpret_rdram(&rdram, 0);
