@@ -5,11 +5,11 @@ use crate::hle::interpret_rdram;
 
 #[test]
 fn g_tri2_emits_two_triangles_in_order() {
-    use crate::asm::encode::{
+    use crate::hle::consts::{G_RM_OPA_SURF, G_RM_OPA_SURF2};
+    use n64_gbi::encode::{
         gdp_set_combine_lerp, gdp_set_cycle_type, gdp_set_render_mode, gsp_2triangles, gsp_enddl,
         gsp_vertex, CcPass, VtxColored, ZERO_A, ZERO_C,
     };
-    use crate::hle::consts::{G_RM_OPA_SURF, G_RM_OPA_SURF2};
     let mut rdram = vec![0u8; 0x100];
     // 4 vertices @0x00 (16 bytes each).
     for i in 0..4u8 {

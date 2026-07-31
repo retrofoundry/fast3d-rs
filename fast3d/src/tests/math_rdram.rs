@@ -1,6 +1,6 @@
-use crate::asm::encode::{mtx_identity_bytes, mtx_to_bytes};
 use crate::hle::math::{identity, mul4, mul_row_vec4};
 use crate::hle::mem::RdramImage;
+use n64_gbi::encode::{mtx_identity_bytes, mtx_to_bytes};
 
 #[test]
 fn identity_is_neutral() {

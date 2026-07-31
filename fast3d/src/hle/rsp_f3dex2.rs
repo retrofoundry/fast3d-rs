@@ -250,8 +250,8 @@ mod wired_tests {
 
 #[cfg(all(test, feature = "asm"))]
 mod fog_tests {
-    use crate::asm::encode::*;
     use crate::hle::interp::interpret_rdram;
+    use n64_gbi::encode::*;
 
     #[test]
     fn fog_position_and_color_reach_rdp() {

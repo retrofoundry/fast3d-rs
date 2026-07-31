@@ -207,8 +207,8 @@ pub fn dl_2d_fill_rect(
     x1: u32,
     y1: u32,
 ) -> crate::hle::Scene {
-    use crate::asm::encode::*; // gdp_set_color_image / gdp_set_scissor / gdp_set_fill_color /
-                               // gdp_fill_rectangle / gsp_enddl  (encode.rs:387/399/405/409/242)
+    use n64_gbi::encode::*; // gdp_set_color_image / gdp_set_scissor / gdp_set_fill_color /
+                            // gdp_fill_rectangle / gsp_enddl  (encode.rs:387/399/405/409/242)
     let mut rdram: Vec<u8> = Vec::new();
     let mut push = |(w0, w1): (u32, u32)| {
         rdram.extend_from_slice(&w0.to_be_bytes());

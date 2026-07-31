@@ -1,13 +1,13 @@
+use crate::hle::interpret_rdram;
 /// §11 run-split unit tests: A6 snapshot_run dedup / None-drop policy.
 ///
-/// Each test builds a minimal DL with `crate::asm::encode` + `crate::hle::interpret_rdram`, then asserts
+/// Each test builds a minimal DL with `n64_gbi::encode` + `crate::hle::interpret_rdram`, then asserts
 /// exact `draw_runs.len()` / `materials.len()` / `render_modes.len()`.
-use crate::asm::encode::{
+use n64_gbi::encode::{
     gdp_set_combine_lerp, gdp_set_cycle_type, gdp_set_prim_color, gdp_set_render_mode,
     gsp_1triangle, gsp_clear_geometrymode, gsp_enddl, gsp_set_geometrymode, gsp_texture,
     gsp_vertex, gsp_viewport, CcPass, ZERO_A, ZERO_C,
 };
-use crate::hle::interpret_rdram;
 
 /// Build a minimal RDRAM prelude: viewport at offset 0, 3 white verts, SHADE combiner,
 /// G_RM_OPA_SURF render mode.  Returns (rdram, cmd_list).

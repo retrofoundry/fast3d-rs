@@ -1,7 +1,7 @@
-//! `fast3d` — N64 F3DEX2 HLE + wgpu renderer. The renderer is the default product. The
+//! `fast3d` — N64 HLE + wgpu renderer. The renderer is the default product. The
 //! assembler is available through the opt-in `asm` cargo feature. Its supported items are
-//! re-exported at `fast3d::asm::*`; `fast3d::asm::encode` and `fast3d::asm::gu` are its only
-//! public submodules.
+//! re-exported at `fast3d::asm::*`. The GBI vocabulary, command encoders and libultra `gu`
+//! math live in the `n64-gbi` leaf crate; depend on it directly rather than through fast3d.
 
 #[cfg(feature = "asm")]
 pub mod asm;

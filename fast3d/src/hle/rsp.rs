@@ -1023,9 +1023,9 @@ mod lights_load_tests {
 #[cfg(all(test, feature = "asm"))]
 mod phase3_state_tests {
     use super::*;
-    use crate::asm::encode::mtx_to_bytes;
     use crate::hle::mem::RdramImage;
     use crate::hle::rdp::Rdp;
+    use n64_gbi::encode::mtx_to_bytes;
 
     #[test]
     fn raw_and_transformed_other_mode_paths_are_equivalent() {
@@ -1253,7 +1253,7 @@ mod lights_table_tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let mtx_bytes = crate::asm::encode::mtx_to_bytes(rot90z);
+        let mtx_bytes = n64_gbi::encode::mtx_to_bytes(rot90z);
 
         // Build RDRAM: 64-byte matrix followed by enough zeros for the vertex read (16B).
         let mut rdram_bytes = mtx_bytes.to_vec();
@@ -1389,7 +1389,7 @@ mod lookat_tests {
             [0.0, 0.0, 1.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ];
-        let mut bytes = crate::asm::encode::mtx_to_bytes(rot90z).to_vec();
+        let mut bytes = n64_gbi::encode::mtx_to_bytes(rot90z).to_vec();
         bytes.extend(vec![0u8; 16]);
         let rd = RdramImage::new(&bytes);
         let mut rsp = Rsp::default();

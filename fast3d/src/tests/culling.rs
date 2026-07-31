@@ -1,9 +1,9 @@
-use crate::asm::encode::{
+use crate::hle::consts::{G_RM_OPA_SURF, G_RM_OPA_SURF2};
+use crate::hle::{interpret_rdram, CullKind, DrawRun};
+use n64_gbi::encode::{
     gdp_set_combine_lerp, gdp_set_cycle_type, gdp_set_render_mode, gsp_1triangle, gsp_enddl,
     gsp_set_geometrymode, gsp_vertex, CcPass, Vp, VtxColored, ZERO_A, ZERO_C,
 };
-use crate::hle::consts::{G_RM_OPA_SURF, G_RM_OPA_SURF2};
-use crate::hle::{interpret_rdram, CullKind, DrawRun};
 
 fn put(rdram: &mut [u8], off: usize, w0: u32, w1: u32) {
     rdram[off..off + 4].copy_from_slice(&w0.to_be_bytes());
@@ -54,7 +54,7 @@ fn run_tri(geom: u32, i0: u8, i1: u8, i2: u8) -> crate::hle::Scene {
         c: ZERO_A,
         d: 4,
     };
-    emit(&mut rdram, crate::asm::encode::gsp_viewport(0x00));
+    emit(&mut rdram, n64_gbi::encode::gsp_viewport(0x00));
     emit(&mut rdram, gsp_set_geometrymode(geom));
     emit(&mut rdram, gdp_set_cycle_type(0)); // 1-cycle
     emit(

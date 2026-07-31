@@ -1,5 +1,5 @@
-use crate::asm::encode::{gsp_branchlist, gsp_displaylist, gsp_enddl, gsp_segment};
 use crate::hle::interpret_rdram;
+use n64_gbi::encode::{gsp_branchlist, gsp_displaylist, gsp_enddl, gsp_segment};
 
 /// Write a single 8-byte command at byte offset `off`.
 fn put(rdram: &mut [u8], off: usize, w0: u32, w1: u32) {

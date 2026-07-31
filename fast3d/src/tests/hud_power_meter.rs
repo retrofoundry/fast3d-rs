@@ -12,8 +12,8 @@
 //! land as 64x64 PIXELS on screen. This test guards the matrix path (fixed-point decode, MUL order,
 //! viewport fold) so the meter stays square independent of texturing.
 
-use crate::asm::encode::*;
 use crate::hle::interpret_rdram;
+use n64_gbi::encode::*;
 
 /// guOrtho(0, 320, 0, 240, -10, 10, scale=1.0), row-major (row-vector convention).
 fn ortho_320x240() -> [[f32; 4]; 4] {

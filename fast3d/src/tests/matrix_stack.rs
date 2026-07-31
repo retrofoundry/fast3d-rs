@@ -1,9 +1,7 @@
 use crate::tests::common;
 
-use crate::asm::encode::{
-    gsp_enddl, gsp_matrix, gsp_popmatrix, gsp_vertex, mtx_to_bytes, VtxColored,
-};
 use crate::hle::interpret_rdram;
+use n64_gbi::encode::{gsp_enddl, gsp_matrix, gsp_popmatrix, gsp_vertex, mtx_to_bytes, VtxColored};
 
 fn put(rdram: &mut [u8], off: usize, w0: u32, w1: u32) {
     rdram[off..off + 4].copy_from_slice(&w0.to_be_bytes());

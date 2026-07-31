@@ -381,8 +381,8 @@ pub fn interpret_rdram(bytes: &[u8], entry_addr: u32) -> InterpResult {
 #[cfg(all(test, feature = "asm"))]
 mod task_a7_tests {
     use super::*;
-    use crate::asm::encode::*;
     use crate::hle::consts::{G_RM_AA_ZB_OPA_SURF, G_RM_AA_ZB_OPA_SURF2, G_ZBUFFER};
+    use n64_gbi::encode::*;
 
     fn push(buf: &mut Vec<u8>, (w0, w1): (u32, u32)) {
         buf.extend_from_slice(&w0.to_be_bytes());
@@ -466,8 +466,8 @@ mod table_tests {
 #[cfg(all(test, feature = "asm"))]
 mod task8_tests {
     use super::*;
-    use crate::asm::encode::*;
     use crate::hle::consts::{G_RM_OPA_SURF, G_RM_OPA_SURF2, G_SHADE, G_SHADING_SMOOTH};
+    use n64_gbi::encode::*;
 
     /// One vertex specification: (x, y, z, s, t, r, g, b, a).
     struct VtxSpec {
@@ -515,10 +515,10 @@ mod task8_tests {
         }
 
         let proj_addr = rdram.len() as u32;
-        rdram.extend_from_slice(&crate::asm::encode::mtx_identity_bytes());
+        rdram.extend_from_slice(&n64_gbi::encode::mtx_identity_bytes());
 
         let model_addr = rdram.len() as u32;
-        rdram.extend_from_slice(&crate::asm::encode::mtx_identity_bytes());
+        rdram.extend_from_slice(&n64_gbi::encode::mtx_identity_bytes());
 
         // Vertex data: 4 corners, s/t in S10.5 (0 and 1024 = 32<<5)
         let vtx_addr = rdram.len() as u32;
@@ -708,7 +708,7 @@ mod task8_tests {
 #[cfg(all(test, feature = "asm"))]
 mod slice2_tests {
     use super::*;
-    use crate::asm::encode::*;
+    use n64_gbi::encode::*;
 
     fn push(buf: &mut Vec<u8>, (w0, w1): (u32, u32)) {
         buf.extend_from_slice(&w0.to_be_bytes());
@@ -733,7 +733,7 @@ mod slice2_tests {
 #[cfg(all(test, feature = "asm"))]
 mod task_a9_tests {
     use super::*;
-    use crate::asm::encode::*;
+    use n64_gbi::encode::*;
 
     fn push(buf: &mut Vec<u8>, (w0, w1): (u32, u32)) {
         buf.extend_from_slice(&w0.to_be_bytes());

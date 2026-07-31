@@ -163,29 +163,29 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
     let vtx_ptr = verts.as_ptr() as u64;
 
     // Combiner: MODULATE (TEXEL0 * SHADE) — build_material keeps tmem only when combiner samples TEXEL0.
-    let combine = crate::asm::encode::gdp_set_combine_lerp(
-        crate::asm::encode::CcPass {
+    let combine = n64_gbi::encode::gdp_set_combine_lerp(
+        n64_gbi::encode::CcPass {
             a: 1,
-            b: crate::asm::encode::ZERO_C,
+            b: n64_gbi::encode::ZERO_C,
             c: 4,
-            d: crate::asm::encode::ZERO_C,
+            d: n64_gbi::encode::ZERO_C,
         },
-        crate::asm::encode::CcPass {
-            a: crate::asm::encode::ZERO_A,
-            b: crate::asm::encode::ZERO_A,
-            c: crate::asm::encode::ZERO_A,
+        n64_gbi::encode::CcPass {
+            a: n64_gbi::encode::ZERO_A,
+            b: n64_gbi::encode::ZERO_A,
+            c: n64_gbi::encode::ZERO_A,
             d: 4,
         },
-        crate::asm::encode::CcPass {
+        n64_gbi::encode::CcPass {
             a: 1,
-            b: crate::asm::encode::ZERO_C,
+            b: n64_gbi::encode::ZERO_C,
             c: 4,
-            d: crate::asm::encode::ZERO_C,
+            d: n64_gbi::encode::ZERO_C,
         },
-        crate::asm::encode::CcPass {
-            a: crate::asm::encode::ZERO_A,
-            b: crate::asm::encode::ZERO_A,
-            c: crate::asm::encode::ZERO_A,
+        n64_gbi::encode::CcPass {
+            a: n64_gbi::encode::ZERO_A,
+            b: n64_gbi::encode::ZERO_A,
+            c: n64_gbi::encode::ZERO_A,
             d: 4,
         },
     );
@@ -195,20 +195,20 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
         "MODULATE golden combine words"
     );
 
-    let (mtx_proj_w0, _) = crate::asm::encode::gsp_matrix(0, true, true, false);
-    let (mtx_model_w0, _) = crate::asm::encode::gsp_matrix(0, false, true, false);
-    let (vtx_w0, _) = crate::asm::encode::gsp_vertex(0, 2, 0);
+    let (mtx_proj_w0, _) = n64_gbi::encode::gsp_matrix(0, true, true, false);
+    let (mtx_model_w0, _) = n64_gbi::encode::gsp_matrix(0, false, true, false);
+    let (vtx_w0, _) = n64_gbi::encode::gsp_vertex(0, 2, 0);
     // One (degenerate) triangle so a per-run material is snapshotted during the walk; it needs a
     // render mode set first (otherwise the walk emits the "render mode never set" diagnostic).
-    let (tri_w0, tri_w1) = crate::asm::encode::gsp_1triangle(0, 1, 0);
-    let (rm_w0, rm_w1) = crate::asm::encode::gdp_set_render_mode(
+    let (tri_w0, tri_w1) = n64_gbi::encode::gsp_1triangle(0, 1, 0);
+    let (rm_w0, rm_w1) = n64_gbi::encode::gdp_set_render_mode(
         crate::hle::consts::G_RM_AA_ZB_OPA_SURF,
         crate::hle::consts::G_RM_AA_ZB_OPA_SURF2,
     );
-    let (vp_w0, _) = crate::asm::encode::gsp_viewport(0);
+    let (vp_w0, _) = n64_gbi::encode::gsp_viewport(0);
     // gsSPTexture(on): required for tex_enable (build_material gates on rsp.texture_state.on).
-    let (texon_w0, texon_w1) = crate::asm::encode::gsp_texture(0xFFFF, 0xFFFF, 0, 0, true);
-    let (setgeo_w0, setgeo_w1) = crate::asm::encode::gsp_set_geometrymode(G_LIGHTING);
+    let (texon_w0, texon_w1) = n64_gbi::encode::gsp_texture(0xFFFF, 0xFFFF, 0, 0, true);
+    let (setgeo_w0, setgeo_w1) = n64_gbi::encode::gsp_set_geometrymode(G_LIGHTING);
     let (numlight_w0, numlight_w1) = (
         ((G_MOVEWORD as u32) << 24) | ((G_MW_NUMLIGHT as u32) << 16),
         24u32, // 1 directional light (n*24)
@@ -223,12 +223,12 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
     };
     // Render tile 0: RGBA (fmt 0) / 16-bit (siz 2) — what build_material reads to decode the texture.
     let (settile_w0, settile_w1) =
-        crate::asm::encode::gdp_set_tile(0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        n64_gbi::encode::gdp_set_tile(0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     let (settilesize_w0, settilesize_w1) =
-        crate::asm::encode::gdp_set_tile_size(0, 0, 0, (2 - 1) << 2, 0);
+        n64_gbi::encode::gdp_set_tile_size(0, 0, 0, (2 - 1) << 2, 0);
     // lrs=0 -> words = (0>>2)+1 = 1 -> 8 B (covers 4-byte blob + pad).
-    let (loadblock_w0, loadblock_w1) = crate::asm::encode::gdp_load_block(7, 0, 0, 0, 0);
-    let (settimg_w0, _) = crate::asm::encode::gdp_set_texture_image(0, 2, 1, 0);
+    let (loadblock_w0, loadblock_w1) = n64_gbi::encode::gdp_load_block(7, 0, 0, 0, 0);
+    let (settimg_w0, _) = n64_gbi::encode::gdp_set_texture_image(0, 2, 1, 0);
 
     let tex_padded: Vec<u8> = {
         let mut v = tex.clone();

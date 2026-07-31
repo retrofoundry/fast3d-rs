@@ -1,0 +1,12 @@
+[package]
+name = "n64-gbi"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "N64 GBI vocabulary, command encoders, and libultra gu math"
+readme = "README.md"
+keywords = ["n64", "gbi", "libultra", "graphics"]
+
+[dependencies]

@@ -3,9 +3,7 @@
 // module. Suppress the resulting module-inception lint.
 #[allow(clippy::module_inception)]
 pub(crate) mod asm;
-pub mod encode;
 mod expr;
-pub mod gu;
 mod parser;
 
 pub use asm::{
