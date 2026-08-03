@@ -1,0 +1,3 @@
+*.rdram binary
+*.dump text eol=lf
+*.toml text eol=lf

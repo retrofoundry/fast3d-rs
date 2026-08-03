@@ -16,6 +16,7 @@ mod e2e;
 #[cfg(feature = "asm")]
 mod facade;
 mod fb_store;
+mod fixtures;
 mod goldens;
 mod hud_power_meter;
 mod interp_tests;

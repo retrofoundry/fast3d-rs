@@ -18,6 +18,9 @@ egui = { version = "0.35", optional = true }
 egui-wgpu = { version = "0.35", optional = true }
 
 [dev-dependencies]
+serde.workspace = true
+sha2.workspace = true
+toml.workspace = true
 wgpu = { version = "29.0", features = ["wgsl"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

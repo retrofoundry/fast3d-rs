@@ -1,0 +1,22 @@
+schema = 1
+registry_file = "fast3d/src/tests/fixtures/generated.rs"
+
+[[fixture]]
+id = "literal/colored-triangle/v1"
+coverage = "fast3d-local"
+groups = ["literal-example"]
+
+[[fixture]]
+id = "scene/morphcube/t-00000000/tex-white1"
+coverage = "fast3d-covered"
+groups = ["pilot", "scene-morphcube"]
+
+[[fixture]]
+id = "scene/morphcube/t-3fc90fdb/tex-white1"
+coverage = "fast3d-covered"
+groups = ["pilot", "scene-morphcube"]
+
+[[fixture]]
+id = "scene/morphcube/t-40490fdb/tex-white1"
+coverage = "fast3d-covered"
+groups = ["pilot", "scene-morphcube"]

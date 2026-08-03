@@ -1,0 +1,50 @@
+schema = 1
+id = "scene/morphcube/t-3fc90fdb/tex-white1"
+rdram_file = "image.rdram"
+dump_file = "image.dump"
+rdram_len = 912
+entry_addr = "0x00000278"
+microcode = "f3dex2"
+data_format = "fixed"
+rdram_sha256 = "44d66962a949ebc2365719b1c0f1d04599dbca71402798fd58c2606110c34813"
+dump_sha256 = "efe24d422b237a13de651e4e87f3d82db626eb38d6042ee368a7506eea0cc4d5"
+artifact_sha256 = "383b482e37228883c8708a8f65a5b452db611c45f2fbe2bd8b69c2f07d2cb73f"
+
+[input]
+time_f32_bits = "3fc90fdb"
+
+[input.source]
+kind = "file"
+logical_id = "scene/morphcube"
+repository = "https://github.com/retrofoundry/fast3d-rs"
+revision = "11260878b58e7bea3f61d7fefc4e290041def3c3"
+path = "fast3d/tests/scenes/morphcube.n64"
+sha256 = "33704a24e81a90d3a7cee777fa36d0e80c16eb7b36922ae0cc65178573bdb3f3"
+
+[[input.textures]]
+name = "$legacy"
+format = "rgba8"
+width = 1
+height = 1
+sha256 = "ad95131bc0b799c0b1af477fb14fcf26a6a9f76079e48bf090acb7e8367bfd0e"
+repository = "https://github.com/retrofoundry/fast3d-rs"
+revision = "11260878b58e7bea3f61d7fefc4e290041def3c3"
+recipe = "solid-rgba8:ffffffff"
+
+[provenance]
+capture_kind = "compiler-compatibility"
+evidence = "compiler-origin; not independent protocol evidence"
+
+[provenance.compiler]
+name = "fast3d::asm"
+repository = "https://github.com/retrofoundry/fast3d-rs"
+revision = "11260878b58e7bea3f61d7fefc4e290041def3c3"
+
+[provenance.n64_gbi]
+repository = "https://github.com/retrofoundry/fast3d-rs"
+revision = "11260878b58e7bea3f61d7fefc4e290041def3c3"
+crate_version = "0.1.0"
+
+[provenance.generator]
+name = "fast3d-fixtures"
+fixture_format_version = 1

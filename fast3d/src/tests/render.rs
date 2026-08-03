@@ -1729,27 +1729,31 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
 /// The full-morph radius assertion FAILS for the old scaled-cube target (its "sphere" corners sit at
 /// 23·√3 ≈ 39.8 BUT its face-region verts would also be ~23·… — i.e. it was still a cube of mixed
 /// radii) and passes only for a target where ALL verts share radius ≈40.
-#[cfg(feature = "asm")]
 #[test]
 fn morphcube_morphs_cube_to_sphere_across_frames() {
-    // A 1×1 white texture is needed because gsDPSetOtherMode_H / gsDPSetCombineLERP require
-    // a texture context even when the combiner uses SHADE only (no actual texture sampling).
-    let white1x1 = vec![255u8; 4];
+    crate::tests::fixtures::assert_literal_colored_triangle_interprets();
+    let cube = crate::tests::fixtures::get("scene/morphcube/t-00000000/tex-white1");
+    let full = crate::tests::fixtures::get("scene/morphcube/t-40490fdb/tex-white1");
+    let half = crate::tests::fixtures::get("scene/morphcube/t-3fc90fdb/tex-white1");
+
+    #[cfg(feature = "asm")]
     let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
+    #[cfg(feature = "asm")]
     let src = std::fs::read_to_string(scenes_dir.join("morphcube.n64"))
         .expect("morphcube.n64 must exist");
-    let tex = Some((white1x1.as_slice(), 1u32, 1u32));
 
     let radius = |p: &[f32; 3]| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
     const S: f32 = 40.0; // cube half-extent / sphere target radius.
 
     // t=0: weight = (1-cos(0))/2 = 0.0 → pure cube.
-    let asm0 = crate::asm::assemble_at(&src, 0.0, tex).expect("morphcube assembles at t=0");
+    #[cfg(feature = "asm")]
     assert!(
         crate::asm::analyze(&src).references_time,
         "morphcube morph weight reads time — must be time-variant"
     );
-    let r0 = crate::hle::interpret_rdram(&asm0.rdram, asm0.entry_addr);
+    #[cfg(feature = "asm")]
+    crate::tests::fixtures::assert_morphcube_compiler_parity(&src);
+    let r0 = cube.interpret();
     assert!(r0.diags.is_empty(), "t=0 interp diags: {:?}", r0.diags);
     assert!(!r0.scene.raw_pos.is_empty(), "t=0: no vertices");
 
@@ -1770,9 +1774,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     );
 
     // t=PI: weight = (1-cos(PI))/2 = 1.0 → FULL morph → sphere.
-    let asm_full = crate::asm::assemble_at(&src, std::f32::consts::PI, tex)
-        .expect("morphcube assembles at t=PI (full morph)");
-    let r_full = crate::hle::interpret_rdram(&asm_full.rdram, asm_full.entry_addr);
+    let r_full = full.interpret();
     assert!(
         r_full.diags.is_empty(),
         "t=PI interp diags: {:?}",
@@ -1797,10 +1799,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     }
 
     // t=PI/2: weight ≈ 0.5 → midpoint; positions must differ from BOTH endpoints (the morph animates).
-    let t_half = std::f32::consts::FRAC_PI_2;
-    let asm_half =
-        crate::asm::assemble_at(&src, t_half, tex).expect("morphcube assembles at t=PI/2");
-    let r_half = crate::hle::interpret_rdram(&asm_half.rdram, asm_half.entry_addr);
+    let r_half = half.interpret();
     assert!(
         r_half.diags.is_empty(),
         "t=PI/2 interp diags: {:?}",

@@ -21,6 +21,10 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: clippy (--features debug-ui)
         run: cargo clippy -p fast3d --features debug-ui --all-targets -- -D warnings
+      - name: fixture integrity and literal drift
+        run: cargo run -p fast3d-fixtures -- verify
+      - name: fixture compiler parity
+        run: cargo run -p fast3d-fixture-capture --features asm -- verify
 
   # Keep the published workspace rust-version honest, including optional dependencies and tests.
   msrv:

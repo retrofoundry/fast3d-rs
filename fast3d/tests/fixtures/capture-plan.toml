@@ -1,0 +1,32 @@
+schema = 1
+expected_count = 3
+
+[[capture]]
+id = "scene/morphcube/t-00000000/tex-white1"
+source_path = "fast3d/tests/scenes/morphcube.n64"
+source_logical_id = "scene/morphcube"
+time_f32_bits = "00000000"
+texture_name = "$legacy"
+texture_recipe = "solid-rgba8:ffffffff"
+texture_width = 1
+texture_height = 1
+
+[[capture]]
+id = "scene/morphcube/t-3fc90fdb/tex-white1"
+source_path = "fast3d/tests/scenes/morphcube.n64"
+source_logical_id = "scene/morphcube"
+time_f32_bits = "3fc90fdb"
+texture_name = "$legacy"
+texture_recipe = "solid-rgba8:ffffffff"
+texture_width = 1
+texture_height = 1
+
+[[capture]]
+id = "scene/morphcube/t-40490fdb/tex-white1"
+source_path = "fast3d/tests/scenes/morphcube.n64"
+source_logical_id = "scene/morphcube"
+time_f32_bits = "40490fdb"
+texture_name = "$legacy"
+texture_recipe = "solid-rgba8:ffffffff"
+texture_width = 1
+texture_height = 1

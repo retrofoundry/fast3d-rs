@@ -1,0 +1,48 @@
+schema = 1
+id = "literal/colored-triangle/v1"
+rdram_file = "image.rdram"
+dump_file = "image.dump"
+rdram_len = 128
+entry_addr = "0x00000040"
+microcode = "f3dex2"
+data_format = "fixed"
+rdram_sha256 = "44533e7107ef9c3857e865bc472de124cd782876e45dc0efb91784220771e689"
+dump_sha256 = "fa710e7dfd5c33845bdd7e68e78f891816875474156cf0ba1d7e009dee0f4bc7"
+artifact_sha256 = "904866b5438b881758a8ec7e6bc843590be6005ad355ea774288d0a9d34f289c"
+
+[input]
+time_f32_bits = "00000000"
+
+[input.source]
+kind = "literal-recipe"
+logical_id = "literal/colored-triangle/v1"
+repository = "https://github.com/retrofoundry/fast3d-rs"
+revision = "11260878b58e7bea3f61d7fefc4e290041def3c3"
+path = "tools/fast3d-fixtures/src/lib.rs"
+sha256 = "c8c034003bb5a8c2387ba41293cb95abe958fe4b31e426ec2bc336b46920e940"
+
+[[input.textures]]
+name = "$none"
+format = "rgba8"
+width = 0
+height = 0
+sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+repository = "https://github.com/retrofoundry/fast3d-rs"
+revision = "11260878b58e7bea3f61d7fefc4e290041def3c3"
+recipe = "empty"
+
+[provenance]
+capture_kind = "fast3d-literal"
+evidence = "literal words and packed records are the review authority"
+
+[provenance.compiler]
+name = "none"
+
+[provenance.n64_gbi]
+repository = "https://github.com/retrofoundry/fast3d-rs"
+revision = "11260878b58e7bea3f61d7fefc4e290041def3c3"
+crate_version = "0.1.0"
+
+[provenance.generator]
+name = "fast3d-fixtures"
+fixture_format_version = 1
