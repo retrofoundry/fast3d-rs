@@ -22,6 +22,16 @@ jobs:
       - name: clippy (--features debug-ui)
         run: cargo clippy -p fast3d --features debug-ui --all-targets -- -D warnings
 
+  # Keep the published workspace rust-version honest, including optional dependencies and tests.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install Rust 1.92.0
+        run: rustup toolchain install 1.92.0 --profile minimal
+      - name: check MSRV (--all-features, --all-targets)
+        run: cargo +1.92.0 check --workspace --all-features --all-targets --locked
+
   # The GPU/render tests (goldens, framebuffer store, hooks, debugger) need a real wgpu
   # adapter. macOS runners have Metal and Windows runners have WARP (software D3D); Linux
   # runners have no adapter, so the render suite is not exercised there (it is compiled by
@@ -40,6 +50,8 @@ jobs:
         run: cargo test -p fast3d --features debug-ui
       - name: test (--all-features)
         run: cargo test --workspace --all-features
+      - name: test ignored (--all-features)
+        run: cargo test --workspace --all-features -- --ignored
 
   # Prove the library stays wasm-compatible (catches a native-only API / dep regression).
   wasm:
