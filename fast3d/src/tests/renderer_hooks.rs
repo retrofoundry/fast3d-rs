@@ -3,9 +3,11 @@
 //! carries the target dimensions, and a hook-free present is unchanged.
 
 use crate::{
-    ClearPolicy, Hardware, HookFrame, Microcode, NopSink, PresentTarget, Rdram, RdramImage,
-    RenderHook, Renderer, RendererConfig,
+    ClearPolicy, Hardware, HookFrame, PresentTarget, Rdram, RdramImage, RenderHook, Renderer,
+    RendererConfig,
 };
+#[cfg(feature = "asm")]
+use crate::{Microcode, NopSink};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -29,6 +31,7 @@ fn cfg() -> RendererConfig {
     }
 }
 
+#[cfg(feature = "asm")]
 fn flat_color_hw() -> (ImgHw, u64) {
     let src = std::fs::read_to_string(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes/flat-color.n64"),
@@ -59,6 +62,7 @@ fn rgba_target(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::T
     (tex, view)
 }
 
+#[cfg(feature = "asm")]
 fn readback_rgba(r: &Renderer, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u8> {
     let buf = r.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some("rb"),
@@ -101,17 +105,21 @@ fn readback_rgba(r: &Renderer, tex: &wgpu::Texture, w: u32, h: u32) -> Vec<u8> {
     slice.get_mapped_range().to_vec()
 }
 
+#[cfg(feature = "asm")]
 fn px(data: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
     let o = ((y * w + x) * 4) as usize;
     [data[o], data[o + 1], data[o + 2], data[o + 3]]
 }
+#[cfg(feature = "asm")]
 fn near(a: u8, b: u8) -> bool {
     (a as i16 - b as i16).abs() <= 2
 }
+#[cfg(feature = "asm")]
 fn close(p: [u8; 4], q: [u8; 4]) -> bool {
     near(p[0], q[0]) && near(p[1], q[1]) && near(p[2], q[2]) && near(p[3], q[3])
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn hook_overlay_composites_over_scanout() {
     let (hw, entry) = flat_color_hw();
@@ -309,6 +317,7 @@ fn present_to_reports_target_dimensions() {
     );
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn present_without_hook_is_unchanged() {
     // Regression guard: with no hook installed, present_to still scans the FB out identically to P3.
@@ -336,9 +345,11 @@ fn present_without_hook_is_unchanged() {
     );
 }
 
+#[cfg(feature = "asm")]
 struct LifecycleHook {
     counts: Rc<Cell<(u32, u32, u32)>>, // (init, draw, deinit)
 }
+#[cfg(feature = "asm")]
 impl RenderHook for LifecycleHook {
     fn init(&mut self, _d: &wgpu::Device, _q: &wgpu::Queue, _f: wgpu::TextureFormat) {
         let (i, d, x) = self.counts.get();
@@ -409,6 +420,7 @@ impl RenderHook for LifecycleHook {
     }
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn hook_full_lifecycle_end_to_end() {
     let (hw, entry) = flat_color_hw();

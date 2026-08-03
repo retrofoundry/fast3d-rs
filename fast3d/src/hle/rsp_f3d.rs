@@ -235,7 +235,7 @@ fn set_texture_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     cx.rsp.set_texture_image(fmt, siz, width, addr, cx.rdp);
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod phase2_tests {
     use crate::hle::consts::{G_CULL_FRONT, G_FOG, G_RM_OPA_SURF, G_RM_OPA_SURF2};
     use crate::hle::gbi::GbiUcode;
@@ -526,7 +526,7 @@ mod phase2_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod phase3_tests {
     use crate::hle::consts::rsp_f3d::{
         G_MOVEWORD, G_MV_MATRIX_2, G_MV_MATRIX_3, G_MV_MATRIX_4, G_MW_PERSPNORM, G_POPMTX,
@@ -904,7 +904,7 @@ mod phase3_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod phase5_tests {
     use crate::diag::DiagKind;
     use crate::hle::consts::rsp_f3d::{
@@ -1185,7 +1185,7 @@ mod phase5_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod phase6_tests {
     use crate::diag::DiagKind;
     use crate::hle::consts::rsp_f3d::{

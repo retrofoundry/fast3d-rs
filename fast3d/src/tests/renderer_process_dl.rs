@@ -1,8 +1,10 @@
 //! P3.8: `Renderer::process_dl` walks a DL into the persistent store and returns a `DlSummary`.
 
+#[cfg(feature = "asm")]
+use crate::DlSummary;
 use crate::{
-    ClearPolicy, Diagnostic, DlSummary, Hardware, Microcode, PresentTarget, Rdram, RdramImage,
-    Renderer, RendererConfig,
+    ClearPolicy, Diagnostic, Hardware, Microcode, PresentTarget, Rdram, RdramImage, Renderer,
+    RendererConfig,
 };
 
 /// A byte-image N64 (web/wafel class): safe `RdramImage`, no live VI.
@@ -40,6 +42,7 @@ fn headless_renderer() -> Renderer {
     )
 }
 
+#[cfg(feature = "asm")]
 fn flat_color_hw() -> (ImgHw, u64) {
     let src = std::fs::read_to_string(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes/flat-color.n64"),
@@ -49,6 +52,7 @@ fn flat_color_hw() -> (ImgHw, u64) {
     (ImgHw { rdram: img.rdram }, img.entry_addr as u64)
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn process_dl_of_flat_quad_is_renderable() {
     let (hw, entry) = flat_color_hw();

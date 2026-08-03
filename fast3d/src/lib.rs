@@ -1407,5 +1407,5 @@ mod debugger_present_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod tests;

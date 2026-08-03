@@ -126,6 +126,7 @@ fn no_cull_bits_records_none_run() {
 }
 
 // Real-scene lock for spec Testing item 2 part 1: the two culling scenes each emit one Cull run.
+#[cfg(feature = "asm")]
 #[test]
 fn cull_scenes_emit_single_cull_run() {
     let scenes = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");

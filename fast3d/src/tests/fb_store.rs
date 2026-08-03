@@ -5,7 +5,10 @@ use crate::tests::common;
 
 use crate::render::{headless_device, SceneRenderer};
 use crate::ClearPolicy;
-use common::{dl_2d_fill, dl_2d_fill_rect, pixel, scene_from_source}; // B1: no `solid_env_texture` (unused → -D warnings error)
+#[cfg(feature = "asm")]
+use common::scene_from_source;
+// `solid_env_texture` is intentionally absent: importing it here would fail under `-D warnings`.
+use common::{dl_2d_fill, dl_2d_fill_rect, pixel};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -97,6 +100,7 @@ fn store_to_pixels(
 
 /// A pair-less flat-3D walk lands in the store keyed by its color image (sentinel 0 for a scene
 /// that never sets CIMG), `has_fb` reports it, and `scanout` blits it 1:1 (PRIM=(64,200,255)).
+#[cfg(feature = "asm")]
 #[test]
 fn pairless_walk_stores_and_scans_out() {
     let (device, queue, dual) = headless_device();
@@ -156,6 +160,7 @@ fn draw_nothing_walk_returns_none_and_touches_nothing() {
 /// COLOR fb at that size too, the color/depth attachment sizes would mismatch and raise a validation
 /// error. A no-depth scene (flat-color) can't surface that — its single-attachment pass plus the
 /// sampler-based scanout stay valid at any size — so it would give this test no teeth.
+#[cfg(feature = "asm")]
 #[test]
 fn store_fb_recreates_on_resize() {
     let (device, queue, dual) = headless_device();

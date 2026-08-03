@@ -13,16 +13,20 @@
 //! rather than PNG because the `image` crate is not in the offline lockfile; the comparison is
 //! a byte-wise max-channel-diff ≤ `TOL`.
 
+use crate::render::{headless_device, CLEAR_COLOR};
+#[cfg(feature = "asm")]
 use crate::render::{
-    headless_device, headless_device_forced_fallback, CombinerUniform, RspProcessParams,
-    RspProcessPipeline, TexturedPipeline, CLEAR_COLOR, DEPTH_FORMAT,
+    headless_device_forced_fallback, CombinerUniform, RspProcessParams, RspProcessPipeline,
+    TexturedPipeline, DEPTH_FORMAT,
 };
+#[cfg(feature = "asm")]
 use wgpu::util::DeviceExt;
 
 use crate::tests::common;
 
 /// Maps an N64 wrap mode (cms/cmt: 0=WRAP, 1=MIRROR, 2+=CLAMP) to a wgpu `AddressMode`.
 /// Mirrors `crate::render::address_mode` (private) so golden tests can select the correct sampler.
+#[cfg(feature = "asm")]
 fn address_mode(wrap: u8) -> wgpu::AddressMode {
     match wrap {
         0 => wgpu::AddressMode::Repeat,
@@ -36,6 +40,7 @@ const TOL: u8 = 2;
 
 /// Seed source — mirrors `tests/scenes/textured-quad.n64` but uses a 4×4 texture so the
 /// golden file is small (64×64 × 4 bytes = 16 KiB).  No `update {}` block: time-invariant.
+#[cfg(feature = "asm")]
 const RGBA16_QUAD_SRC: &str = r#"
 Texture tex = { 4, 4, RGBA16 }
 Mtx proj = scale(0.0078125)
@@ -72,6 +77,7 @@ gsSPEndDisplayList()
 /// Rows 0-1 have alpha=255 (above the 0.125 CVG_X_ALPHA threshold → opaque texels keep).
 /// Rows 2-3 have alpha=0 (below 0.125 → discarded when alpha_mode=CVG_X_ALPHA → background hole).
 /// The `golden_rgba16_quad` test uses SHADE for alpha (not TEXEL0.a), so its golden is unchanged.
+#[cfg(feature = "asm")]
 #[rustfmt::skip]
 const RGBA16_QUAD_TEX: &[u8] = &[
     255,   0,   0, 255,   0, 255,   0, 255,   255,   0,   0, 255,   0, 255,   0, 255, // row 0  α=255
@@ -89,6 +95,7 @@ const RGBA16_QUAD_TEX: &[u8] = &[
 /// (`headless_device_forced_fallback`) paths can share the rendering code.
 /// `TexturedPipeline::new` reads `DUAL_SOURCE_BLENDING` from the device features to select
 /// between the dual-source primary blend and the B3 AlphaOver/Replace fallback pipelines.
+#[cfg(feature = "asm")]
 #[allow(clippy::too_many_arguments)] // test helper: all 8 params are logically distinct
 fn render_scene_with_device(
     src: &str,
@@ -520,6 +527,7 @@ fn render_scene_with_device(
 ///
 /// Thin wrapper around `render_scene_with_device` that creates the primary `(device, queue)`.
 /// Called by `render_scene_to_rgba8` (ClampToEdge) and the wrap/mirror golden tests.
+#[cfg(feature = "asm")]
 fn render_scene_to_rgba8_addr(
     src: &str,
     tex_native: &[u8],
@@ -541,6 +549,7 @@ fn render_scene_to_rgba8_addr(
 ///
 /// [IMP13] Called for every AlphaOver-expressible scene each CI run so the fallback module +
 /// pipelines are compiled and rendered (a web-only fallback break cannot ship green).
+#[cfg(feature = "asm")]
 fn render_scene_to_rgba8_forced_fallback(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
     let (device, queue) = headless_device_forced_fallback();
     render_scene_with_device(
@@ -567,6 +576,7 @@ fn render_scene_to_rgba8_forced_fallback(src: &str, tex_native: &[u8], w: u32, h
 ///
 /// Ported from the manual headless flow in `tests/render.rs`.  Does NOT use
 /// `SceneRenderer::render` (that path provides no pixel readback).
+#[cfg(feature = "asm")]
 fn render_scene_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
     render_scene_to_rgba8_addr(
         src,
@@ -579,6 +589,7 @@ fn render_scene_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8
 }
 
 /// Map the readback buffer, strip row padding, return unpacked RGBA8.
+#[cfg(feature = "asm")]
 fn finish_readback(
     readback: wgpu::Buffer,
     device: &wgpu::Device,
@@ -648,6 +659,7 @@ fn compare_or_write(name: &str, actual: &[u8], w: u32, h: u32) {
 /// Same quad geometry as `RGBA16_QUAD_SRC` but declares `Texture tex = { 4, 4, I8 }` and
 /// uses `G_IM_SIZ_8b`. The assembler calls `encode_i8_texel` (luminance = (R+G+B)/3);
 /// the HLE dispatcher routes tile (fmt=4,siz=1) to `decode_i8`.
+#[cfg(feature = "asm")]
 const I8_RAMP_SRC: &str = r#"
 Texture tex = { 4, 4, I8 }
 Mtx proj = scale(0.0078125)
@@ -679,6 +691,7 @@ gsSPEndDisplayList()
 /// Identical geometry to `I8_RAMP_SRC` but declares `I4` and uses `G_IM_SIZ_4b`.
 /// The assembler packs 2 texels per byte (high nibble = even column);
 /// the HLE dispatcher routes tile (fmt=4,siz=0) to `decode_i4`.
+#[cfg(feature = "asm")]
 const I4_RAMP_SRC: &str = r#"
 Texture tex = { 4, 4, I4 }
 Mtx proj = scale(0.0078125)
@@ -710,6 +723,7 @@ gsSPEndDisplayList()
 /// Row-distinct so an odd-row word swap (§8 linear-TMEM bet) would appear as visible band
 /// reordering in the golden. Values 0, 85 (=0x55), 170 (=0xAA), 255 survive both the I8 and
 /// I4 round-trips exactly (85>>4=5, (5<<4)|5=85; 170>>4=10, (10<<4)|10=170).
+#[cfg(feature = "asm")]
 #[rustfmt::skip]
 const RAMP_TEX: &[u8] = &[
       0,   0,   0, 255,   0,   0,   0, 255,   0,   0,   0, 255,   0,   0,   0, 255, // row 0: black
@@ -726,6 +740,7 @@ const RAMP_TEX: &[u8] = &[
 /// 2. Alpha canary (ci8-canary): alternating a1 means TEXEL0_ALPHA→color renders alternating
 ///    white/black bands — not solid white, so it catches the "palette all-opaque" false pass.
 ///
+#[cfg(feature = "asm")]
 const fn gen_ci8_tex() -> [u8; 32 * 32 * 4] {
     let mut data = [0u8; 32 * 32 * 4];
     let mut row = 0usize;
@@ -746,12 +761,15 @@ const fn gen_ci8_tex() -> [u8; 32 * 32 * 4] {
     data
 }
 
+#[cfg(feature = "asm")]
 const CI8_TEX_ARRAY: [u8; 32 * 32 * 4] = gen_ci8_tex();
 
 /// CI8 ramp + canary source texture: 32×32 RGBA8, row-distinct grayscale with alternating alpha.
+#[cfg(feature = "asm")]
 const CI8_TEX: &[u8] = &CI8_TEX_ARRAY;
 
 /// CI8 ramp: MODULATE combiner (TEXEL0 × SHADE), white shade, G_TT_RGBA16.
+#[cfg(feature = "asm")]
 const CI8_RAMP_SRC: &str = r#"
 Texture tex = { 32, 32, CI8 }
 Mtx proj = scale(0.0078125)
@@ -781,6 +799,7 @@ gsSPEndDisplayList()
 
 /// CI8 combine-route canary: routes TEXEL0_ALPHA (cc1=8) into RGB output.
 /// c1=(ONE−0)×TEXEL0_ALPHA+0=texel.alpha; palette alternating a1 → alternating white/black.
+#[cfg(feature = "asm")]
 const CI8_CANARY_SRC: &str = r#"
 Texture tex = { 32, 32, CI8 }
 Mtx proj = scale(0.0078125)
@@ -820,6 +839,7 @@ gsSPEndDisplayList()
 /// After the RGBA16 5-bit encode/decode round-trip the red channel rounds to 248 and the green
 /// channel rounds to 248, so the rendered quad shows four clearly distinct colour regions —
 /// not noise, not a blank clear colour.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_rgba16_quad() {
     let px = render_scene_to_rgba8(RGBA16_QUAD_SRC, RGBA16_QUAD_TEX, 64, 64);
@@ -832,6 +852,7 @@ fn golden_rgba16_quad() {
 /// should render as a clearly distinct horizontal band (black / dark-gray / light-gray / white).
 /// A clean gradient confirms both the assembler's I8 encoder and the HLE I8 decoder are correct.
 /// A row-scrambled output (bands out of order) would indicate the linear-TMEM bet failed.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_i8_ramp() {
     let px = render_scene_to_rgba8(I8_RAMP_SRC, RAMP_TEX, 64, 64);
@@ -843,6 +864,7 @@ fn golden_i8_ramp() {
 /// I4 quantises to 4 bits (>> 4) then replicates ((v4 << 4) | v4). The seed values 0, 85,
 /// 170, 255 are all exact I4 round-trips, so the I4 golden should be byte-identical to I8.
 /// Row-scramble or banding differences indicate a nibble-order or TMEM layout bug.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_i4_ramp() {
     let px = render_scene_to_rgba8(I4_RAMP_SRC, RAMP_TEX, 64, 64);
@@ -850,6 +872,7 @@ fn golden_i4_ramp() {
 }
 
 /// IA16-format 4×4 vertical ramp: same geometry, declares `IA16` / `G_IM_SIZ_16b`.
+#[cfg(feature = "asm")]
 const IA16_RAMP_SRC: &str = r#"
 Texture tex = { 4, 4, IA16 }
 Mtx proj = scale(0.0078125)
@@ -877,6 +900,7 @@ gsSPEndDisplayList()
 "#;
 
 /// IA8-format 4×4 vertical ramp.
+#[cfg(feature = "asm")]
 const IA8_RAMP_SRC: &str = r#"
 Texture tex = { 4, 4, IA8 }
 Mtx proj = scale(0.0078125)
@@ -904,6 +928,7 @@ gsSPEndDisplayList()
 "#;
 
 /// IA4-format 4×4 vertical ramp.
+#[cfg(feature = "asm")]
 const IA4_RAMP_SRC: &str = r#"
 Texture tex = { 4, 4, IA4 }
 Mtx proj = scale(0.0078125)
@@ -937,6 +962,7 @@ gsSPEndDisplayList()
 /// Alpha decode correctness is validated by unit tests (`ia16_splits_intensity_and_alpha`, etc.).
 /// The swizzle bet: IA16 is a 2-byte format (siz=2); the linear-TMEM decoder iterates two bytes
 /// per texel, so nibble-order is irrelevant — no swizzle risk.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_ia16_ramp() {
     let px = render_scene_to_rgba8(IA16_RAMP_SRC, RAMP_TEX, 64, 64);
@@ -947,6 +973,7 @@ fn golden_ia16_ramp() {
 ///
 /// Alpha validation: same as IA16 — combiner outputs SHADE alpha, not texel alpha.
 /// Unit tests cover alpha decode. Swizzle: IA8 is 1-byte/texel, no nibble order.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_ia8_ramp() {
     let px = render_scene_to_rgba8(IA8_RAMP_SRC, RAMP_TEX, 64, 64);
@@ -959,6 +986,7 @@ fn golden_ia8_ramp() {
 /// Swizzle: IA4 uses the same nibble order as I4 (even col = high nibble). The 2×2 multi-row
 /// unit test (`ia4_multirow_swizzle_canary`) is the primary swizzle check; the golden confirms
 /// the intensity bands are visible and row-distinct.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_ia4_ramp() {
     let px = render_scene_to_rgba8(IA4_RAMP_SRC, RAMP_TEX, 64, 64);
@@ -974,6 +1002,7 @@ fn golden_ia4_ramp() {
 /// — producing clearly distinct quadrants in the rendered image.  With MIRROR the right and
 /// bottom halves are reflected.  With CLAMP the outer portion of the quad is filled by the
 /// clamped edge colour (yellow), making the three modes visually distinguishable.
+#[cfg(feature = "asm")]
 #[rustfmt::skip]
 const WRAP_TEX: &[u8] = &[
     255,   0,   0, 255,   255,   0,   0, 255,     0, 255,   0, 255,     0, 255,   0, 255, // row 0: R R G G
@@ -987,6 +1016,7 @@ const WRAP_TEX: &[u8] = &[
 ///
 /// Vertex S=256 maps to UV ≈ 2.0 via `scale_s = sc/(TC_DIVISOR*tile_w) = 65535/(65536·32·4)`.
 /// `gsDPLoadTextureBlock(…, 4, 4, 0, 0, 0, 0)` sets tile 0 with cms=cmt=0 (WRAP, no mask).
+#[cfg(feature = "asm")]
 const WRAP_REPEAT_SRC: &str = r#"
 Texture tex = { 4, 4, RGBA16 }
 Mtx proj = scale(0.0078125)
@@ -1015,6 +1045,7 @@ gsSPEndDisplayList()
 
 /// MIRROR-mode quad: identical geometry and texture to `WRAP_REPEAT_SRC`, but `cms=cmt=1`
 /// (G_TX_MIRROR).  With a MirrorRepeat sampler the second tile is the reflection of the first.
+#[cfg(feature = "asm")]
 const MIRROR_REPEAT_SRC: &str = r#"
 Texture tex = { 4, 4, RGBA16 }
 Mtx proj = scale(0.0078125)
@@ -1047,6 +1078,7 @@ gsSPEndDisplayList()
 /// `cms=cmt=0` routes to `samplers[0][0]` (wgpu Repeat).  With Repeat the rendered image shows
 /// four quadrants of the texture (R/G/B/Y repeated 2×2), visibly different from a ClampToEdge
 /// render that would fill the outer ~50 % of the quad with the clamped edge colour.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_wrap_repeat() {
     let px = render_scene_to_rgba8_addr(
@@ -1065,6 +1097,7 @@ fn golden_wrap_repeat() {
 /// With MirrorRepeat the second tile (UV 1..2) is the horizontal/vertical reflection of the
 /// first, so the rendered image shows R|G||G|R (top) and B|Y||Y|B (bottom) — distinct from
 /// both WRAP (which repeats R|G||R|G) and CLAMP.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_mirror_repeat() {
     let px = render_scene_to_rgba8_addr(
@@ -1085,6 +1118,7 @@ fn golden_mirror_repeat() {
 /// the CI8 encoder, TLUT loading, and palette decode are correct.
 /// Row-distinct flat regions also serve as the swizzle canary: a TMEM row-swap would produce
 /// bands out of order, immediately visible.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_ci8_ramp() {
     let px = render_scene_to_rgba8(CI8_RAMP_SRC, CI8_TEX, 64, 64);
@@ -1098,6 +1132,7 @@ fn golden_ci8_ramp() {
 /// odd-row entries → alpha=0 (black output). The golden MUST show alternating bands,
 /// NOT solid white. Solid white means tex_enable is false (TEXEL0_ALPHA not wired) — a
 /// false pass matching the broken IA state; do not bake if white.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_ci8_canary() {
     let px = render_scene_to_rgba8(CI8_CANARY_SRC, CI8_TEX, 64, 64);
@@ -1125,6 +1160,7 @@ fn golden_ci8_canary() {
 /// 2. Canary scene (TEXEL0_ALPHA→color): even cells → white, odd cells → black; non-uniform
 ///    output validates the TEXEL0_ALPHA→color path with CI4+TLUT (guards the IA gap).
 ///
+#[cfg(feature = "asm")]
 const fn gen_ci4_tex() -> [u8; 32 * 32 * 4] {
     // 16 rainbow colors spread across the hue wheel; even indices opaque, odd transparent.
     #[rustfmt::skip]
@@ -1172,12 +1208,15 @@ const fn gen_ci4_tex() -> [u8; 32 * 32 * 4] {
     data
 }
 
+#[cfg(feature = "asm")]
 const CI4_TEX_ARRAY: [u8; 32 * 32 * 4] = gen_ci4_tex();
 
 /// CI4 grid + canary source texture: 32×32 RGBA8, 4×4 grid of 8×8 cells, alternating alpha.
+#[cfg(feature = "asm")]
 const CI4_TEX: &[u8] = &CI4_TEX_ARRAY;
 
 /// CI4 grid: MODULATE combiner (TEXEL0 × SHADE), white shade, G_TT_RGBA16.
+#[cfg(feature = "asm")]
 const CI4_GRID_SRC: &str = r#"
 Texture tex = { 32, 32, CI4 }
 Mtx proj = scale(0.0078125)
@@ -1207,6 +1246,7 @@ gsSPEndDisplayList()
 
 /// CI4 combine-route canary: routes TEXEL0_ALPHA (cc1=8) into RGB output.
 /// c1=(ONE−0)×TEXEL0_ALPHA+0=texel.alpha; palette alternating a1 → alternating white/black.
+#[cfg(feature = "asm")]
 const CI4_CANARY_SRC: &str = r#"
 Texture tex = { 32, 32, CI4 }
 Mtx proj = scale(0.0078125)
@@ -1241,6 +1281,7 @@ gsSPEndDisplayList()
 /// regions make palette-index scrambles (nibble-order or TMEM layout bugs) immediately visible.
 /// SHADE alpha (vertex alpha=255) is used as the alpha output, so even transparent-palette cells
 /// (odd indices, a1=0) render fully opaque with their palette RGB.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_ci4_grid() {
     let px = render_scene_to_rgba8(CI4_GRID_SRC, CI4_TEX, 64, 64);
@@ -1254,6 +1295,7 @@ fn golden_ci4_grid() {
 /// odd-index cells → alpha=0 (black output). The golden MUST show a non-uniform alternating
 /// chequerboard of 8×8 bright and dark cells — NOT solid white. Solid white means
 /// TEXEL0_ALPHA is not wired for CI4+TLUT — a false pass; do not bake if white.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_ci4_canary() {
     let px = render_scene_to_rgba8(CI4_CANARY_SRC, CI4_TEX, 64, 64);
@@ -1273,6 +1315,7 @@ fn golden_ci4_canary() {
 /// A full-screen XLU quad: PRIMITIVE combiner with prim=(R=255,G=0,B=0,A=128), G_RM_AA_ZB_XLU_SURF.
 /// Alpha combiner `d = PRIMITIVE` routes prim_alpha=128/255≈0.502 into the fragment alpha,
 /// which the AlphaOver pipeline blends over the clear color.
+#[cfg(feature = "asm")]
 const XLU_QUAD_SRC: &str = r#"
 Mtx proj = scale(0.0078125)
 Mtx model = identity()
@@ -1304,6 +1347,7 @@ gsSPEndDisplayList()
 ///   result.R = 255 → fails `px[c] < 220`.
 ///
 /// Placed before golden_multi_material so a failing blend assertion stops the run early.
+#[cfg(feature = "asm")]
 #[test]
 fn alphaover_pipeline_blends_translucent_over_background() {
     // 1×1 white placeholder; the XLU scene has no gsDPLoadTextureBlock so tex_enable=false.
@@ -1321,6 +1365,7 @@ fn alphaover_pipeline_blends_translucent_over_background() {
 
 // ── Multi-material golden ─────────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "asm")]
 const MULTI_MATERIAL_SRC: &str = include_str!("../../tests/scenes/multi-material.n64");
 
 /// Golden test for multi-material per-run binding — Phase A gate.
@@ -1335,6 +1380,7 @@ const MULTI_MATERIAL_SRC: &str = include_str!("../../tests/scenes/multi-material
 ///
 /// PASS: three visually distinct regions (not a single flat colour — the old collapse).
 /// BLOCKED if the centre equals the left (dedup collapsed three materials into one).
+#[cfg(feature = "asm")]
 #[test]
 fn golden_multi_material() {
     // 3 regions render 3 distinct materials (not the old flat collapse).
@@ -1399,6 +1445,7 @@ fn golden_multi_material() {
 ///
 /// BLOCKED if: hole pixel is non-background (alpha-test not wired), threshold is wrong (not 0.125),
 /// or alpha_mode leaks into non-cutout runs (texture-format/tron/fogworld goldens must be unchanged).
+#[cfg(feature = "asm")]
 #[test]
 fn golden_multi_material_cutout_shows_hole() {
     // The cutout region must show BACKGROUND through a sub-threshold hole (not opaque texels).
@@ -1428,6 +1475,7 @@ fn golden_multi_material_cutout_shows_hole() {
 
 // ── Tron scene + Phase B forced-fallback CI gate ─────────────────────────────────────────────────
 
+#[cfg(feature = "asm")]
 const TRON_SRC: &str = include_str!("../../tests/scenes/tron.n64");
 
 /// Golden test for the `tron` scene — overlapping translucent neon panels.
@@ -1443,6 +1491,7 @@ const TRON_SRC: &str = include_str!("../../tests/scenes/tron.n64");
 /// or shows the clear color (panels didn't render).
 ///
 /// Rendered via the PRIMARY path (`headless_device` — dual-source when available).
+#[cfg(feature = "asm")]
 #[test]
 fn golden_tron() {
     let px = render_scene_to_rgba8(TRON_SRC, &[], 96, 96);
@@ -1478,6 +1527,7 @@ fn golden_tron() {
 /// preserves dst.a=255 from clear; AlphaOver writes src.a≈128).  The inline RGB cross-check
 /// against the PRIMARY `tron.bin` is the IMP13 assertion (fallback RGB == primary RGB); the
 /// `tron-fallback.bin` golden is an additional regression guard for the fallback alpha too.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_tron_forced_fallback() {
     let px = render_scene_to_rgba8_forced_fallback(TRON_SRC, &[], 96, 96);
@@ -1513,6 +1563,7 @@ fn golden_tron_forced_fallback() {
 /// quad (PRIMITIVE combiner, B=1MA, A=A_IN) is canonically expressible as AlphaOver so the
 /// fallback is lossless.  If this test passes, the fallback module + pipelines compiled and
 /// produced a correct result — a web-only regression cannot ship green.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_multi_material_forced_fallback() {
     let px = render_scene_to_rgba8_forced_fallback(MULTI_MATERIAL_SRC, RGBA16_QUAD_TEX, 96, 96);
@@ -1522,6 +1573,7 @@ fn golden_multi_material_forced_fallback() {
 
 // ── Fog golden ───────────────────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "asm")]
 const FOGWORLD_SRC: &str = include_str!("../../tests/scenes/fogworld.n64");
 
 /// Golden test for the fogworld fog demo — proves the G_RM_FOG_SHADE_A + G_CYC_2CYCLE pipeline.
@@ -1532,6 +1584,7 @@ const FOGWORLD_SRC: &str = include_str!("../../tests/scenes/fogworld.n64");
 /// MIN6: two pixel assertions verify the fog gradient is real:
 ///   far  (y=30, x=30): ≈ fog_color [0x80,0x80,0x80] within ±24 per channel
 ///   near (y=60, x=70): ≥ 1 channel differs from fog_color by > 40 (crisp surface)
+#[cfg(feature = "asm")]
 #[test]
 fn golden_fogworld() {
     let px = render_scene_to_rgba8(FOGWORLD_SRC, &[], 96, 96);
@@ -1560,6 +1613,7 @@ fn golden_fogworld() {
 
 // ── Alpha-threshold scene (Phase D Task D2) ──────────────────────────────────────────────────────
 
+#[cfg(feature = "asm")]
 const ALPHA_THRESHOLD_SRC: &str = include_str!("../../tests/scenes/alpha-threshold.n64");
 
 /// Golden test for the `alpha-threshold` scene — G_AC_THRESHOLD alpha-compare gate (Phase D, D2).
@@ -1574,6 +1628,7 @@ const ALPHA_THRESHOLD_SRC: &str = include_str!("../../tests/scenes/alpha-thresho
 ///
 /// MIN7: assert BOTH — sub-threshold sample shows BACKGROUND, supra-threshold shows SURFACE.
 /// BLOCKED if whole quad shows (THRESHOLD path broken) or none shows (discard always fires).
+#[cfg(feature = "asm")]
 #[test]
 fn golden_alpha_threshold() {
     let px = render_scene_to_rgba8(ALPHA_THRESHOLD_SRC, RGBA16_QUAD_TEX, 64, 64);
@@ -1602,11 +1657,15 @@ fn golden_alpha_threshold() {
 
 // ── Decal scene (Phase E Task E2) ─────────────────────────────────────────────────────────────
 
+#[cfg(feature = "asm")]
 const DECAL_SRC: &str = include_str!("../../tests/scenes/decal.n64");
 
 /// Colors authored in `tests/scenes/decal.n64` (RGBA8 byte values).
+#[cfg(feature = "asm")]
 const DECAL_BASE_RGB: [u8; 3] = [40, 40, 200]; // blue base quad
+#[cfg(feature = "asm")]
 const DECAL_DECAL_RGB: [u8; 3] = [240, 220, 40]; // yellow coplanar decal
+#[cfg(feature = "asm")]
 const OCCLUDER_RGB: [u8; 3] = [220, 40, 40]; // red nearer quad
 
 /// Golden test for the `decal` scene — in-shader ZMODE_DEC occlusion + coplanar discard (Phase E, E2).
@@ -1620,6 +1679,7 @@ const OCCLUDER_RGB: [u8; 3] = [220, 40, 40]; // red nearer quad
 /// discarded by Z_CMP), and a pixel where the decal sits coplanar on the base shows the DECAL color
 /// (no z-fight). BLOCKED if the decal shows THROUGH the red quad (occlusion broken) or is missing on
 /// the base (coplanar/z-fight broken).
+#[cfg(feature = "asm")]
 #[test]
 fn golden_decal() {
     let px = render_scene_to_rgba8(DECAL_SRC, &[], 96, 96);
@@ -1670,6 +1730,7 @@ fn golden_decal() {
 // with a coplanar decal offset a small constant in FRONT vs BEHIND. The asymmetry between the
 // occlusion test (bare epsilon) and the coplanar test (max(dz, epsilon)) means a decal slightly in
 // FRONT (delta < dz) shows, while one slightly BEHIND (delta > epsilon) is occluded.
+#[cfg(feature = "asm")]
 const DECAL_IN_FRONT_SRC: &str = r#"
 Mtx proj = scale(0.0078125)
 Mtx model = identity()
@@ -1698,6 +1759,7 @@ gsSP1Triangle(4, 6, 7, 0)
 gsSPEndDisplayList()
 "#;
 
+#[cfg(feature = "asm")]
 const DECAL_BEHIND_SRC: &str = r#"
 Mtx proj = scale(0.0078125)
 Mtx model = identity()
@@ -1729,6 +1791,7 @@ gsSPEndDisplayList()
 /// Coplanar tolerance boundary: a decal slightly IN FRONT of the (tilted) surface shows; the same
 /// decal slightly BEHIND is occluded (shows base). Asserts the two center pixels differ — the
 /// in-shader tolerance must distinguish front (within dz) from behind (beyond epsilon).
+#[cfg(feature = "asm")]
 #[test]
 fn decal_coplanar_tolerance_boundary() {
     let shown = render_scene_to_rgba8(DECAL_IN_FRONT_SRC, &[], 48, 48);
@@ -1750,6 +1813,7 @@ fn decal_coplanar_tolerance_boundary() {
 
 // ── High-poly scene (Phase F Task F1) ────────────────────────────────────────────────────────────
 
+#[cfg(feature = "asm")]
 const HIGH_POLY_SRC: &str = include_str!("../../tests/scenes/high-poly.n64");
 
 /// Golden test for the `high-poly` scene — multi-batch vertex-loading guard (Phase F, F1).
@@ -1770,6 +1834,7 @@ const HIGH_POLY_SRC: &str = include_str!("../../tests/scenes/high-poly.n64");
 /// MIN9: assert BOTH — the overall image matches the golden (whole-mesh regression), AND pixel
 /// (10,10) is red (the post-127 batch resolved correctly). Red requires G<60; both blue
 /// (0,50,200) and the dark background (≈13,13,20) fail `R>200`, so either regression is caught.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_high_poly() {
     let px = render_scene_to_rgba8(HIGH_POLY_SRC, &[], 96, 96);
@@ -1991,6 +2056,7 @@ fn clear_color_rgb_local() -> [u8; 3] {
 /// Scene 1 — `fill-texrect`: FILL clears the 64×64 CIMG to blue, then a COPY TEXRECT blits the
 /// 4×4 `quad_tex` checker over the whole surface. The checker maps row-0-at-top (verified against
 /// the texel alpha pattern: rows 0–1 α=255, rows 2–3 α=0 → a 4-px vertical period).
+#[cfg(feature = "asm")]
 #[test]
 fn golden_2d_fill_texrect() {
     use crate::render::SceneRenderer;
@@ -2019,6 +2085,7 @@ fn golden_2d_fill_texrect() {
 
 /// Scene 2 — `hud-over-3d`: a Gouraud 3D quad in the center, then a COPY TEXRECT HUD in the
 /// top-left 16×16 corner. Verifies tris + rects coexist in one pair and the HUD lands top-left.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_2d_hud_over_3d() {
     use crate::render::SceneRenderer;
@@ -2048,6 +2115,7 @@ fn golden_2d_hud_over_3d() {
 
 /// Scene 4 — `texrectflip`: COPY TEXRECT with S/T axes swapped (`gsSPTextureRectangleFlip`). The
 /// flipped UVs transpose the checker vs `fill-texrect`'s un-flipped layout.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_2d_texrectflip() {
     use crate::render::SceneRenderer;
@@ -2075,6 +2143,7 @@ fn golden_2d_texrectflip() {
 /// Bgra8 headless cover: render `fill-texrect` once at `Rgba8Unorm` and once at `Bgra8Unorm` and
 /// assert the readback bytes are R↔B swapped (G/A identical). Exercises the present pipeline's
 /// surface-format path (`SceneRenderer::new(.., Bgra8Unorm, ..)`) without a real surface.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_2d_bgra8_present_cover() {
     use crate::render::SceneRenderer;
@@ -2116,6 +2185,7 @@ fn golden_2d_bgra8_present_cover() {
 /// FB-as-texture alias active, the scanout TEXRECT samples that orange directly; without it the
 /// scanout would show CLEAR_COLOR (≈13,13,20). The per-pixel assertion below verifies ORANGE
 /// (R>200, G>80, B<60) before the golden is committed.
+#[cfg(feature = "asm")]
 #[test]
 fn golden_2d_offscreen_then_sample() {
     use crate::render::SceneRenderer;
@@ -2156,6 +2226,7 @@ fn golden_2d_offscreen_then_sample() {
 ///
 /// Used exclusively by `golden_2d_alpha_texrect_over_bg` (no separate scene fixture needed).
 #[rustfmt::skip]
+#[cfg(feature = "asm")]
 const ALPHA_TEXRECT_TEX: &[u8] = &[
     255, 0, 0, 255,  255, 0, 0, 255, // row 0: red opaque  (α=255)
     255, 0, 0,   0,  255, 0, 0,   0, // row 1: red transparent (α=0)
@@ -2169,6 +2240,7 @@ const ALPHA_TEXRECT_TEX: &[u8] = &[
 ///   Combiner: (0-0)*0 + TEXEL0 = pure TEXEL0 passthrough (RGB and alpha).
 ///
 /// This is a renderer-test-only fixture (not a shared scene file).
+#[cfg(feature = "asm")]
 const ALPHA_TEXRECT_OVER_BG_SRC: &str = r#"
 Texture tex = { 2, 2, RGBA16 }
 gsDPSetColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00100000)
@@ -2189,6 +2261,7 @@ gsSPEndDisplayList()
 
 /// Assemble a scene from an inline source string for renderer-test-only fixtures.
 /// Mirrors `common::scene_from_source` but takes a source string instead of a file path.
+#[cfg(feature = "asm")]
 fn scene_from_src_str(src: &str, tex_rgba8: &[u8], tex_w: u32, tex_h: u32) -> crate::hle::Scene {
     let img = crate::asm::assemble_with_texture(src, tex_rgba8, tex_w, tex_h)
         .unwrap_or_else(|d| panic!("assembly failed: {d:?}"));
@@ -2211,6 +2284,7 @@ fn scene_from_src_str(src: &str, tex_rgba8: &[u8], tex_w: u32, tex_h: u32) -> cr
 ///   are red, NOT green. The `odd_pix[1] > 200` assertion fails → regression detected.
 ///
 /// **Byte-identity:** existing COPY/FILL scenes are unaffected (Replace paths unchanged).
+#[cfg(feature = "asm")]
 #[test]
 fn golden_2d_alpha_texrect_over_bg() {
     use crate::render::SceneRenderer;
@@ -2641,6 +2715,7 @@ fn golden_paired_decal_respects_op_order() {
 // Captured against the current straight-to-target output; the Phase-1 internal-FB rework must keep
 // them byte-identical (the present blit at 1:1 is an identity resample).
 
+#[cfg(feature = "asm")]
 #[test]
 fn golden_pairless_flat_color() {
     let (device, queue, dual) = headless_device();
@@ -2655,6 +2730,7 @@ fn golden_pairless_flat_color() {
     compare_or_write("pairless-flat-color", &px, 64, 64);
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn golden_pairless_chrome_icosphere() {
     let (device, queue, dual) = headless_device();
@@ -2786,6 +2862,7 @@ fn lod_violations_for_material(
     violations
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn lod_selectors_unreferenced_in_every_non_lod_scene() {
     let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");

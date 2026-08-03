@@ -1020,7 +1020,7 @@ mod lights_load_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod phase3_state_tests {
     use super::*;
     use crate::hle::mem::RdramImage;
@@ -1204,7 +1204,7 @@ mod draw_runs_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod lights_table_tests {
     use super::*;
     use crate::hle::mem::RdramImage;
@@ -1357,7 +1357,7 @@ mod texcoord_table_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod lookat_tests {
     use super::*;
     use crate::hle::mem::RdramImage;

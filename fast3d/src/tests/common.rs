@@ -50,6 +50,7 @@ pub fn ref_uv(scene: &Scene, i: usize) -> [f32; 2] {
 /// `tex_rgba8` / `tex_w` / `tex_h` are the texture bytes uploaded into the assembled image (the
 /// same texture the HLE decodes into `material.texture`); for untextured scenes pass a 1×1 white
 /// placeholder.
+#[cfg(feature = "asm")]
 pub fn scene_from_source(
     name: &str,
     tex_rgba8: &[u8],

@@ -378,7 +378,7 @@ pub fn interpret_rdram(bytes: &[u8], entry_addr: u32) -> InterpResult {
     )
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod task_a7_tests {
     use super::*;
     use crate::hle::consts::{G_RM_AA_ZB_OPA_SURF, G_RM_AA_ZB_OPA_SURF2, G_ZBUFFER};
@@ -463,7 +463,7 @@ mod table_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod task8_tests {
     use super::*;
     use crate::hle::consts::{G_RM_OPA_SURF, G_RM_OPA_SURF2, G_SHADE, G_SHADING_SMOOTH};
@@ -705,7 +705,7 @@ mod task8_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod slice2_tests {
     use super::*;
     use n64_gbi::encode::*;
@@ -730,7 +730,7 @@ mod slice2_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod task_a9_tests {
     use super::*;
     use n64_gbi::encode::*;

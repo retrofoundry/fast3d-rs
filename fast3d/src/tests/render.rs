@@ -1,7 +1,8 @@
 use crate::render::{
-    decode_rgba16, headless_device, CombinerUniform, OutVertex, RspProcessParams,
-    RspProcessPipeline, TexturedPipeline, CLEAR_COLOR, DEPTH_FORMAT,
+    decode_rgba16, headless_device, CombinerUniform, OutVertex, TexturedPipeline, DEPTH_FORMAT,
 };
+#[cfg(feature = "asm")]
+use crate::render::{RspProcessParams, RspProcessPipeline, CLEAR_COLOR};
 use wgpu::util::DeviceExt;
 
 /// Build split bind groups: group0 (tex + sampler) and group1 (combiner uniform).
@@ -858,6 +859,7 @@ fn depth_test_hides_the_farther_triangle() {
 }
 
 struct GpuOut {
+    #[cfg_attr(not(feature = "asm"), allow(dead_code))]
     pos: [f32; 4],
     color: [f32; 4],
     uv: [f32; 2],
@@ -975,6 +977,7 @@ fn run_compute_outputs(
 }
 
 // Independent oracle: re-derives expected pos/uv from raw inputs + tables only.
+#[cfg(feature = "asm")]
 fn ref_pos(raw: [f32; 3], mvp: &crate::hle::math::Mat4, vp: &([f32; 3], [f32; 3])) -> [f32; 4] {
     let clip = crate::hle::math::mul_row_vec4([raw[0], raw[1], raw[2], 1.0], *mvp);
     let w = if clip[3] == 0.0 { 1e-6 } else { clip[3] };
@@ -989,6 +992,7 @@ fn ref_pos(raw: [f32; 3], mvp: &crate::hle::math::Mat4, vp: &([f32; 3], [f32; 3]
 }
 
 // uv oracle: the table already holds the f64-prefolded scale; kernel == this f32 multiply.
+#[cfg(feature = "asm")]
 fn ref_uv(st: [f32; 2], tc: [f32; 2]) -> [f32; 2] {
     [st[0] * tc[0], st[1] * tc[1]]
 }
@@ -996,6 +1000,7 @@ fn ref_uv(st: [f32; 2], tc: [f32; 2]) -> [f32; 2] {
 // texgen uv oracle: reflection-mapped uv when the vertex uses texgen (mode != 0), else None.
 // Mirrors the kernel: clamp(dot(n, axis)) folded by spherical/cubic, scaled by the stored
 // texgen ST-fold. Returns None for non-texgen vertices so the caller falls back to ref_uv.
+#[cfg(feature = "asm")]
 fn ref_texgen_uv(scene: &crate::hle::Scene, i: usize) -> Option<[f32; 2]> {
     let m = scene.texgen_mode[i];
     if m == 0 {
@@ -1023,6 +1028,7 @@ fn ref_texgen_uv(scene: &crate::hle::Scene, i: usize) -> Option<[f32; 2]> {
 }
 
 // color oracle: diffuse lighting if light_count > 0, else cn RGBA passthrough.
+#[cfg(feature = "asm")]
 fn ref_color(scene: &crate::hle::Scene, i: usize) -> [f32; 4] {
     let cn = scene.cn[i];
     // Per-vertex fog (per-vertex fog indices): mirror rsp_process.wgsl — when this vertex was loaded with
@@ -1069,6 +1075,7 @@ fn ref_color(scene: &crate::hle::Scene, i: usize) -> [f32; 4] {
     }
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn compute_outputs_match_oracle_for_every_scene() {
     let (device, queue, _dual_source) = headless_device();
@@ -1722,6 +1729,7 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
 /// The full-morph radius assertion FAILS for the old scaled-cube target (its "sphere" corners sit at
 /// 23·√3 ≈ 39.8 BUT its face-region verts would also be ~23·… — i.e. it was still a cube of mixed
 /// radii) and passes only for a target where ALL verts share radius ≈40.
+#[cfg(feature = "asm")]
 #[test]
 fn morphcube_morphs_cube_to_sphere_across_frames() {
     // A 1×1 white texture is needed because gsDPSetOtherMode_H / gsDPSetCombineLERP require
@@ -1817,6 +1825,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
 /// Cross-frame matrix-animation assertion: assembles `perspective-cube` at two different times and
 /// verifies that the MVP table differs (the update block rotates the model matrix each frame).
 /// This closes the gap where no test previously ticked an `update{}` block across two frames.
+#[cfg(feature = "asm")]
 #[test]
 fn perspective_cube_mvp_differs_between_frames() {
     // Dummy 1×1 texture needed for gsDPSetOtherMode_H / gsDPSetCombineLERP.
@@ -1893,6 +1902,7 @@ fn perspective_cube_mvp_differs_between_frames() {
 ///   G < 150  (not the lighting colour: a MODULATE-of-yellow-lit shade would be G ≈ R ≈ high,
 ///             not tracking the orange env)
 ///   B < 100  (the env's B channel is ~49 after RGBA16 round-trip)
+#[cfg(feature = "asm")]
 #[test]
 fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
     let (device, queue, _dual_source) = headless_device();
@@ -2105,6 +2115,7 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
 ///
 /// Regression guard: a combiner bug that substitutes SHADE (vertex color = white → 255) for PRIM
 /// would make R=255 instead of 64 (fails R≈64). A bug that zeroes the output gives R=0 (fails too).
+#[cfg(feature = "asm")]
 #[test]
 fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
     let (device, queue, _dual_source) = headless_device();
@@ -2321,6 +2332,7 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
 ///
 /// A broken COMBINED-routing or wrong-cycle regression produces a uniform tint instead of the
 /// vivid corner/tint variation, failing at least one of these three distinct-color assertions.
+#[cfg(feature = "asm")]
 #[test]
 fn cycle_type_1_two_cycle_combiner_pixel() {
     let (device, queue, _dual_source) = headless_device();
@@ -2503,6 +2515,7 @@ fn cycle_type_1_two_cycle_combiner_pixel() {
 
 /// Same quad source and texture as in the goldens harness — duplicated here so render.rs can run
 /// a fast smoke test for the split-bind-group path without pulling goldens.rs into scope.
+#[cfg(feature = "asm")]
 const RGBA16_QUAD_SRC: &str = r#"
 Texture tex = { 4, 4, RGBA16 }
 Mtx proj = scale(0.0078125)
@@ -2529,6 +2542,7 @@ gsSP1Triangle(0, 2, 3, 0)
 gsSPEndDisplayList()
 "#;
 
+#[cfg(feature = "asm")]
 #[rustfmt::skip]
 const RGBA16_QUAD_TEX: &[u8] = &[
     255,   0,   0, 255,   0, 255,   0, 255,   255,   0,   0, 255,   0, 255,   0, 255, // row 0
@@ -2539,6 +2553,7 @@ const RGBA16_QUAD_TEX: &[u8] = &[
 
 /// Full-pipeline render helper used by the A8a smoke test.
 /// Assembles, HLE-interprets, RSP-computes, then rasterises with split bind groups.
+#[cfg(feature = "asm")]
 fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
     let pixel_count = tex_native.len() / 4;
     let tex_side = (pixel_count as f64).sqrt() as u32;
@@ -2838,6 +2853,7 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
 /// A8a smoke test: the split-bind-group path (group0=tex+sampler, group1=uniform, stride=0)
 /// produces a textured center pixel — not the clear color. This is the TDD "failing test" that
 /// gates the A8a bind-group split and new draw() signature.
+#[cfg(feature = "asm")]
 #[test]
 fn single_run_path_renders_textured_center() {
     let px = render_source_to_rgba8(RGBA16_QUAD_SRC, RGBA16_QUAD_TEX, 64, 64);

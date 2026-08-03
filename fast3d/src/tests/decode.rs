@@ -1,6 +1,9 @@
+#[cfg(feature = "asm")]
 use crate::tests::common;
 
+#[cfg(feature = "asm")]
 use crate::asm::assemble_with_texture;
+#[cfg(feature = "asm")]
 use crate::hle::interpret_rdram;
 
 #[test]
@@ -66,6 +69,7 @@ fn g_tri2_emits_two_triangles_in_order() {
     assert_eq!(r.scene.indices, vec![0, 1, 2, 0, 2, 3]);
 }
 
+#[cfg(feature = "asm")]
 const SAMPLE: &str = "\
 // Walking-skeleton sample: one vertex-colored triangle (F3DEX2).
 Mtx proj = scale(0.015625)
@@ -87,6 +91,7 @@ gsSP1Triangle(0, 1, 2, 0)
 gsSPEndDisplayList()
 ";
 
+#[cfg(feature = "asm")]
 #[test]
 fn sample_dl_decodes_to_one_colored_triangle() {
     let img = assemble_with_texture(SAMPLE, &[255u8; 4], 1, 1).expect("assemble ok");
@@ -137,6 +142,7 @@ fn sample_dl_decodes_to_one_colored_triangle() {
     assert_eq!(common::ref_pos(&res.scene, 2), [0.0, 0.75, z, 1.0]);
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn tri_index_x2_convention_round_trips() {
     // gsSP1Triangle(0,1,2) must decode back to cache slots 0,1,2 (index*2 encode, /2 decode).
@@ -145,6 +151,7 @@ fn tri_index_x2_convention_round_trips() {
     assert_eq!(res.scene.indices, vec![0, 1, 2]);
 }
 
+#[cfg(feature = "asm")]
 #[test]
 fn geometry_mode_clear_then_set_is_asymmetric_masked() {
     // Clear(G_LIGHTING|G_CULL_BACK) then Set(G_SHADE|G_SHADING_SMOOTH), starting from the
