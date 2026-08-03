@@ -368,7 +368,7 @@ pub fn interpret<M: Rdram>(
     }
 }
 
-#[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn interpret_rdram(bytes: &[u8], entry_addr: u32) -> InterpResult {
     interpret(
         RdramImage::new(bytes),

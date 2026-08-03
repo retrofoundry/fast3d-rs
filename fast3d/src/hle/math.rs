@@ -13,7 +13,7 @@ pub fn identity() -> Mat4 {
 }
 
 /// Row-vector * matrix: out[c] = sum_k v[k] * m[k][c].
-#[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn mul_row_vec4(v: [f32; 4], m: Mat4) -> [f32; 4] {
     let mut out = [0.0f32; 4];
     for c in 0..4 {

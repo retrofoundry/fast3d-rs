@@ -438,7 +438,7 @@ mod tests {
 
 /// RGBA16 -> RGBA8 decode. The single implementation lives in `hle`; re-exported here so
 /// the renderer's texture path and tests share one decoder (no drift).
-#[cfg_attr(not(all(test, feature = "asm")), allow(unused_imports))]
+#[cfg_attr(not(test), allow(unused_imports))]
 pub use crate::hle::decode_rgba16;
 
 /// Build the two-triangle (6-vertex) CLIP-SPACE quad for a 2D `FillRect`/`TexRect` draw.
@@ -2579,7 +2579,7 @@ impl SceneRenderer {
     /// per-material content-keyed tex_cache rebuild + pooled dynamic-offset uniform buffer +
     /// RSP-process compute dispatch + the z_buffer-gated raster pass.
     /// Does NOT present — that stays with the consumer.
-    #[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -3218,7 +3218,7 @@ impl SceneRenderer {
     /// view (including the cross-pair `fb_source` read-back source, Task 10) outlives every pass and
     /// the final submit.
     #[allow(clippy::too_many_arguments)]
-    #[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
+    #[cfg_attr(not(test), allow(dead_code))]
     fn render_pairs(
         &self,
         device: &wgpu::Device,
@@ -4087,7 +4087,7 @@ impl SceneRenderer {
 /// Returns `(device, queue, dual_source)` where `dual_source` is true when the adapter advertised
 /// `DUAL_SOURCE_BLENDING` and it was successfully requested (B3/B4 use this to select pipelines).
 #[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn headless_device() -> (wgpu::Device, wgpu::Queue, bool) {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
