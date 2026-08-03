@@ -277,14 +277,16 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    // LoadTLUT: count = (lrt>>2)+1 packed 16-bit big-endian entries from tex_image.addr (count*2
-    // contiguous RDRAM bytes). gsDPLoadTLUT DMA copies packed RDRAM → strided TMEM (one entry per
-    // 8-byte slot); `write_tlut` performs that stride-8 expansion into the faithful bank's palette
-    // region at PALETTE_BASE. fast3d's DL builder loads TLUTs via tile 7 without setting its `tmem`,
-    // so palette 0 goes to PALETTE_BASE directly.
+    // SDK gsDPLoadTLUTCmd stores count-1 in bits 23:14. The frozen fast3d assembler instead stores
+    // `(count-1)<<2` in bits 11:0, so accept that noncanonical compatibility layout when the SDK
+    // field is zero. A one-entry load is unambiguous because both encodings have zero count bits.
     let (_fmt, _siz, _w, addr) = cx.rdp.tex_image;
-    let lrt = c.p1(0, 12);
-    let count = (lrt >> 2) + 1;
+    let sdk_count_minus_one = c.p1(14, 10);
+    let count = if sdk_count_minus_one != 0 {
+        sdk_count_minus_one + 1
+    } else {
+        (c.p1(0, 12) >> 2) + 1
+    };
     let packed_bytes = count as usize * 2; // 2 bytes/entry — packed RDRAM
     let packed = cx.mem.read_bytes(addr, packed_bytes);
     let dst_word = crate::hle::tmem::PALETTE_BASE >> 3; // 0x100 → base byte 0x800
@@ -476,8 +478,7 @@ mod tests {
 
     #[test]
     fn load_tlut_stores_be_entries() {
-        // 4 RGBA16 entries at addr 0; G_LOADTLUT loads count=(lrt>>2)+1.
-        // lrt = 3<<2 = 12 -> count = 4 -> packed_bytes = 4*2 = 8 (hardware-accurate RDRAM layout).
+        // Four RGBA16 entries at addr 0; canonical gsDPLoadTLUTCmd stores count-1 at bit 14.
         // load_tlut → write_tlut expands packed RDRAM → stride-8 into the faithful bank's palette
         // region (upper 2 KiB at PALETTE_BASE): entry i at palette()[i*8..i*8+2], 6 pad bytes/slot.
         // Use distinct per-entry bytes so the expand is actually verified (not all the same byte).
@@ -487,9 +488,7 @@ mod tests {
             tex_image: (0, 2, 1, 0),
             ..Rdp::default()
         }; // addr=0
-           // w0 = G_LOADTLUT<<24 ; w1 = tile(7)<<24 | lrt(12)<<0  (uls/ult/lrs=0)
-        let w0 = 0xF000_0000u32;
-        let w1 = (7u32 << 24) | 12u32;
+        let (w0, w1) = n64_gbi::encode::gdp_load_tlut_cmd(7, 3);
         let (rdp, diags) = run_cmd(&rdram, rdp, w0, w1);
         assert!(diags.is_empty());
         let tlut = rdp.tmem_bank.palette();
@@ -508,31 +507,46 @@ mod tests {
     #[test]
     fn load_tlut_packed_rdram_sm64_shape_decodes_ci8_correctly() {
         // Proof that a real packed RDRAM palette (sm64-shape — no stride-8 padding) loads and
-        // decodes correctly through load_tlut + decode_ci8.
+        // decodes correctly through load_tlut + decode_ci8 for both the SDK layout and the frozen
+        // fast3d assembler's legacy layout.
         // 3 entries: black(0x0001), red(0xF801), green(0x07C1) — 6 packed bytes.
         let rdram = vec![0x00u8, 0x01, 0xF8, 0x01, 0x07, 0xC1];
-        let rdp = Rdp {
-            tex_image: (0, 2, 1, 0),
-            ..Rdp::default()
+        let vector = n64_gbi::vectors::v1::TABLE
+            .iter()
+            .find(|vector| vector.id == "load-tlut-3-entries")
+            .expect("shared canonical TLUT vector");
+        let n64_gbi::vectors::Literal::Words((w0, w1)) = vector.literal else {
+            panic!("canonical TLUT vector must contain command words");
         };
-        // count=3 -> lrt = (3-1)<<2 = 8
-        let lrt = (3u32 - 1) << 2;
-        let w0 = 0xF000_0000u32;
-        let w1 = (7u32 << 24) | lrt;
-        let (rdp, diags) = run_cmd(&rdram, rdp, w0, w1);
-        assert!(diags.is_empty());
-        // write_tlut DMA-expands packed bytes → stride-8 into the faithful bank's palette region.
-        let tlut = rdp.tmem_bank.palette();
-        // Entry bytes land at stride-8 slots.
-        assert_eq!(&tlut[0..2], &[0x00, 0x01], "entry 0 = black RGBA16");
-        assert_eq!(&tlut[8..10], &[0xF8, 0x01], "entry 1 = red RGBA16");
-        assert_eq!(&tlut[16..18], &[0x07, 0xC1], "entry 2 = green RGBA16");
-        // decode_ci8 via the palette slice (single-sourced from the faithful bank).
-        let ci8_src = [0u8, 1, 2];
-        let out = crate::hle::texdec::decode_ci8(&ci8_src, 3, 1, tlut, 2 /* RGBA16 */);
-        assert_eq!(&out[0..4], &[0, 0, 0, 255], "index 0 -> black");
-        assert_eq!(&out[4..8], &[255, 0, 0, 255], "index 1 -> red");
-        assert_eq!(&out[8..12], &[0, 255, 0, 255], "index 2 -> green");
+        let legacy_words = (0xf000_0000, 0x0700_0008);
+
+        for (layout, (w0, w1)) in [("SDK", (w0, w1)), ("legacy", legacy_words)] {
+            let rdp = Rdp {
+                tex_image: (0, 2, 1, 0),
+                ..Rdp::default()
+            };
+            let (rdp, diags) = run_cmd(&rdram, rdp, w0, w1);
+            assert!(diags.is_empty(), "{layout} layout diagnostics");
+            // write_tlut DMA-expands packed bytes → stride-8 into the faithful palette bank.
+            let tlut = rdp.tmem_bank.palette();
+            assert_eq!(
+                &tlut[0..2],
+                &[0x00, 0x01],
+                "{layout} entry 0 = black RGBA16"
+            );
+            assert_eq!(&tlut[8..10], &[0xF8, 0x01], "{layout} entry 1 = red RGBA16");
+            assert_eq!(
+                &tlut[16..18],
+                &[0x07, 0xC1],
+                "{layout} entry 2 = green RGBA16"
+            );
+            // decode_ci8 via the palette slice (single-sourced from the faithful bank).
+            let ci8_src = [0u8, 1, 2];
+            let out = crate::hle::texdec::decode_ci8(&ci8_src, 3, 1, tlut, 2 /* RGBA16 */);
+            assert_eq!(&out[0..4], &[0, 0, 0, 255], "{layout} index 0 -> black");
+            assert_eq!(&out[4..8], &[255, 0, 0, 255], "{layout} index 1 -> red");
+            assert_eq!(&out[8..12], &[0, 255, 0, 255], "{layout} index 2 -> green");
+        }
     }
 
     #[test]
