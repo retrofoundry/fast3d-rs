@@ -1,5 +1,29 @@
 use crate::consts::*;
 
+/// The two 32-bit words that make up one 64-bit GBI command.
+pub type CommandWords = (u32, u32);
+
+/// Serialize the two words of one GBI command in canonical N64 big-endian order.
+pub const fn command_words_to_be_bytes(words: CommandWords) -> [u8; 8] {
+    let w0 = words.0.to_be_bytes();
+    let w1 = words.1.to_be_bytes();
+    [w0[0], w0[1], w0[2], w0[3], w1[0], w1[1], w1[2], w1[3]]
+}
+
+/// Combine a four-bit segment ID with a 24-bit segment offset.
+///
+/// The N64 ignores address bits 31:28. This helper emits their canonical zero value and encodes
+/// only the low four bits of `segment_id` and low 24 bits of `offset`. Callers remain responsible
+/// for any validation policy before packing.
+pub const fn segmented_address(segment_id: u8, offset: u32) -> u32 {
+    (((segment_id & 0x0f) as u32) << 24) | (offset & 0x00ff_ffff)
+}
+
+/// Pack four final register bytes as `r:g:b:a` from most to least significant.
+pub const fn pack_rgba8(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    ((r as u32) << 24) | ((g as u32) << 16) | ((b as u32) << 8) | a as u32
+}
+
 #[inline]
 fn shiftl(value: u32, shift: u32, width: u32) -> u32 {
     (value & ((1u32 << width) - 1)) << shift
@@ -56,14 +80,30 @@ pub fn gdp_load_block(tile: u32, uls: u32, ult: u32, lrs: u32, dxt: u32) -> (u32
     (w0, w1)
 }
 
-/// gsDPLoadTLUT — load TLUT entries from the current tex_image address into TLUT TMEM.
-/// `tile` selects the tile descriptor (always 7 / G_TX_LOADTILE for palette loads).
-/// `lrt` encodes the palette count in 10.2 fixed-point: `(count-1) << 2`.
-/// w0 = G_LOADTLUT<<24; w1 = tile<<24 | lrt (bits [11:0]).
-/// The HLE handler recovers `count = (lrt>>2)+1` by reading bits [11:0] directly.
+/// Encode fast3d's legacy, non-SDK `G_LOADTLUT` count placement.
+///
+/// `tile` selects the tile descriptor. `lrt` is `(count - 1) << 2` in bits 11:0, matching display
+/// lists emitted by the pre-migration fast3d assembler. This is **not** libultra's
+/// `gsDPLoadTLUTCmd`; new producers must use [`gdp_load_tlut_cmd`], which places `count - 1` in
+/// bits 23:14. fast3d's decoder temporarily accepts both layouts so frozen legacy fixtures remain
+/// readable.
+#[deprecated(
+    since = "0.1.0",
+    note = "fast3d compatibility encoding only; use gdp_load_tlut_cmd for SDK-compatible words"
+)]
 pub fn gdp_load_tlut(tile: u32, lrt: u32) -> (u32, u32) {
     let w0 = shiftl(G_LOADTLUT as u32, 24, 8);
     let w1 = shiftl(tile, 24, 3) | (lrt & 0xFFF);
+    (w0, w1)
+}
+
+/// Encode SDK `gsDPLoadTLUTCmd(tile, count_minus_one)` field placement.
+///
+/// `count_minus_one` occupies bits 23:14. This is the canonical producer API; the deprecated
+/// [`gdp_load_tlut`] function exists only for frozen fast3d compatibility bytes.
+pub fn gdp_load_tlut_cmd(tile: u32, count_minus_one: u16) -> CommandWords {
+    let w0 = shiftl(G_LOADTLUT as u32, 24, 8);
+    let w1 = shiftl(tile, 24, 3) | shiftl(count_minus_one as u32, 14, 10);
     (w0, w1)
 }
 
@@ -86,6 +126,32 @@ pub struct CcPass {
     pub d: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Slot-typed color-combiner selectors for one RDP cycle.
+pub struct ColorCombinePass {
+    /// Color `(A - B)` selector.
+    pub a: crate::consts::rdp::combine::ColorA,
+    /// Color `(A - B)` subtrahend selector.
+    pub b: crate::consts::rdp::combine::ColorB,
+    /// Color multiplier selector.
+    pub c: crate::consts::rdp::combine::ColorC,
+    /// Color addend selector.
+    pub d: crate::consts::rdp::combine::ColorD,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Slot-typed alpha-combiner selectors for one RDP cycle.
+pub struct AlphaCombinePass {
+    /// Alpha `(A - B)` selector.
+    pub a: crate::consts::rdp::combine::AlphaAbd,
+    /// Alpha `(A - B)` subtrahend selector.
+    pub b: crate::consts::rdp::combine::AlphaAbd,
+    /// Alpha multiplier selector.
+    pub c: crate::consts::rdp::combine::AlphaC,
+    /// Alpha addend selector.
+    pub d: crate::consts::rdp::combine::AlphaAbd,
+}
+
 pub fn gdp_set_combine_lerp(c0: CcPass, a0: CcPass, c1: CcPass, a1: CcPass) -> (u32, u32) {
     let w0 = shiftl(G_SETCOMBINE as u32, 24, 8)
         | shiftl(c0.a, 20, 4)
@@ -105,6 +171,41 @@ pub fn gdp_set_combine_lerp(c0: CcPass, a0: CcPass, c1: CcPass, a1: CcPass) -> (
         | shiftl(a1.b, 3, 3)
         | shiftl(a1.d, 0, 3);
     (w0, w1) // full 32-bit w1; combine64 = (w1 << 32) | w0. NO shiftl(.., 0, 24) mask.
+}
+
+/// Encode `gsDPSetCombineLERP` from selectors whose Rust types match each hardware slot.
+pub fn gdp_set_combine_lerp_typed(
+    color0: ColorCombinePass,
+    alpha0: AlphaCombinePass,
+    color1: ColorCombinePass,
+    alpha1: AlphaCombinePass,
+) -> CommandWords {
+    gdp_set_combine_lerp(
+        CcPass {
+            a: color0.a as u32,
+            b: color0.b as u32,
+            c: color0.c as u32,
+            d: color0.d as u32,
+        },
+        CcPass {
+            a: alpha0.a as u32,
+            b: alpha0.b as u32,
+            c: alpha0.c as u32,
+            d: alpha0.d as u32,
+        },
+        CcPass {
+            a: color1.a as u32,
+            b: color1.b as u32,
+            c: color1.c as u32,
+            d: color1.d as u32,
+        },
+        CcPass {
+            a: alpha1.a as u32,
+            b: alpha1.b as u32,
+            c: alpha1.c as u32,
+            d: alpha1.d as u32,
+        },
+    )
 }
 
 pub fn gdp_set_prim_color(minlevel: u32, lodfrac: u32, rgba: u32) -> (u32, u32) {
@@ -244,6 +345,37 @@ pub fn gsp_clear_geometrymode(bits: u32) -> (u32, u32) {
 pub fn gsp_viewport(addr: u32) -> (u32, u32) {
     let w0 = ((G_MOVEMEM as u32) << 24) | (((16u32 - 1) / 8) << 19) | (G_MV_VIEWPORT as u32);
     (w0, addr)
+}
+
+/// F3DEX2 `gsSPNumLights`: write the caller-selected count as `n * 24`.
+///
+/// The multiplication wraps as an unsigned C macro expansion would; callers choose whether to
+/// restrict `n` to libultra's named `NUMLIGHTS_*` values before encoding.
+pub fn gsp_numlights(n: u32) -> CommandWords {
+    let w0 = shiftl(G_MOVEWORD as u32, 24, 8)
+        | shiftl(G_MW_NUMLIGHT as u32, 16, 8)
+        | shiftl(G_MWO_NUMLIGHT as u32, 0, 16);
+    (w0, n.wrapping_mul(24))
+}
+
+/// F3DEX2 `gsSPLight` for a one-based `LIGHT_1` through `LIGHT_8` number.
+pub fn gsp_light(light_number: u8, addr: u32) -> CommandWords {
+    let offset = (u32::from(light_number) * 24) + 24;
+    let w0 = shiftl(G_MOVEMEM as u32, 24, 8)
+        | shiftl((16u32 - 1) / 8, 19, 5)
+        | shiftl(offset / 8, 8, 8)
+        | shiftl(G_MV_LIGHT as u32, 0, 8);
+    (w0, addr)
+}
+
+/// F3DEX2 `gsSPLookAt`: load the X record, then the Y record 16 bytes later.
+pub fn gsp_lookat(base_addr: u32) -> [CommandWords; 2] {
+    let length = shiftl((16u32 - 1) / 8, 19, 5);
+    let common = shiftl(G_MOVEMEM as u32, 24, 8) | length | shiftl(G_MV_LIGHT as u32, 0, 8);
+    [
+        (common, base_addr),
+        (common | shiftl(24 / 8, 8, 8), base_addr.wrapping_add(16)),
+    ]
 }
 
 pub fn gsp_enddl() -> (u32, u32) {
@@ -471,6 +603,133 @@ pub fn gsp_modifyvertex_f3d(vtx: u8, r#where: u16, val: u32) -> (u32, u32) {
         | shiftl(offset, 8, 16)
         | shiftl(rsp_f3d::G_MW_POINTS as u32, 0, 8);
     (w0, val)
+}
+
+/// On-disk N64 normal vertex (`Vtx_tn`), 16 bytes, big-endian.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VtxNormal {
+    /// Object-space X coordinate.
+    pub x: i16,
+    /// Object-space Y coordinate.
+    pub y: i16,
+    /// Object-space Z coordinate.
+    pub z: i16,
+    /// Vertex flag field.
+    pub flag: u16,
+    /// S texture coordinate.
+    pub s: i16,
+    /// T texture coordinate.
+    pub t: i16,
+    /// Signed X normal component.
+    pub nx: i8,
+    /// Signed Y normal component.
+    pub ny: i8,
+    /// Signed Z normal component.
+    pub nz: i8,
+    /// Vertex alpha.
+    pub a: u8,
+}
+
+impl VtxNormal {
+    /// Serialize the record in N64 big-endian field order.
+    pub fn to_bytes(&self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0..2].copy_from_slice(&self.x.to_be_bytes());
+        bytes[2..4].copy_from_slice(&self.y.to_be_bytes());
+        bytes[4..6].copy_from_slice(&self.z.to_be_bytes());
+        bytes[6..8].copy_from_slice(&self.flag.to_be_bytes());
+        bytes[8..10].copy_from_slice(&self.s.to_be_bytes());
+        bytes[10..12].copy_from_slice(&self.t.to_be_bytes());
+        bytes[12] = self.nx as u8;
+        bytes[13] = self.ny as u8;
+        bytes[14] = self.nz as u8;
+        bytes[15] = self.a;
+        bytes
+    }
+}
+
+/// On-disk N64 directional-light record (`Light_t` in its 16-byte `Light` union).
+///
+/// libultra names the three one-byte padding fields but does not prescribe their values, and
+/// `Light_t` occupies only the first 12 bytes of the 16-byte union. All seven non-color bytes are
+/// therefore explicit inputs rather than an implicit zero-fill policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DirectionalLight {
+    /// Diffuse RGB value (`col`).
+    pub color: [u8; 3],
+    /// `Light_t::pad1` byte.
+    pub pad1: u8,
+    /// Copy of the diffuse RGB value (`colc`).
+    pub color_copy: [u8; 3],
+    /// `Light_t::pad2` byte.
+    pub pad2: u8,
+    /// Signed normalized light direction (`dir`).
+    pub direction: [i8; 3],
+    /// `Light_t::pad3` byte.
+    pub pad3: u8,
+    /// Bytes 12:16 that complete the aligned `Light` union.
+    pub alignment_bytes: [u8; 4],
+}
+
+impl DirectionalLight {
+    /// Serialize all caller-selected bytes in `Light_t`/`Light` layout order.
+    pub fn to_bytes(&self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0..3].copy_from_slice(&self.color);
+        bytes[3] = self.pad1;
+        bytes[4..7].copy_from_slice(&self.color_copy);
+        bytes[7] = self.pad2;
+        bytes[8] = self.direction[0] as u8;
+        bytes[9] = self.direction[1] as u8;
+        bytes[10] = self.direction[2] as u8;
+        bytes[11] = self.pad3;
+        bytes[12..16].copy_from_slice(&self.alignment_bytes);
+        bytes
+    }
+}
+
+/// On-disk N64 ambient-light record (`Ambient_t` in its eight-byte `Ambient` union).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AmbientLight {
+    /// Ambient RGB value (`col`).
+    pub color: [u8; 3],
+    /// `Ambient_t::pad1` byte.
+    pub pad1: u8,
+    /// Copy of the ambient RGB value (`colc`).
+    pub color_copy: [u8; 3],
+    /// `Ambient_t::pad2` byte.
+    pub pad2: u8,
+}
+
+impl AmbientLight {
+    /// Serialize all caller-selected bytes in `Ambient_t` layout order.
+    pub fn to_bytes(&self) -> [u8; 8] {
+        let mut bytes = [0u8; 8];
+        bytes[0..3].copy_from_slice(&self.color);
+        bytes[3] = self.pad1;
+        bytes[4..7].copy_from_slice(&self.color_copy);
+        bytes[7] = self.pad2;
+        bytes
+    }
+}
+
+/// Two complete light-shaped look-at records, X first and Y second.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LookAt {
+    /// Right/X look-at record.
+    pub x: DirectionalLight,
+    /// Up/Y look-at record.
+    pub y: DirectionalLight,
+}
+
+impl LookAt {
+    /// Serialize the X record followed by the Y record.
+    pub fn to_bytes(&self) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[..16].copy_from_slice(&self.x.to_bytes());
+        bytes[16..].copy_from_slice(&self.y.to_bytes());
+        bytes
+    }
 }
 
 /// On-disk N64 colored vertex (authentic libultra Vtx_t), 16 bytes, big-endian. No field swaps.

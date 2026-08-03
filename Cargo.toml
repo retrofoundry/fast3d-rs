@@ -4,6 +4,7 @@ members = ["fast3d", "n64-gbi"]
 
 [workspace.package]
 edition = "2021"
+rust-version = "1.92"
 version = "1.0.0"
 authors = ["fast3d-rs developers"]
 description = "Accurate N64 HLE + wgpu renderer"
@@ -14,7 +15,7 @@ readme = "README.md"
 license = "MIT"
 
 [workspace.dependencies]
-n64-gbi = { path = "n64-gbi" }
+n64-gbi = { path = "n64-gbi", version = "0.1.0" }
 wgpu = "29.0"
 bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"

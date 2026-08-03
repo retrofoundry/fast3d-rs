@@ -49,6 +49,23 @@ Gfx main[] = {
     let img = assemble(src).expect("assemble");
     let (_w0, w1) = word(&img.rdram, img.entry_addr as usize);
     assert_eq!(w1, 0x0600_0010, "(6<<24)|16");
+
+    let invalid = "\
+Gfx main[] = {
+  gsSPDisplayList(seg(16, 0))
+  gsSPEndDisplayList()
+}
+";
+    let diags = match assemble(invalid) {
+        Ok(_) => panic!("out-of-range segment ID must be rejected by the authoring layer"),
+        Err(diags) => diags,
+    };
+    assert!(
+        diags
+            .iter()
+            .any(|diag| diag.msg.contains("bad target operand")),
+        "unexpected diagnostics: {diags:?}"
+    );
 }
 
 #[test]

@@ -1,6 +1,238 @@
 #![allow(dead_code)]
 
 pub mod rdp {
+    /// RDP image-format selector used by texture and framebuffer commands.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[repr(u8)]
+    pub enum ImageFormat {
+        /// Red, green, blue, and alpha.
+        Rgba = 0,
+        /// Luma and chroma.
+        Yuv = 1,
+        /// Color index into a TLUT.
+        Ci = 2,
+        /// Intensity and alpha.
+        Ia = 3,
+        /// Intensity only.
+        I = 4,
+    }
+
+    impl ImageFormat {
+        /// Return the three-bit GBI selector value.
+        pub const fn bits(self) -> u32 {
+            self as u32
+        }
+    }
+
+    /// RDP image-size selector, expressed as bits per texel.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[repr(u8)]
+    pub enum ImageSize {
+        /// Four bits per texel.
+        Bits4 = 0,
+        /// Eight bits per texel.
+        Bits8 = 1,
+        /// Sixteen bits per texel.
+        Bits16 = 2,
+        /// Thirty-two bits per texel.
+        Bits32 = 3,
+    }
+
+    impl ImageSize {
+        /// Return the two-bit GBI selector value.
+        pub const fn bits(self) -> u32 {
+            self as u32
+        }
+    }
+
+    /// Conventional render-tile descriptor index (`G_TX_RENDERTILE`).
+    pub const G_TX_RENDERTILE: u32 = 0;
+    /// Conventional load-tile descriptor index (`G_TX_LOADTILE`).
+    pub const G_TX_LOADTILE: u32 = 7;
+
+    /// RDP cycle-type selector.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[repr(u8)]
+    pub enum CycleType {
+        /// One-cycle rendering.
+        OneCycle = 0,
+        /// Two-cycle rendering.
+        TwoCycle = 1,
+        /// Copy-cycle rendering.
+        Copy = 2,
+        /// Fill-cycle rendering.
+        Fill = 3,
+    }
+
+    impl CycleType {
+        /// Return the unshifted two-bit selector.
+        pub const fn selector(self) -> u32 {
+            self as u32
+        }
+
+        /// Return the selector shifted into `other_mode_h` bits 21:20.
+        pub const fn other_mode_h_bits(self) -> u32 {
+            self.selector() << 20
+        }
+    }
+
+    /// Slot-specific RDP color- and alpha-combiner selectors.
+    pub mod combine {
+        /// Selectors legal in a color combiner's `A` slot.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(u8)]
+        pub enum ColorA {
+            /// Previous cycle's combined color.
+            Combined = 0,
+            /// Texture tile 0 color.
+            Texel0 = 1,
+            /// Texture tile 1 color.
+            Texel1 = 2,
+            /// Primitive color.
+            Primitive = 3,
+            /// Shaded vertex color.
+            Shade = 4,
+            /// Environment color.
+            Environment = 5,
+            /// Constant one.
+            One = 6,
+            /// Noise value.
+            Noise = 7,
+            /// Constant zero after truncation into this four-bit slot.
+            Zero = 15,
+        }
+
+        /// Selectors legal in a color combiner's `B` slot.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(u8)]
+        pub enum ColorB {
+            /// Previous cycle's combined color.
+            Combined = 0,
+            /// Texture tile 0 color.
+            Texel0 = 1,
+            /// Texture tile 1 color.
+            Texel1 = 2,
+            /// Primitive color.
+            Primitive = 3,
+            /// Shaded vertex color.
+            Shade = 4,
+            /// Environment color.
+            Environment = 5,
+            /// Chroma-key center.
+            Center = 6,
+            /// Conversion coefficient K4.
+            K4 = 7,
+            /// Constant zero after truncation into this four-bit slot.
+            Zero = 15,
+        }
+
+        /// Selectors legal in a color combiner's `C` multiplier slot.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(u8)]
+        pub enum ColorC {
+            /// Previous cycle's combined color.
+            Combined = 0,
+            /// Texture tile 0 color.
+            Texel0 = 1,
+            /// Texture tile 1 color.
+            Texel1 = 2,
+            /// Primitive color.
+            Primitive = 3,
+            /// Shaded vertex color.
+            Shade = 4,
+            /// Environment color.
+            Environment = 5,
+            /// Chroma-key scale.
+            Scale = 6,
+            /// Previous cycle's combined alpha.
+            CombinedAlpha = 7,
+            /// Texture tile 0 alpha.
+            Texel0Alpha = 8,
+            /// Texture tile 1 alpha.
+            Texel1Alpha = 9,
+            /// Primitive alpha.
+            PrimitiveAlpha = 10,
+            /// Shaded vertex alpha.
+            ShadeAlpha = 11,
+            /// Environment alpha.
+            EnvironmentAlpha = 12,
+            /// Level-of-detail fraction.
+            LodFraction = 13,
+            /// Primitive level-of-detail fraction.
+            PrimLodFraction = 14,
+            /// Conversion coefficient K5.
+            K5 = 15,
+            /// Constant zero.
+            Zero = 31,
+        }
+
+        /// Selectors legal in a color combiner's `D` addend slot.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(u8)]
+        pub enum ColorD {
+            /// Previous cycle's combined color.
+            Combined = 0,
+            /// Texture tile 0 color.
+            Texel0 = 1,
+            /// Texture tile 1 color.
+            Texel1 = 2,
+            /// Primitive color.
+            Primitive = 3,
+            /// Shaded vertex color.
+            Shade = 4,
+            /// Environment color.
+            Environment = 5,
+            /// Constant one.
+            One = 6,
+            /// Constant zero.
+            Zero = 7,
+        }
+
+        /// Selectors legal in alpha-combiner `A`, `B`, and `D` slots.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(u8)]
+        pub enum AlphaAbd {
+            /// Previous cycle's combined alpha.
+            Combined = 0,
+            /// Texture tile 0 alpha.
+            Texel0 = 1,
+            /// Texture tile 1 alpha.
+            Texel1 = 2,
+            /// Primitive alpha.
+            Primitive = 3,
+            /// Shaded vertex alpha.
+            Shade = 4,
+            /// Environment alpha.
+            Environment = 5,
+            /// Constant one.
+            One = 6,
+            /// Constant zero.
+            Zero = 7,
+        }
+
+        /// Selectors legal in an alpha combiner's `C` multiplier slot.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        #[repr(u8)]
+        pub enum AlphaC {
+            /// Level-of-detail fraction.
+            LodFraction = 0,
+            /// Texture tile 0 alpha.
+            Texel0 = 1,
+            /// Texture tile 1 alpha.
+            Texel1 = 2,
+            /// Primitive alpha.
+            Primitive = 3,
+            /// Shaded vertex alpha.
+            Shade = 4,
+            /// Environment alpha.
+            Environment = 5,
+            /// Primitive level-of-detail fraction.
+            PrimLodFraction = 6,
+            /// Constant zero.
+            Zero = 7,
+        }
+    }
+
     // RDP opcodes (top byte of w0, bits [31:24]).
     pub const G_NOOP: u8 = 0x00;
     pub const G_SETTIMG: u8 = 0xFD;

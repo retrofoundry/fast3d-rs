@@ -2,16 +2,16 @@ use crate::asm::expr::EvalCtx;
 use crate::asm::parser::{extract_update, parse, AddrOperand, Diag, GuStmt, MtxInit, Stmt, VtxDef};
 use n64_gbi::encode::*;
 use n64_gbi::gu::{gu_look_at, gu_mtx_ident, gu_perspective, gu_rotate, gu_scale, gu_translate};
+use n64_gbi::texel::{pack_4bit_pair, pack_4bit_row, pack_ia16, pack_ia4, pack_ia8, pack_rgba5551};
 use std::collections::{HashMap, HashSet};
 
 /// Encode a single RGBA8 texel to RGBA16 (5/5/5/1 big-endian, N64 RGBA16 format).
 pub fn encode_rgba16_texel(r: u8, g: u8, b: u8, a: u8) -> [u8; 2] {
-    let r5 = (r >> 3) as u32;
-    let g5 = (g >> 3) as u32;
-    let b5 = (b >> 3) as u32;
-    let a1 = if a >= 128 { 1u32 } else { 0u32 };
-    let v = (r5 << 11) | (g5 << 6) | (b5 << 1) | a1;
-    [(v >> 8) as u8, (v & 0xFF) as u8]
+    let r5 = r >> 3;
+    let g5 = g >> 3;
+    let b5 = b >> 3;
+    let a1 = u8::from(a >= 128);
+    pack_rgba5551(r5, g5, b5, a1)
 }
 
 /// Encode a single RGBA8 texel to I8 (8-bit luminance).
@@ -26,7 +26,7 @@ pub fn encode_i8_texel(r: u8, g: u8, b: u8, _a: u8) -> u8 {
 // Kept for in-crate encoding tests; production encoding uses the row-aware helper.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn encode_i4_pair(t0_i4: u8, t1_i4: u8) -> u8 {
-    (t0_i4 << 4) | (t1_i4 & 0xF)
+    pack_4bit_pair(t0_i4, t1_i4)
 }
 
 /// Encode a single RGBA8 texel to IA16 (big-endian: [intensity, alpha]).
@@ -34,7 +34,7 @@ pub fn encode_i4_pair(t0_i4: u8, t1_i4: u8) -> u8 {
 /// Matches decode_ia16: word = intensity<<8 | alpha.
 pub fn encode_ia16_texel(r: u8, g: u8, b: u8, a: u8) -> [u8; 2] {
     let i = encode_i8_texel(r, g, b, a);
-    [i, a]
+    pack_ia16(i, a)
 }
 
 /// Encode a single RGBA8 texel to IA8 (4-bit intensity + 4-bit alpha in one byte).
@@ -43,7 +43,7 @@ pub fn encode_ia16_texel(r: u8, g: u8, b: u8, a: u8) -> [u8; 2] {
 pub fn encode_ia8_texel(r: u8, g: u8, b: u8, a: u8) -> u8 {
     let i4 = encode_i8_texel(r, g, b, a) >> 4;
     let a4 = a >> 4;
-    (i4 << 4) | a4
+    pack_ia8(i4, a4)
 }
 
 /// Encode a single RGBA8 texel to a 4-bit IA4 nibble.
@@ -52,7 +52,7 @@ pub fn encode_ia8_texel(r: u8, g: u8, b: u8, a: u8) -> u8 {
 pub fn encode_ia4_nibble(r: u8, g: u8, b: u8, a: u8) -> u8 {
     let i3 = encode_i8_texel(r, g, b, a) >> 5;
     let a1 = a >> 7;
-    (i3 << 1) | a1
+    pack_ia4(i3, a1)
 }
 
 /// Pack two 4-bit IA4 nibbles into one byte.
@@ -61,39 +61,18 @@ pub fn encode_ia4_nibble(r: u8, g: u8, b: u8, a: u8) -> u8 {
 // Kept for in-crate encoding tests; production encoding uses the row-aware helper.
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn encode_ia4_pair(t0_ia4: u8, t1_ia4: u8) -> u8 {
-    (t0_ia4 << 4) | (t1_ia4 & 0xF)
+    pack_4bit_pair(t0_ia4, t1_ia4)
 }
 
 fn encode_4bit_flat<F>(rgba8: &[u8], encode: F) -> Vec<u8>
 where
     F: Fn(u8, u8, u8, u8) -> u8,
 {
-    let num_pixels = rgba8.len() / 4;
-    let mut out = Vec::with_capacity(num_pixels.div_ceil(2));
-    let mut i = 0;
-    while i < num_pixels {
-        let first = i * 4;
-        let high = encode(
-            rgba8[first],
-            rgba8[first + 1],
-            rgba8[first + 2],
-            rgba8[first + 3],
-        );
-        let low = if i + 1 < num_pixels {
-            let second = first + 4;
-            encode(
-                rgba8[second],
-                rgba8[second + 1],
-                rgba8[second + 2],
-                rgba8[second + 3],
-            )
-        } else {
-            0
-        };
-        out.push((high << 4) | (low & 0x0f));
-        i += 2;
-    }
-    out
+    let texels: Vec<u8> = rgba8
+        .chunks_exact(4)
+        .map(|pixel| encode(pixel[0], pixel[1], pixel[2], pixel[3]))
+        .collect();
+    pack_4bit_row(&texels).collect()
 }
 
 fn encode_4bit_rows<F>(rgba8: &[u8], width: u32, height: u32, encode: F) -> Vec<u8>
@@ -105,27 +84,18 @@ where
     let mut out = Vec::with_capacity(width.div_ceil(2) * height);
     for row in 0..height {
         let row_start = row * width;
-        for column in (0..width).step_by(2) {
-            let first = (row_start + column) * 4;
-            let high = encode(
-                rgba8[first],
-                rgba8[first + 1],
-                rgba8[first + 2],
-                rgba8[first + 3],
-            );
-            let low = if column + 1 < width {
-                let second = first + 4;
+        let texels: Vec<u8> = (0..width)
+            .map(|column| {
+                let first = (row_start + column) * 4;
                 encode(
-                    rgba8[second],
-                    rgba8[second + 1],
-                    rgba8[second + 2],
-                    rgba8[second + 3],
+                    rgba8[first],
+                    rgba8[first + 1],
+                    rgba8[first + 2],
+                    rgba8[first + 3],
                 )
-            } else {
-                0
-            };
-            out.push((high << 4) | (low & 0x0f));
-        }
+            })
+            .collect();
+        out.extend(pack_4bit_row(&texels));
     }
     out
 }
@@ -220,16 +190,7 @@ pub fn encode_ci4(rgba8: &[u8], palette: &[[u8; 4]]) -> Vec<u8> {
         palette.len()
     );
     let indices = quantize(rgba8, palette);
-    let n = indices.len();
-    let mut out = Vec::with_capacity(n.div_ceil(2));
-    let mut i = 0;
-    while i < n {
-        let idx0 = indices[i] & 0xF;
-        let idx1 = if i + 1 < n { indices[i + 1] & 0xF } else { 0 };
-        out.push((idx0 << 4) | idx1);
-        i += 2;
-    }
-    out
+    pack_4bit_row(&indices).collect()
 }
 
 fn encode_ci4_rows(rgba8: &[u8], palette: &[[u8; 4]], width: u32, height: u32) -> Vec<u8> {
@@ -244,15 +205,7 @@ fn encode_ci4_rows(rgba8: &[u8], palette: &[[u8; 4]], width: u32, height: u32) -
     let mut out = Vec::with_capacity(width.div_ceil(2) * height);
     for row in 0..height {
         let row_start = row * width;
-        for column in (0..width).step_by(2) {
-            let high = indices[row_start + column] & 0x0f;
-            let low = if column + 1 < width {
-                indices[row_start + column + 1] & 0x0f
-            } else {
-                0
-            };
-            out.push((high << 4) | low);
-        }
+        out.extend(pack_4bit_row(&indices[row_start..row_start + width]));
     }
     out
 }
@@ -299,8 +252,14 @@ pub struct Image {
 }
 
 fn push_word(buf: &mut Vec<u8>, w0: u32, w1: u32) {
-    buf.extend_from_slice(&w0.to_be_bytes());
-    buf.extend_from_slice(&w1.to_be_bytes());
+    buf.extend_from_slice(&command_words_to_be_bytes((w0, w1)));
+}
+
+// Step 2 keeps the textual compiler byte-for-byte frozen while downstream migration proceeds.
+// New producers use SDK-compatible gdp_load_tlut_cmd; fast3d's HLE accepts both layouts.
+#[allow(deprecated)]
+fn legacy_fast3d_load_tlut(tile: u32, lrt: u32) -> CommandWords {
+    gdp_load_tlut(tile, lrt)
 }
 
 fn scale_mtx(s: f32) -> [[f32; 4]; 4] {
@@ -387,7 +346,7 @@ fn resolve_addr(
 ) -> Option<u32> {
     match op {
         AddrOperand::Raw(v) => Some(*v),
-        AddrOperand::Segmented { seg, off } => Some(((*seg as u32) << 24) | (off & 0x00FF_FFFF)),
+        AddrOperand::Segmented { seg, off } => Some(segmented_address(*seg, *off)),
         AddrOperand::Symbol(name) => {
             if let Some(&a) = ctx.block_addr.get(name) {
                 Some(a)
@@ -812,26 +771,35 @@ fn assemble_inner(
     let vtx_addr = rdram.len() as u32;
     for (_l, s) in &stmts {
         if let Stmt::Vtx(v) = s {
-            let vc = VtxColored {
-                x: v.x,
-                y: v.y,
-                z: v.z,
-                flag: v.flag,
-                s: v.s,
-                t: v.t,
-                r: v.r,
-                g: v.g,
-                b: v.b,
-                a: v.a,
+            let bytes = if let Some([nx, ny, nz]) = v.normal {
+                VtxNormal {
+                    x: v.x,
+                    y: v.y,
+                    z: v.z,
+                    flag: v.flag,
+                    s: v.s,
+                    t: v.t,
+                    nx,
+                    ny,
+                    nz,
+                    a: v.a,
+                }
+                .to_bytes()
+            } else {
+                VtxColored {
+                    x: v.x,
+                    y: v.y,
+                    z: v.z,
+                    flag: v.flag,
+                    s: v.s,
+                    t: v.t,
+                    r: v.r,
+                    g: v.g,
+                    b: v.b,
+                    a: v.a,
+                }
+                .to_bytes()
             };
-            let mut bytes = vc.to_bytes();
-            // VtxN form: overwrite bytes 12/13/14 with s8 normals (byte 15 = alpha already set).
-            if let Some([nx, ny, nz]) = v.normal {
-                bytes[12] = nx as u8;
-                bytes[13] = ny as u8;
-                bytes[14] = nz as u8;
-                // byte 15 is alpha, already written from vc.a
-            }
             rdram.extend_from_slice(&bytes);
         }
     }
@@ -905,37 +873,26 @@ fn assemble_inner(
             if light_addr.is_empty() {
                 first_light_addr = base;
             }
-            // Each directional Light_t: exactly 16 bytes.
-            // Layout: col[0..2] @0..2, pad @3, colc[0..2] @4..6, pad @7,
-            //         dir[0..2] as u8 @8..10, 5 pad bytes @11..15.
+            // fast3d's authoring policy zeroes every SDK pad/alignment byte explicitly.
             for dir_light in &def.dirs {
-                let mut b = [0u8; 16];
-                b[0] = dir_light.col[0];
-                b[1] = dir_light.col[1];
-                b[2] = dir_light.col[2];
-                // b[3] = 0 (pad)
-                b[4] = dir_light.col[0]; // colc copy
-                b[5] = dir_light.col[1];
-                b[6] = dir_light.col[2];
-                // b[7] = 0 (pad)
-                b[8] = dir_light.dir[0] as u8;
-                b[9] = dir_light.dir[1] as u8;
-                b[10] = dir_light.dir[2] as u8;
-                // b[11..15] = 0 (5 pad bytes)
-                rdram.extend_from_slice(&b);
+                let record = DirectionalLight {
+                    color: dir_light.col,
+                    pad1: 0,
+                    color_copy: dir_light.col,
+                    pad2: 0,
+                    direction: dir_light.dir,
+                    pad3: 0,
+                    alignment_bytes: [0; 4],
+                };
+                rdram.extend_from_slice(&record.to_bytes());
             }
-            // Ambient_t: exactly 8 bytes.
-            // Layout: col[0..2] @0..2, pad @3, colc[0..2] @4..6, pad @7.
-            let mut b = [0u8; 8];
-            b[0] = def.ambient[0];
-            b[1] = def.ambient[1];
-            b[2] = def.ambient[2];
-            // b[3] = 0 (pad)
-            b[4] = def.ambient[0]; // colc copy
-            b[5] = def.ambient[1];
-            b[6] = def.ambient[2];
-            // b[7] = 0 (pad)
-            rdram.extend_from_slice(&b);
+            let ambient = AmbientLight {
+                color: def.ambient,
+                pad1: 0,
+                color_copy: def.ambient,
+                pad2: 0,
+            };
+            rdram.extend_from_slice(&ambient.to_bytes());
             light_addr.insert(def.name.clone(), base);
         }
     }
@@ -957,14 +914,20 @@ fn assemble_inner(
             if lookat_addr.is_empty() {
                 first_lookat_addr = base;
             }
-            for axis in [def.s_axis, def.t_axis] {
-                let mut b = [0u8; 16];
-                b[8] = axis[0] as u8;
-                b[9] = axis[1] as u8;
-                b[10] = axis[2] as u8;
-                // all other bytes = 0
-                rdram.extend_from_slice(&b);
-            }
+            let axis_record = |direction| DirectionalLight {
+                color: [0; 3],
+                pad1: 0,
+                color_copy: [0; 3],
+                pad2: 0,
+                direction,
+                pad3: 0,
+                alignment_bytes: [0; 4],
+            };
+            let look_at = LookAt {
+                x: axis_record(def.s_axis),
+                y: axis_record(def.t_axis),
+            };
+            rdram.extend_from_slice(&look_at.to_bytes());
             lookat_addr.insert(def.name.clone(), base);
         }
     }
@@ -1398,17 +1361,13 @@ fn emit_stmt(rdram: &mut Vec<u8>, s: &Stmt, line: usize, ctx: &EmitCtx, diags: &
             }
         }
         Stmt::SpSetLights { name, num_dir } => {
-            use crate::hle::consts::rsp_f3dex2::{
-                G_MOVEMEM, G_MOVEWORD, G_MV_LIGHT, G_MWO_NUMLIGHT, G_MW_NUMLIGHT,
-            };
+            use crate::hle::consts::rsp_f3dex2::{G_MOVEMEM, G_MV_LIGHT};
             match ctx.light_addr.get(name) {
                 Some(&base) => {
                     let n = *num_dir as usize;
                     // 1. gSPNumLights: MOVEWORD G_MW_NUMLIGHT, w1 = n*24
-                    let w0_num = ((G_MOVEWORD as u32) << 24)
-                        | ((G_MW_NUMLIGHT as u32) << 16)
-                        | (G_MWO_NUMLIGHT as u32);
-                    push_word(rdram, w0_num, (n as u32) * 24);
+                    let (w0_num, w1_num) = gsp_numlights(*num_dir);
+                    push_word(rdram, w0_num, w1_num);
                     // 2. Directional lights: N MOVEMEM commands
                     for k in 0..n {
                         let slot = (k as u32 + 2) * 3;
@@ -1495,7 +1454,7 @@ fn emit_stmt(rdram: &mut Vec<u8>, s: &Stmt, line: usize, ctx: &EmitCtx, diags: &
                             push_word(rdram, w0, w1);
                             let (w0, w1) = gdp_load_sync();
                             push_word(rdram, w0, w1);
-                            let (w0, w1) = gdp_load_tlut(7, lrt);
+                            let (w0, w1) = legacy_fast3d_load_tlut(7, lrt);
                             push_word(rdram, w0, w1);
                             let (w0, w1) = gdp_pipe_sync();
                             push_word(rdram, w0, w1);

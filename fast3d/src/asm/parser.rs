@@ -1,6 +1,7 @@
 //! Line-based parser for the gbi-macro source subset.
 
 use crate::asm::expr::{parse_expr, Expr};
+use n64_gbi::consts::rdp::{CycleType, ImageFormat, ImageSize, G_TX_LOADTILE, G_TX_RENDERTILE};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diag {
@@ -297,9 +298,17 @@ fn parse_addr_operand(tok: &str) -> Option<AddrOperand> {
     if let Some(inner) = t.strip_prefix("seg(").and_then(|x| x.strip_suffix(')')) {
         let parts = split_top_level(inner);
         if parts.len() == 2 {
-            let seg = parse_u32_token(parts[0])? as u8;
+            // Segmented addresses have a four-bit segment ID. Keep rejection policy in this
+            // authoring layer; the protocol leaf deliberately only masks wire fields.
+            let seg = parse_u32_token(parts[0])?;
+            if seg > 0x0f {
+                return None;
+            }
             let off = parse_u32_token(parts[1])?;
-            return Some(AddrOperand::Segmented { seg, off });
+            return Some(AddrOperand::Segmented {
+                seg: seg as u8,
+                off,
+            });
         }
         return None;
     }
@@ -628,11 +637,11 @@ fn parse_u32_token(tok: &str) -> Option<u32> {
 /// Parse an image format mnemonic to the numeric fmt value (0=RGBA, 1=YUV, 2=CI, 3=IA, 4=I).
 fn parse_img_fmt(tok: &str) -> Option<u32> {
     match tok.trim() {
-        "G_IM_FMT_RGBA" => Some(0),
-        "G_IM_FMT_YUV" => Some(1),
-        "G_IM_FMT_CI" => Some(2),
-        "G_IM_FMT_IA" => Some(3),
-        "G_IM_FMT_I" => Some(4),
+        "G_IM_FMT_RGBA" => Some(ImageFormat::Rgba.bits()),
+        "G_IM_FMT_YUV" => Some(ImageFormat::Yuv.bits()),
+        "G_IM_FMT_CI" => Some(ImageFormat::Ci.bits()),
+        "G_IM_FMT_IA" => Some(ImageFormat::Ia.bits()),
+        "G_IM_FMT_I" => Some(ImageFormat::I.bits()),
         other => parse_u32_token(other),
     }
 }
@@ -640,10 +649,10 @@ fn parse_img_fmt(tok: &str) -> Option<u32> {
 /// Parse an image size mnemonic to the numeric siz value (0=4b, 1=8b, 2=16b, 3=32b).
 fn parse_img_siz(tok: &str) -> Option<u32> {
     match tok.trim() {
-        "G_IM_SIZ_4b" => Some(0),
-        "G_IM_SIZ_8b" => Some(1),
-        "G_IM_SIZ_16b" => Some(2),
-        "G_IM_SIZ_32b" => Some(3),
+        "G_IM_SIZ_4b" => Some(ImageSize::Bits4.bits()),
+        "G_IM_SIZ_8b" => Some(ImageSize::Bits8.bits()),
+        "G_IM_SIZ_16b" => Some(ImageSize::Bits16.bits()),
+        "G_IM_SIZ_32b" => Some(ImageSize::Bits32.bits()),
         other => parse_u32_token(other),
     }
 }
@@ -651,8 +660,8 @@ fn parse_img_siz(tok: &str) -> Option<u32> {
 /// Parse a tile index mnemonic.  G_TX_RENDERTILE = 0, G_TX_LOADTILE = 7.
 fn parse_tile_token(tok: &str) -> Option<u32> {
     match tok.trim() {
-        "G_TX_RENDERTILE" => Some(0),
-        "G_TX_LOADTILE" => Some(7),
+        "G_TX_RENDERTILE" => Some(G_TX_RENDERTILE),
+        "G_TX_LOADTILE" => Some(G_TX_LOADTILE),
         other => parse_u32_token(other),
     }
 }
@@ -1663,10 +1672,10 @@ pub fn parse(source: &str) -> (Vec<(usize, Stmt)>, Vec<Diag>) {
             match call_args(line, "gsDPSetOtherMode_H") {
                 Some(a) if a.len() == 1 => {
                     let cyc = match a[0].trim() {
-                        "G_CYC_1CYCLE" => Some(0u32),
-                        "G_CYC_2CYCLE" => Some(1u32),
-                        "G_CYC_COPY" => Some(2u32),
-                        "G_CYC_FILL" => Some(3u32),
+                        "G_CYC_1CYCLE" => Some(CycleType::OneCycle.selector()),
+                        "G_CYC_2CYCLE" => Some(CycleType::TwoCycle.selector()),
+                        "G_CYC_COPY" => Some(CycleType::Copy.selector()),
+                        "G_CYC_FILL" => Some(CycleType::Fill.selector()),
                         other => parse_u32_token(other),
                     };
                     match cyc {
