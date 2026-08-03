@@ -4,6 +4,7 @@
 //! math live in the `n64-gbi` leaf crate; depend on it directly rather than through fast3d.
 
 #[cfg(feature = "asm")]
+#[cfg_attr(all(test, not(fast3d_repository_tests)), allow(dead_code))]
 pub mod asm;
 #[cfg(feature = "debug-ui")]
 pub mod debug;
@@ -740,7 +741,7 @@ mod source_select_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(all(test, feature = "asm", fast3d_repository_tests))]
 mod begin_frame_tests {
     use super::*;
 
@@ -1272,6 +1273,7 @@ mod hook_lifecycle_tests {
     test,
     feature = "asm",
     feature = "debug-ui",
+    fast3d_repository_tests,
     not(target_arch = "wasm32")
 ))]
 mod debugger_present_tests {
@@ -1407,5 +1409,5 @@ mod debugger_present_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, fast3d_repository_tests))]
 mod tests;

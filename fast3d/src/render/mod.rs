@@ -438,7 +438,7 @@ mod tests {
 
 /// RGBA16 -> RGBA8 decode. The single implementation lives in `hle`; re-exported here so
 /// the renderer's texture path and tests share one decoder (no drift).
-#[cfg_attr(not(test), allow(unused_imports))]
+#[cfg_attr(any(not(test), not(fast3d_repository_tests)), allow(unused_imports))]
 pub use crate::hle::decode_rgba16;
 
 /// Build the two-triangle (6-vertex) CLIP-SPACE quad for a 2D `FillRect`/`TexRect` draw.
@@ -2001,7 +2001,10 @@ impl SceneRenderer {
     }
 
     /// Recreate the depth buffer at a new `(w, h)` (the consumer calls this on surface resize).
-    #[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
+    #[cfg_attr(
+        any(not(all(test, feature = "asm")), not(fast3d_repository_tests)),
+        allow(dead_code)
+    )]
     pub fn resize(&mut self, device: &wgpu::Device, w: u32, h: u32) {
         let (depth_view, depth_sample_view) = Self::make_depth_view(device, w, h);
         self.depth_view = depth_view;
@@ -2579,7 +2582,7 @@ impl SceneRenderer {
     /// per-material content-keyed tex_cache rebuild + pooled dynamic-offset uniform buffer +
     /// RSP-process compute dispatch + the z_buffer-gated raster pass.
     /// Does NOT present — that stays with the consumer.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(any(not(test), not(fast3d_repository_tests)), allow(dead_code))]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -3218,7 +3221,7 @@ impl SceneRenderer {
     /// view (including the cross-pair `fb_source` read-back source, Task 10) outlives every pass and
     /// the final submit.
     #[allow(clippy::too_many_arguments)]
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg_attr(any(not(test), not(fast3d_repository_tests)), allow(dead_code))]
     fn render_pairs(
         &self,
         device: &wgpu::Device,
@@ -4120,7 +4123,10 @@ pub fn headless_device() -> (wgpu::Device, wgpu::Queue, bool) {
 /// CI mode. Requests `Features::empty()` even when the adapter supports `DUAL_SOURCE_BLENDING`,
 /// so the fallback blender path (B3) can be exercised deterministically.
 #[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
+#[cfg_attr(
+    any(not(all(test, feature = "asm")), not(fast3d_repository_tests)),
+    allow(dead_code)
+)]
 pub fn headless_device_forced_fallback() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::default();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

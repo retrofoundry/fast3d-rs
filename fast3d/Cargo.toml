@@ -8,6 +8,11 @@ description.workspace = true
 repository.workspace = true
 keywords.workspace = true
 license.workspace = true
+exclude = [
+    "goldens/**",
+    "src/tests/**",
+    "tests/**",
+]
 
 [dependencies]
 n64-gbi.workspace = true

@@ -36,6 +36,52 @@ jobs:
       - name: check MSRV (--all-features, --all-targets)
         run: cargo +1.92.0 check --workspace --all-features --all-targets --locked
 
+  # Exercise the workspace release gate, then inspect and test the exact archives it produced.
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: package and validate published crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `cargo package --workspace` includes `publish = false` members, unlike the release
+          # operation. Exclude exactly the two private tools so this packages the publishable
+          # workspace set that `cargo publish --workspace` selects.
+          cargo package --workspace \
+            --exclude fast3d-fixtures \
+            --exclude fast3d-fixture-capture \
+            --locked
+
+          shopt -s nullglob
+          fast3d_archives=(target/package/fast3d-*.crate)
+          n64_gbi_archives=(target/package/n64-gbi-*.crate)
+          if (( ${#fast3d_archives[@]} != 1 )); then
+            echo "::error::expected one fast3d archive, found ${#fast3d_archives[@]}"
+            exit 1
+          fi
+          if (( ${#n64_gbi_archives[@]} != 1 )); then
+            echo "::error::expected one n64-gbi archive, found ${#n64_gbi_archives[@]}"
+            exit 1
+          fi
+
+          bash .github/scripts/validate-fast3d-package.sh "${fast3d_archives[0]}"
+
+          extract_root="$(mktemp -d)"
+          tar -xzf "${fast3d_archives[0]}" -C "$extract_root"
+          tar -xzf "${n64_gbi_archives[0]}" -C "$extract_root"
+          extracted_fast3d=("$extract_root"/fast3d-*)
+          extracted_n64_gbi=("$extract_root"/n64-gbi-*)
+          if (( ${#extracted_fast3d[@]} != 1 || ${#extracted_n64_gbi[@]} != 1 )); then
+            echo "::error::expected one extracted directory for each published crate"
+            exit 1
+          fi
+
+          cargo test \
+            --manifest-path "${extracted_fast3d[0]}/Cargo.toml" \
+            --no-run \
+            --config "patch.crates-io.n64-gbi.path='${extracted_n64_gbi[0]}'"
+
   # The GPU/render tests (goldens, framebuffer store, hooks, debugger) need a real wgpu
   # adapter. macOS runners have Metal and Windows runners have WARP (software D3D); Linux
   # runners have no adapter, so the render suite is not exercised there (it is compiled by

@@ -15,8 +15,8 @@ path = "src/main.rs"
 required-features = ["asm"]
 
 [dependencies]
-fast3d = { path = "../../fast3d", optional = true }
-fast3d-fixtures = { path = "../fast3d-fixtures" }
+fast3d = { version = "1.0.0", path = "../../fast3d", optional = true }
+fast3d-fixtures = { version = "0.1.0", path = "../fast3d-fixtures" }
 serde.workspace = true
 sha2.workspace = true
 toml.workspace = true
