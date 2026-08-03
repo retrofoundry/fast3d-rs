@@ -1652,8 +1652,8 @@ struct LiteralWordRegion {
     words: Vec<(u32, u32)>,
 }
 
-/// A fast3d-local, compiler-free recipe made from explicit addresses, packed records, and literal
-/// command words. It deliberately performs no symbol resolution or fixups.
+/// A compiler-free fixture artifact built from explicit addresses, packed records, and literal
+/// command words. It performs no symbol resolution or fixups.
 #[derive(Clone, Debug)]
 pub struct LiteralArtifact {
     id: String,
@@ -1822,7 +1822,7 @@ impl LiteralArtifact {
 
 pub const COLORED_TRIANGLE_ID: &str = "literal/colored-triangle/v1";
 
-/// The small worked literal recipe used by the fixture test and the authoring tool.
+/// The literal colored-triangle recipe shared by fixture tests and the authoring tool.
 pub fn colored_triangle_literal() -> Result<LiteralImage> {
     use n64_gbi::encode::{Vp, VtxColored};
 

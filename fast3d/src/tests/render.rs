@@ -1706,29 +1706,13 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
     );
 }
 
-/// Cross-frame morph assertion: assembles `morphcube` at three times and verifies a GENUINE
-/// cube↔sphere morph — not the old "scaled cube" fake (where the sphere VtxSet was just the 8 cube
-/// corners shrunk to ±23, leaving the silhouette a cube at every weight).
+/// Verifies checked `morphcube` fixtures at t=0, π/2, and π, whose weights are 0, 0.5, and 1
+/// under `(1 - cos(time)) / 2`. With `asm`, it also checks source time dependence and exact compiler
+/// parity.
 ///
-/// morphcube is now a frequency-2 spherified cube (26 verts: 8 corners + 12 edge-mids + 6 face-
-/// centers). weight = (1 - cos(time)) / 2. Across the three sampled frames:
-///
-/// - t=0 → weight 0 → CUBE: vertices on the cube surface, radii ranging from 40 (face-centers, at
-///   distance S from origin) up to ~69 (corners at S√3 ≈ 40·1.732). This SPREAD of radii is what
-///   makes it a cube.
-/// - t=PI → weight 1 → SPHERE: every vertex normalized to radius ≈40 (corners pulled IN from 69,
-///   edge-mids from 56, face-centers unchanged). A near-constant radius == a real sphere.
-/// - t=PI/2 → weight 0.5 → midpoint (positions differ from both endpoints; the morph animates).
-///
-/// Radius derivation (S = 40, cube half-extent / sphere target radius):
-///   cube corner      (±40,±40,±40) → |p| = 40·√3 ≈ 69.28
-///   cube edge-mid    (±40,±40,  0) → |p| = 40·√2 ≈ 56.57
-///   cube face-center (  0,  0,±40) → |p| = 40
-///   sphere (any vert): p/|p|·40, rounded to int → |p| ≈ 40 (±~1 from integer rounding).
-///
-/// The full-morph radius assertion FAILS for the old scaled-cube target (its "sphere" corners sit at
-/// 23·√3 ≈ 39.8 BUT its face-region verts would also be ~23·… — i.e. it was still a cube of mixed
-/// radii) and passes only for a target where ALL verts share radius ≈40.
+/// At t=0, face-center and corner radii span 40..40√3; at t=π, every vertex lies near radius 40.
+/// These distributions reject the former scaled-cube target, while the midpoint comparison confirms
+/// that the morph changes across frames.
 #[test]
 fn morphcube_morphs_cube_to_sphere_across_frames() {
     crate::tests::fixtures::assert_literal_colored_triangle_interprets();
@@ -1745,7 +1729,6 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     let radius = |p: &[f32; 3]| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
     const S: f32 = 40.0; // cube half-extent / sphere target radius.
 
-    // t=0: weight = (1-cos(0))/2 = 0.0 → pure cube.
     #[cfg(feature = "asm")]
     assert!(
         crate::asm::analyze(&src).references_time,
@@ -1757,9 +1740,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     assert!(r0.diags.is_empty(), "t=0 interp diags: {:?}", r0.diags);
     assert!(!r0.scene.raw_pos.is_empty(), "t=0: no vertices");
 
-    // The CUBE (t=0) must span a RANGE of radii: face-centers at S=40, corners at S√3≈69. A genuine
-    // cube has min ≈ 40 (some vertex at distance S) and max ≈ 69 (a corner). If min≈max, it's a sphere
-    // (or the degenerate scaled-cube) — not a cube.
+    // Face centers establish the minimum cube radius; corners establish the maximum.
     let cube_radii: Vec<f32> = r0.scene.raw_pos.iter().map(radius).collect();
     let cube_min = cube_radii.iter().cloned().fold(f32::INFINITY, f32::min);
     let cube_max = cube_radii.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
@@ -1773,7 +1754,6 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
         "t=0 cube: maximum radius should be ~{corner} (corners at S√3), got {cube_max}"
     );
 
-    // t=PI: weight = (1-cos(PI))/2 = 1.0 → FULL morph → sphere.
     let r_full = full.interpret();
     assert!(
         r_full.diags.is_empty(),
@@ -1786,10 +1766,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
         "vertex count must be stable across frames"
     );
 
-    // SPHERE assertion: at full morph EVERY vertex must sit at radius ≈40. Tolerance 2.0 absorbs the
-    // integer rounding of the normalized sphere coords (edge-mids land at ~39.6, corners at ~39.8).
-    // This is the assertion that fails the old scaled-cube "sphere" (whose verts kept the cube's
-    // mixed radii) and passes only for a real spherified target.
+    // Integer rounding of normalized coordinates accounts for the two-unit radius tolerance.
     for (i, pos) in r_full.scene.raw_pos.iter().enumerate() {
         let r = radius(pos);
         assert!(
@@ -1798,7 +1775,6 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
         );
     }
 
-    // t=PI/2: weight ≈ 0.5 → midpoint; positions must differ from BOTH endpoints (the morph animates).
     let r_half = half.interpret();
     assert!(
         r_half.diags.is_empty(),

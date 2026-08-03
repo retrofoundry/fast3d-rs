@@ -1,7 +1,6 @@
-//! In-crate integration tests (relocated from `tests/` in P5.4a so they can reach the `pub(crate)`
-//! `hle`/`render`/`scene` internals).
-//! Only modules and individual tests that depend on the compiler are gated on `asm`; four pure-asm
-//! suites remain external in `tests/`.
+//! In-crate integration tests with access to the `pub(crate)` `hle`, `render`, and `scene`
+//! internals. Modules and individual tests that invoke the compiler are gated on `asm`; four
+//! compiler-only suites remain external in `tests/`.
 
 #[allow(dead_code)]
 mod common;
