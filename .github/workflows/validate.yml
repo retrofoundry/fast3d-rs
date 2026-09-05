@@ -65,7 +65,7 @@ jobs:
 
   browser:
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 15
     env:
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
       WASM_BINDGEN_TEST_TIMEOUT: 300
@@ -94,11 +94,25 @@ jobs:
           capabilities["goog:chromeOptions"]["binary"] = os.environ["CHROME"]
           path.write_text(json.dumps(capabilities))
           PYCODE
+      - name: probe WebGPU in headless Chrome
+        env:
+          CHROME: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          page='data:text/html,<body>pending</body><script>navigator.gpu ? navigator.gpu.requestAdapter().then(a => { document.body.textContent = a ? "adapter " + JSON.stringify(a.info || {}) : "no adapter"; }, e => { document.body.textContent = "error " + e; }) : document.body.textContent = "no navigator.gpu";</script>'
+          "$CHROME" --headless=new --enable-unsafe-webgpu --enable-features=WebGPU --use-angle=metal \
+            --enable-logging=stderr --v=0 --virtual-time-budget=10000 --dump-dom "$page" 2> chrome-probe.log | tail -c 2000
+          echo "--- chrome stderr (tail)"; tail -n 40 chrome-probe.log
       - name: browser WebGPU replay
         env:
-          CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
+          CHROMEDRIVER_BIN: ${{ steps.chrome.outputs.chromedriver-path }}
         run: |
+          printf '#!/bin/sh\nexec "%s" --verbose --log-path="%s/chromedriver.log" "$@"\n' "$CHROMEDRIVER_BIN" "$PWD" > chromedriver-wrapper.sh
+          chmod +x chromedriver-wrapper.sh
+          export CHROMEDRIVER="$PWD/chromedriver-wrapper.sh"
           export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
           cargo test -p fast3d --features capture --target wasm32-unknown-unknown \
             --test browser_sm64_fixture_replay --test capture_facade \
             --test capture_memory_wasm -- --nocapture
+      - name: chromedriver log
+        if: always()
+        run: tail -n 200 chromedriver.log 2>/dev/null || echo "no chromedriver log"
