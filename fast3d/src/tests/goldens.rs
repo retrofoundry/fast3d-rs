@@ -1901,6 +1901,7 @@ fn tex1x1_material(rgba: [u8; 4]) -> crate::hle::Material {
         tex_h: 1,
         selectors: crate::hle::combiner::decode_combine(0, 0),
         cycle_type: 2, // G_CYC_COPY
+        filter_mode: 0,
         prim: [0, 0, 0, 0],
         env: [0, 0, 0, 0],
         tex_enable: true,
@@ -2365,6 +2366,7 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
         tex_h: 2,
         selectors: crate::hle::combiner::decode_combine(0, 0),
         cycle_type: 2, // G_CYC_COPY
+        filter_mode: 0,
         prim: [0, 0, 0, 0],
         env: [0, 0, 0, 0],
         tex_enable: true,
@@ -2489,6 +2491,7 @@ fn build_decal_scene() -> crate::hle::Scene {
         tex_h: 1,
         selectors: selectors.clone(),
         cycle_type: 0,
+        filter_mode: 0,
         prim,
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],

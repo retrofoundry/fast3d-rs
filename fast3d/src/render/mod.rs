@@ -143,9 +143,8 @@ pub struct CombinerUniform {
     pub inv_tex_size: [f32; 4],
     /// TEXEL1 mirror of `inv_tex_size` (second-texture params). `.xy` = 1/(tex1_w, tex1_h); `.z` =
     /// `tex_enable1` (1.0 when the material carries a second texture — `tile_count == 2` — else 0.0);
-    /// `.w` = pad. The flag rides in `.z` so the struct grows by exactly one std140 row (112 -> 128);
-    /// single-texture draws leave this `[1, 1, 0, 0]`, byte-identical to the old tail padding. Must
-    /// stay in LOCKSTEP with the WGSL `Combiner.inv_tex1_size`.
+    /// `.w` = filter mode (0 = point, 2 = bilerp, 3 = average). Must stay in lockstep with
+    /// the WGSL `Combiner.inv_tex1_size`.
     pub inv_tex1_size: [f32; 4],
     /// LOD / mipmapping parameters (hardware-faithful LOD). std140 layout:
     /// `.x` = lod_enable (0.0 = G_TL_LOD off; 1.0 when LOD sampling is active),
@@ -227,16 +226,14 @@ impl CombinerUniform {
             // Default = normalized-uv convention (rects). The TRIANGLE draw sites override
             // this to 1/(tex_w, tex_h) for the texel-space triangle texcoord path.
             inv_tex_size: [1.0, 1.0, 0.0, 0.0],
-            // Second-texture params: `.xy` = 1/(tex1 dims), `.z` = 1.0 when a second texture is
-            // present. Single-texture (`tex1 == None`) → `[1, 1, 0, 0]` (tex_enable1 = 0).
             inv_tex1_size: match &mat.tex1 {
                 Some(t) => [
                     1.0 / t.tex_w.max(1) as f32,
                     1.0 / t.tex_h.max(1) as f32,
                     1.0,
-                    0.0,
+                    mat.filter_mode as f32,
                 ],
-                None => [1.0, 1.0, 0.0, 0.0],
+                None => [1.0, 1.0, 0.0, mat.filter_mode as f32],
             },
             // LOD params: lod_enable = 1.0 when the material's per-level texture set is active
             // (`mat.lod`), else 0.0; num_levels is the REAL uploaded level count (clamped to MAX_LOD
@@ -469,6 +466,7 @@ mod tests {
             tex_h: 1,
             selectors: crate::hle::combiner::decode_combine(0x00_00_00_00, 0x00_00_00_00),
             cycle_type: 0,
+            filter_mode: 0,
             prim: [0, 0, 0, 255],
             env: [0, 0, 0, 255],
             blend_color: [0, 0, 0, 255],

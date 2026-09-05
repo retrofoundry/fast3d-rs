@@ -248,6 +248,7 @@ fn phase4_prim_material(prim: [u8; 4]) -> crate::hle::Material {
         tex_h: 1,
         selectors: crate::hle::combiner::decode_combine(0, 0xC3),
         cycle_type: 0,
+        filter_mode: 0,
         prim,
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],

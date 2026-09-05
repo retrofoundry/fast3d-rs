@@ -44,7 +44,7 @@ struct Combiner {
                                 // already normalized.
     inv_tex1_size:   vec4<f32>, // TEXEL1 mirror of inv_tex_size: .xy = 1/(tex1_w, tex1_h); .z =
                                 // tex_enable1 flag (1.0 when the second texture is used, else 0.0);
-                                // .w = pad. In LOCKSTEP with the Rust CombinerUniform.
+                                // .w = filter mode (0 = point, 2 = bilerp, 3 = average).
     lod_params:      vec4<f32>, // LOD params: .x = lod_enable (1.0 when the mip chain is active),
                                 // .y = num_levels (declared; re-clamped to the real uploaded count
                                 // in eval_combiner), .z = prim_lod_frac (the primitive LOD fraction), .w =
@@ -325,11 +325,14 @@ fn tile_address_axis(tap: i32, mode: u32, mask: u32, extent: u32) -> i32 {
     return addressed;
 }
 
-fn tile_bilinear(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<f32>) -> vec4<f32> {
-    // GPU bilinear centers sit half a texel from the integer grid.
-    let centered = coordinate - 0.5;
-    let base = vec2<i32>(floor(centered));
-    let fraction = fract(centered);
+struct TileTaps {
+    tap00: vec2<i32>,
+    tap10: vec2<i32>,
+    tap01: vec2<i32>,
+    tap11: vec2<i32>,
+};
+
+fn tile_taps(tile: TileSampling, base: vec2<i32>) -> TileTaps {
     let x0 = u32(tile_address_axis(base.x, tile.modes.x, tile.shift_mask.z, tile.modes.z));
     let x1 = u32(tile_address_axis(base.x + 1, tile.modes.x, tile.shift_mask.z, tile.modes.z));
     let y0 = u32(tile_address_axis(base.y, tile.modes.y, tile.shift_mask.w, tile.modes.w));
@@ -350,11 +353,27 @@ fn tile_bilinear(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<
     let tap10 = select(vec2<u32>(x1, y0), vec2<u32>((tmem_y0 + tmem_x1) & 4095u, row_y0 + row_x1), lookup);
     let tap01 = select(vec2<u32>(x0, y1), vec2<u32>((tmem_y1 + tmem_x0) & 4095u, row_y1 + row_x0), lookup);
     let tap11 = select(vec2<u32>(x1, y1), vec2<u32>((tmem_y1 + tmem_x1) & 4095u, row_y1 + row_x1), lookup);
-    let c00 = textureLoad(texture, vec2<i32>(tap00), 0);
-    let c10 = textureLoad(texture, vec2<i32>(tap10), 0);
-    let c01 = textureLoad(texture, vec2<i32>(tap01), 0);
-    let c11 = textureLoad(texture, vec2<i32>(tap11), 0);
-    return mix(mix(c00, c10, fraction.x), mix(c01, c11, fraction.x), fraction.y);
+    return TileTaps(vec2<i32>(tap00), vec2<i32>(tap10), vec2<i32>(tap01), vec2<i32>(tap11));
+}
+
+fn tile_filter(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<f32>) -> vec4<f32> {
+    let base = vec2<i32>(floor(coordinate));
+    let taps = tile_taps(tile, base);
+    let c00 = textureLoad(texture, taps.tap00, 0);
+    let c10 = textureLoad(texture, taps.tap10, 0);
+    let c01 = textureLoad(texture, taps.tap01, 0);
+    let c11 = textureLoad(texture, taps.tap11, 0);
+    let mode = u32(combiner.inv_tex1_size.w);
+    if mode == 0u { return c00; }
+
+    let fraction = fract(coordinate);
+    if mode == 3u && all(abs(fraction - 0.5) <= vec2<f32>(1.0 / 128.0)) {
+        return (c00 + c10 + c01 + c11) * 0.25;
+    }
+    if fraction.x + fraction.y < 1.0 {
+        return c00 + fraction.x * (c10 - c00) + fraction.y * (c01 - c00);
+    }
+    return c11 + (1.0 - fraction.x) * (c01 - c11) + (1.0 - fraction.y) * (c10 - c11);
 }
 
 fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>) -> vec4<f32> {
@@ -363,11 +382,11 @@ fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>) -> vec4<
     if tile.image.z == 2u {
         let extent = textureDimensions(texture);
         tile.modes = vec4<u32>(2u, 2u, extent.x, extent.y);
-        coordinate = uv * vec2<f32>(extent);
+        coordinate = tile_coordinate(tile, uv * vec2<f32>(extent));
     } else {
         coordinate = tile_coordinate(tile, uv);
     }
-    return tile_bilinear(texture, tile, coordinate);
+    return tile_filter(texture, tile, coordinate);
 }
 
 fn sample_level(level_idx: u32, uv: vec2<f32>) -> vec4<f32> {

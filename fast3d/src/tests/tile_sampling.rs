@@ -116,7 +116,7 @@ fn tile_shift_all_16_values_pixels() {
 }
 
 #[test]
-fn tile_repeat_extent_preserves_bilinear_pixels() {
+fn tile_repeat_extent_preserves_point_pixels() {
     for (mode, uv) in [(0, [3.25, 1.75]), (0, [11.25, 5.75]), (1, [12.75, 6.25])] {
         assert_probe(
             &scene(
@@ -128,7 +128,7 @@ fn tile_repeat_extent_preserves_bilinear_pixels() {
                 uv,
                 0,
             ),
-            [84, 84, 84, 255],
+            [80, 80, 80, 255],
         );
     }
 }
@@ -157,7 +157,7 @@ fn tile_mask_period_differs_from_image_extent_pixels() {
         ..tile()
     });
     assert_probe(&scene(&state, [4.5, 2.5], 0), [0, 0, 0, 255]);
-    assert_probe(&scene(&state, [3.75, 1.75], 0), [60, 60, 60, 255]);
+    assert_probe(&scene(&state, [3.75, 1.75], 0), [80, 80, 80, 255]);
 }
 
 #[test]

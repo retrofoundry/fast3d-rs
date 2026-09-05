@@ -5,6 +5,55 @@ use crate::hle::rsp::{Rsp, Scene};
 use n64_gbi::encode::{gdp_set_combine_lerp, CcPass};
 
 const FLAT: [u32; 8] = [8, 8, 16, 3, 7, 7, 7, 6];
+
+#[test]
+fn filter_mode_is_captured_in_material_and_uniform() {
+    for rect in [false, true] {
+        let mut uniforms = Vec::new();
+        let mut materials = Vec::new();
+        for filter in [0, 2, 3, 0] {
+            let mut rdp = state([FLAT; 2], 0);
+            rdp.other_mode_h |= filter << 12;
+            let (mat, diags) = material(&rdp, rect);
+            assert!(diags.is_empty(), "{diags:?}");
+            let mat = mat.unwrap();
+            uniforms.push(
+                crate::render::CombinerUniform::from_run(
+                    &mat,
+                    &crate::hle::blender::decode_render_mode(0, 0, 0),
+                    [0; 4],
+                )
+                .inv_tex1_size[3],
+            );
+            materials.push(mat);
+        }
+        assert_eq!(uniforms, [0.0, 2.0, 3.0, 0.0]);
+        assert_ne!(materials[0], materials[1]);
+        assert_ne!(materials[1], materials[2]);
+        assert_eq!(materials[0], materials[3]);
+        assert_eq!(materials[0].texture, materials[1].texture);
+    }
+}
+
+#[test]
+fn filter_changes_split_material_snapshots() {
+    let mut rdp = state([FLAT; 2], 0);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    let mut diags = Vec::new();
+    let mut indices = Vec::new();
+    for mode in [0, 2, 3, 0] {
+        rsp.set_other_mode_h_raw(12, 2, mode << 12, &mut rdp);
+        rsp.material_dirty = true;
+        indices.push(
+            crate::hle::rsp::snapshot_run(&mut rsp, &rdp, &mut diags, &mut scene, 0)
+                .unwrap()
+                .0,
+        );
+    }
+    assert!(diags.is_empty(), "{diags:?}");
+    assert_eq!(indices, [0, 1, 2, 3]);
+}
 const SLOTS: [&str; 8] = ["CA", "CB", "CC", "CD", "AA", "AB", "AC", "AD"];
 const SUPPORT: [&[bool]; 8] = [
     &[

@@ -72,18 +72,13 @@ fn wrapper(bytes: &mut Vec<u8>, scene_entry: u32, width: u32, height: u32) -> u3
     )
 }
 
-pub(super) fn write(
+pub(super) fn make(
     mut bytes: Vec<u8>,
     scene_entry: u32,
     width: u32,
     height: u32,
-    filename: &str,
     provenance: Provenance,
-) {
-    let Some(output_dir) = std::env::var_os("FAST3D_WRITE_FIXTURES") else {
-        eprintln!("FAST3D_WRITE_FIXTURES is not set; skipping {filename}");
-        return;
-    };
+) -> Fixture {
     let entry = wrapper(&mut bytes, scene_entry, width, height);
     let hardware = Image(bytes);
     let recording = RecordingHardware::new(&hardware);
@@ -123,8 +118,28 @@ pub(super) fn write(
     };
     let encoded = fixture.to_bytes().unwrap();
     assert_eq!(Fixture::from_bytes(&encoded).unwrap(), fixture);
+    fixture
+}
+
+pub(super) fn write(
+    bytes: Vec<u8>,
+    scene_entry: u32,
+    width: u32,
+    height: u32,
+    filename: &str,
+    provenance: Provenance,
+) {
+    let Some(output_dir) = std::env::var_os("FAST3D_WRITE_FIXTURES") else {
+        eprintln!("FAST3D_WRITE_FIXTURES is not set; skipping {filename}");
+        return;
+    };
+    let fixture = make(bytes, scene_entry, width, height, provenance);
     std::fs::create_dir_all(&output_dir).unwrap();
-    std::fs::write(std::path::Path::new(&output_dir).join(filename), encoded).unwrap();
+    std::fs::write(
+        std::path::Path::new(&output_dir).join(filename),
+        fixture.to_bytes().unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]

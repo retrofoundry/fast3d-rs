@@ -372,6 +372,8 @@ pub struct Material {
     pub selectors: CombinerSelectors,
     /// Cycle type from othermode.H bits [21:20]. 0 = 1-cycle, 1 = 2-cycle.
     pub cycle_type: u32,
+    /// Othermode H bits 12..13: 0 = point, 2 = bilerp, 3 = average; copy forces point.
+    pub filter_mode: u32,
     pub prim: [u8; 4],
     pub env: [u8; 4],
     /// Whether physical texture 0 is sampled; triangles also require SPTexture on.
@@ -782,6 +784,11 @@ fn build_material_inner(
         tex_h: decoded.h,
         selectors,
         cycle_type,
+        filter_mode: if cycle_type == crate::hle::consts::G_CYC_COPY {
+            0
+        } else {
+            (rdp.other_mode_h >> 12) & 3
+        },
         prim: rdp.prim,
         env: rdp.env,
         tex_enable,
