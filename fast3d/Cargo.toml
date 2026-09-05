@@ -13,6 +13,7 @@ n64-gbi.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 log.workspace = true
+futures-channel = { version = "0.3", optional = true }
 egui = { version = "0.35", optional = true }
 egui-wgpu = { version = "0.35", optional = true }
 
@@ -25,4 +26,15 @@ pollster = "0.3"
 [features]
 default = []
 asm = []
+capture = ["dep:futures-channel"]
 debug-ui = ["dep:egui", "dep:egui-wgpu"]
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+png = "0.18"
+
+[[example]]
+name = "replay_capture"
+required-features = ["capture"]

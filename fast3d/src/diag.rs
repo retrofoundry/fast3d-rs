@@ -173,7 +173,7 @@ impl DiagSink for LogSink {
 }
 
 /// A `Copy` rollup returned by `process_dl` so a `NopSink` caller still learns the outcome.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DlSummary {
     pub commands: u32,
     pub tris: u32,

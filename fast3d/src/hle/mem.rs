@@ -21,6 +21,12 @@ pub enum GbiDataFormat {
 /// One memory address space for the interpreter. `Addr = u64` holds a 32-bit
 /// physical RDRAM offset OR a 64-bit host pointer.
 pub trait Rdram {
+    /// Opts into byte-based capture; every read must match the declared layout and segments.
+    #[cfg(feature = "capture")]
+    fn capture_layout(&self) -> Option<crate::capture::SourceLayout> {
+        None
+    }
+
     fn set_segment(&mut self, seg: u32, value: u64);
     /// UNMASKED resolution (SETTIMG / SETCIMG / SETZIMG).
     fn resolve(&self, addr: u64) -> u64;
@@ -165,6 +171,14 @@ impl<'a> RdramImage<'a> {
 }
 
 impl<'a> Rdram for RdramImage<'a> {
+    #[cfg(feature = "capture")]
+    fn capture_layout(&self) -> Option<crate::capture::SourceLayout> {
+        Some(crate::capture::SourceLayout {
+            memory: crate::capture::MemoryLayout::IMAGE,
+            segments: self.segments.map(u64::from),
+        })
+    }
+
     fn set_segment(&mut self, seg: u32, value: u64) {
         self.segments[(seg & 0xF) as usize] = value as u32;
     }

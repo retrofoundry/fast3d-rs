@@ -1,5 +1,7 @@
 //! HLE interpreter: binary GBI image -> draw calls.
 pub mod blender;
+#[cfg(feature = "capture")]
+pub mod capture;
 pub mod combiner;
 pub use n64_gbi::consts;
 pub mod gbi;

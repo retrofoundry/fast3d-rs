@@ -8,7 +8,7 @@ pub use crate::hle::mem::{Rdram, RdramImage};
 /// Raw VI register words, exactly as the N64 VI presents them; `fast3d` owns the bit-decode
 /// (spec §3.3). v1 scanout uses only `origin` (FB-select) and `width`; the rest are carried so
 /// the struct is stable as scanout grows overscan-crop / interlace.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViRegisters {
     pub status: u32,
     pub origin: u32,
