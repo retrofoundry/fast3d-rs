@@ -483,7 +483,7 @@ mod host {
             assert_eq!(diagnostics[0].len(), 1);
             assert_eq!(diagnostics[0][0].kind, DiagKind::UnhandledMoveword(0xFF));
             let fixture = Fixture::from_bytes(&fixture.to_bytes().unwrap()).unwrap();
-            assert_eq!(fixture.frame.serial, 42);
+            assert_eq!(fixture.frame.serial, 1);
             assert_eq!(fixture.frame.dither_seed, 123);
             assert_eq!(
                 fixture

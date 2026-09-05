@@ -14,13 +14,17 @@ pub struct CaptureFrame {
 }
 
 impl CaptureFrame {
+    /// Begins a renderer frame. The legacy `serial` argument is ignored; the recorded serial
+    /// counts the renderer's `begin_frame` calls, starting at one.
     pub fn begin(
         renderer: &mut Renderer,
-        serial: u64,
+        _serial: u64,
         dither_seed: u32,
         provenance: Provenance,
     ) -> Self {
         renderer.begin_frame();
+        renderer.inner.dither_seed = dither_seed;
+        let serial = renderer.inner.frame_serial;
         let (width, height) = target_extent(renderer);
         Self {
             fixture: Fixture {
@@ -276,6 +280,8 @@ impl Fixture {
 
     async fn render_frame(&self, renderer: &mut Renderer) -> Result<ReplayOutput> {
         renderer.begin_frame();
+        renderer.inner.frame_serial = self.frame.serial;
+        renderer.inner.dither_seed = self.frame.dither_seed;
         let mut summaries = Vec::with_capacity(self.tasks.len());
         let mut diagnostics = Vec::with_capacity(self.tasks.len());
         for task in &self.tasks {

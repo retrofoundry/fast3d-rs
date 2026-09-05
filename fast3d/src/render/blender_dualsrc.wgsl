@@ -54,11 +54,7 @@ fn fs_main(in: VsOut) -> FragOut {
         comb3 = mix(comb3, combiner.fog_color.rgb, in.color.a);
     }
     let out_a = r.alpha;
-    // Phase D: alpha-test discard. Only active when alpha_mode != 0 (CVG_X_ALPHA or THRESHOLD).
-    // alpha_mode == 0 → NO discard → non-cutout runs are byte-identical (zero regression risk).
-    if (combiner.alpha_mode != 0u && out_a < combiner.alpha_threshold) {
-        discard;
-    }
+    alpha_discard(r, in.clip_position.xy);
 
     // Decode the framebuffer-cycle P/A/B selectors from the blender mux. The framebuffer cycle is
     // cycle-2 for 2-cycle (cycle_type==1) and cycle-1 otherwise — mirrors hle::blender::classify.

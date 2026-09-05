@@ -16,9 +16,7 @@ fn fs_decal(in: VsOut) -> FragOut {
         comb3 = mix(comb3, combiner.fog_color.rgb, in.color.a);
     }
     let out_a = r.alpha;
-    if (combiner.alpha_mode != 0u && out_a < combiner.alpha_threshold) {
-        discard;
-    }
+    alpha_discard(r, in.clip_position.xy);
 
     // ── ZMODE_DEC in-shader test against the scene depth written by pass 1 (see decal.wgsl). ──
     let coord = vec2<i32>(i32(in.clip_position.x), i32(in.clip_position.y));
