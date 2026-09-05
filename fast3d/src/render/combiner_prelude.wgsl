@@ -40,7 +40,7 @@ struct Combiner {
     blend_color:     vec4<f32>, // blend color RGBA — wired in B3
     fog_color:       vec4<f32>, // fog color RGBA — wired in Phase C
     inv_tex_size:    vec4<f32>, // .xy = 1/(tex_w, tex_h): draw-time tile-size normalization for the
-                                // TEXEL-space triangle texcoord. (1,1) for rects/texgen whose uv is
+                                // TEXEL-space triangle texcoord. (1,1) for rects whose uv is
                                 // already normalized.
     inv_tex1_size:   vec4<f32>, // TEXEL1 mirror of inv_tex_size: .xy = 1/(tex1_w, tex1_h); .z =
                                 // tex_enable1 flag (1.0 when the second texture is used, else 0.0);
@@ -341,7 +341,7 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     var texel: vec4<f32>;
     if combiner.tex_enable != 0u {
         // Normalize the TEXEL-space triangle texcoord by the draw-time tile dims. inv_tex_size =
-        // (1,1) leaves already-normalized rect / texgen uv untouched.
+        // (1,1) leaves already-normalized rect uv untouched.
         texel = textureSample(tex0, samp0, in.uv * combiner.inv_tex_size.xy);
     } else {
         texel = vec4<f32>(1.0);

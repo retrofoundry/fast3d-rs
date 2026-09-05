@@ -857,13 +857,13 @@ fn depth_test_hides_the_farther_triangle() {
     readback.unmap();
 }
 
-struct GpuOut {
+pub(super) struct GpuOut {
     pos: [f32; 4],
     color: [f32; 4],
-    uv: [f32; 2],
+    pub(super) uv: [f32; 2],
 }
 
-fn run_compute_outputs(
+pub(super) fn run_compute_outputs(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     scene: &crate::hle::Scene,
@@ -995,33 +995,31 @@ fn ref_uv(st: [f32; 2], tc: [f32; 2]) -> [f32; 2] {
     [st[0] * tc[0], st[1] * tc[1]]
 }
 
-// texgen uv oracle: reflection-mapped uv when the vertex uses texgen (mode != 0), else None.
-// Mirrors the kernel: clamp(dot(n, axis)) folded by spherical/cubic, scaled by the stored
-// texgen ST-fold. Returns None for non-texgen vertices so the caller falls back to ref_uv.
 fn ref_texgen_uv(scene: &crate::hle::Scene, i: usize) -> Option<[f32; 2]> {
-    let m = scene.texgen_mode[i];
-    if m == 0 {
+    let mode = scene.texgen_mode[i];
+    if mode == 0 {
         return None;
     }
-    let cn = scene.cn[i];
-    let n = [
-        (cn & 0xff) as u8 as i8 as f32 / 127.0,
-        ((cn >> 8) & 0xff) as u8 as i8 as f32 / 127.0,
-        ((cn >> 16) & 0xff) as u8 as i8 as f32 / 127.0,
-    ];
+    let normal = [0, 8, 16].map(|shift| (scene.cn[i] >> shift) as u8 as i8 as f64 / 127.0);
     let (s, t) = scene.lookat_table[scene.lookat_index[i] as usize];
-    // Reads the STORED fold (tg = sc/65536) rather than recomputing it; the fold value itself is
-    // independently guarded by the hle test `texcoord_table_dedups_and_grows_on_tile_size_change`.
-    let tg = scene.texgen_scale_table[scene.texcoord_index[i] as usize]; // [tgs, tgt]
-    let g = |axis: [f32; 3]| {
-        let d = (n[0] * axis[0] + n[1] * axis[1] + n[2] * axis[2]).clamp(-1.0, 1.0);
-        if m == 2 {
-            0.5 + 0.268845 * d + 0.231152 * d * d * d
+    let scale = scene.texgen_scale_table[scene.texcoord_index[i] as usize];
+    let generated = |axis: [f32; 3]| {
+        let dot = normal
+            .iter()
+            .zip(axis)
+            .map(|(n, a)| n * f64::from(a))
+            .sum::<f64>()
+            .clamp(-1.0, 1.0);
+        if mode == 2 {
+            (-dot).acos() * (1024.0 / std::f64::consts::PI)
         } else {
-            (d + 1.0) * 0.5
+            (dot + 1.0) * 512.0
         }
     };
-    Some([g(s) * tg[0], g(t) * tg[1]])
+    Some([
+        (generated(s) * f64::from(scale[0])) as f32,
+        (generated(t) * f64::from(scale[1])) as f32,
+    ])
 }
 
 // color oracle: diffuse lighting if light_count > 0, else cn RGBA passthrough.
@@ -1117,7 +1115,7 @@ fn compute_outputs_match_oracle_for_every_scene() {
                 );
             }
             for (c, (&a, &b)) in gv.uv.iter().zip(eu.iter()).enumerate() {
-                let tol = 1e-4_f32.max(1e-4 * a.abs().max(b.abs()));
+                let tol = 1.0 / 1024.0;
                 assert!(
                     (a - b).abs() <= tol,
                     "{name}: vtx {i} uv {c}: gpu {a} vs ref {b}"
@@ -1361,159 +1359,6 @@ fn kernel_lit_color_two_directional_lights_plus_ambient() {
             "two-light vtx B color[{c}]: expected 0.05 (ambient) got {got}"
         );
     }
-}
-
-/// Focused texgen-math GPU test (Step 9): proves the kernel's spherical + F3DEX2 cubic fold and
-/// the texgen ST-prefold INDEPENDENTLY of the kernel scale, since at the T3 commit no gallery scene
-/// exercises the golden texgen branch.
-///
-/// Scene: identity modelview, `sc = tc = 0xFFFF`. Vertices have an s8 normal facing the S-axis
-/// exactly: cn = (127,0,0) → n = [1,0,0] (exact 127/127, no quantization error). The texgen ST-fold
-/// is `tg = sc/65536 ≈ 0.99998` (TILE-INDEPENDENT): under the ClampToEdge normalized-uv convention
-/// the spherical phase g ∈ [0,1] maps a mirror-ball env ONCE, so uv = g·tg ∈ [0,1]. A wrong prefold
-/// in the builder (e.g. the old over-scaled 1024·sc/(65536·tile) ≈ 32) fails this.
-///
-///   Vertex A (spherical, mode 1): S-axis [1,0,0], T-axis [0,1,0].
-///     ds = 1.0 → gs = (1+1)/2 = 1.0 ;  dt = 0.0 → gt = (0+1)/2 = 0.5
-///     expected uv = [1.0·tg, 0.5·tg].
-///   Vertex B (cubic, mode 2): S-axis [0.8,0.6,0] (unit), T-axis [0,1,0].
-///     ds = dot([1,0,0],[0.8,0.6,0]) = 0.8 → gs = 0.5 + 0.268845·0.8 + 0.231152·0.8³ = 0.83341…
-///     dt = 0.0 → gt = 0.5 ;  expected uv = [gs·tg, 0.5·tg].
-///   Vertex C (cubic, mode 2, NEGATIVE dot): S-axis [-0.8,-0.6,0] vs n=[1,0,0] → ds = -0.8.
-///     gs = 0.5 + 0.268845·(-0.8) + 0.231152·(-0.8)³ = 0.166574… ; locks the SIGN of the odd cubic
-///     term (an abs() or dropped-cube mutation would otherwise pass). dt = 0.0 → gt = 0.5.
-#[test]
-fn kernel_texgen_spherical_and_cubic_uv() {
-    let (device, queue, _dual_source) = headless_device();
-    use crate::hle::math::identity;
-
-    // Tile-independent texgen ST-fold from raw sc: tg = sc/65536 ≈ 0.99998 (NOT read from the table).
-    let sc: f64 = 0xFFFF as f64;
-    let tg = (sc / 65536.0) as f32; // == 0.9999847
-
-    let vp = (
-        [
-            crate::hle::rsp::FB_WIDTH / 2.0,
-            crate::hle::rsp::FB_HEIGHT / 2.0,
-            511.0 / crate::hle::rsp::DEPTH_RANGE,
-        ],
-        [
-            crate::hle::rsp::FB_WIDTH / 2.0,
-            crate::hle::rsp::FB_HEIGHT / 2.0,
-            511.0 / crate::hle::rsp::DEPTH_RANGE,
-        ],
-    );
-    let mut scene = crate::hle::Scene {
-        mvp_table: vec![identity()],
-        viewport_table: vec![vp],
-        // texcoord_table[i] is unused for texgen uv (the kernel overrides via texgen_scale_table),
-        // but must exist so texcoord_index resolves. texgen_scale_table is index-parallel.
-        texcoord_table: vec![[0.0, 0.0]],
-        texgen_scale_table: vec![[tg, tg]],
-        // lookat_table[0] = spherical axes; [1] = cubic (d=+0.8); [2] = cubic (d=-0.8).
-        lookat_table: vec![
-            ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),   // spherical: S=+X, T=+Y
-            ([0.8, 0.6, 0.0], [0.0, 1.0, 0.0]),   // cubic: S grazes at d=+0.8 vs n=[1,0,0]
-            ([-0.8, -0.6, 0.0], [0.0, 1.0, 0.0]), // cubic: S opposes at d=-0.8 vs n=[1,0,0]
-        ],
-        ..Default::default()
-    };
-
-    // cn packs an s8 normal facing +X exactly: nx=127 → 127/127 = 1.0.
-    let make_cn = |nx: i8, ny: i8, nz: i8| -> u32 {
-        (nx as u8 as u32) | ((ny as u8 as u32) << 8) | ((nz as u8 as u32) << 16) | (255u32 << 24)
-    };
-
-    // Vertex A — spherical.
-    scene.raw_pos.push([0.0, 0.0, 0.0]);
-    scene.mtx_index.push(0);
-    scene.viewport_index.push(0);
-    scene.raw_st.push([0.0, 0.0]);
-    scene.texcoord_index.push(0);
-    scene.cn.push(make_cn(127, 0, 0));
-    scene.light_index.push(0);
-    scene.light_count.push(0);
-    scene.texgen_mode.push(1); // spherical
-    scene.lookat_index.push(0);
-
-    // Vertex B — cubic.
-    scene.raw_pos.push([0.0, 0.0, 0.0]);
-    scene.mtx_index.push(0);
-    scene.viewport_index.push(0);
-    scene.raw_st.push([0.0, 0.0]);
-    scene.texcoord_index.push(0);
-    scene.cn.push(make_cn(127, 0, 0));
-    scene.light_index.push(0);
-    scene.light_count.push(0);
-    scene.texgen_mode.push(2); // linear / F3DEX2 cubic
-    scene.lookat_index.push(1);
-
-    // Vertex C — cubic with NEGATIVE dot (S-axis opposes the normal): d = -0.8.
-    scene.raw_pos.push([0.0, 0.0, 0.0]);
-    scene.mtx_index.push(0);
-    scene.viewport_index.push(0);
-    scene.raw_st.push([0.0, 0.0]);
-    scene.texcoord_index.push(0);
-    scene.cn.push(make_cn(127, 0, 0));
-    scene.light_index.push(0);
-    scene.light_count.push(0);
-    scene.texgen_mode.push(2); // linear / F3DEX2 cubic
-    scene.lookat_index.push(2);
-
-    let gpu = run_compute_outputs(&device, &queue, &scene);
-    assert_eq!(gpu.len(), 3);
-
-    let tol = 1e-4_f32;
-
-    // Vertex A (spherical): gs = (1+1)/2 = 1.0, gt = (0+1)/2 = 0.5.
-    let exp_a = [1.0_f32 * tg, 0.5_f32 * tg];
-    let a = &gpu[0].uv;
-    assert!(
-        (a[0] - exp_a[0]).abs() <= tol,
-        "spherical uv.s: expected {} got {}",
-        exp_a[0],
-        a[0]
-    );
-    assert!(
-        (a[1] - exp_a[1]).abs() <= tol,
-        "spherical uv.t: expected {} got {}",
-        exp_a[1],
-        a[1]
-    );
-
-    // Vertex B (cubic): gs = 0.5 + 0.268845·0.8 + 0.231152·0.8³, gt = g(0.0) = 0.5.
-    let cubic = |d: f32| 0.5 + 0.268845 * d + 0.231152 * d * d * d;
-    let exp_b = [cubic(0.8) * tg, cubic(0.0) * tg];
-    let b = &gpu[1].uv;
-    assert!(
-        (b[0] - exp_b[0]).abs() <= tol,
-        "cubic uv.s: expected {} got {}",
-        exp_b[0],
-        b[0]
-    );
-    assert!(
-        (b[1] - exp_b[1]).abs() <= tol,
-        "cubic uv.t: expected {} got {}",
-        exp_b[1],
-        b[1]
-    );
-
-    // Vertex C (cubic, NEGATIVE d): gs = 0.5 + 0.268845·(-0.8) + 0.231152·(-0.8)³ = 0.166574…
-    // The odd cubic terms make this differ from the d=+0.8 case (0.83341), so the sign is locked.
-    let exp_c = [cubic(-0.8) * tg, cubic(0.0) * tg];
-    let c = &gpu[2].uv;
-    assert!(
-        (c[0] - exp_c[0]).abs() <= tol,
-        "cubic(-d) uv.s: expected {} got {}",
-        exp_c[0],
-        c[0]
-    );
-    assert!(
-        (c[1] - exp_c[1]).abs() <= tol,
-        "cubic(-d) uv.t: expected {} got {}",
-        exp_c[1],
-        c[1]
-    );
 }
 
 // Locks cull_mode:Back + front_face:Ccw == N64 back-face cull.
@@ -2857,7 +2702,7 @@ fn single_run_path_renders_textured_center() {
 
 /// Render an `crate::hle::Scene` to raw RGBA8 pixels using `SceneRenderer` (the full facade path).
 /// `w × h × 4` bytes returned, row-major, no row padding.
-fn render_scene_to_rgba8(scene: &crate::hle::Scene, w: u32, h: u32) -> Vec<u8> {
+pub(super) fn render_scene_to_rgba8(scene: &crate::hle::Scene, w: u32, h: u32) -> Vec<u8> {
     use crate::render::SceneRenderer;
 
     let (device, queue, dual_source) = headless_device();

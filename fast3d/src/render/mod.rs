@@ -96,7 +96,7 @@ pub struct CombinerUniform {
     pub fog_color: [f32; 4],   // fog color RGBA (C3: normalized from scene.fog_color)
     /// `.xy` = 1/(tex_w, tex_h): draw-time tile-size normalization applied to the TEXEL-space
     /// triangle texcoord in the fragment shader (`rsp.rs` emits texel-space texcoords; the tile-size
-    /// division is deferred here to draw time). `(1,1)` for rects/texgen (already normalized).
+    /// division is deferred here to draw time). `(1,1)` for rects (already normalized).
     /// `.zw` pad to keep the 16-byte std140 tail alignment.
     pub inv_tex_size: [f32; 4],
     /// TEXEL1 mirror of `inv_tex_size` (second-texture params). `.xy` = 1/(tex1_w, tex1_h); `.z` =
@@ -182,7 +182,7 @@ impl CombinerUniform {
             env,
             blend_color,
             fog_color,
-            // Default = normalized-uv convention (rects, texgen). The TRIANGLE draw sites override
+            // Default = normalized-uv convention (rects). The TRIANGLE draw sites override
             // this to 1/(tex_w, tex_h) for the texel-space triangle texcoord path.
             inv_tex_size: [1.0, 1.0, 0.0, 0.0],
             // Second-texture params: `.xy` = 1/(tex1 dims), `.z` = 1.0 when a second texture is
@@ -497,25 +497,9 @@ fn rect_quad(
     [tl, bl, br, tl, br, tr]
 }
 
-/// Draw-time tile-size normalization for a TRIANGLE run's texcoord (`CombinerUniform.inv_tex_size`).
-///
-/// The RSP emits TEXEL-space triangle texcoords (no tile division), so the fragment shader must
-/// divide by the tile dimension AT DRAW TIME — from `mat.tex_w/tex_h`, which are the tile-0 dims
-/// decoded when the triangle was recorded (correct even when G_SETTILESIZE followed gsSPVertex).
-/// Returns `(1,1)` for untextured or texgen runs, whose kernel UV is already normalized (texgen
-/// maps [0,1] via `texgen_scale`; rects use `texrect_uv`).
-pub fn triangle_inv_tex_size(
-    scene: &crate::hle::Scene,
-    mat: &crate::hle::Material,
-    run: &crate::hle::DrawRun,
-) -> [f32; 4] {
-    let first = scene
-        .indices
-        .get(run.index_start as usize)
-        .copied()
-        .unwrap_or(0) as usize;
-    let texgen = scene.texgen_mode.get(first).copied().unwrap_or(0) != 0;
-    if mat.tex_enable && !texgen {
+/// Normalize texel-space triangle UVs using the tile dimensions captured at draw time.
+pub fn triangle_inv_tex_size(mat: &crate::hle::Material) -> [f32; 4] {
+    if mat.tex_enable {
         [
             1.0 / mat.tex_w.max(1) as f32,
             1.0 / mat.tex_h.max(1) as f32,
@@ -2498,7 +2482,7 @@ impl SceneRenderer {
                     fc[3] as f32 / 255.0,
                 ];
                 let mut combiner = CombinerUniform::from_run(mat, rm, fog_color);
-                combiner.inv_tex_size = triangle_inv_tex_size(scene, mat, run);
+                combiner.inv_tex_size = triangle_inv_tex_size(mat);
                 let slot = bytemuck::bytes_of(&combiner);
                 pool[i * 256..i * 256 + slot.len()].copy_from_slice(slot);
             }
@@ -2797,7 +2781,7 @@ impl SceneRenderer {
                     fc[3] as f32 / 255.0,
                 ];
                 let mut combiner = CombinerUniform::from_run(mat, rm, fog_color);
-                combiner.inv_tex_size = triangle_inv_tex_size(scene, mat, run);
+                combiner.inv_tex_size = triangle_inv_tex_size(mat);
                 let slot = bytemuck::bytes_of(&combiner);
                 pool[i * 256..i * 256 + slot.len()].copy_from_slice(slot);
             }
@@ -3296,7 +3280,7 @@ impl SceneRenderer {
                         let mat = &scene.materials[run.material_index as usize];
                         let rm = &scene.render_modes[run.render_mode_index as usize];
                         let mut u = CombinerUniform::from_run(mat, rm, fog_color);
-                        u.inv_tex_size = triangle_inv_tex_size(scene, mat, run);
+                        u.inv_tex_size = triangle_inv_tex_size(mat);
                         push_slot(&mut pool, &u);
                     }
                     crate::hle::SceneOp::TexRect {
@@ -3757,7 +3741,7 @@ impl SceneRenderer {
                         let mat = &scene.materials[run.material_index as usize];
                         let rm = &scene.render_modes[run.render_mode_index as usize];
                         let mut u = CombinerUniform::from_run(mat, rm, fog_color);
-                        u.inv_tex_size = triangle_inv_tex_size(scene, mat, run);
+                        u.inv_tex_size = triangle_inv_tex_size(mat);
                         push_slot(&mut pool, &u);
                     }
                     crate::hle::SceneOp::TexRect {

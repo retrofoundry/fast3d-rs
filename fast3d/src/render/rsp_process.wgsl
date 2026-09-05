@@ -121,19 +121,15 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         o.color.a = fog_alpha;
     }
 
-    // Texgen / reflection mapping (authentic F3DEX2): override o.uv with the folded reflection
-    // coord. axis_s/axis_t are object-space (lights datapath); d = clamp(dot(n, axis), -1, 1).
-    // Spherical (mode 1): g = (d+1)/2. Linear (mode 2): the hardware cubic g = 0.5 +
-    // 0.268845*d + 0.231152*d^3 (NOT acos). Scaled by the prefolded texgen ST-fold.
     if (v.texgen_mode != 0u) {
         let lk = lookat[v.lookat_index];
         let ds = clamp(dot(n, lk.axis_s.xyz), -1.0, 1.0);
         let dt = clamp(dot(n, lk.axis_t.xyz), -1.0, 1.0);
-        var gs = (ds + 1.0) * 0.5;
-        var gt = (dt + 1.0) * 0.5;
+        var gs = (ds + 1.0) * 512.0;
+        var gt = (dt + 1.0) * 512.0;
         if (v.texgen_mode == 2u) {
-            gs = 0.5 + 0.268845 * ds + 0.231152 * ds * ds * ds;
-            gt = 0.5 + 0.268845 * dt + 0.231152 * dt * dt * dt;
+            gs = acos(-ds) * (1024.0 / 3.141592653589793);
+            gt = acos(-dt) * (1024.0 / 3.141592653589793);
         }
         o.uv = vec2<f32>(gs * tc.texgen_scale_s, gt * tc.texgen_scale_t);
     }
