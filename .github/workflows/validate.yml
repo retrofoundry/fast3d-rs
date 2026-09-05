@@ -38,6 +38,7 @@ jobs:
       RUST_TEST_THREADS: ${{ matrix.os == 'windows-latest' && '1' || '4' }}
       RUST_BACKTRACE: 1
       WGPU_DX12_COMPILER: staticdxc
+      RUST_LOG: wgpu_core=warn,wgpu_hal=warn
     steps:
       - uses: actions/checkout@v4
       - name: test (default)
