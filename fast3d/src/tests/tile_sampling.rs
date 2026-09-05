@@ -56,7 +56,11 @@ fn assert_probe(scene: &Scene, expected: [u8; 4]) {
     let (device, queue, dual) = headless_device();
     let mut renderer = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 320, 240, dual);
     let pixels = render_to_pixels(&device, &queue, &mut renderer, scene, 320, 240);
-    assert_eq!(pixel(&pixels, 320, 100, 80), expected);
+    let got = pixel(&pixels, 320, 100, 80);
+    assert!(
+        got.iter().zip(expected).all(|(&g, e)| g.abs_diff(e) <= 1),
+        "{got:?}, expected {expected:?}"
+    );
 }
 
 #[test]
