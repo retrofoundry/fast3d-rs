@@ -168,7 +168,7 @@ fn fixture(bytes: Vec<u8>, source: &str) -> Fixture {
     })
 }
 
-fn assert_frame(fixture: Fixture, expected: impl Fn(usize, usize) -> [u8; 4]) {
+fn assert_frame(fixture: Fixture, case: super::sm64_semantics::Case) {
     let (device, queue) = crate::render::headless_device_forced_fallback();
     let output = pollster::block_on(fixture.replay(device, queue)).unwrap();
     assert!(
@@ -176,61 +176,21 @@ fn assert_frame(fixture: Fixture, expected: impl Fn(usize, usize) -> [u8; 4]) {
         "{:?}",
         output.diagnostics
     );
-    for (i, got) in output.rgba8.as_chunks::<4>().0.iter().enumerate() {
-        let expected = expected(i % 320, i / 320);
-        assert!(
-            got.iter().zip(expected).all(|(&a, b)| a.abs_diff(b) <= 2),
-            "({}, {}): {got:?}, expected {expected:?}",
-            i % 320,
-            i / 320
-        );
-    }
+    assert_eq!((output.width, output.height), case.dimensions());
+    case.assert_pixels(&output.rgba8);
 }
 
 #[test]
 fn fixture_sm64_power_meter_point() {
     assert_frame(
-        fixture(
-            power_meter_memory(),
-            "actors/power_meter/model.inc.c: dl_power_meter_base",
-        ),
-        |x, y| {
-            if !(88..152).contains(&y) {
-                return [0, 0, 0, 255];
-            }
-            match x {
-                128..=144 => [255, 0, 0, 255],
-                145..=159 => [0, 255, 0, 255],
-                160..=175 => [0, 0, 255, 255],
-                176..=191 => [255, 255, 0, 255],
-                _ => [0, 0, 0, 255],
-            }
-        },
+        power_meter_fixture(),
+        super::sm64_semantics::Case::PowerMeterPoint,
     );
 }
 
 #[test]
 fn fixture_sm64_castle_trilerp() {
-    assert_frame(
-        fixture(
-            castle_memory(),
-            "levels/castle_inside/areas/1/1/model.inc.c: inside_castle_seg7_dl_07023DB0",
-        ),
-        |x, y| {
-            if !(144..176).contains(&x) || !(104..136).contains(&y) {
-                return [0, 0, 0, 255];
-            }
-            if x >= 165 {
-                return [64, 128, 128, 255];
-            }
-            [
-                [0, 128, 128, 255],
-                [64, 64, 64, 255],
-                [159, 32, 32, 255],
-                [96, 96, 96, 255],
-            ][(x - 144) % 4]
-        },
-    );
+    assert_frame(castle_fixture(), super::sm64_semantics::Case::CastleTrilerp);
 }
 
 #[test]
@@ -264,4 +224,18 @@ fn filter_fixture_commands_preserve_load_order_and_lod_storage() {
             assert_eq!(result.scene.draw_runs.len(), 2);
         }
     }
+}
+
+pub(super) fn power_meter_fixture() -> Fixture {
+    fixture(
+        power_meter_memory(),
+        "actors/power_meter/model.inc.c: dl_power_meter_base",
+    )
+}
+
+pub(super) fn castle_fixture() -> Fixture {
+    fixture(
+        castle_memory(),
+        "levels/castle_inside/areas/1/1/model.inc.c: inside_castle_seg7_dl_07023DB0",
+    )
 }

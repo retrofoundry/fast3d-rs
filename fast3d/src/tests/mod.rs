@@ -11,6 +11,8 @@ mod alpha_dither;
 mod alpha_dither_fixture;
 mod asm_tests;
 #[cfg(feature = "capture")]
+mod browser_fixtures;
+#[cfg(feature = "capture")]
 #[path = "../../../tools/rt64-oracle/fixture.rs"]
 mod capture_fixture;
 mod culling;
@@ -37,6 +39,11 @@ mod renderer_process_dl;
 mod rsp_tests;
 mod run_split;
 mod scene_walk;
+#[cfg(feature = "capture")]
+mod sm64_corpus;
+#[cfg(feature = "capture")]
+#[path = "../../tests/common/sm64_semantics.rs"]
+mod sm64_semantics;
 #[cfg(feature = "capture")]
 mod sm64_surface_fixtures;
 mod texgen;

@@ -557,14 +557,24 @@ fn write_rt64_mario_metal_butt_fixture() {
         320,
         240,
         "mario-metal-butt.f3dcap",
-        crate::capture::Provenance {
-            decomp_revision: "sm64 1372ae1bb7cbedc03df366393188f4f05dcfc422".into(),
-            source_symbols: "actors/mario/model.inc.c: mario_metal_butt, mario_butt_dl"
-                .into(),
-            command_vector: "SM64 display-list commands with capture-only framebuffer wrapper"
-                .into(),
-            synthetic_data: "Synthetic vertices, normals, lights, look-at vectors, matrix, and coordinate texture"
-                .into(),
-        },
+        metal_butt_provenance(),
     );
+}
+
+#[cfg(feature = "capture")]
+fn metal_butt_provenance() -> crate::capture::Provenance {
+    crate::capture::Provenance {
+        decomp_revision: "sm64 1372ae1bb7cbedc03df366393188f4f05dcfc422".into(),
+        source_symbols: "actors/mario/model.inc.c: mario_metal_butt, mario_butt_dl".into(),
+        command_vector: "SM64 display-list commands with capture-only framebuffer wrapper".into(),
+        synthetic_data:
+            "Synthetic vertices, normals, lights, look-at vectors, matrix, and coordinate texture"
+                .into(),
+    }
+}
+
+#[cfg(feature = "capture")]
+pub(super) fn metal_butt_fixture() -> crate::capture::Fixture {
+    let (bytes, entry) = metal_butt_memory();
+    super::capture_fixture::make(bytes, entry, 320, 240, metal_butt_provenance())
 }

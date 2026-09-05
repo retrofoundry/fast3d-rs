@@ -151,6 +151,16 @@ fn memory(surface: Surface) -> Vec<u8> {
             }
         }
     }
+    let geometry = if matches!(surface, Surface::Foliage) {
+        0x0002_0000
+    } else {
+        0x0002_2000
+    };
+    let [load_cmt, load_maskt, load_cms, load_masks] = if matches!(surface, Surface::Shadow) {
+        [cmt, maskt, cms, masks]
+    } else {
+        [0; 4]
+    };
     let mut words = vec![
         gsp_matrix_f3d(0, true, true, false),
         gsp_viewport_f3d(64),
@@ -158,14 +168,14 @@ fn memory(surface: Surface) -> Vec<u8> {
         (0xba00_1301, 0x0008_0000),
         (0xba00_0c02, 0x2000),
         (0xb900_0002, 0),
-        (0xb700_0000, 0x0020_0005),
+        (0xb700_0000, 0x0000_0205),
         (0xb900_031d, 0x0055_2078),
         (0xfcff_ffff, 0xfffe_793c),
         gsp_vertex_f3d(0, 4, 0x100),
         gsp_1triangle_f3d(0, 1, 2),
         gsp_1triangle_f3d(0, 2, 3),
         (0xe700_0000, 0),
-        (0xb600_0000, 0x0002_2000),
+        (0xb600_0000, geometry),
         (
             0xb900_031d,
             match surface {
@@ -181,7 +191,9 @@ fn memory(surface: Surface) -> Vec<u8> {
         (0xfb00_0000, 0xffff_ff11),
         gsp_texture_f3d(65535, 65535, 0, 0, true),
         gdp_set_texture_image(fmt, 2, 1, 0x1000),
-        gdp_set_tile(fmt, 2, 0, 0, 7, 0, cmt, maskt, 0, cms, masks, 0),
+        gdp_set_tile(
+            fmt, 2, 0, 0, 7, 0, load_cmt, load_maskt, 0, load_cms, load_masks, 0,
+        ),
         gdp_load_sync(),
         gdp_load_block(7, 0, 0, load_count, dxt),
         (0xe700_0000, 0),
@@ -193,7 +205,7 @@ fn memory(surface: Surface) -> Vec<u8> {
         gsp_1triangle_f3d(0, 2, 3),
         gsp_texture_f3d(65535, 65535, 0, 0, false),
         (0xe700_0000, 0),
-        (0xb700_0000, 0x0002_2000),
+        (0xb700_0000, geometry),
         (0xfcff_ffff, 0xfffe_793c),
     ];
     words.push(gsp_enddl_f3d());
