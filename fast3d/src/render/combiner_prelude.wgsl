@@ -347,11 +347,7 @@ fn eval_combiner(in: VsOut) -> CycleResult {
         texel = vec4<f32>(1.0);
     }
 
-    // Sample the second texture (TEXEL1). `inv_tex1_size.z` is the tex_enable1 flag, set only for a
-    // genuine two-texture material (`tile_count == 2`). When it is 0 the material is single-texture
-    // (tex1 is the 1×1 dummy): TEXEL1 selectors resolve to the magenta sentinel and NO role swap
-    // occurs, so single-texture goldens stay byte-identical.
-    var use_tex1 = combiner.inv_tex1_size.z != 0.0;
+    let use_tex1 = combiner.inv_tex1_size.z != 0.0;
     let texel1 = textureSample(tex1, samp1, in.uv * combiner.inv_tex1_size.xy);
     let sentinel1 = vec4<f32>(1.0, 0.0, 1.0, 1.0); // unwired-TEXEL1 sentinel (never read when gated)
     // The value a TEXEL1 selector reads in CYCLE 0 (no swap yet): the tex1 sample when present, else
@@ -367,12 +363,6 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     var lod_fraction = 1.0;
     let prim_lod_frac = combiner.lod_params.z;
 
-    // N64-faithful LOD: overrides `texel` (TEXEL0 pre-swap) / `t1_cyc0` (TEXEL1 pre-swap) /
-    // `lod_fraction` with the two mip taps (or DETAIL tap) `compute_lod` selects, and forces the
-    // TEXEL0<->TEXEL1 role swap on (`use_tex1 = true`) so the EXISTING 2-cycle swap block below
-    // feeds them through unchanged — LOD is mutually exclusive with a genuine second texture.
-    // `lod_params.x == 0` for every existing (non-LOD) golden, so this block is dead code for them:
-    // BYTE-IDENTICAL.
     if combiner.lod_params.x != 0.0 {
         let detail_active = (u32(combiner.inv_detail_size.w) & 2u) != 0u;
         // `lod_params.y` is the REAL uploaded per-level count (Rust `uploaded_level_count`, capped at
@@ -386,7 +376,6 @@ fn eval_combiner(in: VsOut) -> CycleResult {
         texel = sample_tile(lod.level0, in.uv, detail_active);
         t1_cyc0 = sample_tile(lod.level1, in.uv, detail_active);
         lod_fraction = lod.lod_fraction;
-        use_tex1 = true;
     }
 
     // 1-cycle (cycle_type==0) uses cycle-1 slots (F3DEX2 convention); combined starts as zero.
@@ -423,16 +412,8 @@ fn eval_combiner(in: VsOut) -> CycleResult {
         // Cycle 0 (secondCycle=false): TEXEL0 -> tex0, TEXEL1 -> tex1.
         let r0 = run_cycle(ca0, cb0, cc0, cd0, aa0, ab0, ac0, ad0, texel, t1_cyc0, shade, zero4, prim, env, lod_fraction, prim_lod_frac);
         let combined0 = vec4<f32>(r0.rgb, r0.alpha);
-        // Cycle 1 (secondCycle=true): the TEXEL0<->TEXEL1 role swap — a TEXEL0 selector reads
-        // the tex1 sample, a TEXEL1 selector reads the tex0 sample
-        // (C_TEXEL0 -> secondCycle ? texVal1 : texVal0). Gated on use_tex1 so a
-        // single-texture 2-cycle combiner keeps the no-swap behavior and its goldens stay identical.
-        // `t1_cyc0` (not the raw `texel1`) feeds `c1_t0` so the LOD override above (which replaces
-        // `t1_cyc0`, not `texel1`) flows through the swap — `t1_cyc0 == texel1` whenever
-        // `use_tex1` is true on the non-LOD path, so this is byte-identical there.
-        let c1_t0 = select(texel, t1_cyc0, use_tex1);
-        let c1_t1 = select(t1_cyc0, texel, use_tex1);
-        result = run_cycle(ca1, cb1, cc1, cd1, aa1, ab1, ac1, ad1, c1_t0, c1_t1, shade, combined0, prim, env, lod_fraction, prim_lod_frac);
+        // The RDP pipeline reverses physical texture roles in the second cycle.
+        result = run_cycle(ca1, cb1, cc1, cd1, aa1, ab1, ac1, ad1, t1_cyc0, texel, shade, combined0, prim, env, lod_fraction, prim_lod_frac);
     }
 
     return result;

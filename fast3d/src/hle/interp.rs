@@ -220,10 +220,15 @@ pub fn interpret<M: Rdram>(
                 continue;
             }
 
+            let Some((material_index, render_mode_index)) =
+                crate::hle::rsp::snapshot_rect_run(&rsp, &rdp, &mut diags, &mut scene, pc)
+            else {
+                dropped_runs += 1;
+                pc += 3 * stride;
+                continue;
+            };
             crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
             crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
-            let (material_index, render_mode_index) =
-                crate::hle::rsp::snapshot_rect_run(&rsp, &rdp, &mut diags, &mut scene, pc);
 
             // fb_source: the latest PRIOR pair whose framebuffer byte-range contains the texture
             // image address (a framebuffer-as-texture read-back). The current pair is excluded

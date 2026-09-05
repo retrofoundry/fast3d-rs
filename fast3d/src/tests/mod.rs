@@ -4,7 +4,7 @@
 //! below needs a `feature = "asm"` cfg. The 4 pure-asm suites stay external in `tests/`.
 
 #[allow(dead_code)]
-mod common;
+pub(crate) mod common;
 
 mod asm_tests;
 mod culling;

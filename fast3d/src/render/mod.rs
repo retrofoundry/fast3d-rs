@@ -230,6 +230,18 @@ impl CombinerUniform {
         }
     }
 
+    fn from_rect(
+        mat: &crate::hle::Material,
+        rm: &crate::hle::RenderMode,
+        fog_color: [f32; 4],
+    ) -> Self {
+        let mut uniform = Self::from_run(mat, rm, fog_color);
+        // TexRect UVs are already divided by the first binding's dimensions.
+        uniform.inv_tex1_size[0] *= mat.tex_w.max(1) as f32;
+        uniform.inv_tex1_size[1] *= mat.tex_h.max(1) as f32;
+        uniform
+    }
+
     /// Synthesize a `CombinerUniform` for a `SceneOp::FillRect` (the 2D solid-rect path).
     ///
     /// The RDP fill-color register (`color_raw`) is resolved to normalized RGBA8 via the color
@@ -3311,7 +3323,7 @@ impl SceneRenderer {
                             CombinerUniform::tex_copy(rm, mat.fmt)
                         } else {
                             let rm = &scene.render_modes[*render_mode_index as usize];
-                            CombinerUniform::from_run(mat, rm, fog_color)
+                            CombinerUniform::from_rect(mat, rm, fog_color)
                         };
                         push_slot(&mut pool, &u);
                         // COPY cycle scales the horizontal step by 4 (4 px/cycle): dsdx >>= 2.
@@ -3772,7 +3784,7 @@ impl SceneRenderer {
                             CombinerUniform::tex_copy(rm, mat.fmt)
                         } else {
                             let rm = &scene.render_modes[*render_mode_index as usize];
-                            CombinerUniform::from_run(mat, rm, fog_color)
+                            CombinerUniform::from_rect(mat, rm, fog_color)
                         };
                         push_slot(&mut pool, &u);
                         // COPY cycle scales the horizontal step by 4 (4 px/cycle): dsdx >>= 2.

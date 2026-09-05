@@ -832,17 +832,15 @@ pub(crate) fn record_scissor_if_changed(
     }
 }
 
-/// Snapshot the material + render mode for a 2D rectangle, deduped against the LAST scene entry
-/// (mirrors `snapshot_run`, but rects ALWAYS build a forced-TEXEL0 material via `build_rect_material`
-/// — they never refuse to draw). Returns `(material_index, render_mode_index)`.
+/// Snapshot a valid TexRect material and render mode, deduped against the last scene entry.
 pub(crate) fn snapshot_rect_run(
     rsp: &Rsp,
     rdp: &crate::hle::rdp::Rdp,
     diags: &mut Vec<crate::diag::Diagnostic>,
     scene: &mut Scene,
     pc: u64,
-) -> (u32, u32) {
-    let m = crate::hle::combiner::build_rect_material(rdp, rsp, diags, pc);
+) -> Option<(u32, u32)> {
+    let m = crate::hle::combiner::build_rect_material(rdp, rsp, diags, pc)?;
     let material_index = match scene.materials.last() {
         Some(last) if *last == m => (scene.materials.len() - 1) as u32,
         _ => {
@@ -858,7 +856,7 @@ pub(crate) fn snapshot_rect_run(
             (scene.render_modes.len() - 1) as u32
         }
     };
-    (material_index, render_mode_index)
+    Some((material_index, render_mode_index))
 }
 
 /// Record a triangle through the pair recorder. When a CIMG has been seen the tri is routed into the
