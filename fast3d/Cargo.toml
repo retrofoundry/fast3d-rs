@@ -38,3 +38,7 @@ png = "0.18"
 [[example]]
 name = "replay_capture"
 required-features = ["capture"]
+
+[[example]]
+name = "export_capture_rdram"
+required-features = ["capture"]

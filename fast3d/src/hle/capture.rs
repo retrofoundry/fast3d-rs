@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 
 mod format;
 mod replay;
+pub use crate::scene::ColorImage;
 pub use format::{Fixture, Frame, Provenance};
 pub use replay::{CaptureFrame, ReplayOutput};
 
@@ -142,6 +143,26 @@ pub struct Task {
 }
 
 impl Task {
+    /// Walks the captured memory without a GPU and returns the final colour target.
+    /// Missing memory or interpreter diagnostics reject the result.
+    pub fn final_color_image(&self) -> Result<ColorImage> {
+        let hardware = ReplayHardware::new(self, None)?;
+        let result = super::interp::interpret(
+            hardware.rdram(),
+            self.entry,
+            self.microcode.into(),
+            self.data_format,
+        );
+        hardware.check()?;
+        if let Some(diagnostic) = result.diags.first() {
+            return Err(CaptureError::Invalid(format!(
+                "task {}: {diagnostic}",
+                self.order
+            )));
+        }
+        Ok(result.scene.color_image)
+    }
+
     fn validate(&self) -> Result<()> {
         self.source.memory.validate()?;
         if self.source.memory.address_space == AddressSpace::Image

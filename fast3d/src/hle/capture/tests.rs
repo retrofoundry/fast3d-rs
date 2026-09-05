@@ -634,3 +634,45 @@ fn capture_missing_span_near_address_limit_does_not_panic() {
         ));
     }
 }
+
+#[test]
+fn final_color_image_follows_nested_lists_and_segments() {
+    let words: [(u32, u32); 7] = [
+        (0xff10_013f, 0x0010_0000),
+        (0x0600_0000, 0x0400_0018),
+        (0xb800_0000, 0),
+        (0xbc00_0806, 0x0020_0000),
+        (0xff18_00ff, 0x0200_0100),
+        (0xb800_0000, 0),
+        (0xff10_003f, 0x0030_0000),
+    ];
+    let task = Task {
+        entry: 0x100,
+        microcode: Microcode::F3d,
+        data_format: DataFormat::Fixed,
+        order: 0,
+        source: SourceLayout {
+            memory: MemoryLayout::IMAGE,
+            segments: {
+                let mut segments = [0; 16];
+                segments[4] = 0x100;
+                segments
+            },
+        },
+        spans: vec![MemorySpan {
+            address: 0x100,
+            bytes: words
+                .into_iter()
+                .flat_map(|(a, b)| [a.to_be_bytes(), b.to_be_bytes()].concat())
+                .collect(),
+        }],
+    };
+    let color = task.final_color_image().unwrap();
+    assert_eq!(
+        (color.addr, color.width, color.fmt, color.siz),
+        (0x0020_0100, 256, 0, 3)
+    );
+    let mut incomplete = task;
+    incomplete.spans[0].bytes.truncate(32);
+    assert!(incomplete.final_color_image().is_err());
+}

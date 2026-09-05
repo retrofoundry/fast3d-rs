@@ -7,6 +7,9 @@
 pub(crate) mod common;
 
 mod asm_tests;
+#[cfg(feature = "capture")]
+#[path = "../../../tools/rt64-oracle/fixture.rs"]
+mod capture_fixture;
 mod culling;
 mod decode;
 mod dl_plumbing;
