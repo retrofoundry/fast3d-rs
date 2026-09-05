@@ -14,14 +14,19 @@ Items 1–6 landed as PRs #27–#38, including the rt64 oracle in #33. The autho
 regression corpus and browser execution land with this PR. Live-game acceptance
 still requires reviewed captures and independent reference comparisons.
 
-Two disagreements with rt64 came out of running the corpus through the oracle and are open:
+`TrianglePixelCornerSampling` resolves the sample-position differences in water, foliage and
+castle TRILERP. Triangles evaluate ST at pixel corners for every filter and cycle type;
+rectangles retain their own endpoint construction. Both renderers select castle levels 0/1 with LOD fraction
+0.499977. Its period-4 assertion is RGB (96,32,32), (128,64,64), (64,128,128), (32,96,96),
+with tolerance two and the clamped region unchanged. The replacement-texture mip bias does
+not apply to these native tiles.
 
-- Triangle texture coordinates are half a texel apart. With bilinear filtering rt64 blends
-  adjacent texels where fast3d returns the exact texel (the water fixture's band boundary
-  columns, the foliage fixture's cutout edges); point sampling agrees. The corpus assertions
-  stay off texel edges until this is settled.
-- The castle TRILERP fixture renders different level weights in rt64 (period-4 pattern values
-  differ by up to 100/255). Its assertions encode fast3d's current output.
+The point-filter decision has a separate synthetic F3D IMAGE fixture,
+`triangle-pixel-corner-point.f3dcap`, emitted by
+`write_rt64_triangle_pixel_corner_point_fixture`. Its 32x32 RGBA16 bands repeat over a
+64x64 quad with raw ST starting at -8: corner sampling selects the previous texel at
+each band boundary, while centre sampling selects the next band. The fixture's rt64
+comparison is pending; the 13 affected point-filter goldens have not been regenerated.
 
 1. Captured display-list corpus. A recording `Rdram` backend that snapshots every byte the
    interpreter reads from live guest memory into a relocatable fixture, plus a loader that

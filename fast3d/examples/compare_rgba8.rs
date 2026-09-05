@@ -69,6 +69,7 @@ mod native {
         width: u32,
         region: DitherRegion,
         background: [u8; 4],
+        ignore_alpha: bool,
     ) -> DitherStats {
         let mut stats = DitherStats {
             survivors: 0,
@@ -80,7 +81,8 @@ mod native {
             let mut row_discards = 0;
             for (column, x) in (region.x..region.x + region.width).enumerate() {
                 let offset = (y as usize * width as usize + x as usize) * 4;
-                if image[offset..offset + 4] == background {
+                let channels = if ignore_alpha { 3 } else { 4 };
+                if image[offset..offset + channels] == background[..channels] {
                     row_discards += 1;
                     column_discards[column] += 1;
                 } else {
@@ -99,13 +101,20 @@ mod native {
         width: u32,
         region: DitherRegion,
         background: [u8; 4],
+        ignore_alpha: bool,
     ) -> Result<(), Box<dyn Error>> {
-        let reference = dither_stats(left, width, region, background);
-        let replay = dither_stats(right, width, region, background);
+        let reference = dither_stats(left, width, region, background, ignore_alpha);
+        let replay = dither_stats(right, width, region, background, ignore_alpha);
         let pixels = region.pixels();
+        let channels = if ignore_alpha { 3 } else { 4 };
         println!(
-            "dither region (x,y,width,height): {},{},{},{}; discarded RGBA: {:?}",
-            region.x, region.y, region.width, region.height, background
+            "dither region (x,y,width,height): {},{},{},{}; discarded {}: {:?}",
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+            if ignore_alpha { "RGB" } else { "RGBA" },
+            &background[..channels]
         );
         let mut failures = Vec::new();
         for (name, stats) in [("reference", &reference), ("replay", &replay)] {
@@ -152,6 +161,7 @@ mod native {
         width: u32,
         threshold: u8,
         dither_region: Option<DitherRegion>,
+        ignore_alpha: bool,
     ) -> Differences {
         let mut result = Differences {
             mask: vec![0; left.len() / 4],
@@ -170,7 +180,7 @@ mod native {
                 continue;
             }
             let mut over_threshold = false;
-            for channel in 0..4 {
+            for channel in 0..if ignore_alpha { 3 } else { 4 } {
                 let difference = a[channel].abs_diff(b[channel]);
                 result.max_channels[channel] = result.max_channels[channel].max(difference);
                 over_threshold |= difference > threshold;
@@ -197,7 +207,7 @@ mod native {
         let (Some(left), Some(right), Some(width), Some(height)) =
             (args.next(), args.next(), args.next(), args.next())
         else {
-            return Err("usage: compare_rgba8 <reference.rgba8> <replay.rgba8> <width> <height> [--threshold 8] [--max-diff-pixels N] [--diff-mask output.png] [--dither-region x,y,width,height] [--dither-background r,g,b,a]\nDither regions use statistical comparison; exact matches to the background RGBA (default 0,0,0,255) are discarded samples. Select a region covered by the dithered primitive whose surviving color differs from the background. Survivor fractions must differ by at most 0.05, and no row or column in either image may be more than 80% discarded. The threshold, pixel budget, and diff mask apply only outside the region.".into());
+            return Err("usage: compare_rgba8 <reference.rgba8> <replay.rgba8> <width> <height> [--threshold 8] [--ignore-alpha] [--max-diff-pixels N] [--diff-mask output.png] [--dither-region x,y,width,height] [--dither-background r,g,b,a]\nDither regions use statistical comparison; exact matches to the background RGBA (default 0,0,0,255) are discarded samples. Select a region covered by the dithered primitive whose surviving color differs from the background. Survivor fractions must differ by at most 0.05, and no row or column in either image may be more than 80% discarded. The threshold, pixel budget, and diff mask apply only outside the region.".into());
         };
         let width: u32 = width.to_str().ok_or("invalid width")?.parse()?;
         let height: u32 = height.to_str().ok_or("invalid height")?.parse()?;
@@ -208,11 +218,16 @@ mod native {
             .and_then(|n| usize::try_from(n).ok())
             .ok_or("dimensions must be positive and their RGBA8 size must fit in memory")?;
         let mut threshold = 8u8;
+        let mut ignore_alpha = false;
         let mut budget = None;
         let mut dither_region = None;
         let mut dither_background = None;
         let mut mask_path = PathBuf::from(&right).with_extension("diff.png");
         while let Some(option) = args.next() {
+            if option == "--ignore-alpha" {
+                ignore_alpha = true;
+                continue;
+            }
             let value = args.next().ok_or("option requires a value")?;
             match option.to_str() {
                 Some("--threshold") => {
@@ -249,11 +264,14 @@ mod native {
             )
             .into());
         }
-        let differences = compare(&left, &right, width, threshold, dither_region);
+        let differences = compare(&left, &right, width, threshold, dither_region, ignore_alpha);
+        let channels = if ignore_alpha { 3 } else { 4 };
+        let maxima = &differences.max_channels[..channels];
         println!(
-            "max channel diff: {} / 255 (RGBA: {:?})",
-            differences.max_channels.iter().max().unwrap(),
-            differences.max_channels
+            "max channel diff: {} / 255 ({}: {:?})",
+            maxima.iter().max().unwrap(),
+            if ignore_alpha { "RGB" } else { "RGBA" },
+            maxima
         );
         println!(
             "pixels over {threshold} / 255: {} / {}",
@@ -284,6 +302,7 @@ mod native {
                 width,
                 region,
                 dither_background.unwrap_or([0, 0, 0, 255]),
+                ignore_alpha,
             )?;
         }
         if budget.is_some_and(|maximum| differences.pixels > maximum) {
@@ -531,7 +550,7 @@ mod native {
                 8, 0, 0, 0, 9, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 255, 0,
             ];
             assert_eq!(
-                compare(&left, &right, 3, 8, None),
+                compare(&left, &right, 3, 8, None, false),
                 Differences {
                     max_channels: [9, 10, 255, 11],
                     pixels: 3,
@@ -542,8 +561,42 @@ mod native {
         }
 
         #[test]
+        fn ignore_alpha_excludes_alpha_from_maxima_budget_bounds_and_mask() {
+            let left = [[0; 4]; 3];
+            let right = [[0, 0, 0, 255], [9, 0, 0, 0], [0, 0, 8, 255]];
+            assert_eq!(
+                compare(left.as_flattened(), right.as_flattened(), 3, 8, None, true),
+                Differences {
+                    max_channels: [9, 0, 8, 0],
+                    pixels: 1,
+                    bounds: Some((1, 0, 1, 0)),
+                    mask: vec![0, 255, 0],
+                }
+            );
+            let fixture = Fixture::new(3, 1, &left, &right);
+            fixture
+                .run(&["--max-diff-pixels", "1", "--ignore-alpha"])
+                .unwrap();
+            assert!(fixture
+                .run(&["--ignore-alpha", "--max-diff-pixels", "0"])
+                .is_err());
+            assert!(fixture.run(&["--max-diff-pixels", "1"]).is_err());
+        }
+
+        #[test]
+        fn ignore_alpha_matches_dither_background_by_rgb() {
+            let left = checkerboard(10, 10);
+            let right: Vec<_> = left.iter().map(|p| [p[0], p[1], p[2], 128]).collect();
+            let fixture = Fixture::new(10, 10, &left, &right);
+            fixture
+                .run(&["--ignore-alpha", "--dither-region", "0,0,10,10"])
+                .unwrap();
+            assert!(fixture.run(&["--dither-region", "0,0,10,10"]).is_err());
+        }
+
+        #[test]
         fn equal_images_have_no_bounds() {
-            let diff = compare(&[15; 8], &[15; 8], 2, 0, None);
+            let diff = compare(&[15; 8], &[15; 8], 2, 0, None, false);
             assert_eq!(diff.bounds, None);
             assert_eq!(diff.pixels, 0);
             assert_eq!(diff.max_channels, [0; 4]);

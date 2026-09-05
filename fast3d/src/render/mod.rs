@@ -135,7 +135,7 @@ pub struct CombinerUniform {
     pub blend_color: [f32; 4], // blend color RGBA, normalized 0..1 (from mat.blend_color / G_SETBLENDCOLOR)
     pub fog_color: [f32; 4],   // normalized draw fog color RGBA
     /// `.xy` = 1/(tex_w, tex_h) for texel-space triangle and rectangle coordinates.
-    /// `.zw` pad to keep the 16-byte std140 tail alignment.
+    /// `.z` = 1 for rectangles, 0 for triangles; `.w` is padding.
     pub inv_tex_size: [f32; 4],
     /// TEXEL1 mirror of `inv_tex_size` (second-texture params). `.xy` = 1/(tex1_w, tex1_h); `.z` =
     /// `tex_enable1` (1.0 when the material carries a second texture — `tile_count == 2` — else 0.0);
@@ -268,6 +268,7 @@ impl CombinerUniform {
     ) -> Self {
         let mut uniform = Self::from_run(mat, rm, fog_color);
         uniform.inv_tex_size = triangle_inv_tex_size(mat);
+        uniform.inv_tex_size[2] = 1.0;
         uniform
     }
 
@@ -3325,6 +3326,7 @@ impl SceneRenderer {
                             CombinerUniform::from_rect(mat, rm, *fog_color)
                         };
                         u.inv_tex_size = triangle_inv_tex_size(mat);
+                        u.inv_tex_size[2] = 1.0;
                         u.frame = [self.frame_serial as u32, self.dither_seed, fb_w, fb_h];
                         push_slot(&mut pool, &u);
                         rect_verts.extend_from_slice(&texrect_quad(
@@ -3765,6 +3767,7 @@ impl SceneRenderer {
                             CombinerUniform::from_rect(mat, rm, *fog_color)
                         };
                         u.inv_tex_size = triangle_inv_tex_size(mat);
+                        u.inv_tex_size[2] = 1.0;
                         u.frame = [self.frame_serial as u32, self.dither_seed, fb_w, fb_h];
                         push_slot(&mut pool, &u);
                         rect_verts.extend_from_slice(&texrect_quad(

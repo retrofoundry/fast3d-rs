@@ -1405,22 +1405,19 @@ const MULTI_MATERIAL_SRC: &str = include_str!("../../tests/scenes/multi-material
 fn golden_multi_material() {
     // 3 regions render 3 distinct materials (not the old flat collapse).
     let px = render_scene_to_rgba8(MULTI_MATERIAL_SRC, RGBA16_QUAD_TEX, 96, 96);
-    // Canary: left-third center pixel vs. centre-third center pixel must differ.
-    // For a 96×96 image, sample row 48:
-    //   left-third   center x ≈ 16  → pixel byte offset (48*96 + 16)*4
-    //   centre-third center x ≈ 48  → pixel byte offset (48*96 + 48)*4
-    //   right-third  center x ≈ 80  → pixel byte offset (48*96 + 80)*4
-    let row = 48usize;
+    // Canary: a left-third pixel vs. a centre-third pixel must differ. Row 60 and columns 12/76
+    // sit mid-texel (texel row 1, column 1: green) so the sample does not straddle a texel edge.
+    let row = 60usize;
     let stride = 96usize;
-    let left_r = px[(row * stride + 16) * 4];
-    let left_g = px[(row * stride + 16) * 4 + 1];
-    let left_b = px[(row * stride + 16) * 4 + 2];
+    let left_r = px[(row * stride + 12) * 4];
+    let left_g = px[(row * stride + 12) * 4 + 1];
+    let left_b = px[(row * stride + 12) * 4 + 2];
     let centre_r = px[(row * stride + 48) * 4];
     let centre_g = px[(row * stride + 48) * 4 + 1];
     let centre_b = px[(row * stride + 48) * 4 + 2];
-    let right_r = px[(row * stride + 80) * 4];
-    let right_g = px[(row * stride + 80) * 4 + 1];
-    let right_b = px[(row * stride + 80) * 4 + 2];
+    let right_r = px[(row * stride + 76) * 4];
+    let right_g = px[(row * stride + 76) * 4 + 1];
+    let right_b = px[(row * stride + 76) * 4 + 2];
     // Centre quad is flat blue (PRIMITIVE = 0,0,255) — assert blue channel dominant.
     assert!(
         centre_b > 200 && centre_b > centre_r + 100,

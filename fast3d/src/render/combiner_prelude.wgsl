@@ -40,6 +40,7 @@ struct Combiner {
     blend_color:     vec4<f32>, // blend color RGBA — wired in B3
     fog_color:       vec4<f32>, // fog color RGBA — wired in Phase C
     inv_tex_size:    vec4<f32>, // .xy = 1/(tex_w, tex_h) for texel-space triangle and rectangle UVs.
+                                // .z = 1 for rectangles, 0 for triangles.
     inv_tex1_size:   vec4<f32>, // TEXEL1 mirror of inv_tex_size: .xy = 1/(tex1_w, tex1_h); .z =
                                 // tex_enable1 flag (1.0 when the second texture is used, else 0.0);
                                 // .w = filter mode (0 = point, 2 = bilerp, 3 = average).
@@ -419,7 +420,14 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     // tcScale is needed).
     let ddx_uv = dpdx(in.uv);
     let ddy_uv = dpdy(in.uv);
-    let uv = in.uv * combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
+    // rt64's half-pixel screen offset evaluates triangle ST at the pixel corner.
+    let uvw = vec3<f32>(in.uv * in.clip_position.w, in.clip_position.w);
+    let corner = uvw - 0.5 * (dpdx(uvw) + dpdy(uvw));
+    var sample_uv = in.uv;
+    if combiner.inv_tex_size.z == 0.0 {
+        sample_uv = corner.xy / corner.z;
+    }
+    let uv = sample_uv * combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
 
     let l = combiner.combine_l;
     let h = combiner.combine_h;

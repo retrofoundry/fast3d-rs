@@ -212,7 +212,7 @@ fn texrect_uniform_uses_texel_units() {
     mat.tex_h = 8;
     let rm = crate::hle::blender::decode_render_mode(0, 0, 0);
     let uniform = CombinerUniform::from_rect(&mat, &rm, [0; 4]);
-    assert_eq!(uniform.inv_tex_size, [0.0625, 0.125, 0.0, 0.0]);
+    assert_eq!(uniform.inv_tex_size, [0.0625, 0.125, 1.0, 0.0]);
 }
 
 #[cfg(feature = "asm")]

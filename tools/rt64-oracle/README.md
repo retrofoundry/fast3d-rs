@@ -97,6 +97,8 @@ established by this tool: current filtering, coverage and blending differences
 can still produce a mask. Review that mask before using it as a gate for
 `docs/design/sm64-fidelity.md` PRs 2 through 4.
 
+Use `--ignore-alpha` to compare RGB only, including dither-background matching, when rt64's RGBA16 coverage alpha differs from fast3d's blended alpha.
+
 The exporter accepts only IMAGE layout: big-endian data and eight-byte commands.
 It preserves physical addresses in an 8 MiB image, zeroes uncaptured gaps, walks
 each task through the existing CPU interpreter, and writes the final colour
