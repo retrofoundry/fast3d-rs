@@ -300,6 +300,27 @@ impl Tmem {
         out
     }
 
+    pub fn sampling_lookup(&self, tile: &TileDescriptor, tlut_fmt: u8) -> Vec<u8> {
+        let mut out = Vec::with_capacity(TMEM_BYTES * 4 * 4);
+        for odd in [false, true] {
+            for parity in 0..2 {
+                for rel in 0..TMEM_BYTES {
+                    out.extend_from_slice(&self.decode_texel(
+                        tile.fmt,
+                        tile.siz,
+                        usize::from(tile.tmem_addr) * 8,
+                        rel,
+                        odd,
+                        parity,
+                        tlut_fmt,
+                        usize::from(tile.palette),
+                    ));
+                }
+            }
+        }
+        out
+    }
+
     /// Decode a single texel to RGBA8, reproducing the `texdec` expansions exactly.
     ///
     /// `tlut_fmt` / `palette` are used only by the CI4/CI8 arms.
@@ -418,6 +439,54 @@ impl Tmem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tile_lookup_matches_tmem_all_supported_formats() {
+        let mut tmem = Tmem::default();
+        tmem.bytes.copy_from_slice(&pattern(4096));
+        for (fmt, siz) in [
+            (0, 2),
+            (0, 3),
+            (4, 0),
+            (4, 1),
+            (3, 0),
+            (3, 1),
+            (3, 2),
+            (2, 0),
+            (2, 1),
+        ] {
+            for (base, palette, tlut) in [(0, 0, 2), (255, 7, 3), (511, 15, 2)] {
+                let tile = TileDescriptor {
+                    fmt,
+                    siz,
+                    tmem_addr: base,
+                    palette,
+                    ..Default::default()
+                };
+                let lookup = tmem.sampling_lookup(&tile, tlut);
+                assert_eq!(lookup.len(), 65536);
+                for odd in 0..2 {
+                    for parity in 0..2 {
+                        for rel in 0..4096 {
+                            let offset = ((odd * 2 + parity) * 4096 + rel) * 4;
+                            let expected = tmem.decode_texel(
+                                fmt,
+                                siz,
+                                usize::from(base) * 8,
+                                rel + 4096,
+                                odd != 0,
+                                parity,
+                                tlut,
+                                usize::from(palette),
+                            );
+                            assert_eq!(lookup[offset..offset + 4], expected,
+                                "fmt {fmt}/{siz}, base {base}, rel {rel}, odd {odd}, parity {parity}");
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// libultra CALC_DXT for a texture whose row occupies `line_words` 64-bit words:
     /// `dxt = ceil(2048 / line_words)`, i.e. `(2048 + n - 1) / n`.

@@ -5,6 +5,7 @@
 //! decode_combine validates support and texture dependencies; the shader receives
 //! raw combine_l/combine_h words (one source of truth).
 
+use super::tile_sampling::TileSampling;
 #[cfg(test)]
 #[path = "combiner_tests.rs"]
 mod fidelity_tests;
@@ -326,7 +327,8 @@ pub struct CombinerSelectors {
 /// bytes + dims + wrap/format).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tex1 {
-    /// Decoded RGBA8 texture (length = tex_w * tex_h * 4).
+    pub sampling: TileSampling,
+    /// RGBA8 payload sized by `sampling.allocation_extent()`; tex_w/tex_h remain logical extents.
     pub texture: Vec<u8>,
     pub tex_w: u32,
     pub tex_h: u32,
@@ -343,13 +345,14 @@ pub struct Tex1 {
 /// fixed per-level bindings. Kept in sync with `render::MAX_LOD`.
 pub const MAX_LOD_LEVELS: u32 = 8;
 
-/// One decoded LOD level. `texture` is the decoded RGBA8 buffer (length = `w * h * 4`) for a single
+/// One decoded LOD level. `texture` is an image or bounded TMEM lookup for a single
 /// independent LOD level; `mip_levels[0]` mirrors the `Material.texture` / `tex_w` / `tex_h` level-0
 /// fields. Levels are NOT required to halve — each carries its own `(w, h)`. Also used for the DETAIL
 /// tile (`Material.detail_tex`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MipLevel {
-    /// Decoded RGBA8 texture (length = w * h * 4).
+    pub sampling: TileSampling,
+    /// RGBA8 payload sized by `sampling.allocation_extent()`; w/h remain logical extents.
     pub texture: Vec<u8>,
     pub w: u32,
     pub h: u32,
@@ -360,7 +363,8 @@ pub struct MipLevel {
 /// words (for the shader), cycle type, prim/env, and whether texture is enabled.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Material {
-    /// Decoded RGBA8 texture (length = tex_w * tex_h * 4).
+    pub sampling: TileSampling,
+    /// RGBA8 payload sized by `sampling.allocation_extent()`; tex_w/tex_h remain logical extents.
     pub texture: Vec<u8>,
     pub tex_w: u32,
     pub tex_h: u32,
@@ -372,10 +376,10 @@ pub struct Material {
     pub env: [u8; 4],
     /// Whether physical texture 0 is sampled; triangles also require SPTexture on.
     pub tex_enable: bool,
-    /// Wrap mode from the render tile (cms/cmt): 0=WRAP 1=MIRROR 2=CLAMP. Consumed by the renderer sampler.
+    /// Wrap mode from the render tile (cms/cmt): 0=WRAP 1=MIRROR 2=CLAMP.
     pub wrap_s: u8,
     pub wrap_t: u8,
-    /// Tile format/size (diagnostic; decode is CPU-side so the GPU never sees these).
+    /// Tile format/size (diagnostic; decode is CPU-side).
     pub fmt: u8,
     pub siz: u8,
     /// Blend color RGBA (sourced from gsDPSetBlendColor; Phase D dependency).
@@ -562,7 +566,10 @@ fn tile_takes_faithful_path(
         (tile.fmt, tile.siz),
         (0, 2) | (0, 3) | (4, 1) | (4, 0) | (3, 2) | (3, 1) | (3, 0) | (2, 0) | (2, 1)
     );
-    format_ok && (line_bytes.is_multiple_of(8) || rdp.load_via_tile)
+    format_ok
+        && (line_bytes.is_multiple_of(8)
+            || rdp.load_via_tile
+            || TileSampling::from_tile(tile, 0).image[2] == 1)
 }
 
 /// Decode `tile` to a `tex_w * tex_h * 4` RGBA8 buffer for a `Material`, via the N64-faithful path
@@ -604,6 +611,27 @@ fn decode_tile_texture(
         let mut padded = rdp.tmem.to_vec();
         padded.resize(needed, 0);
         fi.decode(&padded, tex_w, tex_h, tlut, tile.palette, tlut_fmt)
+    }
+}
+
+fn decode_sampling_texture(
+    rdp: &crate::hle::rdp::Rdp,
+    tile: &crate::hle::rdp::TileDescriptor,
+    tlut_fmt: u8,
+) -> MipLevel {
+    let sampling = TileSampling::from_tile(tile, tlut_fmt);
+    let w = u32::from(tile.width.max(1));
+    let h = u32::from(tile.height.max(1));
+    let texture = if sampling.image[2] == 1 {
+        rdp.tmem_bank.sampling_lookup(tile, tlut_fmt)
+    } else {
+        decode_tile_texture(rdp, tile, w, h, tlut_fmt)
+    };
+    MipLevel {
+        sampling,
+        texture,
+        w,
+        h,
     }
 }
 
@@ -650,12 +678,15 @@ fn build_material_inner(
     };
     let tile = &rdp.tiles[base];
     let tlut_fmt = ((rdp.other_mode_h >> 14) & 0x3) as u8;
-    let (texture, tex_w, tex_h) = if uses_physical0 {
-        let w = tile.width.max(1) as u32;
-        let h = tile.height.max(1) as u32;
-        (decode_tile_texture(rdp, tile, w, h, tlut_fmt), w, h)
+    let decoded = if uses_physical0 {
+        decode_sampling_texture(rdp, tile, tlut_fmt)
     } else {
-        (vec![0; 4], 1, 1)
+        MipLevel {
+            sampling: TileSampling::default(),
+            texture: vec![0; 4],
+            w: 1,
+            h: 1,
+        }
     };
     let tex_enable = (rect || rsp.texture_state.on) && uses_physical0;
     let tile_count = if uses_physical1 {
@@ -678,8 +709,10 @@ fn build_material_inner(
             });
             return None;
         }
+        let decoded = decode_sampling_texture(rdp, t1, tlut_fmt);
         Some(Tex1 {
-            texture: decode_tile_texture(rdp, t1, t1_w, t1_h, tlut_fmt),
+            sampling: decoded.sampling,
+            texture: decoded.texture,
             tex_w: t1_w,
             tex_h: t1_h,
             wrap_s: t1.cms,
@@ -712,16 +745,11 @@ fn build_material_inner(
         for k in 0..n {
             let tk = &rdp.tiles[(base + k as usize) & 7];
             let lw = tk.width.max(1) as u32;
-            let lh = tk.height.max(1) as u32;
             if !tile_takes_faithful_path(rdp, tk, lw) {
                 faithful = false;
                 break;
             }
-            levels.push(MipLevel {
-                texture: decode_tile_texture(rdp, tk, lw, lh, tlut_fmt),
-                w: lw,
-                h: lh,
-            });
+            levels.push(decode_sampling_texture(rdp, tk, tlut_fmt));
         }
         if faithful {
             // DETAIL mode (text_detail bit1): the DETAIL tile is the finest tile (index 0),
@@ -730,13 +758,8 @@ fn build_material_inner(
             let detail = if td & 0b10 != 0 {
                 let dt = &rdp.tiles[0];
                 let dw = dt.width.max(1) as u32;
-                let dh = dt.height.max(1) as u32;
                 if tile_takes_faithful_path(rdp, dt, dw) {
-                    Some(MipLevel {
-                        texture: decode_tile_texture(rdp, dt, dw, dh, tlut_fmt),
-                        w: dw,
-                        h: dh,
-                    })
+                    Some(decode_sampling_texture(rdp, dt, tlut_fmt))
                 } else {
                     None
                 }
@@ -751,10 +774,12 @@ fn build_material_inner(
         (false, 1u8, Vec::new(), 0u8, None)
     };
 
+    let decoded = if lod { mip_levels[0].clone() } else { decoded };
     Some(Material {
-        texture,
-        tex_w,
-        tex_h,
+        sampling: decoded.sampling,
+        texture: decoded.texture,
+        tex_w: decoded.w,
+        tex_h: decoded.h,
         selectors,
         cycle_type,
         prim: rdp.prim,

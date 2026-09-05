@@ -107,6 +107,9 @@ fn make_bind_groups(
             binding: b,
             resource: wgpu::BindingResource::TextureView(&tex_view),
         }))
+        .chain([crate::render::sampling_entry(
+            &crate::render::image_sampling_buffer(device),
+        )])
         .collect::<Vec<_>>(),
     });
 
@@ -356,6 +359,7 @@ fn combiner_uniform_packs_raw_words() {
     let selectors = crate::hle::combiner::decode_combine(0xFC12_7E24, 0xFFFF_F9FC);
 
     let mat = Material {
+        sampling: Default::default(),
         texture: vec![128u8; 4],
         tex_w: 1,
         tex_h: 1,
@@ -2454,9 +2458,10 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
         .first()
         .expect("non-empty scene must have a material");
 
+    let [upload_w, upload_h] = material.sampling.allocation_extent();
     let tex_size = wgpu::Extent3d {
-        width: material.tex_w,
-        height: material.tex_h,
+        width: upload_w,
+        height: upload_h,
         depth_or_array_layers: 1,
     };
     let gpu_tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -2479,8 +2484,8 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
         &material.texture,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(material.tex_w * 4),
-            rows_per_image: Some(material.tex_h),
+            bytes_per_row: Some(upload_w * 4),
+            rows_per_image: Some(upload_h),
         },
         tex_size,
     );
@@ -2541,6 +2546,9 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
             binding: b,
             resource: wgpu::BindingResource::TextureView(&tex_view2),
         }))
+        .chain([crate::render::sampling_entry(
+            &crate::render::sampling_buffer(&device, &crate::render::material_sampling(material)),
+        )])
         .collect::<Vec<_>>(),
     });
     let group1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2812,6 +2820,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
     let white_tex = vec![255u8, 255, 255, 255]; // 1×1 white placeholder (tex_enable=false)
 
     let mat0 = crate::hle::Material {
+        sampling: Default::default(),
         texture: white_tex.clone(),
         tex_w: 1,
         tex_h: 1,
@@ -2836,6 +2845,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
         detail_tex: None,
     };
     let mat1 = crate::hle::Material {
+        sampling: Default::default(),
         texture: white_tex,
         tex_w: 1,
         tex_h: 1,
@@ -2986,6 +2996,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
     let blue_tex = vec![0u8, 0, 255, 255]; // 1×1 BLUE
 
     let mat0 = crate::hle::Material {
+        sampling: Default::default(),
         texture: red_tex,
         tex_w: 1,
         tex_h: 1,
@@ -3010,6 +3021,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
         detail_tex: None,
     };
     let mat1 = crate::hle::Material {
+        sampling: Default::default(),
         texture: blue_tex,
         tex_w: 1,
         tex_h: 1,
@@ -3143,6 +3155,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
     let selectors = crate::hle::combiner::decode_combine(0x0000_0000, 0x0000_00C3);
     let white = vec![255u8, 255, 255, 255];
     let mat_green = crate::hle::Material {
+        sampling: Default::default(),
         texture: white.clone(),
         tex_w: 1,
         tex_h: 1,
@@ -3167,6 +3180,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
         detail_tex: None,
     };
     let mat_red = crate::hle::Material {
+        sampling: Default::default(),
         texture: white,
         tex_w: 1,
         tex_h: 1,
@@ -3506,6 +3520,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
     let selectors = crate::hle::combiner::decode_combine(0x0000_0000, 0x0000_00C3);
     let white = vec![255u8, 255, 255, 255];
     let mat_base = crate::hle::Material {
+        sampling: Default::default(),
         texture: white.clone(),
         tex_w: 1,
         tex_h: 1,
@@ -3530,6 +3545,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
         detail_tex: None,
     };
     let mat_decal = crate::hle::Material {
+        sampling: Default::default(),
         texture: white,
         tex_w: 1,
         tex_h: 1,
@@ -3822,6 +3838,9 @@ fn render_two_texture_center(
             binding: b,
             resource: wgpu::BindingResource::TextureView(&tex1_view),
         }))
+        .chain([crate::render::sampling_entry(
+            &crate::render::image_sampling_buffer(device),
+        )])
         .collect::<Vec<_>>(),
     });
     let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -4262,6 +4281,9 @@ fn render_lod_center(
                     resource: wgpu::BindingResource::TextureView(v),
                 }),
         )
+        .chain([crate::render::sampling_entry(
+            &crate::render::image_sampling_buffer(device),
+        )])
         .collect::<Vec<_>>(),
     });
     let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

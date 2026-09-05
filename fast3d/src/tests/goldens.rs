@@ -31,6 +31,29 @@ fn address_mode(wrap: u8) -> wgpu::AddressMode {
     }
 }
 
+fn set_address_modes(
+    tile: &mut crate::hle::tile_sampling::TileSampling,
+    addr_u: wgpu::AddressMode,
+    addr_v: wgpu::AddressMode,
+) {
+    for (axis, mode) in [addr_u, addr_v].into_iter().enumerate() {
+        let (mode, mask) = match mode {
+            wgpu::AddressMode::ClampToEdge => (2, 0),
+            wgpu::AddressMode::Repeat | wgpu::AddressMode::MirrorRepeat => {
+                let extent = tile.image[axis];
+                assert!(extent.is_power_of_two() && extent <= 1 << 15);
+                (
+                    u32::from(mode == wgpu::AddressMode::MirrorRepeat),
+                    extent.ilog2(),
+                )
+            }
+            _ => panic!("unsupported golden address mode: {mode:?}"),
+        };
+        tile.modes[axis] = mode;
+        tile.shift_mask[axis + 2] = mask;
+    }
+}
+
 /// Maximum per-channel absolute difference allowed in golden comparisons.
 const TOL: u8 = 2;
 
@@ -219,16 +242,15 @@ fn render_scene_with_device(
         return finish_readback(readback, &device, bytes_per_row, w, h);
     }
 
-    // --- Step 6: per-material GPU textures + @group(0) bind groups (pooled path). ---
-    // Each material gets its own texture upload and bind group.  The passed `addr_u`/`addr_v`
-    // are used as the sampler address mode for all materials (the golden tests are all
-    // single-material, so this is byte-identical to the old A8a single-material path).
     let pipeline = TexturedPipeline::new(&device, format, DEPTH_FORMAT);
     let mut material_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(scene.materials.len());
     for mat in &scene.materials {
+        let mut sampling = crate::render::material_sampling(mat);
+        set_address_modes(&mut sampling[0], addr_u, addr_v);
+        let [upload_w, upload_h] = mat.sampling.allocation_extent();
         let tex_size = wgpu::Extent3d {
-            width: mat.tex_w,
-            height: mat.tex_h,
+            width: upload_w,
+            height: upload_h,
             depth_or_array_layers: 1,
         };
         let gpu_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -251,8 +273,8 @@ fn render_scene_with_device(
             &mat.texture,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(mat.tex_w * 4),
-                rows_per_image: Some(mat.tex_h),
+                bytes_per_row: Some(upload_w * 4),
+                rows_per_image: Some(upload_h),
             },
             tex_size,
         );
@@ -305,6 +327,9 @@ fn render_scene_with_device(
                 binding: b,
                 resource: wgpu::BindingResource::TextureView(&tex_view),
             }))
+            .chain([crate::render::sampling_entry(
+                &crate::render::sampling_buffer(&device, &sampling),
+            )])
             .collect::<Vec<_>>(),
         });
         material_bgs.push(bg);
@@ -1037,6 +1062,50 @@ gsSP1Triangle(0, 1, 2, 0)
 gsSP1Triangle(0, 2, 3, 0)
 gsSPEndDisplayList()
 "#;
+
+#[test]
+fn golden_address_modes_reach_tile_sampling() {
+    for (mode, source, source_32) in [
+        (
+            0,
+            WRAP_REPEAT_SRC,
+            include_str!("../../tests/scenes/wrap-repeat.n64"),
+        ),
+        (
+            1,
+            MIRROR_REPEAT_SRC,
+            include_str!("../../tests/scenes/mirror-repeat.n64"),
+        ),
+    ] {
+        for (source, extent, mask) in [(source, 4, 0), (source_32, 32, 5)] {
+            let texture = vec![255; extent * extent * 4];
+            let image =
+                crate::asm::assemble_with_texture(source, &texture, extent as u32, extent as u32)
+                    .unwrap();
+            let interp = crate::hle::interpret_rdram(&image.rdram, image.entry_addr);
+            assert!(interp.diags.is_empty(), "{:?}", interp.diags);
+            let mat = &interp.scene.materials[0];
+            let mut sampling = crate::render::material_sampling(mat);
+            assert_eq!(sampling[0].image, [extent as u32, extent as u32, 0, 0]);
+            assert_eq!(sampling[0].shift_mask, [0, 0, mask, mask]);
+            assert_eq!(sampling[0].modes[..2], [mode.into(); 2]);
+            let inv_size = crate::render::triangle_inv_tex_size(mat);
+            assert_eq!(inv_size[0] * extent as f32, 1.0);
+            assert_eq!(inv_size[1] * extent as f32, 1.0);
+            set_address_modes(&mut sampling[0], address_mode(mode), address_mode(mode));
+            let expected_mask = extent.ilog2();
+            assert_eq!(sampling[0].shift_mask, [0, 0, expected_mask, expected_mask]);
+            assert_eq!(sampling[0].modes[..2], [mode.into(); 2]);
+            set_address_modes(
+                &mut sampling[0],
+                wgpu::AddressMode::ClampToEdge,
+                wgpu::AddressMode::ClampToEdge,
+            );
+            assert_eq!(sampling[0].shift_mask, [0; 4]);
+            assert_eq!(sampling[0].modes[..2], [2; 2]);
+        }
+    }
+}
 
 /// Golden test for WRAP (Repeat) sampler — 4×4 two-colour-block texture tiled 2×2.
 ///
@@ -1826,6 +1895,7 @@ fn fill_rect_scene(
 /// A 1×1-texel material whose decoded RGBA8 is exactly `rgba` (so any sampled point returns it).
 fn tex1x1_material(rgba: [u8; 4]) -> crate::hle::Material {
     crate::hle::Material {
+        sampling: Default::default(),
         texture: rgba.to_vec(),
         tex_w: 1,
         tex_h: 1,
@@ -2278,6 +2348,18 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
         255, 0, 0, 0, 255, 0, 0, 0, // row 1 — α=0   (alpha-keyed hole)
     ];
     let material = Material {
+        sampling: crate::hle::tile_sampling::TileSampling::from_tile(
+            &crate::hle::rdp::TileDescriptor {
+                width: 2,
+                height: 2,
+                lrs: 4,
+                lrt: 4,
+                masks: 1,
+                maskt: 1,
+                ..Default::default()
+            },
+            0,
+        ),
         texture,
         tex_w: 2,
         tex_h: 2,
@@ -2401,6 +2483,7 @@ fn build_decal_scene() -> crate::hle::Scene {
     // PRIM-passthrough combiner (combine_l=0, combine_h=0xC3 → cd1=PRIM, ad1=PRIM).
     let selectors = crate::hle::combiner::decode_combine(0x0000_0000, 0x0000_00C3);
     let mat = |prim: [u8; 4]| crate::hle::Material {
+        sampling: Default::default(),
         texture: vec![255u8, 255, 255, 255],
         tex_w: 1,
         tex_h: 1,

@@ -71,7 +71,7 @@ struct Combiner {
 // N64-faithful per-level LOD textures. Each N64 LOD level is an INDEPENDENT texture (no halving
 // constraint) — level 0 is `tex0` (@binding 0), levels 1..7 are these fixed bindings. `sample_level`
 // switch-selects between them so a non-halving level set (e.g. two 32×32 TRILERP levels) is sampled
-// faithfully. All levels share `samp0` (mip levels share wrap/filter). Unused level slots bind the
+// faithfully. Unused level slots bind the
 // 1×1 dummy; they are never selected because `compute_lod` clamps the level to the uploaded count.
 @group(0) @binding(6)  var tex_lod1: texture_2d<f32>;
 @group(0) @binding(7)  var tex_lod2: texture_2d<f32>;
@@ -80,6 +80,15 @@ struct Combiner {
 @group(0) @binding(10) var tex_lod5: texture_2d<f32>;
 @group(0) @binding(11) var tex_lod6: texture_2d<f32>;
 @group(0) @binding(12) var tex_lod7: texture_2d<f32>;
+struct TileSampling {
+    bounds: vec4<i32>,
+    shift_mask: vec4<u32>,
+    modes: vec4<u32>,
+    image: vec4<u32>,
+    tmem: vec4<u32>,
+    palette: vec4<u32>,
+};
+@group(0) @binding(13) var<uniform> tile_sampling: array<TileSampling, 10>;
 @group(1) @binding(0) var<uniform> combiner: Combiner;
 
 fn bits(v: u32, pos: u32, n: u32) -> u32 {
@@ -288,41 +297,98 @@ fn compute_lod(ddx_uv: vec2<f32>, ddy_uv: vec2<f32>, num_levels: f32, prim_lod_m
     return LodResult(level0, level1, lod_fraction);
 }
 
-// Switch-select one of the fixed per-level LOD textures by integer level index. Level 0 is `tex0`
-// (@binding 0), levels 1..7 the `tex_lod*` bindings. `textureSampleLevel` (explicit LOD 0) is used —
-// NOT `textureSample` — so the call is legal inside the non-uniform `switch` (implicit-derivative
-// sampling requires uniform control flow). Each per-level texture is single-mip, so LOD 0 is its
-// only level. `uv` is already normalized to [0,1] by the caller (level-0 dims); an independent
-// level texture maps that same [0,1] range across its own extent, so a non-halving level samples
-// correctly. The `default` clamps any out-of-range index to the highest binding (never reached for a
-// real level — `compute_lod` clamps to the uploaded count).
+fn tile_shift(value: f32, shift: u32) -> f32 {
+    if shift <= 10u { return value / f32(1u << shift); }
+    return value * f32(1u << (16u - shift));
+}
+
+fn tile_coordinate(tile: TileSampling, uv: vec2<f32>) -> vec2<f32> {
+    let shifted = vec2<f32>(tile_shift(uv.x, tile.shift_mask.x), tile_shift(uv.y, tile.shift_mask.y));
+    return round(shifted * 128.0) / 128.0 - vec2<f32>(tile.bounds.xy) / 4.0;
+}
+
+fn tile_address_axis(tap: i32, mode: u32, mask: u32, extent: u32) -> i32 {
+    var addressed = tap;
+    if (mode & 2u) != 0u || mask == 0u {
+        addressed = clamp(addressed, 0, i32(extent) - 1);
+    }
+    if mask != 0u {
+        let period = i32(1u << mask);
+        if (mode & 1u) != 0u {
+            let cycle = period * 2;
+            let phase = addressed & (cycle - 1);
+            addressed = select(cycle - 1 - phase, phase, phase < period);
+        } else {
+            addressed = addressed & (period - 1);
+        }
+    }
+    return addressed;
+}
+
+fn tile_bilinear(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<f32>) -> vec4<f32> {
+    // GPU bilinear centers sit half a texel from the integer grid.
+    let centered = coordinate - 0.5;
+    let base = vec2<i32>(floor(centered));
+    let fraction = fract(centered);
+    let x0 = u32(tile_address_axis(base.x, tile.modes.x, tile.shift_mask.z, tile.modes.z));
+    let x1 = u32(tile_address_axis(base.x + 1, tile.modes.x, tile.shift_mask.z, tile.modes.z));
+    let y0 = u32(tile_address_axis(base.y, tile.modes.y, tile.shift_mask.w, tile.modes.w));
+    let y1 = u32(tile_address_axis(base.y + 1, tile.modes.y, tile.shift_mask.w, tile.modes.w));
+
+    // RGBA32 occupies two bytes per bank; the CPU lookup already resolves both banks.
+    let half_byte_shift = min(tile.tmem.w, 2u);
+    let tmem_x0 = (x0 << half_byte_shift) >> 1u;
+    let tmem_x1 = (x1 << half_byte_shift) >> 1u;
+    let tmem_y0 = y0 * tile.tmem.y;
+    let tmem_y1 = y1 * tile.tmem.y;
+    let row_x0 = x0 & 1u;
+    let row_x1 = x1 & 1u;
+    let row_y0 = (y0 & 1u) * 2u;
+    let row_y1 = (y1 & 1u) * 2u;
+    let lookup = tile.image.z == 1u;
+    let tap00 = select(vec2<u32>(x0, y0), vec2<u32>((tmem_y0 + tmem_x0) & 4095u, row_y0 + row_x0), lookup);
+    let tap10 = select(vec2<u32>(x1, y0), vec2<u32>((tmem_y0 + tmem_x1) & 4095u, row_y0 + row_x1), lookup);
+    let tap01 = select(vec2<u32>(x0, y1), vec2<u32>((tmem_y1 + tmem_x0) & 4095u, row_y1 + row_x0), lookup);
+    let tap11 = select(vec2<u32>(x1, y1), vec2<u32>((tmem_y1 + tmem_x1) & 4095u, row_y1 + row_x1), lookup);
+    let c00 = textureLoad(texture, vec2<i32>(tap00), 0);
+    let c10 = textureLoad(texture, vec2<i32>(tap10), 0);
+    let c01 = textureLoad(texture, vec2<i32>(tap01), 0);
+    let c11 = textureLoad(texture, vec2<i32>(tap11), 0);
+    return mix(mix(c00, c10, fraction.x), mix(c01, c11, fraction.x), fraction.y);
+}
+
+fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>) -> vec4<f32> {
+    var tile = tile_sampling[index];
+    var coordinate: vec2<f32>;
+    if tile.image.z == 2u {
+        let extent = textureDimensions(texture);
+        tile.modes = vec4<u32>(2u, 2u, extent.x, extent.y);
+        coordinate = uv * vec2<f32>(extent);
+    } else {
+        coordinate = tile_coordinate(tile, uv);
+    }
+    return tile_bilinear(texture, tile, coordinate);
+}
+
 fn sample_level(level_idx: u32, uv: vec2<f32>) -> vec4<f32> {
     switch level_idx {
-        case 0u:  { return textureSampleLevel(tex0,     samp0, uv, 0.0); }
-        case 1u:  { return textureSampleLevel(tex_lod1, samp0, uv, 0.0); }
-        case 2u:  { return textureSampleLevel(tex_lod2, samp0, uv, 0.0); }
-        case 3u:  { return textureSampleLevel(tex_lod3, samp0, uv, 0.0); }
-        case 4u:  { return textureSampleLevel(tex_lod4, samp0, uv, 0.0); }
-        case 5u:  { return textureSampleLevel(tex_lod5, samp0, uv, 0.0); }
-        case 6u:  { return textureSampleLevel(tex_lod6, samp0, uv, 0.0); }
-        default:  { return textureSampleLevel(tex_lod7, samp0, uv, 0.0); }
+        case 0u: { return sample_physical(tex0, 0u, uv); }
+        case 1u: { return sample_physical(tex_lod1, 3u, uv); }
+        case 2u: { return sample_physical(tex_lod2, 4u, uv); }
+        case 3u: { return sample_physical(tex_lod3, 5u, uv); }
+        case 4u: { return sample_physical(tex_lod4, 6u, uv); }
+        case 5u: { return sample_physical(tex_lod5, 7u, uv); }
+        case 6u: { return sample_physical(tex_lod6, 8u, uv); }
+        default: { return sample_physical(tex_lod7, 9u, uv); }
     }
 }
 
-// Sample one LOD level by its post-`compute_lod` index. Under DETAIL, index 0 is the DETAIL tap
-// (its own UV normalization); index i >= 1 is LOD level `i - 1` (the `tileBase += 1` shift in
-// `compute_lod` reserves index 0 for the tap). When DETAIL is off, index i is LOD level `i` directly.
-// `idx` is always an exact non-negative integer (built from `floor`/`clamp` on integer-valued
-// floats), so the comparisons below are exact, not epsilon-sensitive. The selected level is
-// switch-dispatched to its independent per-level binding by `sample_level`.
 fn sample_tile(idx: f32, uv: vec2<f32>, detail_active: bool) -> vec4<f32> {
     if detail_active && idx == 0.0 {
-        return textureSampleLevel(tex_detail, samp_detail, uv * combiner.inv_detail_size.xy, 0.0);
+        return sample_physical(tex_detail, 2u, uv);
     }
     let mip = select(idx, idx - 1.0, detail_active);
-    // Clamp to the highest per-level binding so the switch never indexes past MAX_LOD-1.
-    let level = u32(clamp(mip, 0.0, 7.0));
-    return sample_level(level, uv * combiner.inv_tex_size.xy);
+    return sample_level(u32(clamp(mip, 0.0, 7.0)), uv);
 }
 
 // Evaluate the full color combiner for a fragment, returning RGB + alpha.
@@ -334,21 +400,20 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     // tcScale is needed).
     let ddx_uv = dpdx(in.uv);
     let ddy_uv = dpdy(in.uv);
+    let uv = in.uv * combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
 
     let l = combiner.combine_l;
     let h = combiner.combine_h;
 
     var texel: vec4<f32>;
     if combiner.tex_enable != 0u {
-        // Normalize the TEXEL-space triangle texcoord by the draw-time tile dims. inv_tex_size =
-        // (1,1) leaves already-normalized rect uv untouched.
-        texel = textureSample(tex0, samp0, in.uv * combiner.inv_tex_size.xy);
+        texel = sample_physical(tex0, 0u, uv);
     } else {
         texel = vec4<f32>(1.0);
     }
 
     let use_tex1 = combiner.inv_tex1_size.z != 0.0;
-    let texel1 = textureSample(tex1, samp1, in.uv * combiner.inv_tex1_size.xy);
+    let texel1 = sample_physical(tex1, 1u, uv);
     let sentinel1 = vec4<f32>(1.0, 0.0, 1.0, 1.0); // unwired-TEXEL1 sentinel (never read when gated)
     // The value a TEXEL1 selector reads in CYCLE 0 (no swap yet): the tex1 sample when present, else
     // the sentinel.
@@ -373,8 +438,8 @@ fn eval_combiner(in: VsOut) -> CycleResult {
         let n_levels = min(combiner.lod_params.y, 8.0);
 
         let lod = compute_lod(ddx_uv, ddy_uv, n_levels, combiner.inv_detail_size.z, combiner.lod_params.w, combiner.inv_detail_size.w);
-        texel = sample_tile(lod.level0, in.uv, detail_active);
-        t1_cyc0 = sample_tile(lod.level1, in.uv, detail_active);
+        texel = sample_tile(lod.level0, uv, detail_active);
+        t1_cyc0 = sample_tile(lod.level1, uv, detail_active);
         lod_fraction = lod.lod_fraction;
     }
 

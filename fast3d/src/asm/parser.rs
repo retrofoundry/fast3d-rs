@@ -1481,6 +1481,8 @@ pub fn parse(source: &str) -> (Vec<(usize, Stmt)>, Vec<Diag>) {
                             };
                             let maskt = if a.len() > 6 {
                                 parse_u32_token(a[6]).unwrap_or(0)
+                            } else if height.is_power_of_two() {
+                                height.ilog2()
                             } else {
                                 0
                             };
@@ -1491,6 +1493,8 @@ pub fn parse(source: &str) -> (Vec<(usize, Stmt)>, Vec<Diag>) {
                             };
                             let masks = if a.len() > 8 {
                                 parse_u32_token(a[8]).unwrap_or(0)
+                            } else if width.is_power_of_two() {
+                                width.ilog2()
                             } else {
                                 0
                             };
@@ -2759,6 +2763,59 @@ mod geom_mode_pipe_tests {
 #[cfg(test)]
 mod public_grammar_tests {
     use super::*;
+
+    #[test]
+    fn texture_block_defaults_masks_to_power_of_two_extents() {
+        for (width, height, masks, maskt) in [
+            (32, 8, 5, 3),
+            (4, 4, 2, 2),
+            (1, 1, 0, 0),
+            (3, 8, 0, 3),
+            (8, 3, 3, 0),
+            (0, 0, 0, 0),
+        ] {
+            let source = format!(
+                "gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, {width}, {height})"
+            );
+            let (stmts, diags) = parse(&source);
+            assert!(diags.is_empty(), "{diags:?}");
+            assert_eq!(
+                stmts[0].1,
+                Stmt::DpLoadTextureBlock {
+                    tex_name: "tex".into(),
+                    fmt: 0,
+                    siz: 2,
+                    width,
+                    height,
+                    cmt: 0,
+                    maskt,
+                    cms: 0,
+                    masks,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn texture_block_preserves_explicit_modes_and_masks() {
+        let (stmts, diags) =
+            parse("gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, 32, 8, 1, 0, 2, 4)");
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(
+            stmts[0].1,
+            Stmt::DpLoadTextureBlock {
+                tex_name: "tex".into(),
+                fmt: 0,
+                siz: 2,
+                width: 32,
+                height: 8,
+                cmt: 1,
+                maskt: 0,
+                cms: 2,
+                masks: 4,
+            }
+        );
+    }
 
     #[test]
     fn parses_minimal_dl_with_matrix_symbols() {

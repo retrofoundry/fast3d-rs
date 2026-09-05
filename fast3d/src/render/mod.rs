@@ -72,6 +72,48 @@ fn lod_level_entries(view: &wgpu::TextureView) -> impl Iterator<Item = wgpu::Bin
     })
 }
 
+const TILE_SAMPLING_BINDING: u32 = 13;
+const TILE_SAMPLING_COUNT: usize = MAX_LOD as usize + 2;
+
+type TileSamplingArray = [crate::hle::tile_sampling::TileSampling; TILE_SAMPLING_COUNT];
+
+pub(crate) fn material_sampling(mat: &crate::hle::Material) -> TileSamplingArray {
+    let mut tiles = [crate::hle::tile_sampling::TileSampling::default(); TILE_SAMPLING_COUNT];
+    tiles[0] = mat.sampling;
+    if let Some(tex) = &mat.tex1 {
+        tiles[1] = tex.sampling;
+    }
+    if let Some(tex) = &mat.detail_tex {
+        tiles[2] = tex.sampling;
+    }
+    for (i, level) in mat.mip_levels.iter().take(MAX_LOD as usize).enumerate() {
+        tiles[if i == 0 { 0 } else { i + 2 }] = level.sampling;
+    }
+    tiles
+}
+
+pub(crate) fn sampling_buffer(device: &wgpu::Device, tiles: &TileSamplingArray) -> wgpu::Buffer {
+    use wgpu::util::DeviceExt;
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("tile-sampling"),
+        contents: bytemuck::cast_slice(tiles),
+        usage: wgpu::BufferUsages::UNIFORM,
+    })
+}
+
+pub(crate) fn sampling_entry(buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
+    wgpu::BindGroupEntry {
+        binding: TILE_SAMPLING_BINDING,
+        resource: buffer.as_entire_binding(),
+    }
+}
+
+pub(crate) fn image_sampling_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    let mut tile = crate::hle::tile_sampling::TileSampling::default();
+    tile.image[2] = 2;
+    sampling_buffer(device, &[tile; TILE_SAMPLING_COUNT])
+}
+
 /// The combiner uniform passed to the shader.
 /// Carries raw combine words + cycle type + tex_enable flag + blender fields + prim/env/blend/fog colors.
 /// 160 bytes total; must be ≤ 256 (A8b slot stride). Field order matches `combiner_prelude.wgsl
@@ -381,8 +423,47 @@ impl CombinerUniform {
 mod tests {
     use super::*;
 
+    #[test]
+    fn tile_sampling_uniform_and_shaders_fit_webgpu() {
+        assert_eq!(std::mem::size_of::<CombinerUniform>(), 160);
+        assert_eq!(std::mem::size_of::<TileSamplingArray>(), 960);
+        let limits = wgpu::Limits::default();
+        assert!(
+            std::mem::size_of::<TileSamplingArray>()
+                <= limits.max_uniform_buffer_binding_size as usize
+        );
+        assert!((TILE_SAMPLING_COUNT as u32) < limits.max_sampled_textures_per_shader_stage);
+        assert!(TILE_SAMPLING_BINDING < limits.max_bindings_per_bind_group);
+        for (prefix, body, decal) in [
+            (
+                "",
+                include_str!("skeleton.wgsl"),
+                include_str!("decal.wgsl"),
+            ),
+            (
+                "enable dual_source_blending;\n",
+                include_str!("blender_dualsrc.wgsl"),
+                include_str!("decal_dual.wgsl"),
+            ),
+        ] {
+            let source = format!(
+                "{prefix}{}\n{body}\n{decal}",
+                include_str!("combiner_prelude.wgsl")
+            );
+            let module = wgpu::naga::front::wgsl::parse_str(&source)
+                .unwrap_or_else(|err| panic!("{}", err.emit_to_string(&source)));
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|err| panic!("{}", err.emit_to_string(&source)));
+        }
+    }
+
     fn test_material() -> crate::hle::Material {
         crate::hle::Material {
+            sampling: Default::default(),
             texture: vec![255u8; 4],
             tex_w: 1,
             tex_h: 1,
@@ -499,7 +580,7 @@ fn rect_quad(
 
 /// Normalize texel-space triangle UVs using the tile dimensions captured at draw time.
 pub fn triangle_inv_tex_size(mat: &crate::hle::Material) -> [f32; 4] {
-    if mat.tex_enable {
+    if mat.tex_enable || mat.lod {
         [
             1.0 / mat.tex_w.max(1) as f32,
             1.0 / mat.tex_h.max(1) as f32,
@@ -777,6 +858,18 @@ impl TexturedPipeline {
             },
             count: None,
         }));
+        group0_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: TILE_SAMPLING_BINDING,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: std::num::NonZeroU64::new(
+                    std::mem::size_of::<TileSamplingArray>() as u64,
+                ),
+            },
+            count: None,
+        });
         let group0_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("textured-group0-bgl"),
             entries: &group0_entries,
@@ -1717,10 +1810,8 @@ fn address_mode(wrap: u8) -> wgpu::AddressMode {
     }
 }
 
-/// Cached GPU texture + bind group, keyed by the source texture's `(w, h, bytes, wrap_s, wrap_t)`
-/// so it is only rebuilt when the material's texture content or wrap mode changes (web's persistent
-/// `tex_cache`).
 struct TexCache {
+    sampling: TileSamplingArray,
     w: u32,
     h: u32,
     bytes: Vec<u8>,
@@ -1791,7 +1882,8 @@ fn build_tex_entry(
     // tex0: LOD level 0 as its OWN single-level texture (`upload` uses mip_level_count = 1). Non-LOD
     // materials upload only this from `mat.texture` — byte-identical to the pre-LOD single
     // `write_texture`. When LOD is active, level 0 is `mat.texture` (== `mip_levels[0]`).
-    let tex_view = upload("n64-tex", mat.tex_w, mat.tex_h, &mat.texture);
+    let [w, h] = mat.sampling.allocation_extent();
+    let tex_view = upload("n64-tex", w, h, &mat.texture);
     // Levels 1..MAX_LOD as INDEPENDENT per-level textures (hardware-faithful — NO halving constraint),
     // bound at bindings 6..=12. `uploaded_level_count` caps the real count at MAX_LOD. A slot beyond
     // the uploaded count (or a non-LOD material) binds the shared 1×1 dummy; it is never sampled
@@ -1802,7 +1894,8 @@ fn build_tex_entry(
         .map(|k| {
             if k < num_levels {
                 if let Some(lvl) = mat.mip_levels.get(k as usize) {
-                    return upload(&format!("n64-tex-lod{k}"), lvl.w, lvl.h, &lvl.texture);
+                    let [w, h] = lvl.sampling.allocation_extent();
+                    return upload(&format!("n64-tex-lod{k}"), w, h, &lvl.texture);
                 }
             }
             dummy_view.clone()
@@ -1811,7 +1904,10 @@ fn build_tex_entry(
     // Binding 2/3: the second texture (TEXEL1) when the material carries one (`tile_count == 2`),
     // else the shared 1×1 dummy. tex1 wrap comes from the second tile's cms/cmt.
     let tex1_view = match &mat.tex1 {
-        Some(t) => upload("n64-tex1", t.tex_w, t.tex_h, &t.texture),
+        Some(t) => {
+            let [w, h] = t.sampling.allocation_extent();
+            upload("n64-tex1", w, h, &t.texture)
+        }
         None => dummy_view.clone(),
     };
     let samp1 = match &mat.tex1 {
@@ -1821,12 +1917,16 @@ fn build_tex_entry(
     // Binding 4/5: the DETAIL tile when present (LOD DETAIL mode), else the shared 1×1 dummy.
     // ClampToEdge/Linear sampler for the detail tile.
     let detail_view = match &mat.detail_tex {
-        Some(d) => upload("n64-tex-detail", d.w, d.h, &d.texture),
+        Some(d) => {
+            let [w, h] = d.sampling.allocation_extent();
+            upload("n64-tex-detail", w, h, &d.texture)
+        }
         None => dummy_view.clone(),
     };
-    // Bindings 6..=12: the independent LOD-level textures (`tex_lod1..tex_lod7`), all sampled with
-    // `samp0` (the material's wrap sampler, binding 1) — mip levels share wrap/filter.
+    let sampling = material_sampling(mat);
+    let sampling_buffer = sampling_buffer(device, &sampling);
     let entries: Vec<wgpu::BindGroupEntry> = [
+        sampling_entry(&sampling_buffer),
         wgpu::BindGroupEntry {
             binding: 0,
             resource: wgpu::BindingResource::TextureView(&tex_view),
@@ -1871,6 +1971,7 @@ fn build_tex_entry(
         entries: &entries,
     });
     TexCache {
+        sampling,
         w: mat.tex_w,
         h: mat.tex_h,
         bytes: mat.texture.clone(),
@@ -1943,6 +2044,8 @@ pub struct SceneRenderer {
     /// touched (cleared-or-loaded) THIS frame, so `ClearPolicy::PerFrame` clears exactly once per
     /// frame per addr. Reset by `begin_frame`. Never dropped/rebuilt otherwise.
     first_touch: std::collections::HashSet<u64>,
+    /// Descriptor array for bind groups that sample plain images (fill, scanout, FB alias).
+    image_sampling: wgpu::Buffer,
 }
 
 impl SceneRenderer {
@@ -2071,6 +2174,7 @@ impl SceneRenderer {
         // 1×1 `@group(0)` bind group used as the FillRect texture binding. The pipeline layout
         // requires group 0, but the fill combine has `tex_enable = 0`, so binding 0 is never sampled;
         // bindings 2/3 (TEXEL1) point at the same dummy and are likewise never read (tex_enable1 = 0).
+        let image_sampling = image_sampling_buffer(device);
         let fill_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("fill-bg"),
             layout: textured_fb.bind_group_layout(),
@@ -2104,6 +2208,7 @@ impl SceneRenderer {
             ]
             .into_iter()
             .chain(lod_level_entries(&dummy_view))
+            .chain([sampling_entry(&image_sampling)])
             .collect::<Vec<_>>(),
         });
         Self {
@@ -2121,6 +2226,7 @@ impl SceneRenderer {
             fb_h: h,
             framebuffers: std::collections::HashMap::new(),
             first_touch: std::collections::HashSet::new(),
+            image_sampling,
         }
     }
 
@@ -2241,6 +2347,7 @@ impl SceneRenderer {
                     ]
                     .into_iter()
                     .chain(lod_level_entries(&self.dummy_view))
+                    .chain([sampling_entry(&self.image_sampling)])
                     .collect::<Vec<_>>(),
                 }),
             )
@@ -2347,6 +2454,7 @@ impl SceneRenderer {
             ]
             .into_iter()
             .chain(lod_level_entries(&self.dummy_view))
+            .chain([sampling_entry(&self.image_sampling)])
             .collect::<Vec<_>>(),
         });
         self.framebuffers.insert(
@@ -2437,7 +2545,8 @@ impl SceneRenderer {
             let needs_rebuild = {
                 let mat = &scene.materials[i];
                 self.tex_caches.get(i).is_none_or(|c| {
-                    c.w != mat.tex_w
+                    c.sampling != material_sampling(mat)
+                        || c.w != mat.tex_w
                         || c.h != mat.tex_h
                         || c.bytes != mat.texture
                         || c.wrap_s != mat.wrap_s
@@ -2659,7 +2768,8 @@ impl SceneRenderer {
             let needs_rebuild = {
                 let mat = &scene.materials[i];
                 self.tex_caches.get(i).is_none_or(|c| {
-                    c.w != mat.tex_w
+                    c.sampling != material_sampling(mat)
+                        || c.w != mat.tex_w
                         || c.h != mat.tex_h
                         || c.bytes != mat.texture
                         || c.wrap_s != mat.wrap_s
@@ -2853,6 +2963,7 @@ impl SceneRenderer {
                 ]
                 .into_iter()
                 .chain(lod_level_entries(&self.dummy_view))
+                .chain([sampling_entry(&self.image_sampling)])
                 .collect::<Vec<_>>(),
             });
             self.blit_to(&mut encoder, target, &src_bg);
@@ -3585,6 +3696,7 @@ impl SceneRenderer {
                     ]
                     .into_iter()
                     .chain(lod_level_entries(&self.dummy_view))
+                    .chain([sampling_entry(&self.image_sampling)])
                     .collect::<Vec<_>>(),
                 });
                 self.blit_to(encoder, target, &src_bg);
@@ -3991,7 +4103,10 @@ impl SceneRenderer {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
 pub fn headless_device() -> (wgpu::Device, wgpu::Queue, bool) {
-    let instance = wgpu::Instance::default();
+    #[cfg(test)]
+    let _ = env_logger::try_init();
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         force_fallback_adapter: false,
@@ -4024,7 +4139,10 @@ pub fn headless_device() -> (wgpu::Device, wgpu::Queue, bool) {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(all(test, feature = "asm")), allow(dead_code))]
 pub fn headless_device_forced_fallback() -> (wgpu::Device, wgpu::Queue) {
-    let instance = wgpu::Instance::default();
+    #[cfg(test)]
+    let _ = env_logger::try_init();
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         force_fallback_adapter: false,

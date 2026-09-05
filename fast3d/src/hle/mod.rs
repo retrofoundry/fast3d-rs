@@ -15,6 +15,9 @@ pub mod rsp;
 pub mod rsp_f3d;
 pub mod rsp_f3dex2;
 pub mod texdec;
+pub mod tile_sampling;
+#[cfg(test)]
+mod tile_tests;
 pub mod tmem;
 
 #[cfg_attr(not(all(test, feature = "asm")), allow(unused_imports))]
