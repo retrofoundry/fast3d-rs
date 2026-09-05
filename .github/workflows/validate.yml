@@ -99,9 +99,17 @@ jobs:
           CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           page='data:text/html,<body>pending</body><script>navigator.gpu ? navigator.gpu.requestAdapter().then(a => { document.body.textContent = a ? "adapter " + JSON.stringify(a.info || {}) : "no adapter"; }, e => { document.body.textContent = "error " + e; }) : document.body.textContent = "no navigator.gpu";</script>'
-          "$CHROME" --headless=new --enable-unsafe-webgpu --enable-features=WebGPU --use-angle=metal \
-            --enable-logging=stderr --v=0 --virtual-time-budget=10000 --dump-dom "$page" 2> chrome-probe.log | tail -c 2000
-          echo "--- chrome stderr (tail)"; tail -n 40 chrome-probe.log
+          probe() {
+            echo "=== flags: $*"
+            gtimeout 60 "$CHROME" --headless=new --no-sandbox --enable-logging=stderr --v=0 --virtual-time-budget=10000 --dump-dom "$@" "$page" 2> probe.log | tail -c 400; echo " (exit $?)"
+            grep -iE "gpu|angle|dawn|webgpu|metal|swiftshader" probe.log | head -n 8
+          }
+          probe --enable-unsafe-webgpu --enable-features=WebGPU --use-angle=metal
+          probe --enable-unsafe-webgpu --enable-features=WebGPU
+          probe --enable-unsafe-webgpu --enable-features=WebGPU --use-angle=swiftshader --enable-unsafe-swiftshader
+          probe --enable-unsafe-webgpu --enable-features=WebGPU,Vulkan --use-angle=swiftshader --enable-unsafe-swiftshader --use-webgpu-adapter=swiftshader
+          probe --enable-unsafe-webgpu --enable-features=WebGPU --disable-gpu
+          probe
       - name: browser WebGPU replay
         env:
           CHROMEDRIVER_BIN: ${{ steps.chrome.outputs.chromedriver-path }}
