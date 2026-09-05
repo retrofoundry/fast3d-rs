@@ -102,13 +102,15 @@ its installed Chrome path into `goog:chromeOptions.binary` in `fast3d/webdriver.
 set that field locally too if Chrome is installed outside its usual location.
 The crate's [WebDriver configuration](https://wasm-bindgen.github.io/wasm-bindgen/wasm-bindgen-test/browsers.html#configuring-headless-browser-capabilities)
 enables headless Chrome and WebGPU with Metal. The checked-in arguments omit
-`--no-sandbox`; wasm-bindgen-test-runner 0.2.121 appends it internally.
+`--no-sandbox`; wasm-bindgen-test-runner appends it internally.
 
-The lockfile pins wasm-bindgen to 0.2.121 and wasm-bindgen-test to 0.3.71. Install the
-matching runner, then use the same test command and environment as CI:
+`fast3d/Cargo.toml` pins `wasm-bindgen-test` exactly, which fixes the `wasm-bindgen` version
+the runner must match (the repository does not track `Cargo.lock`). Install that runner, then
+use the same test command and environment as CI:
 
 ```sh
-version=$(awk '$0 == "name = \"wasm-bindgen\"" {getline; gsub(/"/, "", $3); print $3; exit}' Cargo.lock)
+version=$(cargo tree -p fast3d --target wasm32-unknown-unknown --features capture -e normal,dev --prefix none \
+  | awk '$1 == "wasm-bindgen" {print substr($2, 2); exit}')
 cargo install --locked wasm-bindgen-cli --version "$version"
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
 export WASM_BINDGEN_TEST_TIMEOUT=300
