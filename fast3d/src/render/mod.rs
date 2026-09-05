@@ -118,26 +118,20 @@ pub(crate) fn image_sampling_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     sampling_buffer(device, &[tile; TILE_SAMPLING_COUNT])
 }
 
-/// The combiner uniform passed to the shader.
-/// Carries raw combine words + cycle type + tex_enable flag + blender fields + prim/env/blend/fog colors.
-/// 160 bytes total; must be ≤ 256 (A8b slot stride). Field order matches `combiner_prelude.wgsl
-/// struct Combiner` (std140): 8 scalar u32/f32 fields (32 bytes), then seven vec4<f32> fields (112 bytes).
-/// The blender fields (blender_mux/force_blend/alpha_mode/alpha_threshold) and color registers
-/// (blend_color/fog_color) drive the dual-source blender, fog mix, and alpha-test discard in the
-/// shaders (wired in B3/Phase C/D).
+/// The combiner uniform; field order matches WGSL `Combiner` and fits a 256-byte draw slot.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct CombinerUniform {
     pub combine_l: u32,        // raw w0 (combine_l = w0)
     pub combine_h: u32,        // raw w1 (combine_h = w1)
-    pub cycle_type: u32,       // 0 = 1-cycle, 1 = 2-cycle
+    pub cycle_type: u32,       // 0 = 1-cycle, 1 = 2-cycle, 2 = COPY
     pub tex_enable: u32,       // 1 if texture is enabled, 0 otherwise
     pub blender_mux: u32,      // raw blender mux (other_mode_l bits [31:16])
     pub force_blend: u32,      // 1 if FORCE_BL is set, 0 otherwise
-    pub alpha_mode: u32,       // 0=off, 1=CVG_X_ALPHA, 2=THRESHOLD (Phase D)
-    pub alpha_threshold: f32, // alpha discard threshold (Phase D: 0.125 for CVG_X_ALPHA, blend_color.a for THRESHOLD)
-    pub prim: [f32; 4],       // primitive color RGBA, normalized 0..1
-    pub env: [f32; 4],        // environment color RGBA, normalized 0..1
+    pub alpha_flags: u32, // bits 0..1: alpha compare (0=off, 1=threshold, 3=dither); bit 2: coverage
+    pub alpha_threshold: f32, // blend-color alpha threshold
+    pub prim: [f32; 4],   // primitive color RGBA, normalized 0..1
+    pub env: [f32; 4],    // environment color RGBA, normalized 0..1
     pub blend_color: [f32; 4], // blend color RGBA, normalized 0..1 (from mat.blend_color / G_SETBLENDCOLOR)
     pub fog_color: [f32; 4],   // normalized draw fog color RGBA
     /// `.xy` = 1/(tex_w, tex_h) for texel-space triangle and rectangle coordinates.
@@ -166,18 +160,26 @@ pub struct CombinerUniform {
     /// this `[1, 1, 0, 0]`, byte-identical to the prior tail. Grows the struct by exactly one
     /// std140 row (144 -> 160). Must stay in LOCKSTEP with the WGSL `Combiner.inv_detail_size`.
     pub inv_detail_size: [f32; 4],
+    /// Low 32 bits of frame serial, dither seed, framebuffer width and height.
+    pub frame: [u32; 4],
 }
-const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 160);
+const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 176);
 
 impl CombinerUniform {
+    fn alpha_flags(rm: &crate::hle::RenderMode) -> u32 {
+        let compare = match rm.alpha_compare {
+            crate::hle::AlphaCompare::None => 0,
+            crate::hle::AlphaCompare::Threshold => 1,
+            crate::hle::AlphaCompare::Dither => 3,
+        };
+        compare | (u32::from(rm.cvg_x_alpha) << 2)
+    }
+
     /// Build a `CombinerUniform` from a material + run's render mode + draw fog color.
     ///
     /// The blender fields are wired from `rm`; `blend_color` is
     /// derived from `mat.blend_color` (set by G_SETBLENDCOLOR; default [0,0,0,255]); `fog_color`
     /// is captured by the draw.
-    ///
-    /// Phase D: `alpha_mode` is derived from `rm.cvg_x_alpha` (1 = CVG_X_ALPHA, threshold 0.125)
-    /// and `rm.alpha_compare` (2 = THRESHOLD, threshold = mat.blend_color[3] / 255.0).
     pub fn from_run(
         mat: &crate::hle::Material,
         rm: &crate::hle::RenderMode,
@@ -201,17 +203,6 @@ impl CombinerUniform {
             mat.blend_color[2] as f32 / 255.0,
             mat.blend_color[3] as f32 / 255.0,
         ];
-        // Phase D: derive alpha_mode and alpha_threshold from the render mode.
-        // CVG_X_ALPHA (TEX_EDGE): threshold = 8/255 ≈ 0.125.
-        // THRESHOLD: threshold = blend_color.a (gsDPSetBlendColor alpha channel).
-        // Neither set: alpha_mode = 0 → no discard.
-        let (alpha_mode, alpha_threshold) = if rm.cvg_x_alpha {
-            (1u32, 0.125f32)
-        } else if rm.alpha_compare == crate::hle::AlphaCompare::Threshold {
-            (2u32, mat.blend_color[3] as f32 / 255.0)
-        } else {
-            (0u32, 0.0f32)
-        };
         CombinerUniform {
             combine_l: mat.selectors.raw_l,
             combine_h: mat.selectors.raw_h,
@@ -219,8 +210,8 @@ impl CombinerUniform {
             tex_enable: if mat.tex_enable { 1 } else { 0 },
             blender_mux: rm.blender_mux as u32,
             force_blend: if rm.force_blend { 1 } else { 0 },
-            alpha_mode,
-            alpha_threshold,
+            alpha_flags: Self::alpha_flags(rm),
+            alpha_threshold: blend_color[3],
             prim,
             env,
             blend_color,
@@ -266,6 +257,7 @@ impl CombinerUniform {
                 let detail_bit = if mat.detail_tex.is_some() { 2.0 } else { 0.0 };
                 [dw, dh, mat.prim_min_level, sharpen_bit + detail_bit]
             },
+            frame: [0; 4],
         }
     }
 
@@ -335,7 +327,7 @@ impl CombinerUniform {
             tex_enable: 0,
             blender_mux: 0,
             force_blend: 0,
-            alpha_mode: 0,
+            alpha_flags: 0,
             alpha_threshold: 0.0,
             prim,
             env: [0.0; 4],
@@ -348,57 +340,29 @@ impl CombinerUniform {
             lod_params: [0.0, 1.0, 0.0, 1.0],
             // No DETAIL tile on the fill path.
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
+            frame: [0; 4],
         }
     }
 
-    /// Synthesize a `CombinerUniform` for a COPY-cycle `SceneOp::TexRect` (`G_CYC_COPY`).
-    ///
-    /// In COPY mode the RDP bypasses the color combiner entirely and copies the sampled texel
-    /// verbatim into the framebuffer. Our renderer has no dedicated copy path, so we encode a
-    /// TEXEL0-passthrough combine that makes the ubershader emit the texel as-is — independent of
-    /// whatever (stale / zero) combine register the DL left set. Without this, a copy TEXRECT whose
-    /// combine register is 0 would resolve every selector to ZERO and render solid black.
-    ///
-    /// 1-cycle (`cycle_type = 0`): color = (0 − 0)·0 + TEXEL0 (color d = TEXEL0 at H[6,3]); alpha =
-    /// (0 − 0)·0 + TEXEL0_ALPHA (alpha d = TEXEL0 at H[0,3]). `tex_enable = 1` so the selected tile
-    /// is sampled; blender stays Replace (mux 0) and no fog.
-    ///
-    /// Alpha-test discard (the alpha-keyed-HUD fix). COPY mode bypasses the combiner/blender, but the
-    /// RDP alpha-compare hardware still keys transparent texels away. sm64's HUD/text glyphs
-    /// (`bin/segment2.c` `dl_hud_*`) set `gsDPSetCycleType(G_CYC_COPY)` + `gsDPSetAlphaCompare`
-    /// (`G_AC_THRESHOLD`) + `gsDPSetBlendColor(255,255,255,255)` over RGBA5551 (1-bit-alpha) glyphs:
-    /// background texels have α=0, foreground α=255. Without alpha-keying those α=0 texels write as
-    /// OPAQUE BLACK boxes. We enable the discard when the decoded render mode enables alpha-compare
-    /// (`cvg_x_alpha` or `alpha_compare != None`) AND the tile format carries an alpha channel
-    /// (RGBA fmt 0 / IA fmt 3 — never intensity-only I, fmt 4). The threshold is a fixed 0.5 (the
-    /// 1-bit alpha is exactly 0 or 1, so 0.5 reliably discards the 0 and keeps the 1) — NOT
-    /// `blend_color.a`, which sm64 sets to 255 (→ 1.0, would discard *every* texel).
-    ///
-    /// When alpha-compare is NOT enabled (`rm == None`, or a render mode with no AC — e.g. the
-    /// `offscreen-then-sample` opaque FB-as-texture scratch blit), `alpha_mode` stays 0: an opaque
-    /// copy, byte-identical to before.
+    /// COPY bypasses the combiner and blender, but still compares sampled texel alpha.
+    /// Threshold compare and the coverage approximation use a half-alpha cutoff for RGBA/IA.
     pub fn tex_copy(rm: Option<&crate::hle::RenderMode>, fmt: u8) -> Self {
-        const CC_TEXEL0: u32 = 1; // G_CCMUX_TEXEL0 (color d slot, 3-bit)
-        const AC_TEXEL0: u32 = 1; // G_ACMUX_TEXEL0 (alpha d slot, 3-bit)
-        let combine_h = ((CC_TEXEL0 & 0x7) << 6) | (AC_TEXEL0 & 0x7);
-        // fmt 0 = RGBA, 3 = IA → has an alpha channel; 4 = I (intensity-only) and CI/YUV do not.
-        let fmt_has_alpha = fmt == 0 || fmt == 3;
-        let ac_enabled =
-            rm.is_some_and(|r| r.cvg_x_alpha || r.alpha_compare != crate::hle::AlphaCompare::None);
-        let (alpha_mode, alpha_threshold) = if ac_enabled && fmt_has_alpha {
-            (2u32, 0.5f32)
-        } else {
-            (0u32, 0.0f32)
-        };
+        let mut alpha_flags = rm.map_or(0, Self::alpha_flags);
+        if fmt != 0 && fmt != 3 {
+            alpha_flags &= !4;
+            if alpha_flags & 3 == 1 {
+                alpha_flags &= !3;
+            }
+        }
         CombinerUniform {
             combine_l: 0,
-            combine_h,
-            cycle_type: 0,
+            combine_h: 0,
+            cycle_type: 2,
             tex_enable: 1,
             blender_mux: 0,
             force_blend: 0,
-            alpha_mode,
-            alpha_threshold,
+            alpha_flags,
+            alpha_threshold: 0.5,
             prim: [0.0; 4],
             env: [0.0; 4],
             blend_color: [0.0; 4],
@@ -410,6 +374,7 @@ impl CombinerUniform {
             lod_params: [0.0, 1.0, 0.0, 1.0],
             // No DETAIL tile on the COPY-mode TexRect path.
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
+            frame: [0; 4],
         }
     }
 }
@@ -420,7 +385,7 @@ mod tests {
 
     #[test]
     fn tile_sampling_uniform_and_shaders_fit_webgpu() {
-        assert_eq!(std::mem::size_of::<CombinerUniform>(), 160);
+        assert_eq!(std::mem::size_of::<CombinerUniform>(), 176);
         assert_eq!(std::mem::size_of::<TileSamplingArray>(), 960);
         let limits = wgpu::Limits::default();
         assert!(
@@ -2001,6 +1966,8 @@ struct Framebuffer {
 /// `frame.present()` — `render` takes a `&TextureView` so the consumer keeps surface lifecycle.
 /// It is wasm-compatible: no `headless_device`/`pollster`/native-only code lives here.
 pub struct SceneRenderer {
+    pub(crate) frame_serial: u64,
+    pub(crate) dither_seed: u32,
     textured: TexturedPipeline,
     /// Second draw-pipeline matrix built at `Rgba8Unorm` — the internal-framebuffer draw target,
     /// used by the per-pair FB passes AND the pair-less flat-3D internal-FB path.
@@ -2223,6 +2190,8 @@ impl SceneRenderer {
             fb_h: h,
             framebuffers: std::collections::HashMap::new(),
             first_touch: std::collections::HashSet::new(),
+            frame_serial: 0,
+            dither_seed: 0,
             image_sampling,
         }
     }
@@ -2491,6 +2460,7 @@ impl SceneRenderer {
     /// Explicit frame boundary (D2): reset the per-frame first-touch-clear set. Does NOT drop the
     /// textures (cross-frame persistence). `Renderer::begin_frame` delegates here.
     pub fn begin_frame(&mut self) {
+        self.frame_serial = self.frame_serial.wrapping_add(1);
         self.first_touch.clear();
     }
 
@@ -2623,6 +2593,12 @@ impl SceneRenderer {
                 let rm = &scene.render_modes[run.render_mode_index as usize];
                 let mut combiner = CombinerUniform::from_run(mat, rm, run.fog_color);
                 combiner.inv_tex_size = triangle_inv_tex_size(mat);
+                combiner.frame = [
+                    self.frame_serial as u32,
+                    self.dither_seed,
+                    self.fb_w,
+                    self.fb_h,
+                ];
                 let slot = bytemuck::bytes_of(&combiner);
                 pool[i * 256..i * 256 + slot.len()].copy_from_slice(slot);
             }
@@ -2833,6 +2809,12 @@ impl SceneRenderer {
                 let rm = &scene.render_modes[run.render_mode_index as usize];
                 let mut combiner = CombinerUniform::from_run(mat, rm, run.fog_color);
                 combiner.inv_tex_size = triangle_inv_tex_size(mat);
+                combiner.frame = [
+                    self.frame_serial as u32,
+                    self.dither_seed,
+                    self.fb_w,
+                    self.fb_h,
+                ];
                 let slot = bytemuck::bytes_of(&combiner);
                 pool[i * 256..i * 256 + slot.len()].copy_from_slice(slot);
             }
@@ -3312,6 +3294,7 @@ impl SceneRenderer {
                         let rm = &scene.render_modes[run.render_mode_index as usize];
                         let mut u = CombinerUniform::from_run(mat, rm, run.fog_color);
                         u.inv_tex_size = triangle_inv_tex_size(mat);
+                        u.frame = [self.frame_serial as u32, self.dither_seed, fb_w, fb_h];
                         push_slot(&mut pool, &u);
                     }
                     crate::hle::SceneOp::TexRect {
@@ -3342,6 +3325,7 @@ impl SceneRenderer {
                             CombinerUniform::from_rect(mat, rm, *fog_color)
                         };
                         u.inv_tex_size = triangle_inv_tex_size(mat);
+                        u.frame = [self.frame_serial as u32, self.dither_seed, fb_w, fb_h];
                         push_slot(&mut pool, &u);
                         rect_verts.extend_from_slice(&texrect_quad(
                             rect,
@@ -3750,6 +3734,7 @@ impl SceneRenderer {
                         let rm = &scene.render_modes[run.render_mode_index as usize];
                         let mut u = CombinerUniform::from_run(mat, rm, run.fog_color);
                         u.inv_tex_size = triangle_inv_tex_size(mat);
+                        u.frame = [self.frame_serial as u32, self.dither_seed, fb_w, fb_h];
                         push_slot(&mut pool, &u);
                     }
                     crate::hle::SceneOp::TexRect {
@@ -3780,6 +3765,7 @@ impl SceneRenderer {
                             CombinerUniform::from_rect(mat, rm, *fog_color)
                         };
                         u.inv_tex_size = triangle_inv_tex_size(mat);
+                        u.frame = [self.frame_serial as u32, self.dither_seed, fb_w, fb_h];
                         push_slot(&mut pool, &u);
                         rect_verts.extend_from_slice(&texrect_quad(
                             rect,

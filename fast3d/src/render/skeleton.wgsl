@@ -14,10 +14,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     if (p1 == 3u) {
         rgb = mix(rgb, combiner.fog_color.rgb, in.color.a);
     }
-    // Phase D: alpha-test discard. Only active when alpha_mode != 0 (CVG_X_ALPHA or THRESHOLD).
-    // alpha_mode == 0 → NO discard → non-cutout runs are byte-identical (zero regression risk).
-    if (combiner.alpha_mode != 0u && r.alpha < combiner.alpha_threshold) {
-        discard;
-    }
+    alpha_discard(r, in.clip_position.xy);
     return vec4<f32>(rgb, r.alpha);
 }

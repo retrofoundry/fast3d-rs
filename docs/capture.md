@@ -18,8 +18,12 @@ after initializing the used color targets with two contrasting colors through di
 This catches missing clears that two fresh renderers would conceal. A mismatch rejects the
 fixture. This is a test of the current renderer's color-persistence behavior; it does not add
 persistent depth or reconstruct GPU contents from RAM. The initialization check rejects paired
-framebuffers wider or taller than 1023 pixels, the primer's fixed-coordinate range. Frame serial and dither seed are stored
-for the later dither implementation; PR 1 does not introduce dither shader behavior.
+framebuffers wider or taller than 1023 pixels, the primer's fixed-coordinate range.
+
+Alpha dither uses the recorded frame serial and seed on replay. `CaptureFrame::begin` calls
+`Renderer::begin_frame` and records its count, starting at one; its legacy serial argument is
+ignored. The counter survives renderer reconfiguration. The shader uses the serial's low
+32 bits, XORed with the dither seed, and the framebuffer pixel index.
 
 ## Capture from Helix
 
@@ -33,10 +37,11 @@ FAST3D_CAPTURE_REVISION="$(git rev-parse HEAD)" \
 ./build-cmake/sm64-us
 ```
 
-Serials start at zero and count graphics-task consumes, including frames before gameplay.
-Whitespace around comma-separated serials is accepted; invalid or absent serials disable
+Helix's selection indices start at zero and count graphics-task consumes, including frames
+before gameplay. Whitespace around comma-separated indices is accepted; invalid or absent indices disable
 capture with a warning. A selected consume copies memory while the guest is blocked. After
-presentation, Helix writes `frame-000120.f3dcap`, etc. Existing files are never overwritten.
+presentation, Helix names the file from the recorded renderer serial: selection `120` writes
+`frame-000121.f3dcap` when each consume begins one frame. Existing files are never overwritten.
 Use a new directory for another run. `FAST3D_CAPTURE_REVISION` and
 `FAST3D_CAPTURE_SYMBOLS` optionally supply provenance; omitted values are marked unknown.
 The hook cannot discover decomp symbols from runtime pointers.
@@ -49,7 +54,7 @@ Replay a captured frame from the fast3d worktree:
 
 ```sh
 devenv shell -- cargo run -p fast3d --features capture --example replay_capture -- \
-  ../sm64-frames/frame-000120.f3dcap ../sm64-frame-120
+  ../sm64-frames/frame-000121.f3dcap ../sm64-frame-121
 ```
 
 The example reports adapter information, task diagnostics and summaries, and writes a PNG

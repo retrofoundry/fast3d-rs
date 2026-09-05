@@ -20,10 +20,7 @@ fn fs_decal(in: VsOut) -> @location(0) vec4<f32> {
     if (p1 == 3u) {
         rgb = mix(rgb, combiner.fog_color.rgb, in.color.a);
     }
-    // Phase D: alpha-test discard (only active when alpha_mode != 0).
-    if (combiner.alpha_mode != 0u && r.alpha < combiner.alpha_threshold) {
-        discard;
-    }
+    alpha_discard(r, in.clip_position.xy);
 
     // ── ZMODE_DEC in-shader test against the scene depth written by pass 1. ──
     // `in.clip_position` is the rasterizer @builtin(position): .xy are framebuffer pixel coords,

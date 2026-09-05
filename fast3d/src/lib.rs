@@ -379,7 +379,10 @@ impl Renderer {
             .device
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+        let (frame_serial, dither_seed) = (self.inner.frame_serial, self.inner.dither_seed);
         self.inner = SceneRenderer::new(&self.device, render_fmt, w, h, dual_source);
+        self.inner.frame_serial = frame_serial;
+        self.inner.dither_seed = dither_seed;
         self.surface_format = render_fmt;
         self.config = config;
         // The store was just dropped with the old `inner`; drop dangling scanout state too.

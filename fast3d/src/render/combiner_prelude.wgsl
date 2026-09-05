@@ -29,12 +29,12 @@ fn vs_main(in: VsIn) -> VsOut {
 struct Combiner {
     combine_l:       u32,       // raw w0 (combine_l = w0)
     combine_h:       u32,       // raw w1 (combine_h = w1)
-    cycle_type:      u32,       // 0 = 1-cycle (G_CYC_1CYCLE), 1 = 2-cycle
+    cycle_type:      u32,       // 0 = 1-cycle, 1 = 2-cycle, 2 = COPY
     tex_enable:      u32,       // 1 if texture is enabled
     blender_mux:     u32,       // raw blender mux (other_mode_l bits [31:16]) — wired in B3
     force_blend:     u32,       // 1 if FORCE_BL is set — wired in B3
-    alpha_mode:      u32,       // 0=off,1=CVG_X_ALPHA,2=THRESHOLD — wired in Phase D
-    alpha_threshold: f32,       // alpha discard threshold — wired in Phase D
+    alpha_flags:     u32,       // low two bits: compare mode; bit 2: coverage approximation
+    alpha_threshold: f32,       // blend-color alpha threshold
     prim:            vec4<f32>, // primitive color RGBA normalized
     env:             vec4<f32>, // environment color RGBA normalized
     blend_color:     vec4<f32>, // blend color RGBA — wired in B3
@@ -52,6 +52,7 @@ struct Combiner {
                                 // by compute_lod under DETAIL/SHARPEN. .w = detail_mode bits (bit0 =
                                 // SHARPEN, bit1 = DETAIL — DETAIL set only when a real tile was
                                 // decoded). In LOCKSTEP with the Rust CombinerUniform.
+    frame:           vec4<u32>, // serial, seed, framebuffer width, framebuffer height
 };
 
 @group(0) @binding(0) var tex0:  texture_2d<f32>;
@@ -192,6 +193,7 @@ fn alpha_c(idx: u32, t0_a: f32, t1_a: f32, shade_a: f32, combined_a: f32, prim_a
 
 // (a-b)*c+d combiner cycle
 struct CycleResult {
+    compare_alpha: f32,
     rgb:   vec3<f32>,
     alpha: f32,
 };
@@ -223,7 +225,7 @@ fn run_cycle(
     let d_a = alpha_abd(ad_idx, t0.a, t1.a, shade.a, combined.a, prim.a, env.a);
     let out_a = clamp((a_a - b_a) * c_a + d_a, 0.0, 1.0);
 
-    return CycleResult(out_rgb, out_a);
+    return CycleResult(out_a, out_rgb, out_a);
 }
 
 struct LodResult {
@@ -429,6 +431,10 @@ fn eval_combiner(in: VsOut) -> CycleResult {
         texel = vec4<f32>(1.0);
     }
 
+    if combiner.cycle_type == 2u {
+        return CycleResult(texel.a, texel.rgb, texel.a);
+    }
+
     let use_tex1 = combiner.inv_tex1_size.z != 0.0;
     let texel1 = sample_physical(tex1, 1u, uv);
     let sentinel1 = vec4<f32>(1.0, 0.0, 1.0, 1.0); // unwired-TEXEL1 sentinel (never read when gated)
@@ -496,7 +502,37 @@ fn eval_combiner(in: VsOut) -> CycleResult {
         let combined0 = vec4<f32>(r0.rgb, r0.alpha);
         // The RDP pipeline reverses physical texture roles in the second cycle.
         result = run_cycle(ca1, cb1, cc1, cd1, aa1, ab1, ac1, ad1, t1_cyc0, texel, shade, combined0, prim, env, lod_fraction, prim_lod_frac);
+        result.compare_alpha = r0.alpha;
     }
 
     return result;
+}
+
+// RT64 Random.hlsli initRand (16 rounds), followed by nextRandUint.
+fn dither_threshold(position: vec2<u32>) -> f32 {
+    var v0 = combiner.frame.x ^ combiner.frame.y;
+    var v1 = position.x + combiner.frame.z * position.y;
+    var sum = 0u;
+    for (var n = 0u; n < 16u; n++) {
+        sum += 0x9e3779b9u;
+        v0 += ((v1 << 4u) + 0xa341316cu) ^ (v1 + sum) ^ ((v1 >> 5u) + 0xc8013ea4u);
+        v1 += ((v0 << 4u) + 0xad90777du) ^ (v0 + sum) ^ ((v0 >> 5u) + 0x7e95761eu);
+    }
+    let next = 1664525u * v0 + 1013904223u;
+    return (f32(next >> 24u) + 0.5) / 256.0;
+}
+
+fn alpha_discard(result: CycleResult, position: vec2<f32>) {
+    let coverage_threshold = select(0.125, 0.5, combiner.cycle_type == 2u);
+    if (combiner.alpha_flags & 4u) != 0u && result.alpha < coverage_threshold {
+        discard;
+    }
+    let compare = combiner.alpha_flags & 3u;
+    var threshold = combiner.alpha_threshold;
+    if compare == 3u {
+        threshold = dither_threshold(vec2<u32>(position));
+    }
+    if compare != 0u && result.compare_alpha < threshold {
+        discard;
+    }
 }

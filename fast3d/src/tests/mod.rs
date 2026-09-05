@@ -6,6 +6,9 @@
 #[allow(dead_code)]
 pub(crate) mod common;
 
+mod alpha_dither;
+#[cfg(feature = "capture")]
+mod alpha_dither_fixture;
 mod asm_tests;
 #[cfg(feature = "capture")]
 #[path = "../../../tools/rt64-oracle/fixture.rs"]
