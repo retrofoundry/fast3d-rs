@@ -116,6 +116,24 @@ fn tile_shift_all_16_values_pixels() {
 }
 
 #[test]
+fn tile_repeat_extent_preserves_bilinear_pixels() {
+    for (mode, uv) in [(0, [3.25, 1.75]), (0, [11.25, 5.75]), (1, [12.75, 6.25])] {
+        assert_probe(
+            &scene(
+                &rdp(TileDescriptor {
+                    cms: mode,
+                    cmt: mode,
+                    ..tile()
+                }),
+                uv,
+                0,
+            ),
+            [84, 84, 84, 255],
+        );
+    }
+}
+
+#[test]
 fn tile_mask_zero_clamps_pixels() {
     assert_probe(
         &scene(
@@ -221,8 +239,7 @@ fn tile_large_mask_uses_bounded_tmem_lookup_pixels() {
     }
 }
 
-#[test]
-fn lod_tiles_apply_independent_origin_and_shift_pixels() {
+fn lod_scene() -> Scene {
     let mut state = rdp(TileDescriptor {
         width: 32,
         height: 32,
@@ -257,7 +274,32 @@ fn lod_tiles_apply_independent_origin_and_shift_pixels() {
         let screen_x = pos[0] * 2.5 + 160.0;
         st[0] = 13.0 + (screen_x - 100.5) * 1.5;
     }
-    assert_probe(&scene, [60, 60, 60, 255]);
+    scene
+}
+
+#[test]
+fn lod_texel1_only_preserves_texel_coordinates() {
+    let scene = lod_scene();
+    let mat = &scene.materials[0];
+    assert!(!mat.tex_enable);
+    assert!(mat.lod);
+    assert_eq!(
+        crate::render::triangle_inv_tex_size(mat),
+        [1.0 / 32.0, 1.0 / 32.0, 0.0, 0.0]
+    );
+    let tiles = crate::render::material_sampling(mat);
+    assert_eq!(tiles[0].image, [32, 32, 0, 0]);
+    assert_eq!(tiles[3].bounds, [8, 12, 132, 136]);
+    assert_eq!(tiles[3].shift_mask, [1, 15, 5, 5]);
+    assert_eq!(
+        pixel(&mat.mip_levels[1].texture, 32, 4, 14),
+        [60, 60, 60, 60]
+    );
+}
+
+#[test]
+fn lod_tiles_apply_independent_origin_and_shift_pixels() {
+    assert_probe(&lod_scene(), [60, 60, 60, 255]);
 }
 
 #[test]

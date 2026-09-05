@@ -580,7 +580,7 @@ fn rect_quad(
 
 /// Normalize texel-space triangle UVs using the tile dimensions captured at draw time.
 pub fn triangle_inv_tex_size(mat: &crate::hle::Material) -> [f32; 4] {
-    if mat.tex_enable {
+    if mat.tex_enable || mat.lod {
         [
             1.0 / mat.tex_w.max(1) as f32,
             1.0 / mat.tex_h.max(1) as f32,
