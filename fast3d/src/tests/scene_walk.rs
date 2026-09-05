@@ -54,5 +54,5 @@ fn every_curated_scene_assembles_and_renders_clean() {
         }
         checked += 1;
     }
-    assert_eq!(checked, 32, "expected 32 curated scenes, found {checked}");
+    assert_eq!(checked, 33, "expected 33 curated scenes, found {checked}");
 }

@@ -113,6 +113,19 @@ pub fn render_to_pixels_fmt(
     h: u32,
     format: wgpu::TextureFormat,
 ) -> Vec<u8> {
+    pixels_from_render(device, queue, w, h, format, |view| {
+        renderer.render(device, queue, scene, view);
+    })
+}
+
+pub fn pixels_from_render(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    w: u32,
+    h: u32,
+    format: wgpu::TextureFormat,
+    render: impl FnOnce(&wgpu::TextureView),
+) -> Vec<u8> {
     let bytes_per_row = w * 4;
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("facade-target"),
@@ -131,7 +144,7 @@ pub fn render_to_pixels_fmt(
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
     // The facade owns its own encode→submit; this is the consumer's frame-present analog.
-    renderer.render(device, queue, scene, &view);
+    render(&view);
 
     // Copy the rendered target into a mappable readback buffer (a separate encoder, as the real
     // consumer would do for a screenshot; the facade's own submit has already happened).

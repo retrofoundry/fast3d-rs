@@ -375,7 +375,9 @@ fn render_scene_with_device(
         label: Some("golden-rsp-params"),
         contents: bytemuck::bytes_of(&RspProcessParams {
             vertex_count: n,
-            _pad: [0; 3],
+            _pad: 0,
+            fb_width: 320.0,
+            fb_height: 240.0,
         }),
         usage: wgpu::BufferUsages::UNIFORM,
     });
@@ -2394,10 +2396,7 @@ fn golden_2d_copy_alpha_keyed_over_bg() {
 /// coplanar BRIGHT MAGENTA decal quad (run 1, `G_RM_AA_ZB_OPA_DECAL`), both full-screen at Z=0.
 /// This is the pair-LESS form (flat `draw_runs`). Mirrors `render.rs::build_decal_smoke_scene`.
 ///
-/// The viewport uses the canonical FB_WIDTH/2, FB_HEIGHT/2 (160, 120) so the RSP-process fold
-/// (`rsp_process.wgsl`, which hardcodes FB_WIDTH=320 / FB_HEIGHT=240) maps the NDC `[-1,1]` quad to
-/// the FULL render target at ANY target size — so both the pair-less render and a paired render
-/// into any-size FB fill the whole target.
+/// The 320×240 viewport fills the pairless logical canvas and covers the smaller 64×64 pairs.
 fn build_decal_scene() -> crate::hle::Scene {
     // PRIM-passthrough combiner (combine_l=0, combine_h=0xC3 → cd1=PRIM, ad1=PRIM).
     let selectors = crate::hle::combiner::decode_combine(0x0000_0000, 0x0000_00C3);
