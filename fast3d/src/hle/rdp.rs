@@ -253,7 +253,9 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let actual_width = width as u32 + 1;
     let bytes_per_row = (actual_width << siz) >> 1;
     let bytes_offset = (uls << siz) >> 1;
-    let texture_start = addr + bytes_offset as u64 + bytes_per_row as u64 * ult as u64;
+    let texture_start = addr
+        .saturating_add(bytes_offset as u64)
+        .saturating_add(bytes_per_row as u64 * ult as u64);
     let src_len = (row_count as usize - 1) * bytes_per_row as usize + words_per_row as usize * 8;
     let src = cx.mem.read_bytes(texture_start, src_len).into_owned();
 

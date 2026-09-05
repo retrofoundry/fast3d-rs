@@ -7,6 +7,8 @@
 pub mod asm;
 #[cfg(feature = "debug-ui")]
 pub mod debug;
+#[cfg(feature = "capture")]
+pub use hle::capture;
 pub mod diag;
 pub mod hardware;
 pub(crate) mod hle;

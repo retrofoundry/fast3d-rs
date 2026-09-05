@@ -223,15 +223,15 @@ impl Rsp {
     pub fn set_viewport<M: Rdram>(&mut self, mem: &M, addr: u64) {
         let vscale = [
             mem.read_i16(addr),
-            mem.read_i16(addr + 2),
-            mem.read_i16(addr + 4),
-            mem.read_i16(addr + 6),
+            mem.read_i16(addr.saturating_add(2)),
+            mem.read_i16(addr.saturating_add(4)),
+            mem.read_i16(addr.saturating_add(6)),
         ];
         let vtrans = [
-            mem.read_i16(addr + 8),
-            mem.read_i16(addr + 10),
-            mem.read_i16(addr + 12),
-            mem.read_i16(addr + 14),
+            mem.read_i16(addr.saturating_add(8)),
+            mem.read_i16(addr.saturating_add(10)),
+            mem.read_i16(addr.saturating_add(12)),
+            mem.read_i16(addr.saturating_add(14)),
         ];
         // Authentic libultra order: X=index0, Y=index1, Z=index2 / DepthRange.
         // Some ports read vscale[1] for X / vscale[0] for Y; that swap is a host-byteswap
@@ -351,7 +351,7 @@ impl Rsp {
         // fogs terrain while leaving overlay geometry's alpha untouched.
         let fog_flag = u32::from((self.geom & self.consts.g_fog_geom) != 0);
         for i in 0..count {
-            let o = addr + (i as u64) * stride;
+            let o = addr.saturating_add((i as u64) * stride);
             let v = mem.read_vertex(o, self.data_format);
             let slot = (dst + i) as usize;
             let gi = scene.raw_pos.len() as u32;
@@ -653,19 +653,19 @@ impl Rsp {
             // ambient (8B Ambient_t: col@0..2, no dir)
             self.ambient_col = [
                 mem.read_u8(addr) as f32 / 255.0,
-                mem.read_u8(addr + 1) as f32 / 255.0,
-                mem.read_u8(addr + 2) as f32 / 255.0,
+                mem.read_u8(addr.saturating_add(1)) as f32 / 255.0,
+                mem.read_u8(addr.saturating_add(2)) as f32 / 255.0,
             ];
         } else if (light_idx as usize) < self.lights.len() {
             let col = [
                 mem.read_u8(addr) as f32 / 255.0,
-                mem.read_u8(addr + 1) as f32 / 255.0,
-                mem.read_u8(addr + 2) as f32 / 255.0,
+                mem.read_u8(addr.saturating_add(1)) as f32 / 255.0,
+                mem.read_u8(addr.saturating_add(2)) as f32 / 255.0,
             ];
             let dir = [
-                mem.read_i8(addr + 8) as f32 / 127.0,
-                mem.read_i8(addr + 9) as f32 / 127.0,
-                mem.read_i8(addr + 10) as f32 / 127.0,
+                mem.read_i8(addr.saturating_add(8)) as f32 / 127.0,
+                mem.read_i8(addr.saturating_add(9)) as f32 / 127.0,
+                mem.read_i8(addr.saturating_add(10)) as f32 / 127.0,
             ];
             self.lights[light_idx as usize] = (dir, col);
         }
@@ -692,9 +692,9 @@ impl Rsp {
     pub fn set_lookat<M: Rdram>(&mut self, mem: &M, slot: u32, addr: u64) {
         if (slot as usize) < self.lookat_axes.len() {
             self.lookat_axes[slot as usize] = [
-                mem.read_i8(addr + 8) as f32 / 127.0,
-                mem.read_i8(addr + 9) as f32 / 127.0,
-                mem.read_i8(addr + 10) as f32 / 127.0,
+                mem.read_i8(addr.saturating_add(8)) as f32 / 127.0,
+                mem.read_i8(addr.saturating_add(9)) as f32 / 127.0,
+                mem.read_i8(addr.saturating_add(10)) as f32 / 127.0,
             ];
         }
         self.lookat_version += 1;

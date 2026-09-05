@@ -57,6 +57,14 @@ impl<'a> HostRam<'a> {
 }
 
 impl<'a> Rdram for HostRam<'a> {
+    #[cfg(feature = "capture")]
+    fn capture_layout(&self) -> Option<crate::capture::SourceLayout> {
+        Some(crate::capture::SourceLayout {
+            memory: crate::capture::MemoryLayout::host_native(),
+            segments: self.segments,
+        })
+    }
+
     /// Store a raw 64-bit segment base. We deliberately do NOT mask the value.
     ///
     /// CONFIRMED (SP3b HELIX_DL_PROBE, 2026-06-25): sm64's PC port uses identity address

@@ -186,3 +186,249 @@ fn golden_sp_2triangles() {
     // A=(0,1,2) -> w0=0x06000204 ; B=(0,2,3) -> w1=0x00000406 ; decodes to [0,1,2,0,2,3].
     assert_eq!(gsp_2triangles(0, 1, 2, 0, 2, 3), (0x0600_0204, 0x0000_0406));
 }
+
+#[test]
+fn sm64_seed_macro_words_match_gbi() {
+    // Expanded with sm64 4a9dcf0d0a82a637b19b401f969639c9f4e0c83a include/PR/gbi.h (F3D).
+    // Source symbols identify prefixes or selected commands; these are not complete fixtures.
+    let cc = |a, b, c, d| CcPass { a, b, c, d };
+    let decal_rgb = cc(31, 31, 31, 1);
+    let decal_alpha = cc(7, 7, 7, 1);
+    let env_alpha = cc(7, 7, 7, 5);
+    let shade_rgb = cc(31, 31, 31, 4);
+    let shade_alpha = cc(7, 7, 7, 4);
+
+    let mut mario_metal_butt_prefix = vec![
+        gdp_pipe_sync(),
+        gsp_set_geometrymode_f3d(0x0004_0000),
+        gdp_set_combine_lerp(decal_rgb, env_alpha, decal_rgb, env_alpha),
+    ];
+    mario_metal_butt_prefix.extend(gdp_load_texture_block(
+        0,
+        2,
+        64,
+        32,
+        0x0400_0090,
+        0,
+        5,
+        0,
+        6,
+    ));
+    mario_metal_butt_prefix.push(gsp_texture_f3d(0x0F80, 0x07C0, 0, 0, true));
+    assert_eq!(
+        mario_metal_butt_prefix,
+        [
+            (0xE700_0000, 0x0000_0000),
+            (0xB700_0000, 0x0004_0000),
+            (0xFCFF_FFFF, 0xFFFC_FA7D),
+            (0xFD10_0000, 0x0400_0090),
+            (0xF510_0000, 0x0701_4060),
+            (0xE600_0000, 0x0000_0000),
+            (0xF300_0000, 0x077F_F080),
+            (0xE700_0000, 0x0000_0000),
+            (0xF510_2000, 0x0001_4060),
+            (0xF200_0000, 0x000F_C07C),
+            (0xBB00_0001, 0x0F80_07C0),
+        ],
+        "actors/mario/model.inc.c: mario_metal_butt prefix"
+    );
+
+    assert_eq!(
+        [
+            gdp_pipe_sync(),
+            gsp_clear_geometrymode_f3d(0x0002_0000),
+            gdp_set_combine_lerp(decal_rgb, decal_alpha, decal_rgb, decal_alpha),
+            gdp_set_render_mode_f3d(0x0C08_7008, 0x0302_7008),
+            gsp_setothermode_h_f3d(12, 2, 0),
+            gsp_texture_f3d(0xFFFF, 0xFFFF, 0, 0, true),
+        ],
+        [
+            (0xE700_0000, 0x0000_0000),
+            (0xB600_0000, 0x0002_0000),
+            (0xFCFF_FFFF, 0xFFFC_F279),
+            (0xB900_031D, 0x0F0A_7008),
+            (0xBA00_0C02, 0x0000_0000),
+            (0xBB00_0001, 0xFFFF_FFFF),
+        ],
+        "actors/power_meter/model.inc.c: dl_power_meter_base prefix"
+    );
+    assert_eq!(
+        [
+            gdp_set_tile(0, 2, 8, 0, 0, 0, 2, 6, 0, 2, 5, 0),
+            gdp_set_tile_size(0, 0, 0, 124, 252),
+            gdp_set_texture_image(0, 2, 1, 0x0302_33E0),
+            gdp_load_block(7, 0, 0, 2047, 256),
+            gsp_1triangle_f3d(0, 1, 2),
+            gsp_1triangle_f3d(0, 2, 3),
+            gdp_set_texture_image(0, 2, 1, 0x0302_43E0),
+            gsp_1triangle_f3d(4, 5, 6),
+            gsp_1triangle_f3d(4, 6, 7),
+        ],
+        [
+            (0xF510_1000, 0x0009_8250),
+            (0xF200_0000, 0x0007_C0FC),
+            (0xFD10_0000, 0x0302_33E0),
+            (0xF300_0000, 0x077F_F100),
+            (0xBF00_0000, 0x0000_0A14),
+            (0xBF00_0000, 0x0000_141E),
+            (0xFD10_0000, 0x0302_43E0),
+            (0xBF00_0000, 0x0028_323C),
+            (0xBF00_0000, 0x0028_3C46),
+        ],
+        "actors/power_meter/model.inc.c: dl_power_meter_base selected commands"
+    );
+    assert_eq!(
+        [
+            gdp_set_tile(0, 2, 8, 0, 0, 0, 2, 5, 0, 2, 5, 0),
+            gdp_set_tile_size(0, 0, 0, 124, 124),
+        ],
+        [(0xF510_1000, 0x0009_4250), (0xF200_0000, 0x0007_C07C),],
+        "actors/power_meter/model.inc.c: dl_power_meter_health_segments_begin tile commands"
+    );
+    assert_eq!(
+        [
+            gdp_pipe_sync(),
+            gsp_texture_f3d(0xFFFF, 0xFFFF, 0, 0, false),
+            gsp_set_geometrymode_f3d(0x0002_0000),
+            gdp_set_render_mode_f3d(0x0C08_4000, 0x0302_4000),
+            gdp_set_combine_lerp(shade_rgb, shade_alpha, shade_rgb, shade_alpha),
+            gsp_setothermode_h_f3d(12, 2, 0x0000_2000),
+            gsp_enddl_f3d(),
+        ],
+        [
+            (0xE700_0000, 0x0000_0000),
+            (0xBB00_0000, 0xFFFF_FFFF),
+            (0xB700_0000, 0x0002_0000),
+            (0xB900_031D, 0x0F0A_4000),
+            (0xFCFF_FFFF, 0xFFFE_793C),
+            (0xBA00_0C02, 0x0000_2000),
+            (0xB800_0000, 0x0000_0000),
+        ],
+        "actors/power_meter/model.inc.c: dl_power_meter_health_segments_end"
+    );
+
+    assert_eq!(
+        [
+            gdp_pipe_sync(),
+            gdp_set_cycle_type_f3d(2),
+            gsp_setothermode_h_f3d(19, 1, 0),
+            gsp_setothermode_l_f3d(0, 2, 1),
+            gdp_set_blend_color(0xFFFF_FFFF),
+            gdp_set_render_mode_f3d(0x0040_41C8, 0x0010_41C8),
+            gsp_enddl_f3d(),
+        ],
+        [
+            (0xE700_0000, 0x0000_0000),
+            (0xBA00_1402, 0x0020_0000),
+            (0xBA00_1301, 0x0000_0000),
+            (0xB900_0002, 0x0000_0001),
+            (0xF900_0000, 0xFFFF_FFFF),
+            (0xB900_031D, 0x0050_41C8),
+            (0xB800_0000, 0x0000_0000),
+        ],
+        "bin/segment2.c: dl_hud_img_begin VERSION_US"
+    );
+    assert_eq!(
+        [
+            gdp_pipe_sync(),
+            gdp_set_cycle_type_f3d(2),
+            gsp_setothermode_h_f3d(19, 1, 0),
+            gsp_setothermode_l_f3d(0, 2, 1),
+            gdp_set_blend_color(0xFFFF_FFFF),
+            gdp_set_render_mode_f3d(0, 0),
+            gsp_setothermode_h_f3d(12, 2, 0),
+            gsp_enddl_f3d(),
+        ],
+        [
+            (0xE700_0000, 0x0000_0000),
+            (0xBA00_1402, 0x0020_0000),
+            (0xBA00_1301, 0x0000_0000),
+            (0xB900_0002, 0x0000_0001),
+            (0xF900_0000, 0xFFFF_FFFF),
+            (0xB900_031D, 0x0000_0000),
+            (0xBA00_0C02, 0x0000_0000),
+            (0xB800_0000, 0x0000_0000),
+        ],
+        "bin/segment2.c: dl_hud_img_begin VERSION_EU"
+    );
+
+    // jrb_seg7_dl_070069B0 uses raw FogFactor(0x0724, 0xF9DC), which has no encoder.
+    assert_eq!(
+        gdp_set_fog_color(0x0F41_64FF),
+        (0xF800_0000, 0x0F41_64FF),
+        "levels/jrb/areas/1/5/model.inc.c: jrb_seg7_dl_070069B0 fog color"
+    );
+    assert_eq!(
+        [
+            gdp_pipe_sync(),
+            gdp_set_cycle_type_f3d(1),
+            gdp_set_render_mode_f3d(0xC800_0000, 0x0011_2078),
+            gsp_setothermode_l_f3d(2, 1, 0),
+            gdp_set_fog_color(0x0550_4BFF),
+            gsp_fog_position_f3d(900, 1000),
+            gsp_set_geometrymode_f3d(0x0001_0000),
+            gdp_set_combine_lerp(
+                cc(1, 31, 4, 31),
+                shade_alpha,
+                cc(31, 31, 31, 0),
+                cc(7, 7, 7, 0),
+            ),
+        ],
+        [
+            (0xE700_0000, 0x0000_0000),
+            (0xBA00_1402, 0x0010_0000),
+            (0xB900_031D, 0xC811_2078),
+            (0xB900_0201, 0x0000_0000),
+            (0xF800_0000, 0x0550_4BFF),
+            (0xBC00_0008, 0x0500_FC00),
+            (0xB700_0000, 0x0001_0000),
+            (0xFC12_7FFF, 0xFFFF_F838),
+        ],
+        "levels/jrb/areas/1/2/model.inc.c: jrb_seg7_dl_07004940 prefix"
+    );
+
+    assert_eq!(
+        [
+            gsp_setothermode_l_f3d(0, 2, 3),
+            gdp_set_env_color(0xFFFF_FF80),
+            gsp_enddl_f3d(),
+        ],
+        [
+            (0xB900_0002, 0x0000_0003),
+            (0xFB00_0000, 0xFFFF_FF80),
+            (0xB800_0000, 0x0000_0000),
+        ],
+        "src/game/mario_misc.c: make_gfx_mario_alpha(alpha=128)"
+    );
+
+    assert_eq!(
+        [
+            gdp_set_combine_lerp(
+                cc(2, 1, 13, 1),
+                cc(2, 1, 0, 1),
+                cc(31, 31, 31, 0),
+                shade_alpha,
+            ),
+            gdp_set_render_mode_f3d(0x0C08_0000, 0x0011_2078),
+            gsp_setothermode_h_f3d(16, 1, 0x0001_0000),
+            gsp_clear_geometrymode_f3d(0x0002_0200),
+            gdp_set_tile(0, 2, 8, 0, 0, 0, 2, 5, 0, 2, 5, 0),
+            gdp_set_tile_size(0, 0, 0, 124, 124),
+            gdp_set_tile(0, 2, 8, 256, 1, 0, 2, 5, 0, 2, 5, 0),
+            gdp_set_tile_size(1, 0, 0, 124, 124),
+            gsp_texture_f3d(0xFFFF, 0xFFFF, 1, 0, true),
+        ],
+        [
+            (0xFC26_A1FF, 0x1FFC_923C),
+            (0xB900_031D, 0x0C19_2078),
+            (0xBA00_1001, 0x0001_0000),
+            (0xB600_0000, 0x0002_0200),
+            (0xF510_1000, 0x0009_4250),
+            (0xF200_0000, 0x0007_C07C),
+            (0xF510_1100, 0x0109_4250),
+            (0xF200_0000, 0x0107_C07C),
+            (0xBB00_0801, 0xFFFF_FFFF),
+        ],
+        "levels/castle_inside/areas/1/1/model.inc.c: inside_castle_seg7_dl_07023DB0 selected commands"
+    );
+}
