@@ -9,11 +9,17 @@ use n64_gbi::encode::*;
 use super::render::{render_scene_to_rgba8, run_compute_outputs};
 
 const TEXEL_TOLERANCE: f64 = 1.0 / 1024.0;
+// WARP's acos lands ~1.3e-3 texel off at the metal scale; the cubic it replaces is off by >0.2.
+const ACOS_TEXEL_TOLERANCE: f64 = 1.0 / 256.0;
 
 fn assert_uv(got: [f32; 2], expected: [f64; 2]) {
+    assert_uv_within(got, expected, TEXEL_TOLERANCE);
+}
+
+fn assert_uv_within(got: [f32; 2], expected: [f64; 2], tolerance: f64) {
     for axis in 0..2 {
         assert!(
-            (f64::from(got[axis]) - expected[axis]).abs() <= TEXEL_TOLERANCE,
+            (f64::from(got[axis]) - expected[axis]).abs() <= tolerance,
             "axis {axis}: expected {} texels, got {}",
             expected[axis],
             got[axis]
@@ -81,12 +87,13 @@ fn texgen_linear_matches_acos() {
         .zip(dots)
     {
         let d = f64::from(d).clamp(-1.0, 1.0);
-        assert_uv(
+        assert_uv_within(
             vertex.uv,
             [
                 (-d).acos() * 62.0 / std::f64::consts::PI,
                 d.acos() * 31.0 / std::f64::consts::PI,
             ],
+            ACOS_TEXEL_TOLERANCE,
         );
     }
 }
