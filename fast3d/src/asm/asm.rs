@@ -2087,8 +2087,8 @@ Gfx main[] = { gsSPVertex(verts, 1, 0) gsSP1Triangle(0,0,0,0) gsSPEndDisplayList
                 flip,
                 ..
             } => {
-                assert_eq!(rect.lrx, 320); // 1280 >> 2
-                assert_eq!(rect.lry, 240); // 960 >> 2
+                assert_eq!(rect.lrx, 1280);
+                assert_eq!(rect.lry, 960);
                 assert_eq!(rect.ulx, 0);
                 assert_eq!(rect.uly, 0);
                 assert_eq!(*uls, 44);

@@ -38,6 +38,14 @@ pub struct Rect {
     pub lrx: i32,
     pub lry: i32,
 }
+/// TexRect command bounds in raw 10.2 fixed point.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TexRectBounds {
+    pub ulx: i32,
+    pub uly: i32,
+    pub lrx: i32,
+    pub lry: i32,
+}
 /// Scissor rectangle in pixel coordinates with mode.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Scissor {
@@ -56,7 +64,8 @@ pub enum SceneOp {
         color_raw: u32,
     },
     TexRect {
-        rect: Rect,
+        rect: TexRectBounds,
+        tile: u8,
         uls: i16,
         ult: i16,
         dsdx: i16,

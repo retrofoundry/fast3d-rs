@@ -35,6 +35,7 @@ mod rsp_tests;
 mod run_split;
 mod scene_walk;
 mod texgen;
+mod texrect;
 mod tile_sampling;
 
 // `HostRam`-dependent → 64-bit non-wasm only (preserves host_mem.rs:14 / dlmemory_equivalence.rs:13).

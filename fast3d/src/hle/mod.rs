@@ -33,4 +33,6 @@ pub use interp::{interpret, interpret_rdram, InterpResult};
 #[cfg_attr(not(all(test, feature = "asm")), allow(unused_imports))]
 pub use mem::Rdram;
 #[cfg_attr(not(all(test, feature = "asm")), allow(unused_imports))]
-pub use rsp::{ColorImage, CullKind, DrawRun, FramebufferPair, Rect, Scene, SceneOp, Scissor};
+pub use rsp::{
+    ColorImage, CullKind, DrawRun, FramebufferPair, Rect, Scene, SceneOp, Scissor, TexRectBounds,
+};

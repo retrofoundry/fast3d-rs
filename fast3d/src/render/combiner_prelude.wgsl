@@ -39,9 +39,7 @@ struct Combiner {
     env:             vec4<f32>, // environment color RGBA normalized
     blend_color:     vec4<f32>, // blend color RGBA — wired in B3
     fog_color:       vec4<f32>, // fog color RGBA — wired in Phase C
-    inv_tex_size:    vec4<f32>, // .xy = 1/(tex_w, tex_h): draw-time tile-size normalization for the
-                                // TEXEL-space triangle texcoord. (1,1) for rects whose uv is
-                                // already normalized.
+    inv_tex_size:    vec4<f32>, // .xy = 1/(tex_w, tex_h) for texel-space triangle and rectangle UVs.
     inv_tex1_size:   vec4<f32>, // TEXEL1 mirror of inv_tex_size: .xy = 1/(tex1_w, tex1_h); .z =
                                 // tex_enable1 flag (1.0 when the second texture is used, else 0.0);
                                 // .w = filter mode (0 = point, 2 = bilerp, 3 = average).

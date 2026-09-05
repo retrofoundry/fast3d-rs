@@ -1,4 +1,4 @@
-use crate::hle::{ColorImage, FramebufferPair, Rect, Scene, SceneOp, Scissor};
+use crate::hle::{ColorImage, FramebufferPair, Scene, SceneOp, Scissor};
 use crate::render::{headless_device, SceneRenderer};
 use crate::tests::common::{pixel, pixels_from_render, render_to_pixels, scene_from_source};
 
@@ -73,12 +73,13 @@ fn framebuffer_640x480_triangles_align_with_texrect() {
         rect_scene.materials[0].tex_w = 1;
         rect_scene.materials[0].tex_h = 1;
         rect_scene.framebuffer_pairs[0].ops = vec![SceneOp::TexRect {
-            rect: Rect {
-                ulx: 80,
-                uly: 60,
-                lrx: 159,
-                lry: 119,
+            rect: crate::hle::TexRectBounds {
+                ulx: 80 * 4,
+                uly: 60 * 4,
+                lrx: 159 * 4,
+                lry: 119 * 4,
             },
+            tile: 0,
             uls: 0,
             ult: 0,
             dsdx: 1024,

@@ -644,7 +644,7 @@ pub fn build_material(
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
 ) -> Option<Material> {
-    build_material_inner(rdp, rsp, diags, pc, false)
+    build_material_inner(rdp, rsp, diags, pc, None)
 }
 
 fn build_material_inner(
@@ -652,8 +652,9 @@ fn build_material_inner(
     rsp: &crate::hle::rsp::Rsp,
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
-    rect: bool,
+    rect_tile: Option<u8>,
 ) -> Option<Material> {
+    let rect = rect_tile.is_some();
     let selectors = decode_combine(rdp.combine_l, rdp.combine_h);
     let cycle_type = (rdp.other_mode_h >> 20) & 3;
     if !validate_combiner(&selectors, cycle_type, diags, pc) {
@@ -673,11 +674,7 @@ fn build_material_inner(
         }
     }
 
-    let base = if rect {
-        0
-    } else {
-        (rsp.texture_state.tile & 7) as usize
-    };
+    let base = (rect_tile.unwrap_or(rsp.texture_state.tile) & 7) as usize;
     let tile = &rdp.tiles[base];
     let tlut_fmt = ((rdp.other_mode_h >> 14) & 0x3) as u8;
     let decoded = if uses_physical0 {
@@ -813,10 +810,11 @@ fn build_material_inner(
 pub fn build_rect_material(
     rdp: &crate::hle::rdp::Rdp,
     rsp: &crate::hle::rsp::Rsp,
+    tile: u8,
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
 ) -> Option<Material> {
-    build_material_inner(rdp, rsp, diags, pc, true)
+    build_material_inner(rdp, rsp, diags, pc, Some(tile))
 }
 
 #[cfg(test)]

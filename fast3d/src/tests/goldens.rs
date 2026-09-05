@@ -2006,12 +2006,13 @@ fn golden_2d_rect_geometry_exact() {
             },
             depth_image: None,
             ops: vec![crate::hle::SceneOp::TexRect {
-                rect: crate::hle::Rect {
+                rect: crate::hle::TexRectBounds {
                     ulx: 0,
                     uly: 0,
-                    lrx: W as i32 - 1,
-                    lry: H as i32 - 1,
+                    lrx: (W as i32 - 1) * 4,
+                    lry: (H as i32 - 1) * 4,
                 },
+                tile: 0,
                 uls: 0,
                 ult: 0,
                 dsdx: 1024,
@@ -2413,12 +2414,13 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
                     color_raw: 0x07C1_07C1,
                 },
                 SceneOp::TexRect {
-                    rect: Rect {
+                    rect: crate::hle::TexRectBounds {
                         ulx: 0,
                         uly: 0,
-                        lrx: W as i32 - 1,
-                        lry: H as i32 - 1,
+                        lrx: (W as i32 - 1) * 4,
+                        lry: (H as i32 - 1) * 4,
                     },
+                    tile: 0,
                     uls: 0,
                     ult: 0,
                     dsdx: 1024,

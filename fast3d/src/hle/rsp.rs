@@ -5,7 +5,7 @@ use crate::hle::gbi::f3dex2::F3DEX2_CONSTS;
 use crate::hle::math::{identity, mul4, mul_col_vec3, Mat4};
 use crate::hle::mem::Rdram;
 pub use crate::scene::{
-    ColorImage, CullKind, DrawRun, FramebufferPair, Rect, Scene, SceneOp, Scissor,
+    ColorImage, CullKind, DrawRun, FramebufferPair, Rect, Scene, SceneOp, Scissor, TexRectBounds,
 };
 
 pub const RSP_MAX_VERTICES: usize = 256;
@@ -815,11 +815,12 @@ pub(crate) fn record_scissor_if_changed(
 pub(crate) fn snapshot_rect_run(
     rsp: &Rsp,
     rdp: &crate::hle::rdp::Rdp,
+    tile: u8,
     diags: &mut Vec<crate::diag::Diagnostic>,
     scene: &mut Scene,
     pc: u64,
 ) -> Option<(u32, u32)> {
-    let m = crate::hle::combiner::build_rect_material(rdp, rsp, diags, pc)?;
+    let m = crate::hle::combiner::build_rect_material(rdp, rsp, tile, diags, pc)?;
     let material_index = match scene.materials.last() {
         Some(last) if *last == m => (scene.materials.len() - 1) as u32,
         _ => {

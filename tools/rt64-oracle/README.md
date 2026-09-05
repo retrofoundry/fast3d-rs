@@ -34,7 +34,7 @@ its `stb_image_write.h` for PNG output. There are no downloaded dependencies.
 The temporary `XDG_CACHE_HOME` lets devenv run when the usual Nix cache is outside
 the writable sandbox.
 
-Generate both fixtures without a GPU. The tests are ignored by default and need
+Generate the fixtures without a GPU. The tests are ignored by default and need
 both `asm` (the existing in-crate test module gate) and `capture`.
 
 ```sh
@@ -53,12 +53,22 @@ an unrelated size discrepancy. Geometry, normals, textures and other payloads
 are synthetic, as recorded in fixture provenance. These are isolated command
 scenes, not captured game frames.
 
+`sm64-hud-us-copy` and `sm64-hud-eu-point` reuse the regional
+`bin/segment2.c: dl_hud_img_begin` copy-mode state, including threshold alpha
+compare and blend alpha 255. The EU variant selects point filtering and NOOP;
+US retains AA_XLU_SURF. Both draw two adjacent 16×16 synthetic RGBA16 glyphs
+using tile 3 at tile origin (4,6), with a deliberately red tile 0. Their ignored
+writers are `write_rt64_sm64_hud_us_copy_fixture` and
+`write_rt64_sm64_hud_eu_point_fixture`. The `write_rt64_` command above includes
+both. Require maximum channel difference below 8 and zero pixels over 8;
+use `--threshold 7 --max-diff-pixels 0` for the strict gate below.
+
 Run each fixture through both renderers, then compare. The rt64 command opens a
 window. Its PNG comes from RDRAM readback, before VI filtering or presentation
 scaling. Claude should run this part in the GPU session.
 
 ```sh
-for scene in mario-metal-butt jrb-mixed-fog; do
+for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point; do
   devenv shell -- cargo run -p fast3d --features capture \
     --example export_capture_rdram -- \
     "/tmp/fast3d-oracle/$scene.f3dcap" "/tmp/fast3d-oracle/$scene" || break

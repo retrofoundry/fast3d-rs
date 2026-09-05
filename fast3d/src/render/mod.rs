@@ -1,6 +1,9 @@
 //! wgpu pass-through renderer for the walking skeleton, extended with texture support.
 use bytemuck::{Pod, Zeroable};
 
+#[cfg(test)]
+mod texrect_tests;
+
 /// The depth format the Z-buffer uses. `Depth32Float` is WebGL2-core (`DEPTH_COMPONENT32F`) and
 /// matches `D32_FLOAT`. Callers that own the depth texture must use this format.
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -94,6 +97,7 @@ pub(crate) fn material_sampling(mat: &crate::hle::Material) -> TileSamplingArray
 
 pub(crate) fn sampling_buffer(device: &wgpu::Device, tiles: &TileSamplingArray) -> wgpu::Buffer {
     use wgpu::util::DeviceExt;
+
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("tile-sampling"),
         contents: bytemuck::cast_slice(tiles),
@@ -136,9 +140,7 @@ pub struct CombinerUniform {
     pub env: [f32; 4],        // environment color RGBA, normalized 0..1
     pub blend_color: [f32; 4], // blend color RGBA, normalized 0..1 (from mat.blend_color / G_SETBLENDCOLOR)
     pub fog_color: [f32; 4],   // normalized draw fog color RGBA
-    /// `.xy` = 1/(tex_w, tex_h): draw-time tile-size normalization applied to the TEXEL-space
-    /// triangle texcoord in the fragment shader (`rsp.rs` emits texel-space texcoords; the tile-size
-    /// division is deferred here to draw time). `(1,1)` for rects (already normalized).
+    /// `.xy` = 1/(tex_w, tex_h) for texel-space triangle and rectangle coordinates.
     /// `.zw` pad to keep the 16-byte std140 tail alignment.
     pub inv_tex_size: [f32; 4],
     /// TEXEL1 mirror of `inv_tex_size` (second-texture params). `.xy` = 1/(tex1_w, tex1_h); `.z` =
@@ -223,8 +225,6 @@ impl CombinerUniform {
             env,
             blend_color,
             fog_color: fog_color.map(|c| c as f32 / 255.0),
-            // Default = normalized-uv convention (rects). The TRIANGLE draw sites override
-            // this to 1/(tex_w, tex_h) for the texel-space triangle texcoord path.
             inv_tex_size: [1.0, 1.0, 0.0, 0.0],
             inv_tex1_size: match &mat.tex1 {
                 Some(t) => [
@@ -275,9 +275,7 @@ impl CombinerUniform {
         fog_color: [u8; 4],
     ) -> Self {
         let mut uniform = Self::from_run(mat, rm, fog_color);
-        // TexRect UVs are already divided by the first binding's dimensions.
-        uniform.inv_tex1_size[0] *= mat.tex_w.max(1) as f32;
-        uniform.inv_tex1_size[1] *= mat.tex_h.max(1) as f32;
+        uniform.inv_tex_size = triangle_inv_tex_size(mat);
         uniform
     }
 
@@ -362,7 +360,7 @@ impl CombinerUniform {
     /// combine register is 0 would resolve every selector to ZERO and render solid black.
     ///
     /// 1-cycle (`cycle_type = 0`): color = (0 − 0)·0 + TEXEL0 (color d = TEXEL0 at H[6,3]); alpha =
-    /// (0 − 0)·0 + TEXEL0_ALPHA (alpha d = TEXEL0 at H[0,3]). `tex_enable = 1` so the tile-0 texture
+    /// (0 − 0)·0 + TEXEL0_ALPHA (alpha d = TEXEL0 at H[0,3]). `tex_enable = 1` so the selected tile
     /// is sampled; blender stays Replace (mux 0) and no fog.
     ///
     /// Alpha-test discard (the alpha-keyed-HUD fix). COPY mode bypasses the combiner/blender, but the
@@ -532,21 +530,6 @@ mod tests {
 #[cfg_attr(not(all(test, feature = "asm")), allow(unused_imports))]
 pub use crate::hle::decode_rgba16;
 
-/// Build the two-triangle (6-vertex) CLIP-SPACE quad for a 2D `FillRect`/`TexRect` draw.
-///
-/// The raster vertex shader takes clip-space directly (w=1, GPU does the perspective divide), so
-/// these vertices bypass the RSP-process compute kernel entirely. The N64 rect covers pixels
-/// `[ulx, lrx] × [uly, lry]` INCLUSIVE; in continuous framebuffer space that is
-/// `[ulx, lrx+1) × [uly, lry+1)` (the exclusive `+1` on the lower-right). Integer pixel coords map
-/// to NDC grid LINES (not centers), so the rasterizer's half-pixel center sampling covers exactly
-/// pixels `ulx..=lrx` / `uly..=lry`. The Y axis is flipped (FB row 0 ↔ NDC +1, per WebGPU's
-/// viewport transform `yf = (1 − ndc_y)/2 · H`) so the rect top lands at framebuffer row `uly`.
-///
-/// NOTE on COPY rounding: the `|=3` / `&=~3` sub-pixel snap the RDP applies in COPY cycle is ALREADY
-/// absorbed by the `>>2` floor `hle` applies when decoding the 10.2 fixed-point coords — so the px
-/// coords here are the final integer pixels and need no further snapping.
-///
-/// `uv` are the four corner UVs in (TL, TR, BR, BL) order, normalized 0..1; `color` is the shade.
 fn rect_quad(
     rect: &crate::hle::Rect,
     fb_w: u32,
@@ -554,12 +537,23 @@ fn rect_quad(
     color: [f32; 4],
     uv: [[f32; 2]; 4],
 ) -> [OutVertex; 6] {
-    let fw = fb_w.max(1) as f32;
-    let fh = fb_h.max(1) as f32;
-    let left = rect.ulx as f32;
-    let right = (rect.lrx + 1) as f32;
-    let top = rect.uly as f32;
-    let bottom = (rect.lry + 1) as f32;
+    screen_quad(
+        [rect.ulx, rect.uly, rect.lrx + 1, rect.lry + 1],
+        (fb_w, fb_h),
+        color,
+        uv,
+    )
+}
+
+fn screen_quad(
+    bounds: [i32; 4],
+    extent: (u32, u32),
+    color: [f32; 4],
+    uv: [[f32; 2]; 4],
+) -> [OutVertex; 6] {
+    let fw = extent.0.max(1) as f32;
+    let fh = extent.1.max(1) as f32;
+    let [left, top, right, bottom] = bounds.map(|v| v as f32);
     let ndc_x = |px: f32| px / fw * 2.0 - 1.0;
     let ndc_y = |py: f32| 1.0 - py / fh * 2.0; // Y-flip
     let v = |px: f32, py: f32, uv: [f32; 2]| OutVertex {
@@ -590,48 +584,53 @@ pub fn triangle_inv_tex_size(mat: &crate::hle::Material) -> [f32; 4] {
     }
 }
 
-/// Compute the four normalized-UV corners (TL, TR, BR, BL) for a `TexRect`.
-///
-/// The texel coordinate at pixel offset `o` from the rect's upper-left is `uls/32 + o·dsdx/1024`
-/// (S10.5 base + S5.10 per-pixel step), divided by the tile dimension to normalize. In COPY cycle
-/// the caller passes `dsdx >> 2` as the S `step` (the 4-pixels-per-cycle horizontal scaling).
-/// `TEXRECTFLIP` swaps which screen axis advances S vs T.
-///
-/// `base` = `(uls, ult)` (S10.5); `step` = `(dsdx_eff, dtdy)` (S5.10); `tex` = `(tex_w, tex_h)`.
-fn texrect_uv(
-    rect: &crate::hle::Rect,
+fn texrect_quad(
+    rect: &crate::hle::TexRectBounds,
     base: (i16, i16),
-    step: (i32, i32),
+    step: (i16, i16),
     flip: bool,
-    tex: (u32, u32),
-) -> [[f32; 2]; 4] {
-    let (uls, ult) = base;
-    let (dsdx_eff, dtdy) = step;
-    let (tex_w, tex_h) = tex;
-    let tw = tex_w.max(1) as f32;
-    let th = tex_h.max(1) as f32;
-    let w_px = (rect.lrx + 1 - rect.ulx) as f32;
-    let h_px = (rect.lry + 1 - rect.uly) as f32;
-    let s0 = uls as f32 / 32.0;
-    let t0 = ult as f32 / 32.0;
-    let ds = dsdx_eff as f32 / 1024.0;
-    let dt = dtdy as f32 / 1024.0;
-    if !flip {
-        // S advances with screen X (left→right); T advances with screen Y (top→bottom).
-        let u_l = s0 / tw;
-        let u_r = (s0 + w_px * ds) / tw;
-        let v_t = t0 / th;
-        let v_b = (t0 + h_px * dt) / th;
-        [[u_l, v_t], [u_r, v_t], [u_r, v_b], [u_l, v_b]]
+    copy_mode: bool,
+    extent: (u32, u32),
+) -> [OutVertex; 6] {
+    let [left, top, right, bottom] = if copy_mode {
+        [
+            rect.ulx >> 2,
+            rect.uly >> 2,
+            (rect.lrx >> 2) + 1,
+            (rect.lry >> 2) + 1,
+        ]
     } else {
-        // FLIP: S advances with screen Y; T advances with screen X.
-        let u_t = s0 / tw;
-        let u_b = (s0 + h_px * ds) / tw;
-        let v_l = t0 / th;
-        let v_r = (t0 + w_px * dt) / th;
-        // corner (x_off, y_off): U from y_off, V from x_off.
-        [[u_t, v_l], [u_t, v_r], [u_b, v_r], [u_b, v_l]]
-    }
+        [rect.ulx, rect.uly, rect.lrx, rect.lry].map(|v| (v + 3) >> 2)
+    };
+    let bounds = [left, top, right.max(left), bottom.max(top)];
+    let width = i64::from(bounds[2] - left);
+    let height = i64::from(bounds[3] - top);
+    let ds = i64::from(if copy_mode { step.0 >> 2 } else { step.0 });
+    let dt = i64::from(step.1);
+    let (sw, th) = if flip {
+        (height, width)
+    } else {
+        (width, height)
+    };
+    // rt64 drawRect truncates endpoints to S10.5 and advances T for any fractional upper Y.
+    let endpoint = |base: i16, step: i64, pixels: i64| {
+        (((i64::from(base) << 7) + step * (pixels << 2)) >> 7) as f32 / 32.0
+    };
+    let t_offset = if !copy_mode && rect.uly & 3 != 0 {
+        (dt >> 5) as f32 / 32.0
+    } else {
+        0.0
+    };
+    let s0 = f32::from(base.0) / 32.0;
+    let t0 = f32::from(base.1) / 32.0 + t_offset;
+    let s1 = endpoint(base.0, ds, sw);
+    let t1 = endpoint(base.1, dt, th) + t_offset;
+    let uv = if flip {
+        [[s0, t0], [s0, t1], [s1, t1], [s1, t0]]
+    } else {
+        [[s0, t0], [s1, t0], [s1, t1], [s0, t1]]
+    };
+    screen_quad(bounds, extent, [1.0; 4], uv)
 }
 
 /// Clamp an N64 `Scissor` (pixel coords, possibly negative or larger than the FB) to a
@@ -3331,7 +3330,7 @@ impl SceneRenderer {
                         let mat = &scene.materials[*material_index as usize];
                         // COPY cycle bypasses the combiner: emit a TEXEL0 passthrough. Otherwise use
                         // the material's combine/render-mode (1-/2-cycle).
-                        let u = if *copy_mode {
+                        let mut u = if *copy_mode {
                             // Copy mode bypasses the combiner, but RDP alpha-compare still keys
                             // transparent texels away (alpha-keyed HUD/text glyphs). Derive the
                             // discard from the decoded render mode + tile format. `.get` defends
@@ -3342,21 +3341,16 @@ impl SceneRenderer {
                             let rm = &scene.render_modes[*render_mode_index as usize];
                             CombinerUniform::from_rect(mat, rm, *fog_color)
                         };
+                        u.inv_tex_size = triangle_inv_tex_size(mat);
                         push_slot(&mut pool, &u);
-                        // COPY cycle scales the horizontal step by 4 (4 px/cycle): dsdx >>= 2.
-                        let dsdx_eff = if *copy_mode {
-                            (*dsdx as i32) >> 2
-                        } else {
-                            *dsdx as i32
-                        };
-                        let uv = texrect_uv(
+                        rect_verts.extend_from_slice(&texrect_quad(
                             rect,
                             (*uls, *ult),
-                            (dsdx_eff, *dtdy as i32),
+                            (*dsdx, *dtdy),
                             *flip,
-                            (mat.tex_w, mat.tex_h),
-                        );
-                        rect_verts.extend_from_slice(&rect_quad(rect, fb_w, fb_h, [1.0; 4], uv));
+                            *copy_mode,
+                            (fb_w, fb_h),
+                        ));
                     }
                     crate::hle::SceneOp::FillRect { rect, color_raw } => {
                         let u = CombinerUniform::fill_rect(*color_raw, pair.color_image.siz);
@@ -3774,7 +3768,7 @@ impl SceneRenderer {
                         let mat = &scene.materials[*material_index as usize];
                         // COPY cycle bypasses the combiner: emit a TEXEL0 passthrough. Otherwise use
                         // the material's combine/render-mode (1-/2-cycle).
-                        let u = if *copy_mode {
+                        let mut u = if *copy_mode {
                             // Copy mode bypasses the combiner, but RDP alpha-compare still keys
                             // transparent texels away (alpha-keyed HUD/text glyphs). Derive the
                             // discard from the decoded render mode + tile format. `.get` defends
@@ -3785,21 +3779,16 @@ impl SceneRenderer {
                             let rm = &scene.render_modes[*render_mode_index as usize];
                             CombinerUniform::from_rect(mat, rm, *fog_color)
                         };
+                        u.inv_tex_size = triangle_inv_tex_size(mat);
                         push_slot(&mut pool, &u);
-                        // COPY cycle scales the horizontal step by 4 (4 px/cycle): dsdx >>= 2.
-                        let dsdx_eff = if *copy_mode {
-                            (*dsdx as i32) >> 2
-                        } else {
-                            *dsdx as i32
-                        };
-                        let uv = texrect_uv(
+                        rect_verts.extend_from_slice(&texrect_quad(
                             rect,
                             (*uls, *ult),
-                            (dsdx_eff, *dtdy as i32),
+                            (*dsdx, *dtdy),
                             *flip,
-                            (mat.tex_w, mat.tex_h),
-                        );
-                        rect_verts.extend_from_slice(&rect_quad(rect, fb_w, fb_h, [1.0; 4], uv));
+                            *copy_mode,
+                            (fb_w, fb_h),
+                        ));
                     }
                     crate::hle::SceneOp::FillRect { rect, color_raw } => {
                         let u = CombinerUniform::fill_rect(*color_raw, pair.color_image.siz);
