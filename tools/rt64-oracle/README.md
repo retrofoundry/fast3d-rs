@@ -138,3 +138,24 @@ are relative to the pinned rt64 checkout.
   after FullSync and again after presenting once. `src/hle/rt64_vi.cpp:81`
   subtracts one row from VI origin, so the supplied origin is the colour address
   plus one row. `:115` accounts for the extra rows in its height estimate.
+
+## First results (2026-09-05, rt64 `4337374`, fast3d at PR 5)
+
+`jrb-mixed-fog`: max channel difference 7/255, no pixel over 8/255. rt64 writes RGBA16 back to
+RAM, so a difference below 8 is quantisation; the two fog settings in one frame come out the same
+in both renderers.
+
+`mario-metal-butt`: 12000 pixels differ, up to 128/255, all inside the ten patches. fast3d still
+samples with GPU bilinear at normalised coordinates, so an integer texel coordinate straddles two
+texels, while rt64 addresses the texel exactly. The fixture's coordinate-coded texture turns that
+half-texel disagreement into a large colour difference on purpose. This is the baseline the tile
+addressing and filter work (design PRs 6 and 7) has to close; rerun after those land.
+
+Two things the oracle caught in the fixtures themselves, both invisible to fast3d because it never
+writes depth to memory: a Z-buffered scene needs `SETZIMG`, or rt64's RAM write-back puts depth
+values at address 0 and overwrites the display list; and it needs the depth buffer cleared, or
+every fragment fails the depth test. The wrapper in `fixture.rs` now does both, the way sm64 does.
+
+On macOS rt64's own SDL window path hands plume an `SDL_Window*` where `CocoaWindow` expects an
+`NSWindow*` and crashes in `objc_msgSend`; the harness creates the window itself and passes the
+Cocoa window plus the Metal layer through `core.window`, as the recomp frontends do.

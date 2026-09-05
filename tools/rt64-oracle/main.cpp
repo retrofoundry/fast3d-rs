@@ -9,6 +9,9 @@
 
 #include <unistd.h>
 
+#include <SDL.h>
+#include <SDL_syswm.h>
+
 #include "gbi/rt64_gbi_f3d.h"
 #include "gbi/rt64_gbi_f3dex2.h"
 #include "gbi/rt64_gbi_rdp.h"
@@ -181,10 +184,18 @@ struct CoreStorage {
     }
 };
 
-[[noreturn]] void rejectCommand(RT64::State *, RT64::DisplayList **dl) {
-    char message[128];
-    std::snprintf(message, sizeof(message), "unsupported GBI opcode 0x%02x: 0x%08x 0x%08x",
-        (*dl)->w0 >> 24, (*dl)->w0, (*dl)->w1);
+[[noreturn]] void rejectCommand(RT64::State *state, RT64::DisplayList **dl) {
+    char message[160];
+    std::snprintf(message, sizeof(message), "unsupported GBI opcode 0x%02x: 0x%08x 0x%08x at RDRAM offset 0x%llx",
+        (*dl)->w0 >> 24, (*dl)->w0, (*dl)->w1,
+        static_cast<unsigned long long>(reinterpret_cast<const uint8_t *>(*dl) - state->RDRAM));
+    const auto offset = reinterpret_cast<const uint8_t *>(*dl) - state->RDRAM;
+    std::fprintf(stderr, "return stack depth %zu; RDRAM words around the fetch:\n", state->returnAddressStack.size());
+    for (long long o = offset - 0x40; o < offset + 0x20; o += 8) {
+        if (o < 0) continue;
+        const auto *w = reinterpret_cast<const uint32_t *>(state->RDRAM + o);
+        std::fprintf(stderr, "  %06llx: %08x %08x\n", o, w[0], w[1]);
+    }
     throw std::runtime_error(message);
 }
 
@@ -229,7 +240,23 @@ void render(std::vector<uint8_t> &memory, const Metadata &metadata, const std::s
     RT64::ApplicationConfiguration configuration;
     configuration.detectDataPath = false;
     configuration.useConfigurationFile = false;
-    RT64::Application app(storage.core(memory, metadata), configuration);
+    // RT64's own SDL window path hands plume an SDL_Window* where it expects an NSWindow*
+    // (rt64_application_window.cpp vs plume_apple.mm CocoaWindow), so create the window here and
+    // pass the Cocoa window and Metal layer the way the recomp frontends do.
+    SDL_Window *sdlWindow = SDL_CreateWindow("rt64-oracle", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        int(metadata.width * scale), int(metadata.height * scale), SDL_WINDOW_METAL | SDL_WINDOW_RESIZABLE);
+    if (sdlWindow == nullptr) {
+        throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
+    }
+    SDL_SysWMinfo wmInfo;
+    SDL_VERSION(&wmInfo.version);
+    if (!SDL_GetWindowWMInfo(sdlWindow, &wmInfo)) {
+        throw std::runtime_error(std::string("SDL_GetWindowWMInfo failed: ") + SDL_GetError());
+    }
+    SDL_MetalView metalView = SDL_Metal_CreateView(sdlWindow);
+    RT64::Application::Core core = storage.core(memory, metadata);
+    core.window = plume::RenderWindow{ wmInfo.info.cocoa.window, SDL_Metal_GetLayer(metalView) };
+    RT64::Application app(core, configuration);
     ApplicationEnd end{app};
     app.emulatorConfig.framebuffer.renderToRAM = true;
     app.userConfig.resolution = RT64::UserConfiguration::Resolution::Original;
@@ -242,6 +269,11 @@ void render(std::vector<uint8_t> &memory, const Metadata &metadata, const std::s
     app.userConfig.internalColorFormat = RT64::UserConfiguration::InternalColorFormat::Standard;
     app.userConfig.idleWorkActive = false;
     app.enhancementConfig.presentation.mode = RT64::EnhancementConfiguration::Presentation::Mode::Console;
+    SDL_DisplayMode desktop{};
+    const int desktopResult = SDL_GetDesktopDisplayMode(0, &desktop);
+    std::fprintf(stderr, "sdl: driver %s, displays %d, desktop mode %d (%dx%d): %s\n",
+        SDL_GetCurrentVideoDriver() ? SDL_GetCurrentVideoDriver() : "(none)", SDL_GetNumVideoDisplays(),
+        desktopResult, desktop.w, desktop.h, SDL_GetError());
     std::fprintf(stderr, "setup: native %ux%u, window scale %u, renderToRAM enabled\n",
         metadata.width, metadata.height, scale);
     const auto setup = app.setup(0);
@@ -249,10 +281,6 @@ void render(std::vector<uint8_t> &memory, const Metadata &metadata, const std::s
     if (setup != RT64::Application::SetupResult::Success) {
         throw std::runtime_error("RT64 setup failed: " + RT64::GlobalLastError);
     }
-    if (app.appWindow->sdlWindow == nullptr) {
-        throw std::runtime_error(std::string("RT64 did not create an SDL window: ") + SDL_GetError());
-    }
-    SDL_SetWindowSize(app.appWindow->sdlWindow, metadata.width * scale, metadata.height * scale);
     SDL_PumpEvents();
     for (const auto &task : metadata.tasks) {
         selectMicrocode(app, task, gbi);
@@ -356,7 +384,12 @@ int main(int argc, char **argv) {
         }
         const auto metadata = readMetadata(argv[2]);
         auto memory = readRdram(argv[1]);
+        // RT64 expects the emulator host to have initialised SDL before it opens its window.
+        if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+            throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
+        }
         render(memory, metadata, gbi, scale);
+        SDL_Quit();
         writeImages(memory, metadata, prefix);
         return 0;
     }
