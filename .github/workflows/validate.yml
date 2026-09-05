@@ -25,7 +25,7 @@ jobs:
   # The GPU/render tests (goldens, framebuffer store, hooks, debugger) need a real wgpu
   # adapter. macOS runners have Metal and Windows runners have WARP (software D3D); Linux
   # runners have no adapter, so the render suite is not exercised there (it is compiled by
-  # `lint`). Web/WebGPU behaviour is verified in-browser by the consumer app.
+  # `lint`).
   test:
     strategy:
       fail-fast: false
@@ -56,3 +56,35 @@ jobs:
       - uses: actions/checkout@v4
       - name: build for wasm32
         run: cargo build -p fast3d --target wasm32-unknown-unknown
+      - name: build for wasm32 (--features asm)
+        run: cargo build -p fast3d --target wasm32-unknown-unknown --features asm
+      - name: build for wasm32 (--features capture)
+        run: cargo build -p fast3d --target wasm32-unknown-unknown --features capture
+      - name: build for wasm32 (--features asm capture)
+        run: cargo build -p fast3d --target wasm32-unknown-unknown --features "asm capture"
+
+  browser:
+    runs-on: macos-14
+    timeout-minutes: 15
+    env:
+      CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+      WASM_BINDGEN_TEST_TIMEOUT: 300
+    steps:
+      - uses: actions/checkout@v4
+      - name: install matching wasm-bindgen runner
+        run: |
+          version=$(cargo tree -p fast3d --target wasm32-unknown-unknown --features capture -e normal,dev --prefix none \
+            | awk '$1 == "wasm-bindgen" {print substr($2, 2); exit}')
+          echo "wasm-bindgen $version"
+          cargo install --locked wasm-bindgen-cli --version "$version"
+      # The image's own Google Chrome and ChromeDriver. A downloaded Chrome for Testing cannot
+      # reach its Mach rendezvous port on these runners and its network service crash-loops.
+      - name: browser WebGPU replay
+        run: |
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version
+          "$CHROMEWEBDRIVER/chromedriver" --version
+          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
+          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
+          cargo test -p fast3d --features capture --target wasm32-unknown-unknown \
+            --test browser_sm64_fixture_replay --test capture_facade \
+            --test capture_memory_wasm -- --nocapture

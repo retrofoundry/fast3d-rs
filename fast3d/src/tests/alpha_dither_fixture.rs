@@ -194,6 +194,7 @@ fn fixture_sm64_transparent_mario() {
         assert_eq!(*pixel, expected, "({x},{y})");
     }
     assert_eq!(survivors, 515);
+    super::sm64_semantics::Case::TransparentMario.assert_pixels(&output.rgba8);
 }
 
 #[test]

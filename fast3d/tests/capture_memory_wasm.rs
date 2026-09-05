@@ -3,6 +3,9 @@
 use fast3d::capture::{CaptureError, Fixture, ReplayHardware};
 use fast3d::{Hardware, Rdram};
 
+#[cfg(target_arch = "wasm32")]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn capture_high_addresses_resolve_on_this_platform() {

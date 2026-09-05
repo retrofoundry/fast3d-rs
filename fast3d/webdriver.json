@@ -1,0 +1,10 @@
+{
+  "goog:chromeOptions": {
+    "args": [
+      "--headless=new",
+      "--enable-unsafe-webgpu",
+      "--enable-features=WebGPU",
+      "--use-angle=metal"
+    ]
+  }
+}

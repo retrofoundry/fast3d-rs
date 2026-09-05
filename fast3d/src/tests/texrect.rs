@@ -138,7 +138,7 @@ fn provenance(eu: bool) -> crate::capture::Provenance {
 
 #[cfg(feature = "capture")]
 fn assert_hud(eu: bool) {
-    let fixture = super::capture_fixture::make(hud_memory(eu), 0x2000, 320, 240, provenance(eu));
+    let fixture = hud_fixture(eu);
     let (device, queue) = crate::render::headless_device_forced_fallback();
     let output = pollster::block_on(fixture.replay(device, queue)).unwrap();
     assert!(
@@ -238,4 +238,9 @@ fn texrect_nonzero_origin_matches_triangle_sampling() {
     let b = render_to_pixels(&device, &queue, &mut renderer, &rect, 320, 240);
     assert_eq!(pixel(&a, 320, 100, 80), [24, 41, 255, 255]);
     assert_eq!(pixel(&b, 320, 41, 33), [24, 41, 255, 255]);
+}
+
+#[cfg(feature = "capture")]
+pub(super) fn hud_fixture(eu: bool) -> crate::capture::Fixture {
+    super::capture_fixture::make(hud_memory(eu), 0x2000, 320, 240, provenance(eu))
 }

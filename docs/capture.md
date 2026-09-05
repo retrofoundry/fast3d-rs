@@ -63,6 +63,69 @@ is an error. Review live images and independent semantic assertions before pinni
 regression golden. `fast3d/tests/fixtures/host64-fill.f3dcap` is a synthetic full-frame red fill,
 with literal F3D commands and addresses above 4 GiB; it contains no game assets.
 
+## Authored corpus and browser tests
+
+The in-crate `sm64_corpus::fixtures` function lists the ten sm64 cases. Their payloads
+are synthetic and their provenance identifies the modelled decomp symbols. Water uses
+`dl_waterbox_rgba16_begin`'s `MODULATERGBA`: texture alpha times vertex alpha from
+`movtex_make_quad_vertex`. Environment alpha does not control this source path.
+
+The browser suite embeds five `.f3dcap` files: the high-address fill, an environment-alpha
+combiner selector, power-meter point filtering, castle TRILERP and transparent-Mario dither.
+Native and browser runs share semantic assertions; the browser dither check allows 450–575
+survivors among 1024 pixels with alpha 128/255. The native transparent-Mario test also checks
+the exact deterministic mask. No pixel goldens are generated here.
+
+Regenerate the checked-in files from the workspace root. The ignored writer and byte-drift
+test need no GPU; the writer records the synthetic command reads through the CPU interpreter.
+Cargo runs tests from the crate directory, so use an absolute output path:
+
+```sh
+FAST3D_WRITE_FIXTURES="$PWD/fast3d/tests/fixtures" \
+  cargo test -p fast3d --features "asm capture" --lib \
+  write_browser_sm64_fixtures -- --ignored
+cargo test -p fast3d --features "asm capture" --lib browser_fixture_bytes_match_builders
+cargo test -p fast3d --features "asm capture" --lib sm64_corpus_roundtrips_without_diagnostics
+```
+
+The GPU gate round-trips every sm64 fixture through the public headless facade and compares
+its output with explicit-device replay on the same adapter:
+
+```sh
+cargo test -p fast3d --features "asm capture" --lib sm64_corpus_public_facade -- --nocapture
+```
+
+CI runs Chrome on `macos-14`, using Metal WebGPU, with the runner image's own Google Chrome
+and the ChromeDriver at `$CHROMEWEBDRIVER`. A Chrome for Testing download does not work
+there: its child processes cannot reach the browser's Mach rendezvous port and the network
+service crash-loops before the page loads. Locally, put a matching Chrome and ChromeDriver on
+PATH (or set `CHROMEDRIVER` to the driver's absolute path); set `goog:chromeOptions.binary`
+in `fast3d/webdriver.json` only if Chrome is installed outside its usual location.
+The crate's [WebDriver configuration](https://wasm-bindgen.github.io/wasm-bindgen/wasm-bindgen-test/browsers.html#configuring-headless-browser-capabilities)
+enables headless Chrome and WebGPU with Metal. The checked-in arguments omit
+`--no-sandbox`; wasm-bindgen-test-runner appends it internally.
+
+`fast3d/Cargo.toml` pins `wasm-bindgen-test` exactly, which fixes the `wasm-bindgen` version
+the runner must match (the repository does not track `Cargo.lock`). Install that runner, then
+use the same test command and environment as CI:
+
+```sh
+version=$(cargo tree -p fast3d --target wasm32-unknown-unknown --features capture -e normal,dev --prefix none \
+  | awk '$1 == "wasm-bindgen" {print substr($2, 2); exit}')
+cargo install --locked wasm-bindgen-cli --version "$version"
+export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
+export WASM_BINDGEN_TEST_TIMEOUT=300
+export CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}"
+export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
+cargo test -p fast3d --features capture --target wasm32-unknown-unknown \
+  --test browser_sm64_fixture_replay --test capture_facade \
+  --test capture_memory_wasm -- --nocapture
+```
+
+Replay requests `Features::empty()` and default limits, exercising the fallback blender.
+The suite prints `sm64 fixture adapter: <backend> <name> (<fixture>)` for every replay
+and fails if WebGPU has no adapter. `--nocapture` keeps adapter lines in successful CI logs.
+
 ## Version-one byte layout
 
 All container integers are unsigned little-endian. Payload bytes retain the source byte order;

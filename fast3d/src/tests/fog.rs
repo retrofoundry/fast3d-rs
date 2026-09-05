@@ -267,13 +267,7 @@ fn write_rt64_jrb_mixed_fog_fixture() {
         320,
         240,
         "jrb-mixed-fog.f3dcap",
-        crate::capture::Provenance {
-            decomp_revision: "unknown".into(),
-            source_symbols: "levels/jrb/areas/1/{5,2}/model.inc.c".into(),
-            command_vector: "JRB fog state sequence with capture-only framebuffer wrapper".into(),
-            synthetic_data: "Synthetic quad geometry, matrix, vertex colors, and alpha payloads"
-                .into(),
-        },
+        jrb_provenance(),
     );
 }
 
@@ -320,4 +314,21 @@ fn fog_unused_commands_leave_scene_unchanged() {
         })
         .collect();
     assert_eq!(colors, [[15, 65, 100, 255], [5, 80, 75, 255]]);
+}
+
+#[cfg(feature = "capture")]
+fn jrb_provenance() -> crate::capture::Provenance {
+    crate::capture::Provenance {
+        decomp_revision: "sm64 1372ae1bb7cbedc03df366393188f4f05dcfc422".into(),
+        source_symbols: "levels/jrb/areas/1/5/model.inc.c: jrb_seg7_dl_070069B0; levels/jrb/areas/1/2/model.inc.c: jrb_seg7_dl_07004940".into(),
+        command_vector: "JRB fog state sequence with capture-only framebuffer wrapper".into(),
+        synthetic_data: "Synthetic quad geometry, matrix, vertex colors, and alpha payloads"
+            .into(),
+    }
+}
+
+#[cfg(feature = "capture")]
+pub(super) fn jrb_fixture() -> crate::capture::Fixture {
+    let (bytes, entry) = jrb_memory(false);
+    super::capture_fixture::make(bytes, entry, 320, 240, jrb_provenance())
 }
