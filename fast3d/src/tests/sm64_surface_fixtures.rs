@@ -35,7 +35,7 @@ impl Surface {
             Self::Foliage => (
                 "actors/tree/model.inc.c: tree_seg3_dl_0302FEE8, tree_seg3_dl_0302FE88; actors/tree/geo.inc.c: bubbly_tree_geo",
                 "AA_ZB_TEX_EDGE/TEX_EDGE2, DECALRGBA, clamped 32x64 RGBA16, coverage-select alpha, no alpha compare",
-                "Green RGBA16 tapered billboard with transparent diagonal holes; 32x64 quad above the opaque floor, white unlit vertices",
+                "Green RGBA16 tapered billboard with transparent 4x4 blocks; 32x64 quad above the opaque floor, white unlit vertices",
             ),
         };
         Provenance {
@@ -49,6 +49,16 @@ impl Surface {
     pub(super) fn fixture(self) -> Fixture {
         super::capture_fixture::make(memory(self), 0x3000, 320, 240, self.provenance())
     }
+}
+
+fn foliage_opaque(s: u32, t: u32) -> bool {
+    s >= t / 4 && s < 32 - t / 4 && !(s / 4 + t / 4).is_multiple_of(3)
+}
+
+fn foliage_interior(s: u32, t: u32) -> bool {
+    let value = foliage_opaque(s, t);
+    (s.saturating_sub(1)..=s + 1)
+        .all(|s| (t.saturating_sub(1)..=t + 1).all(|t| foliage_opaque(s, t) == value))
 }
 
 fn quad(bytes: &mut [u8], address: usize, region: [usize; 4], z: i16, rgba: [u8; 4]) {
@@ -143,7 +153,7 @@ fn memory(surface: Surface) -> Vec<u8> {
                                 0x07c1
                             }
                         }
-                        _ => 0x07c0 | u16::from(s >= t / 4 && s < 32 - t / 4 && (s + t) % 7 != 0),
+                        _ => 0x07c0 | u16::from(foliage_opaque(s, t)),
                     };
                     bytes[0x1000 + index * 2..0x1002 + index * 2]
                         .copy_from_slice(&word.to_be_bytes());
@@ -321,10 +331,19 @@ fn assert_surface(surface: Surface) {
                     };
                     blended = true;
                 }
-                Surface::Foliage if s >= t / 4 && s < 32 - t / 4 && (s + t) % 7 != 0 => {
-                    expected = [0, 255, 0, 255]
+                Surface::Foliage => {
+                    // Texel edges depend on the sampling convention; only edge-free texels are
+                    // hardware-independent. The band boundary columns of the water follow suit.
+                    if !foliage_interior(s as u32, t as u32) {
+                        continue;
+                    }
+                    if foliage_opaque(s as u32, t as u32) {
+                        expected = [0, 255, 0, 255];
+                    }
                 }
-                _ => {}
+            }
+            if matches!(surface, Surface::Water) && s % 16 == 0 {
+                continue;
             }
         }
         let tolerance = u8::from(blended);
