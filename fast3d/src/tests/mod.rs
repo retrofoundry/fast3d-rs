@@ -37,6 +37,8 @@ mod renderer_process_dl;
 mod rsp_tests;
 mod run_split;
 mod scene_walk;
+#[cfg(feature = "capture")]
+mod sm64_surface_fixtures;
 mod texgen;
 mod texrect;
 mod tile_sampling;
