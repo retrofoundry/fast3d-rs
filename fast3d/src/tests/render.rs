@@ -962,7 +962,9 @@ fn run_compute_outputs(
     let data = slice.get_mapped_range();
     // OutVertex = 12 f32 (48B): [0..4]=pos, [4..8]=color, [8..10]=uv, [10..12]=pad
     let res: Vec<GpuOut> = bytemuck::cast_slice::<u8, f32>(&data)
-        .chunks_exact(12)
+        .as_chunks::<12>()
+        .0
+        .iter()
         .map(|c| GpuOut {
             pos: [c[0], c[1], c[2], c[3]],
             color: [c[4], c[5], c[6], c[7]],

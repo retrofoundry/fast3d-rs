@@ -771,7 +771,7 @@ mod tests {
 
         // Distinct per-channel bytes across all 12 texels (48 bytes 10..=57).
         let mut src = vec![0u8; w * h * 4];
-        for (t, chunk) in src.chunks_exact_mut(4).enumerate() {
+        for (t, chunk) in src.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             for (c, b) in chunk.iter_mut().enumerate() {
                 *b = (10 + t * 4 + c) as u8;
             }
@@ -878,7 +878,7 @@ mod tests {
 
         // Distinct per-channel bytes across all 6 texels.
         let mut src = vec![0u8; h * src_stride];
-        for (t, chunk) in src.chunks_exact_mut(4).enumerate() {
+        for (t, chunk) in src.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             for (c, b) in chunk.iter_mut().enumerate() {
                 *b = (0x10 + t * 4 + c) as u8;
             }
