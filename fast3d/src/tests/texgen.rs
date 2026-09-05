@@ -194,9 +194,13 @@ fn write_commands(bytes: &mut [u8], offset: usize, commands: &[(u32, u32)]) {
 fn interpret_commands(mut bytes: Vec<u8>, commands: &[(u32, u32)]) -> Scene {
     bytes.resize(0x6000 + commands.len() * 8, 0);
     write_commands(&mut bytes, 0x6000, commands);
+    interpret_memory(bytes, 0x6000)
+}
+
+fn interpret_memory(bytes: Vec<u8>, entry: u32) -> Scene {
     let mut mem = RdramImage::new(&bytes);
     mem.set_segment(4, 0);
-    let result = interpret(mem, 0x6000, GbiUcode::F3d, GbiDataFormat::Fixed);
+    let result = interpret(mem, entry.into(), GbiUcode::F3d, GbiDataFormat::Fixed);
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     result.scene
 }
@@ -447,7 +451,7 @@ const PATCH_NORMALS: [(i8, i8); 10] = [
     (64, -32),
 ];
 
-fn metal_butt_scene() -> Scene {
+fn metal_butt_memory() -> (Vec<u8>, u32) {
     let mut bytes = fixture_memory();
     for (group, ((nx, ny), count)) in PATCH_NORMALS
         .into_iter()
@@ -488,7 +492,14 @@ fn metal_butt_scene() -> Scene {
     write_commands(&mut bytes, 0x5000, MARIO_METAL_BUTT);
     let mut commands = prologue();
     commands.extend([gsp_displaylist_f3d(0x0400_5000), gsp_enddl_f3d()]);
-    interpret_commands(bytes, &commands)
+    bytes.resize(0x6000 + commands.len() * 8, 0);
+    write_commands(&mut bytes, 0x6000, &commands);
+    (bytes, 0x6000)
+}
+
+fn metal_butt_scene() -> Scene {
+    let (bytes, entry) = metal_butt_memory();
+    interpret_memory(bytes, entry)
 }
 
 #[test]
@@ -534,4 +545,27 @@ fn fixture_sm64_mario_metal_butt() {
             assert_pixel(&pixels[offset..offset + 4], expected);
         }
     }
+}
+
+#[cfg(feature = "capture")]
+#[test]
+#[ignore = "writes an RT64 oracle fixture to FAST3D_WRITE_FIXTURES"]
+fn write_rt64_mario_metal_butt_fixture() {
+    let (bytes, scene_entry) = metal_butt_memory();
+    super::capture_fixture::write(
+        bytes,
+        scene_entry,
+        320,
+        240,
+        "mario-metal-butt.f3dcap",
+        crate::capture::Provenance {
+            decomp_revision: "sm64 1372ae1bb7cbedc03df366393188f4f05dcfc422".into(),
+            source_symbols: "actors/mario/model.inc.c: mario_metal_butt, mario_butt_dl"
+                .into(),
+            command_vector: "SM64 display-list commands with capture-only framebuffer wrapper"
+                .into(),
+            synthetic_data: "Synthetic vertices, normals, lights, look-at vectors, matrix, and coordinate texture"
+                .into(),
+        },
+    );
 }

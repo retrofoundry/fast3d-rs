@@ -14,7 +14,7 @@ const COLOR_B: (u32, u32) = (0xF800_0000, 0x0550_4BFF);
 const LOAD: (u32, u32) = (0x0400_0010, 0x40);
 const TRI: (u32, u32) = (0xBF00_0000, 0);
 
-fn scene(commands: &[(u32, u32)]) -> Scene {
+fn scene_memory(commands: &[(u32, u32)]) -> (Vec<u8>, u32) {
     let mut bytes = vec![0; 0x40];
     for (x, y) in [(-10, 10), (10, 10), (10, -10), (-10, -10)] {
         bytes.extend_from_slice(
@@ -55,14 +55,23 @@ fn scene(commands: &[(u32, u32)]) -> Scene {
         bytes.extend_from_slice(&w0.to_be_bytes());
         bytes.extend_from_slice(&w1.to_be_bytes());
     }
+    (bytes, 0x100)
+}
+
+fn interpret_memory(bytes: Vec<u8>, entry: u32) -> Scene {
     let result = interpret(
         RdramImage::new(&bytes),
-        0x100,
+        entry.into(),
         GbiUcode::F3d,
         GbiDataFormat::Fixed,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     result.scene
+}
+
+fn scene(commands: &[(u32, u32)]) -> Scene {
+    let (bytes, entry) = scene_memory(commands);
+    interpret_memory(bytes, entry)
 }
 
 #[test]
@@ -187,7 +196,7 @@ fn assert_alphas(scene: &Scene, expected: &[f32]) {
 }
 
 // JRB command settings from areas/1/{5,2}/model.inc.c; geometry is synthetic.
-fn jrb_scene(append_unused: bool) -> Scene {
+fn jrb_commands(append_unused: bool) -> Vec<(u32, u32)> {
     let mut commands = vec![
         (0xFF10_013F, 0x0010_0000),
         (0xED00_0000, 0x0050_03C0),
@@ -215,7 +224,16 @@ fn jrb_scene(append_unused: bool) -> Scene {
     if append_unused {
         commands.extend([(0xF800_0000, 0xFF00_FF00), (0xBC00_0008, 0xFFFF_8000)]);
     }
-    scene(&commands)
+    commands
+}
+
+fn jrb_memory(append_unused: bool) -> (Vec<u8>, u32) {
+    scene_memory(&jrb_commands(append_unused))
+}
+
+fn jrb_scene(append_unused: bool) -> Scene {
+    let (bytes, entry) = jrb_memory(append_unused);
+    interpret_memory(bytes, entry)
 }
 
 #[test]
@@ -236,6 +254,27 @@ fn fixture_sm64_jrb_mixed_fog() {
         assert_eq!(&pixels[offset..offset + 4], &expected, "x={x}");
     }
     assert_eq!(pixels, render_scene_to_rgba8(&jrb_scene(true), 320, 240));
+}
+
+#[cfg(feature = "capture")]
+#[test]
+#[ignore = "writes an RT64 oracle fixture to FAST3D_WRITE_FIXTURES"]
+fn write_rt64_jrb_mixed_fog_fixture() {
+    let (bytes, scene_entry) = jrb_memory(false);
+    super::capture_fixture::write(
+        bytes,
+        scene_entry,
+        320,
+        240,
+        "jrb-mixed-fog.f3dcap",
+        crate::capture::Provenance {
+            decomp_revision: "unknown".into(),
+            source_symbols: "levels/jrb/areas/1/{5,2}/model.inc.c".into(),
+            command_vector: "JRB fog state sequence with capture-only framebuffer wrapper".into(),
+            synthetic_data: "Synthetic quad geometry, matrix, vertex colors, and alpha payloads"
+                .into(),
+        },
+    );
 }
 
 fn rect_scene(append_unused: bool) -> Scene {

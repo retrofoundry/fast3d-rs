@@ -34,6 +34,13 @@ diverge today. Every fix lands with a fixture that fails before and passes after
 6. Remove the 320×240 constant from the compute RSP; viewport fold uses the pair's framebuffer
    size. S. Evidence: a 640×480 fixture renders geometry and rects aligned.
 
+- Independent rt64 oracle for the capture corpus: `tools/rt64-oracle` exports IMAGE-layout
+  fixtures to RDRAM, renders them through rt64, and compares native pixels with fast3d replay.
+  The Metal Mario and mixed JRB scenes check texgen, fog and the combiners used by those scenes;
+  synthetic payloads do not establish whole-frame game fidelity. Helix HOST64 captures cannot
+  be fed to rt64. Evidence: reviewed difference masks and explicit pixel budgets for the same
+  self-contained display lists, with RGBA16 quantization accounted for.
+
 ## 2. Library contract and other games
 
 7. TLUT encoding. `gdp_load_tlut` and `load_tlut` use the libultra layout (count in bits 14..23,
