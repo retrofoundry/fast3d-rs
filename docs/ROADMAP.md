@@ -10,6 +10,10 @@ Sizes: S days, M one to two weeks, L several weeks, XL open-ended.
 Goal: sm64 through helix matches an independent reference at the places the code is known to
 diverge today. Every fix lands with a fixture that fails before and passes after.
 
+Items 1–6 landed as PRs #27–#38, including the rt64 oracle in #33. The authored
+regression corpus and browser execution land with this PR. Live-game acceptance
+still requires reviewed captures and independent reference comparisons.
+
 1. Captured display-list corpus. A recording `Rdram` backend that snapshots every byte the
    interpreter reads from live guest memory into a relocatable fixture, plus a loader that
    replays it through the public facade as a golden. Seed it with sm64 frames covering: metal
@@ -75,8 +79,6 @@ diverge today. Every fix lands with a fixture that fails before and passes after
 - Delete stale branches `add-rgba32-texture`, `feat/n64-gbi-extraction`, `vnext-relocate`.
 - README says `fast3d = "1.0"`; crates.io has the 2023 `0.5.0` legacy crate. Publish or fix.
 - Replace `eprintln!` in `tmem.rs` and `texdec.rs` with `DiagKind` variants.
-- CI: build the `asm` feature for wasm32; run a browser WebGPU smoke test; exercise the
-  forced-fallback blender.
 
 ## Decisions still open
 
