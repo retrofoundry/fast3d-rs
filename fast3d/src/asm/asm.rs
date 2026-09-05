@@ -560,7 +560,7 @@ fn encode_texture_data(
             }
         },
         (4, 1) => {
-            for pixel in rgba8.chunks_exact(4) {
+            for pixel in rgba8.as_chunks::<4>().0.iter() {
                 rdram.push(encode_i8_texel(pixel[0], pixel[1], pixel[2], pixel[3]));
             }
             None
@@ -577,13 +577,13 @@ fn encode_texture_data(
             None
         }
         (3, 2) => {
-            for pixel in rgba8.chunks_exact(4) {
+            for pixel in rgba8.as_chunks::<4>().0.iter() {
                 rdram.extend_from_slice(&encode_ia16_texel(pixel[0], pixel[1], pixel[2], pixel[3]));
             }
             None
         }
         (3, 1) => {
-            for pixel in rgba8.chunks_exact(4) {
+            for pixel in rgba8.as_chunks::<4>().0.iter() {
                 rdram.push(encode_ia8_texel(pixel[0], pixel[1], pixel[2], pixel[3]));
             }
             None
@@ -599,7 +599,7 @@ fn encode_texture_data(
             None
         }
         _ => {
-            for pixel in rgba8.chunks_exact(4) {
+            for pixel in rgba8.as_chunks::<4>().0.iter() {
                 rdram.extend_from_slice(&encode_rgba16_texel(
                     pixel[0], pixel[1], pixel[2], pixel[3],
                 ));
