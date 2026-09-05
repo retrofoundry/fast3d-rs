@@ -17,7 +17,13 @@ mod native {
             mask: vec![0; left.len() / 4],
             ..Default::default()
         };
-        for (index, (a, b)) in left.chunks_exact(4).zip(right.chunks_exact(4)).enumerate() {
+        for (index, (a, b)) in left
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(right.as_chunks::<4>().0.iter())
+            .enumerate()
+        {
             let mut over_threshold = false;
             for channel in 0..4 {
                 let difference = a[channel].abs_diff(b[channel]);
