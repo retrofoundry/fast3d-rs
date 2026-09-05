@@ -198,12 +198,12 @@ fn sm64_seed_macro_words_match_gbi() {
     let shade_rgb = cc(31, 31, 31, 4);
     let shade_alpha = cc(7, 7, 7, 4);
 
-    let mut mario_metal_butt_prefix = vec![
+    let mut mario_metal_butt = vec![
         gdp_pipe_sync(),
         gsp_set_geometrymode_f3d(0x0004_0000),
         gdp_set_combine_lerp(decal_rgb, env_alpha, decal_rgb, env_alpha),
     ];
-    mario_metal_butt_prefix.extend(gdp_load_texture_block(
+    mario_metal_butt.extend(gdp_load_texture_block(
         0,
         2,
         64,
@@ -214,9 +214,15 @@ fn sm64_seed_macro_words_match_gbi() {
         0,
         6,
     ));
-    mario_metal_butt_prefix.push(gsp_texture_f3d(0x0F80, 0x07C0, 0, 0, true));
+    mario_metal_butt.push(gsp_texture_f3d(0x0F80, 0x07C0, 0, 0, true));
+    mario_metal_butt.extend([
+        gsp_light_f3d(0, 0x0400_1120),
+        gsp_light_f3d(1, 0x0400_1130),
+        gsp_displaylist_f3d(0x0400_4000),
+        gsp_enddl_f3d(),
+    ]);
     assert_eq!(
-        mario_metal_butt_prefix,
+        mario_metal_butt,
         [
             (0xE700_0000, 0x0000_0000),
             (0xB700_0000, 0x0004_0000),
@@ -229,8 +235,12 @@ fn sm64_seed_macro_words_match_gbi() {
             (0xF510_2000, 0x0001_4060),
             (0xF200_0000, 0x000F_C07C),
             (0xBB00_0001, 0x0F80_07C0),
+            (0x0386_0000, 0x0400_1120),
+            (0x0388_0000, 0x0400_1130),
+            (0x0600_0000, 0x0400_4000),
+            (0xB800_0000, 0x0000_0000),
         ],
-        "actors/mario/model.inc.c: mario_metal_butt prefix"
+        "actors/mario/model.inc.c: mario_metal_butt with synthetic light/list addresses"
     );
 
     assert_eq!(

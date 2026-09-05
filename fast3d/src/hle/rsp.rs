@@ -275,20 +275,13 @@ impl Rsp {
             (self.texture_state.sc as f64 / TC_DIVISOR) as f32,
             (self.texture_state.tc as f64 / TC_DIVISOR) as f32,
         ];
-        // Parallel texgen ST-fold: tg = sc/65536 (tc/65536 for T), f64-prefolded. This is
-        // TILE-INDEPENDENT (depends only on sc/tc) — distinct from the normal-path TC_DIVISOR
-        // factor. The spherical phase g=(d+1)/2 ∈ [0,1], so kernel uv = g*tg ∈ [0,1] under the
-        // ClampToEdge normalized-uv convention: a mirror-ball env maps ONCE. We push tg in lockstep
-        // with tc_entry inside the tc_entry dedup branch below, so the tables stay index-parallel /
-        // equal-length. When ONLY the tile changes, the new tg entry equals the previous one
-        // (harmless duplicate; indices still correct).
         let tg_entry = [
             (self.texture_state.sc as f64 / 65536.0) as f32,
             (self.texture_state.tc as f64 / 65536.0) as f32,
         ];
         if self.texcoord_table.last() != Some(&tc_entry) {
             self.texcoord_table.push(tc_entry);
-            self.texgen_scale_table.push(tg_entry); // NEW — stays index-parallel
+            self.texgen_scale_table.push(tg_entry);
             self.cur_texcoord_index = (self.texcoord_table.len() - 1) as u32;
         }
         // Object-space light set for these vertices: bring each eye-space light dir INTO object
@@ -490,33 +483,8 @@ impl Rsp {
         } else {
             CullKind::None
         };
-        // The kernel emits TEXEL-space texcoords for non-texgen verts but NORMALIZED texcoords for
-        // texgen verts, and the renderer applies ONE per-run `inv_tex_size` scalar. Never coalesce
-        // across a texgen boundary, or a run would mix the two conventions and the single scalar
-        // would mis-scale half of it. texgen is a per-vertex geometry-mode state; toggling it changes
-        // neither material_index nor render_mode_index, so it is not otherwise in the coalesce key.
-        let tri_texgen = scene
-            .texgen_mode
-            .get(self.cache_global_index[a as usize] as usize)
-            .copied()
-            .unwrap_or(0)
-            != 0;
-        let last_first_index = match pair_target {
-            Some(p) => match scene.framebuffer_pairs[p].ops.last() {
-                Some(SceneOp::Tris(run)) => Some(run.index_start),
-                _ => None,
-            },
-            None => scene.draw_runs.last().map(|run| run.index_start),
-        };
-        let last_run_texgen = last_first_index
-            .and_then(|i| scene.indices.get(i as usize).copied())
-            .and_then(|gi| scene.texgen_mode.get(gi as usize).copied())
-            .unwrap_or(0)
-            != 0;
-        let texgen_matches = last_run_texgen == tri_texgen;
         let coalesces = |run: &DrawRun| {
-            texgen_matches
-                && run.cull == kind
+            run.cull == kind
                 && run.material_index == material_index
                 && run.render_mode_index == render_mode_index
         };
@@ -1164,41 +1132,39 @@ mod draw_runs_tests {
     }
 
     #[test]
-    fn run_splits_on_texgen_boundary() {
-        // A texgen vertex emits NORMALIZED texcoords; a non-texgen vertex emits TEXEL-space ones, and
-        // the renderer picks ONE per-run inv_tex_size scalar. So draw_tri must NOT coalesce across a
-        // texgen boundary even when cull / material / render-mode are identical — otherwise a run
-        // would mix the two conventions and the scalar would mis-scale half of it.
-        let bytes = vec![0u8; 64 + 6 * 16]; // 64B modelview matrix + 6 zero verts
-        let rd = crate::hle::mem::RdramImage::new(&bytes);
-        let mut rsp = Rsp::default();
-        rsp.matrix(&rd, 0, crate::hle::consts::G_MTX_LOAD); // modelview for the texgen lookat prefold
-        rsp.lookat_axes[0] = [1.0, 0.0, 0.0];
-        rsp.lookat_version += 1;
-        let mut scene = Scene::default();
+    fn run_coalesces_across_texgen_boundary() {
+        for pair_target in [None, Some(0)] {
+            let bytes = vec![0u8; 6 * 16];
+            let rd = crate::hle::mem::RdramImage::new(&bytes);
+            let mut rsp = Rsp::default();
+            let mut scene = Scene::default();
+            scene.framebuffer_pairs.push(Default::default());
+            rsp.modify_geometry_mode(
+                !0,
+                crate::hle::consts::G_LIGHTING | crate::hle::consts::G_TEXTURE_GEN,
+            );
+            rsp.set_vertex(&rd, 0, 3, 0, &Default::default(), &mut scene);
+            rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, pair_target);
+            rsp.modify_geometry_mode(!crate::hle::consts::G_TEXTURE_GEN, 0);
+            rsp.set_vertex(&rd, 0, 3, 3, &Default::default(), &mut scene);
+            rsp.draw_tri(3, 4, 5, 0, 0, &mut scene, pair_target);
+            rsp.draw_tri(0, 4, 2, 0, 0, &mut scene, pair_target);
 
-        // Batch 1: G_LIGHTING | G_TEXTURE_GEN -> texgen_mode 1.
-        rsp.modify_geometry_mode(
-            !0,
-            crate::hle::consts::G_LIGHTING | crate::hle::consts::G_TEXTURE_GEN,
-        );
-        rsp.set_vertex(&rd, 64, 3, 0, &Default::default(), &mut scene);
-        rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None);
-
-        // Batch 2: clear G_TEXTURE_GEN (keep G_LIGHTING) -> texgen_mode 0. Same material/rendermode/cull.
-        rsp.modify_geometry_mode(!crate::hle::consts::G_TEXTURE_GEN, 0);
-        rsp.set_vertex(&rd, 64, 3, 3, &Default::default(), &mut scene);
-        rsp.draw_tri(3, 4, 5, 0, 0, &mut scene, None);
-
-        assert_eq!(
-            scene.draw_runs.len(),
-            2,
-            "texgen boundary must split the run"
-        );
-        let run_texgen =
-            |r: &DrawRun| scene.texgen_mode[scene.indices[r.index_start as usize] as usize];
-        assert_eq!(run_texgen(&scene.draw_runs[0]), 1);
-        assert_eq!(run_texgen(&scene.draw_runs[1]), 0);
+            let runs: Vec<_> = match pair_target {
+                None => scene.draw_runs.iter().collect(),
+                Some(p) => scene.framebuffer_pairs[p]
+                    .ops
+                    .iter()
+                    .filter_map(|op| match op {
+                        SceneOp::Tris(run) => Some(run),
+                        _ => None,
+                    })
+                    .collect(),
+            };
+            assert_eq!(runs.len(), 1, "texgen must share a run: {pair_target:?}");
+            assert_eq!(runs[0].index_count, 9);
+            assert_eq!(scene.texgen_mode, [1, 1, 1, 0, 0, 0]);
+        }
     }
 }
 
@@ -1427,8 +1393,6 @@ mod lookat_tests {
 
     #[test]
     fn texgen_linear_mode_two() {
-        // G_TEXTURE_GEN_LINEAR (in addition to G_TEXTURE_GEN + G_LIGHTING) selects the cubic
-        // (linear/F3DEX2) fold -> texgen_mode 2. Mirrors texgen_prefold_axis_is_world_fixed_and_mode_set.
         let mut rsp = Rsp::default();
         let bytes = vec![0u8; 64];
         let rd = RdramImage::new(&bytes);

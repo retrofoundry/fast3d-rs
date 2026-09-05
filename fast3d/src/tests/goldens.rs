@@ -330,7 +330,7 @@ fn render_scene_with_device(
         ];
         let mut combiner = CombinerUniform::from_run(mat, rm, fog_color);
         // Texcoord table is TEXEL-space: normalize by draw-time tile dims in the fragment.
-        combiner.inv_tex_size = crate::render::triangle_inv_tex_size(scene, mat, run);
+        combiner.inv_tex_size = crate::render::triangle_inv_tex_size(mat);
         let slot = bytemuck::bytes_of(&combiner);
         pool[i * 256..i * 256 + slot.len()].copy_from_slice(slot);
     }
