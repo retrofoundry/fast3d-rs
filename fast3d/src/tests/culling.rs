@@ -76,6 +76,7 @@ fn cull_back_marks_cull_run_no_swap() {
     assert_eq!(
         s.draw_runs,
         vec![DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::Cull,
@@ -92,6 +93,7 @@ fn cull_front_marks_cull_run_and_swaps() {
     assert_eq!(
         s.draw_runs,
         vec![DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::Cull,
@@ -115,6 +117,7 @@ fn no_cull_bits_records_none_run() {
     assert_eq!(
         s.draw_runs,
         vec![DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::None,

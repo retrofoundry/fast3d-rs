@@ -467,6 +467,7 @@ mod phase2_tests {
         assert_eq!(
             result.scene.draw_runs,
             vec![DrawRun {
+                fog_color: [0; 4],
                 material_index: 0,
                 render_mode_index: 0,
                 cull: CullKind::None,
@@ -506,6 +507,7 @@ mod phase2_tests {
             result.scene.draw_runs,
             vec![
                 DrawRun {
+                    fog_color: [0; 4],
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::Cull,
@@ -513,6 +515,7 @@ mod phase2_tests {
                     index_start: 0,
                 },
                 DrawRun {
+                    fog_color: [0; 4],
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::None,

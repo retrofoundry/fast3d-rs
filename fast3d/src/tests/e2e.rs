@@ -118,8 +118,7 @@ fn e2e_textured_quad_pipeline() {
         (uv(0)[0]).abs() < 1e-3 && (uv(2)[0] - 1.0).abs() < 2e-3 && (uv(2)[1] - 1.0).abs() < 2e-3
     );
 
-    let u =
-        crate::render::CombinerUniform::from_run(m, &crate::hle::RenderMode::default(), [0.0; 4]);
+    let u = crate::render::CombinerUniform::from_run(m, &crate::hle::RenderMode::default(), [0; 4]);
     assert_eq!(
         (u.combine_l, u.combine_h),
         (0xFC12_7E24, 0xFFFF_F9FC),

@@ -259,7 +259,7 @@ impl Rsp {
         addr: u64,
         count: u32,
         dst: u32,
-        _rdp: &crate::hle::rdp::Rdp,
+        rdp: &crate::hle::rdp::Rdp,
         scene: &mut Scene,
     ) {
         // NOTE: mtx_index/viewport_index/texcoord_index pushed per-vertex here only resolve to
@@ -339,10 +339,17 @@ impl Rsp {
         // Vertex stride + field layout are backend-decided (fixed-point vs GBI_FLOATS) — see
         // `Rdram::read_vertex`. Decoding a float-GBI vertex as s16 misreads every position.
         let stride = mem.vertex_stride(self.data_format);
-        // Per-vertex fog capture (fog indices): the G_FOG geom bit AT LOAD TIME.
-        // sm64 sets G_FOG before loading fogged terrain and clears it before the HUD/dialog, so this
-        // fogs terrain while leaving overlay geometry's alpha untouched.
-        let fog_flag = u32::from((self.geom & self.consts.g_fog_geom) != 0);
+        let fog_index = if (self.geom & self.consts.g_fog_geom) != 0 {
+            let factors = [rdp.fog_mul, rdp.fog_offset];
+            let index = scene.fog_table.iter().position(|&entry| entry == factors);
+            index.unwrap_or_else(|| {
+                scene.fog_table.push(factors);
+                scene.fog_table.len() - 1
+            }) as u32
+                + 1
+        } else {
+            0
+        };
         for i in 0..count {
             let o = addr.saturating_add((i as u64) * stride);
             let v = mem.read_vertex(o, self.data_format);
@@ -364,7 +371,7 @@ impl Rsp {
                 .push(if lit { self.cur_light_index } else { 0 });
             scene.light_count.push(light_count);
             scene.texgen_mode.push(texgen_mode);
-            scene.fog.push(fog_flag);
+            scene.fog.push(fog_index);
             scene.lookat_index.push(if texgen_mode != 0 {
                 self.cur_lookat_index
             } else {
@@ -452,7 +459,7 @@ impl Rsp {
     ///
     /// Either way the three indices are pushed onto the shared `scene.indices` buffer in draw order,
     /// and coalescing only extends the LAST run/op when it is a `Tris` with a matching
-    /// `(cull, material_index, render_mode_index)` key.
+    /// `(cull, material_index, render_mode_index, fog_color)` key.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_tri(
         &mut self,
@@ -461,6 +468,7 @@ impl Rsp {
         c: u32,
         material_index: u32,
         render_mode_index: u32,
+        fog_color: [u8; 4],
         scene: &mut Scene,
         pair_target: Option<usize>,
     ) {
@@ -487,6 +495,7 @@ impl Rsp {
             run.cull == kind
                 && run.material_index == material_index
                 && run.render_mode_index == render_mode_index
+                && run.fog_color == fog_color
         };
         let index_start = scene.indices.len() as u32;
         match pair_target {
@@ -495,6 +504,7 @@ impl Rsp {
                 _ => scene.framebuffer_pairs[p].ops.push(SceneOp::Tris(DrawRun {
                     material_index,
                     render_mode_index,
+                    fog_color,
                     cull: kind,
                     index_count: 3,
                     index_start,
@@ -505,6 +515,7 @@ impl Rsp {
                 _ => scene.draw_runs.push(DrawRun {
                     material_index,
                     render_mode_index,
+                    fog_color,
                     cull: kind,
                     index_count: 3,
                     index_start,
@@ -852,11 +863,21 @@ pub(crate) fn record_tri(
             c,
             material_index,
             render_mode_index,
+            rdp.fog_color,
             scene,
             Some(rec.cur_pair),
         );
     } else {
-        rsp.draw_tri(a, b, c, material_index, render_mode_index, scene, None);
+        rsp.draw_tri(
+            a,
+            b,
+            c,
+            material_index,
+            render_mode_index,
+            rdp.fog_color,
+            scene,
+            None,
+        );
     }
 }
 
@@ -1047,11 +1068,12 @@ mod draw_runs_tests {
     #[test]
     fn cull_off_records_none_run_in_order() {
         let (mut rsp, mut scene) = rsp_three();
-        rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
         assert_eq!(scene.indices, vec![0, 1, 2]);
         assert_eq!(
             scene.draw_runs,
             vec![DrawRun {
+                fog_color: [0; 4],
                 material_index: 0,
                 render_mode_index: 0,
                 cull: CullKind::None,
@@ -1065,11 +1087,12 @@ mod draw_runs_tests {
     fn cull_front_swaps_a_c_and_marks_cull() {
         let (mut rsp, mut scene) = rsp_three();
         rsp.modify_geometry_mode(!0, G_CULL_FRONT);
-        rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
         assert_eq!(scene.indices, vec![2, 1, 0]);
         assert_eq!(
             scene.draw_runs,
             vec![DrawRun {
+                fog_color: [0; 4],
                 material_index: 0,
                 render_mode_index: 0,
                 cull: CullKind::Cull,
@@ -1082,14 +1105,15 @@ mod draw_runs_tests {
     #[test]
     fn runs_coalesce_and_split_on_cull_change() {
         let (mut rsp, mut scene) = rsp_three();
-        rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None); // None
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
         rsp.modify_geometry_mode(!0, G_CULL_BACK);
-        rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None); // Cull
-        rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None); // Cull -> extends
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
         assert_eq!(
             scene.draw_runs,
             vec![
                 DrawRun {
+                    fog_color: [0; 4],
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::None,
@@ -1097,6 +1121,7 @@ mod draw_runs_tests {
                     index_start: 0,
                 },
                 DrawRun {
+                    fog_color: [0; 4],
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::Cull,
@@ -1110,10 +1135,11 @@ mod draw_runs_tests {
     #[test]
     fn drawrun_carries_material_and_render_mode_index() {
         let (mut rsp, mut scene) = rsp_three();
-        rsp.draw_tri(0, 1, 2, 5, 7, &mut scene, None); // material_index=5, render_mode_index=7
+        rsp.draw_tri(0, 1, 2, 5, 7, [0; 4], &mut scene, None);
         assert_eq!(
             scene.draw_runs,
             vec![DrawRun {
+                fog_color: [0; 4],
                 material_index: 5,
                 render_mode_index: 7,
                 cull: CullKind::None,
@@ -1126,8 +1152,8 @@ mod draw_runs_tests {
     #[test]
     fn run_splits_on_material_index_change() {
         let (mut rsp, mut scene) = rsp_three();
-        rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, None);
-        rsp.draw_tri(0, 1, 2, 1, 0, &mut scene, None); // material change -> new run
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 1, 0, [0; 4], &mut scene, None);
         assert_eq!(scene.draw_runs.len(), 2);
     }
 
@@ -1144,11 +1170,11 @@ mod draw_runs_tests {
                 crate::hle::consts::G_LIGHTING | crate::hle::consts::G_TEXTURE_GEN,
             );
             rsp.set_vertex(&rd, 0, 3, 0, &Default::default(), &mut scene);
-            rsp.draw_tri(0, 1, 2, 0, 0, &mut scene, pair_target);
+            rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, pair_target);
             rsp.modify_geometry_mode(!crate::hle::consts::G_TEXTURE_GEN, 0);
             rsp.set_vertex(&rd, 0, 3, 3, &Default::default(), &mut scene);
-            rsp.draw_tri(3, 4, 5, 0, 0, &mut scene, pair_target);
-            rsp.draw_tri(0, 4, 2, 0, 0, &mut scene, pair_target);
+            rsp.draw_tri(3, 4, 5, 0, 0, [0; 4], &mut scene, pair_target);
+            rsp.draw_tri(0, 4, 2, 0, 0, [0; 4], &mut scene, pair_target);
 
             let runs: Vec<_> = match pair_target {
                 None => scene.draw_runs.iter().collect(),

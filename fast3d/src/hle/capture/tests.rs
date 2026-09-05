@@ -378,7 +378,7 @@ mod host {
         let t = task(rec, entry, DataFormat::Fixed);
         assert_eq!(live.scene.raw_pos, vec![[-12., 23., 45.]]);
         assert_eq!(live.commands, 6);
-        assert_eq!(live.scene.fog_color, [222, 173, 190, 239]);
+        assert_eq!(live.rdp.fog_color, [222, 173, 190, 239]);
         let m = matrix.as_ptr() as u64;
         let v = vertex.as_ptr() as u64;
         drop(commands);

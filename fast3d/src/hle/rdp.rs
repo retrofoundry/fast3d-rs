@@ -161,9 +161,7 @@ fn set_env_color<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn set_fog_color<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    // G_SETFOGCOLOR: w1 is the RGBA8 fog color packed as a big-endian u32.
-    // Fog color is scene-global; it does not trigger a material re-snap (no texture dependency),
-    // but the renderer uniform reads it at draw time so we leave material_dirty unchanged here.
+    // Fog color has no texture dependency, so material_dirty stays unchanged.
     cx.rdp.fog_color = c.w1.to_be_bytes();
 }
 
