@@ -4,11 +4,8 @@
 // normalize is the extra step matching hle set_vertex.
 // color: diffuse lighting (light_count>0) or cn RGBA passthrough (unlit).
 
-const FB_WIDTH:  f32 = 320.0;
-const FB_HEIGHT: f32 = 240.0;
-
-// Must mirror RspProcessParams (lib.rs) exactly — 16 bytes.
-struct Params { vertex_count: u32, _pad0: u32, _pad1: u32, _pad2: u32 };
+// Must mirror RspProcessParams (render/mod.rs) exactly — 16 bytes.
+struct Params { vertex_count: u32, _pad: u32, fb_width: f32, fb_height: f32 };
 // Must mirror rsp_buffers::SrcVertex (render/mod.rs) exactly — 80 bytes.
 struct SrcVertex {
     pos: vec3<f32>,
@@ -60,16 +57,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var o: OutVertex;
     o.pos = vec4<f32>(
-        clip.x * (2.0 * vp.scale.x / FB_WIDTH)  + w * (2.0 * vp.trans.x / FB_WIDTH  - 1.0),
-        clip.y * (2.0 * vp.scale.y / FB_HEIGHT) + w * (1.0 - 2.0 * vp.trans.y / FB_HEIGHT),
+        clip.x * (2.0 * vp.scale.x / params.fb_width)  + w * (2.0 * vp.trans.x / params.fb_width  - 1.0),
+        clip.y * (2.0 * vp.scale.y / params.fb_height) + w * (1.0 - 2.0 * vp.trans.y / params.fb_height),
         clip.z * vp.scale.z + w * vp.trans.z,
         w,
     );
     // gSPModifyVertex screen overrides. Rebuild clip = ndc*w so the GPU's perspective divide
     // lands on the requested pixel/depth while keeping the shader-computed w for correct UVs.
     if ((v.modify_flags & 1u) != 0u) {
-        o.pos.x = (2.0 * v.modify_screen.x / FB_WIDTH - 1.0) * w;
-        o.pos.y = (1.0 - 2.0 * v.modify_screen.y / FB_HEIGHT) * w;
+        o.pos.x = (2.0 * v.modify_screen.x / params.fb_width - 1.0) * w;
+        o.pos.y = (1.0 - 2.0 * v.modify_screen.y / params.fb_height) * w;
     }
     if ((v.modify_flags & 2u) != 0u) {
         o.pos.z = v.modify_screen.z * w;

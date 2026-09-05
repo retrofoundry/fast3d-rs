@@ -1488,9 +1488,30 @@ pub struct RspProcessPipeline {
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RspProcessParams {
     pub vertex_count: u32,
-    pub _pad: [u32; 3],
+    pub _pad: u32,
+    pub fb_width: f32,
+    pub fb_height: f32,
 }
 const _: () = assert!(std::mem::size_of::<RspProcessParams>() == 16);
+
+const PAIRLESS_LOGICAL_EXTENT: (u32, u32) = (320, 240);
+
+fn pair_render_extent(pair: &crate::hle::FramebufferPair) -> (u32, u32) {
+    (
+        u32::from(pair.color_image.width).max(1),
+        if pair.size_extent.1 == 0 {
+            240
+        } else {
+            pair.size_extent.1
+        },
+    )
+}
+
+#[derive(Default)]
+struct RspSceneBuffers {
+    vertices: std::collections::HashMap<(u32, u32), wgpu::Buffer>,
+    indices: Option<wgpu::Buffer>,
+}
 
 impl RspProcessPipeline {
     pub fn new(device: &wgpu::Device) -> Self {
@@ -1548,6 +1569,119 @@ impl RspProcessPipeline {
         Self {
             pipeline,
             bind_group_layout,
+        }
+    }
+
+    fn process_scene(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        scene: &crate::hle::Scene,
+    ) -> RspSceneBuffers {
+        use crate::render::rsp_buffers as rb;
+        use wgpu::util::DeviceExt;
+        if scene.raw_pos.is_empty() || scene.indices.is_empty() {
+            return RspSceneBuffers::default();
+        }
+        let n = scene.raw_pos.len() as u32;
+        let sb = |data: &[u8]| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: data,
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        };
+        let source = sb(bytemuck::cast_slice(&rb::src_vertices(scene)));
+        let mvp_table = sb(bytemuck::cast_slice(&rb::mvp_table(scene)));
+        let viewport_table = sb(bytemuck::cast_slice(&rb::viewport_table(scene)));
+        let texcoord_table = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
+        let lights_table = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
+        let lookat_table = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
+        let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
+
+        let extents = if scene.framebuffer_pairs.is_empty() {
+            vec![PAIRLESS_LOGICAL_EXTENT]
+        } else {
+            scene
+                .framebuffer_pairs
+                .iter()
+                .filter(|pair| !pair.is_depth_clear)
+                .map(pair_render_extent)
+                .collect()
+        };
+        let mut vertices = std::collections::HashMap::new();
+        for extent in extents {
+            vertices.entry(extent).or_insert_with(|| {
+                let dst = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("out-vertices"),
+                    size: (n as u64) * 48,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+                    mapped_at_creation: false,
+                });
+                let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("rsp-params"),
+                    contents: bytemuck::bytes_of(&RspProcessParams {
+                        vertex_count: n,
+                        _pad: 0,
+                        fb_width: extent.0 as f32,
+                        fb_height: extent.1 as f32,
+                    }),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                let rsp_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("rsp-bg"),
+                    layout: self.bind_group_layout(),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: params.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: source.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: mvp_table.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: viewport_table.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: texcoord_table.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: lights_table.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: lookat_table.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: dst.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 8,
+                            resource: fog_table.as_entire_binding(),
+                        },
+                    ],
+                });
+                self.dispatch(encoder, &rsp_bg, n);
+                dst
+            });
+        }
+        let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ibuf"),
+            contents: bytemuck::cast_slice(&scene.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        RspSceneBuffers {
+            vertices,
+            indices: Some(indices),
         }
     }
 
@@ -2344,12 +2478,7 @@ impl SceneRenderer {
                     ops.push(wgpu::LoadOp::Load); // placeholder; the loop `continue`s past depth-clear
                     continue;
                 }
-                let w = (pair.color_image.width as u32).max(1);
-                let h = if pair.size_extent.1 == 0 {
-                    240
-                } else {
-                    pair.size_extent.1
-                };
+                let (w, h) = pair_render_extent(pair);
                 let created = self.ensure_fb(device, pair.color_image.addr, w, h);
                 ops.push(self.fb_clear_op(pair.color_image.addr, created, clear_policy));
             }
@@ -2365,99 +2494,15 @@ impl SceneRenderer {
             label: Some("render-into-store"),
         });
 
-        // --- RSP-process compute + global index buffer (triangle-bearing scenes only). ---
-        // Triangle-less guard (BLOCKER): a pure-2D paired scene (FillRect/TexRect only) has empty
-        // `raw_pos`/`indices`. Dispatching the compute then would be `div_ceil(64)` of 0 = 0
-        // workgroups against a 0-byte `dst`, and the index buffer would be 0-byte — both wgpu
-        // validation errors. Skip the whole block; the per-pair loop simply records no Tris draws.
-        let has_tris = !scene.raw_pos.is_empty() && !scene.indices.is_empty();
-        let (dst, ibuf): (Option<wgpu::Buffer>, Option<wgpu::Buffer>) = if has_tris {
-            use crate::render::rsp_buffers as rb;
-            let n = scene.raw_pos.len() as u32;
-            let sb = |data: &[u8]| {
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: data,
-                    usage: wgpu::BufferUsages::STORAGE,
-                })
-            };
-            let source = sb(bytemuck::cast_slice(&rb::src_vertices(scene)));
-            let mvp_table = sb(bytemuck::cast_slice(&rb::mvp_table(scene)));
-            let viewport_table = sb(bytemuck::cast_slice(&rb::viewport_table(scene)));
-            let texcoord_table = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
-            let lights_table = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
-            let lookat_table = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
-            let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
-            let dst = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("out-vertices"),
-                size: (n as u64) * 48,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: false,
-            });
-            let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("rsp-params"),
-                contents: bytemuck::bytes_of(&RspProcessParams {
-                    vertex_count: n,
-                    _pad: [0; 3],
-                }),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let rsp_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("rsp-bg"),
-                layout: self.rsp.bind_group_layout(),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: params.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: source.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: mvp_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: viewport_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: texcoord_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: lights_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: lookat_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 7,
-                        resource: dst.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 8,
-                        resource: fog_table.as_entire_binding(),
-                    },
-                ],
-            });
-            self.rsp.dispatch(&mut encoder, &rsp_bg, n);
-
-            let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ibuf"),
-                contents: bytemuck::cast_slice(&scene.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-            (Some(dst), Some(ibuf))
-        } else {
-            (None, None)
-        };
+        let RspSceneBuffers {
+            vertices,
+            indices: ibuf,
+        } = self.rsp.process_scene(device, &mut encoder, scene);
 
         let addr = if scene.framebuffer_pairs.is_empty() {
-            let dst = dst.as_ref().expect("pair-less scene has triangles");
+            let dst = vertices
+                .get(&PAIRLESS_LOGICAL_EXTENT)
+                .expect("pair-less scene has triangles");
             let ibuf = ibuf.as_ref().expect("pair-less scene has triangles");
 
             // --- Pooled uniform buffer: N_runs × 256 bytes (256 = min_uniform_buffer_offset_alignment).
@@ -2550,7 +2595,7 @@ impl SceneRenderer {
                 scene,
                 &clear_ops,
                 &material_bgs,
-                &dst,
+                &vertices,
                 &ibuf,
             )
         };
@@ -2647,96 +2692,10 @@ impl SceneRenderer {
 
         use wgpu::util::DeviceExt;
 
-        // --- RSP-process compute + global index buffer (triangle-bearing scenes only). ---
-        // Triangle-less guard (BLOCKER): a pure-2D paired scene (FillRect/TexRect only) has empty
-        // `raw_pos`/`indices`. Dispatching the compute then would be `div_ceil(64)` of 0 = 0
-        // workgroups against a 0-byte `dst`, and the index buffer would be 0-byte — both wgpu
-        // validation errors. Skip the whole block; the per-pair loop simply records no Tris draws.
-        let has_tris = !scene.raw_pos.is_empty() && !scene.indices.is_empty();
-        let (dst, ibuf): (Option<wgpu::Buffer>, Option<wgpu::Buffer>) = if has_tris {
-            use crate::render::rsp_buffers as rb;
-            let n = scene.raw_pos.len() as u32;
-            let sb = |data: &[u8]| {
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: data,
-                    usage: wgpu::BufferUsages::STORAGE,
-                })
-            };
-            let source = sb(bytemuck::cast_slice(&rb::src_vertices(scene)));
-            let mvp_table = sb(bytemuck::cast_slice(&rb::mvp_table(scene)));
-            let viewport_table = sb(bytemuck::cast_slice(&rb::viewport_table(scene)));
-            let texcoord_table = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
-            let lights_table = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
-            let lookat_table = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
-            let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
-            let dst = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("out-vertices"),
-                size: (n as u64) * 48,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: false,
-            });
-            let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("rsp-params"),
-                contents: bytemuck::bytes_of(&RspProcessParams {
-                    vertex_count: n,
-                    _pad: [0; 3],
-                }),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            let rsp_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("rsp-bg"),
-                layout: self.rsp.bind_group_layout(),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: params.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: source.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: mvp_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: viewport_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: texcoord_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: lights_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 6,
-                        resource: lookat_table.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 7,
-                        resource: dst.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 8,
-                        resource: fog_table.as_entire_binding(),
-                    },
-                ],
-            });
-            self.rsp.dispatch(&mut encoder, &rsp_bg, n);
-
-            let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ibuf"),
-                contents: bytemuck::cast_slice(&scene.indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-            (Some(dst), Some(ibuf))
-        } else {
-            (None, None)
-        };
+        let RspSceneBuffers {
+            vertices,
+            indices: ibuf,
+        } = self.rsp.process_scene(device, &mut encoder, scene);
 
         if scene.framebuffer_pairs.is_empty() {
             // ── Pair-less (flat 3D) path — renders into an INTERNAL color framebuffer, then blits
@@ -2745,8 +2704,9 @@ impl SceneRenderer {
             // (created, drawn, blitted, dropped); Phase 3 promotes it into the persistent
             // address-keyed store `SceneRenderer::framebuffers[addr]`. It is sized to the surface
             // (fb_w/fb_h), matching the owned depth buffer, and blitted (1:1 or scaled) to `target`.
-            // The empty-scene guard above guarantees `has_tris` here, so `dst`/`ibuf` are `Some`.
-            let dst = dst.as_ref().expect("pair-less scene has triangles");
+            let dst = vertices
+                .get(&PAIRLESS_LOGICAL_EXTENT)
+                .expect("pair-less scene has triangles");
             let ibuf = ibuf.as_ref().expect("pair-less scene has triangles");
 
             // --- Pooled uniform buffer: N_runs × 256 bytes (256 = min_uniform_buffer_offset_alignment).
@@ -2904,7 +2864,7 @@ impl SceneRenderer {
                 scene,
                 target,
                 &material_bgs,
-                &dst,
+                &vertices,
                 &ibuf,
             );
         }
@@ -3192,9 +3152,7 @@ impl SceneRenderer {
     /// `FramebufferPair` into its color target (attaching depth per the depth-Option branch), then
     /// blit the scanout pair to the external `target`.
     ///
-    /// `dst`/`ibuf` are the compute-RSP output vertex buffer + global index buffer (`Some` only when
-    /// the scene has triangles); `material_bgs` are the per-material `@group(0)` bind groups. The
-    /// FB pool is a frame-LOCAL map (IMPORTANT 13) — NEVER a persisted field — so each pair's color
+    /// The FB pool is a frame-LOCAL map (IMPORTANT 13) — NEVER a persisted field — so each pair's color
     /// view (including the cross-pair `fb_source` read-back source, Task 10) outlives every pass and
     /// the final submit.
     #[allow(clippy::too_many_arguments)]
@@ -3206,7 +3164,7 @@ impl SceneRenderer {
         scene: &crate::hle::Scene,
         target: &wgpu::TextureView,
         material_bgs: &[&wgpu::BindGroup],
-        dst: &Option<wgpu::Buffer>,
+        vertices: &std::collections::HashMap<(u32, u32), wgpu::Buffer>,
         ibuf: &Option<wgpu::Buffer>,
     ) {
         use std::collections::{HashMap, HashSet};
@@ -3221,18 +3179,6 @@ impl SceneRenderer {
 
         // --- Op-count uniform pool (BLOCKER 3): one 256-byte slot per DRAWING op (Tris/FillRect/
         // TexRect), walked across every pair in order. `SetScissor` carries no slot. ---
-        // FB extent for a pair: color_image.width × size_extent.1 (scissor.lry, else 240).
-        // Computed identically in the pool/vertex build below and the per-pair render loop.
-        let fb_dims = |pair: &crate::hle::FramebufferPair| -> (u32, u32) {
-            let w = (pair.color_image.width as u32).max(1);
-            let h = if pair.size_extent.1 == 0 {
-                240
-            } else {
-                pair.size_extent.1
-            };
-            (w, h)
-        };
-
         let mut pool: Vec<u8> = Vec::new();
         let push_slot = |pool: &mut Vec<u8>, u: &CombinerUniform| {
             let base = pool.len();
@@ -3250,7 +3196,7 @@ impl SceneRenderer {
             if pair.is_depth_clear {
                 continue;
             }
-            let (fb_w, fb_h) = fb_dims(pair);
+            let (fb_w, fb_h) = pair_render_extent(pair);
             for op in &pair.ops {
                 match op {
                     crate::hle::SceneOp::Tris(run) => {
@@ -3356,7 +3302,8 @@ impl SceneRenderer {
         let mut slot: u32 = 0;
         let mut rect_idx: u32 = 0;
         for (pair_idx, pair) in scene.framebuffer_pairs.iter().enumerate() {
-            let (fb_w, fb_h) = fb_dims(pair);
+            let (fb_w, fb_h) = pair_render_extent(pair);
+            let dst = vertices.get(&(fb_w, fb_h));
             let fb_extent = wgpu::Extent3d {
                 width: fb_w,
                 height: fb_h,
@@ -3454,7 +3401,7 @@ impl SceneRenderer {
                     color_load,
                     scene,
                     material_bgs,
-                    dst.as_ref(),
+                    dst,
                     ibuf.as_ref(),
                     rect_vbuf.as_ref(),
                     uniform_bg.as_ref(),
@@ -3546,7 +3493,7 @@ impl SceneRenderer {
                         };
                         pass.set_pipeline(pipeline);
                         // Tris consume the compute `dst` vertex buffer (rects rebind slot 0).
-                        if let Some(d) = dst.as_ref() {
+                        if let Some(d) = dst {
                             pass.set_vertex_buffer(0, d.slice(..));
                         }
                         pass.set_bind_group(0, material_bgs[run.material_index as usize], &[]);
@@ -3657,7 +3604,7 @@ impl SceneRenderer {
         scene: &crate::hle::Scene,
         clear_ops: &[wgpu::LoadOp<wgpu::Color>],
         material_bgs: &[&wgpu::BindGroup],
-        dst: &Option<wgpu::Buffer>,
+        vertices: &std::collections::HashMap<(u32, u32), wgpu::Buffer>,
         ibuf: &Option<wgpu::Buffer>,
     ) -> Option<u64> {
         use std::collections::HashMap;
@@ -3672,22 +3619,8 @@ impl SceneRenderer {
                 .or_insert_with(|| (fb.attach.clone(), fb.sampled.clone()));
         }
 
-        // ── Uniform/rect-quad pool build — copied from render_pairs VERBATIM (produces `uniform_bg`,
-        //    `rect_vbuf`, and the per-pair `fb_dims` closure). ──
         // --- Op-count uniform pool (BLOCKER 3): one 256-byte slot per DRAWING op (Tris/FillRect/
         // TexRect), walked across every pair in order. `SetScissor` carries no slot. ---
-        // FB extent for a pair: color_image.width × size_extent.1 (scissor.lry, else 240).
-        // Computed identically in the pool/vertex build below and the per-pair render loop.
-        let fb_dims = |pair: &crate::hle::FramebufferPair| -> (u32, u32) {
-            let w = (pair.color_image.width as u32).max(1);
-            let h = if pair.size_extent.1 == 0 {
-                240
-            } else {
-                pair.size_extent.1
-            };
-            (w, h)
-        };
-
         let mut pool: Vec<u8> = Vec::new();
         let push_slot = |pool: &mut Vec<u8>, u: &CombinerUniform| {
             let base = pool.len();
@@ -3705,7 +3638,7 @@ impl SceneRenderer {
             if pair.is_depth_clear {
                 continue;
             }
-            let (fb_w, fb_h) = fb_dims(pair);
+            let (fb_w, fb_h) = pair_render_extent(pair);
             for op in &pair.ops {
                 match op {
                     crate::hle::SceneOp::Tris(run) => {
@@ -3816,7 +3749,8 @@ impl SceneRenderer {
         let mut slot: u32 = 0;
         let mut rect_idx: u32 = 0;
         for (pair_idx, pair) in scene.framebuffer_pairs.iter().enumerate() {
-            let (fb_w, fb_h) = fb_dims(pair);
+            let (fb_w, fb_h) = pair_render_extent(pair);
+            let dst = vertices.get(&(fb_w, fb_h));
             let fb_extent = wgpu::Extent3d {
                 width: fb_w,
                 height: fb_h,
@@ -3895,7 +3829,7 @@ impl SceneRenderer {
                     color_load,
                     scene,
                     material_bgs,
-                    dst.as_ref(),
+                    dst,
                     ibuf.as_ref(),
                     rect_vbuf.as_ref(),
                     uniform_bg.as_ref(),
@@ -3989,7 +3923,7 @@ impl SceneRenderer {
                         };
                         pass.set_pipeline(pipeline);
                         // Tris consume the compute `dst` vertex buffer (rects rebind slot 0).
-                        if let Some(d) = dst.as_ref() {
+                        if let Some(d) = dst {
                             pass.set_vertex_buffer(0, d.slice(..));
                         }
                         pass.set_bind_group(0, material_bgs[run.material_index as usize], &[]);

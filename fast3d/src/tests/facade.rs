@@ -149,14 +149,6 @@ fn scene_renderer_tex_cache_rebuilds_on_content_change() {
 
 /// 5. Per-pair FB-pool roundtrip: render a TRIS-ONLY scene two ways and assert pixel equality
 ///    within `TOL=2`.
-///
-///    Path A (pair-less): the flat `draw_runs` scene renders straight to the target.
-///    Path B (paired): the SAME triangles are moved into a single `FramebufferPair` whose CIMG
-///    width == facade W (64) and `active_scissor.lry` == H (64), so the FB pool allocates a 64×64
-///    offscreen color target, the per-pair pass draws the tris into it, and the scanout blit copies
-///    it 1:1 to the target (no resample). Equality (within ±2 for linear-sample float rounding)
-///    proves the FB-pool + per-pair-pass + blit roundtrip is lossless. depth_image=None exercises
-///    the color-only branch.
 #[test]
 fn scene_renderer_paired_tris_matches_pair_less() {
     const TOL: i16 = 2;
@@ -169,8 +161,7 @@ fn scene_renderer_paired_tris_matches_pair_less() {
         "flat-color must be a pair-less draw_runs scene"
     );
 
-    // Path B: clone it, move every draw_run into a single FramebufferPair as a Tris op (CIMG
-    // width 64, scissor lry 64 → 64×64 FB, 1:1 scanout blit), and clear draw_runs.
+    // The pair matches the scene's logical viewport; scanout scales it to the 64×64 test target.
     let mut paired = pair_less.clone();
     let ops: Vec<crate::hle::SceneOp> = paired
         .draw_runs
@@ -181,7 +172,7 @@ fn scene_renderer_paired_tris_matches_pair_less() {
         color_image: crate::hle::ColorImage {
             fmt: 0,
             siz: 2, // G_IM_SIZ_16b
-            width: W as u16,
+            width: 320,
             addr: 0x0010_0000,
         },
         depth_image: None,
@@ -189,11 +180,11 @@ fn scene_renderer_paired_tris_matches_pair_less() {
         active_scissor: crate::hle::Scissor {
             ulx: 0,
             uly: 0,
-            lrx: W as i32,
-            lry: H as i32,
+            lrx: 320,
+            lry: 240,
             mode: 0,
         },
-        size_extent: (W, H),
+        size_extent: (320, 240),
         is_depth_clear: false,
     }];
 
