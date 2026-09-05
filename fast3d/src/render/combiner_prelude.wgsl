@@ -316,27 +316,13 @@ fn tile_address_axis(tap: i32, mode: u32, mask: u32, extent: u32) -> i32 {
         let period = i32(1u << mask);
         if (mode & 1u) != 0u {
             let cycle = period * 2;
-            let phase = ((addressed % cycle) + cycle) % cycle;
+            let phase = addressed & (cycle - 1);
             addressed = select(cycle - 1 - phase, phase, phase < period);
         } else {
-            addressed = ((addressed % period) + period) % period;
+            addressed = addressed & (period - 1);
         }
     }
     return addressed;
-}
-
-fn tile_tap(texture: texture_2d<f32>, tile: TileSampling, tap: vec2<i32>) -> vec4<f32> {
-    let addressed = vec2<u32>(vec2<i32>(
-        tile_address_axis(tap.x, tile.modes.x, tile.shift_mask.z, tile.modes.z),
-        tile_address_axis(tap.y, tile.modes.y, tile.shift_mask.w, tile.modes.w)));
-    if tile.image.z == 1u {
-        // RGBA32 occupies two bytes per bank; the CPU lookup already resolves both banks.
-        let half_byte_shift = min(tile.tmem.w, 2u);
-        let relative = (addressed.y * tile.tmem.y + ((addressed.x << half_byte_shift) >> 1u)) & 4095u;
-        let row = (addressed.y & 1u) * 2u + (addressed.x & 1u);
-        return textureLoad(texture, vec2<i32>(i32(relative), i32(row)), 0);
-    }
-    return textureLoad(texture, vec2<i32>(addressed), 0);
 }
 
 fn tile_bilinear(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<f32>) -> vec4<f32> {
@@ -344,21 +330,44 @@ fn tile_bilinear(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<
     let centered = coordinate - 0.5;
     let base = vec2<i32>(floor(centered));
     let fraction = fract(centered);
-    let c00 = tile_tap(texture, tile, base);
-    let c10 = tile_tap(texture, tile, base + vec2<i32>(1, 0));
-    let c01 = tile_tap(texture, tile, base + vec2<i32>(0, 1));
-    let c11 = tile_tap(texture, tile, base + vec2<i32>(1, 1));
+    let x0 = u32(tile_address_axis(base.x, tile.modes.x, tile.shift_mask.z, tile.modes.z));
+    let x1 = u32(tile_address_axis(base.x + 1, tile.modes.x, tile.shift_mask.z, tile.modes.z));
+    let y0 = u32(tile_address_axis(base.y, tile.modes.y, tile.shift_mask.w, tile.modes.w));
+    let y1 = u32(tile_address_axis(base.y + 1, tile.modes.y, tile.shift_mask.w, tile.modes.w));
+
+    // RGBA32 occupies two bytes per bank; the CPU lookup already resolves both banks.
+    let half_byte_shift = min(tile.tmem.w, 2u);
+    let tmem_x0 = (x0 << half_byte_shift) >> 1u;
+    let tmem_x1 = (x1 << half_byte_shift) >> 1u;
+    let tmem_y0 = y0 * tile.tmem.y;
+    let tmem_y1 = y1 * tile.tmem.y;
+    let row_x0 = x0 & 1u;
+    let row_x1 = x1 & 1u;
+    let row_y0 = (y0 & 1u) * 2u;
+    let row_y1 = (y1 & 1u) * 2u;
+    let lookup = tile.image.z == 1u;
+    let tap00 = select(vec2<u32>(x0, y0), vec2<u32>((tmem_y0 + tmem_x0) & 4095u, row_y0 + row_x0), lookup);
+    let tap10 = select(vec2<u32>(x1, y0), vec2<u32>((tmem_y0 + tmem_x1) & 4095u, row_y0 + row_x1), lookup);
+    let tap01 = select(vec2<u32>(x0, y1), vec2<u32>((tmem_y1 + tmem_x0) & 4095u, row_y1 + row_x0), lookup);
+    let tap11 = select(vec2<u32>(x1, y1), vec2<u32>((tmem_y1 + tmem_x1) & 4095u, row_y1 + row_x1), lookup);
+    let c00 = textureLoad(texture, vec2<i32>(tap00), 0);
+    let c10 = textureLoad(texture, vec2<i32>(tap10), 0);
+    let c01 = textureLoad(texture, vec2<i32>(tap01), 0);
+    let c11 = textureLoad(texture, vec2<i32>(tap11), 0);
     return mix(mix(c00, c10, fraction.x), mix(c01, c11, fraction.x), fraction.y);
 }
 
 fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>) -> vec4<f32> {
     var tile = tile_sampling[index];
+    var coordinate: vec2<f32>;
     if tile.image.z == 2u {
         let extent = textureDimensions(texture);
         tile.modes = vec4<u32>(2u, 2u, extent.x, extent.y);
-        return tile_bilinear(texture, tile, uv * vec2<f32>(extent));
+        coordinate = uv * vec2<f32>(extent);
+    } else {
+        coordinate = tile_coordinate(tile, uv);
     }
-    return tile_bilinear(texture, tile, tile_coordinate(tile, uv));
+    return tile_bilinear(texture, tile, coordinate);
 }
 
 fn sample_level(level_idx: u32, uv: vec2<f32>) -> vec4<f32> {
