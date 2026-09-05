@@ -2044,6 +2044,8 @@ pub struct SceneRenderer {
     /// touched (cleared-or-loaded) THIS frame, so `ClearPolicy::PerFrame` clears exactly once per
     /// frame per addr. Reset by `begin_frame`. Never dropped/rebuilt otherwise.
     first_touch: std::collections::HashSet<u64>,
+    /// Descriptor array for bind groups that sample plain images (fill, scanout, FB alias).
+    image_sampling: wgpu::Buffer,
 }
 
 impl SceneRenderer {
@@ -2172,6 +2174,7 @@ impl SceneRenderer {
         // 1×1 `@group(0)` bind group used as the FillRect texture binding. The pipeline layout
         // requires group 0, but the fill combine has `tex_enable = 0`, so binding 0 is never sampled;
         // bindings 2/3 (TEXEL1) point at the same dummy and are likewise never read (tex_enable1 = 0).
+        let image_sampling = image_sampling_buffer(device);
         let fill_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("fill-bg"),
             layout: textured_fb.bind_group_layout(),
@@ -2205,7 +2208,7 @@ impl SceneRenderer {
             ]
             .into_iter()
             .chain(lod_level_entries(&dummy_view))
-            .chain([sampling_entry(&image_sampling_buffer(device))])
+            .chain([sampling_entry(&image_sampling)])
             .collect::<Vec<_>>(),
         });
         Self {
@@ -2223,6 +2226,7 @@ impl SceneRenderer {
             fb_h: h,
             framebuffers: std::collections::HashMap::new(),
             first_touch: std::collections::HashSet::new(),
+            image_sampling,
         }
     }
 
@@ -2343,7 +2347,7 @@ impl SceneRenderer {
                     ]
                     .into_iter()
                     .chain(lod_level_entries(&self.dummy_view))
-                    .chain([sampling_entry(&image_sampling_buffer(device))])
+                    .chain([sampling_entry(&self.image_sampling)])
                     .collect::<Vec<_>>(),
                 }),
             )
@@ -2450,7 +2454,7 @@ impl SceneRenderer {
             ]
             .into_iter()
             .chain(lod_level_entries(&self.dummy_view))
-            .chain([sampling_entry(&image_sampling_buffer(device))])
+            .chain([sampling_entry(&self.image_sampling)])
             .collect::<Vec<_>>(),
         });
         self.framebuffers.insert(
@@ -2959,7 +2963,7 @@ impl SceneRenderer {
                 ]
                 .into_iter()
                 .chain(lod_level_entries(&self.dummy_view))
-                .chain([sampling_entry(&image_sampling_buffer(device))])
+                .chain([sampling_entry(&self.image_sampling)])
                 .collect::<Vec<_>>(),
             });
             self.blit_to(&mut encoder, target, &src_bg);
@@ -3692,7 +3696,7 @@ impl SceneRenderer {
                     ]
                     .into_iter()
                     .chain(lod_level_entries(&self.dummy_view))
-                    .chain([sampling_entry(&image_sampling_buffer(device))])
+                    .chain([sampling_entry(&self.image_sampling)])
                     .collect::<Vec<_>>(),
                 });
                 self.blit_to(encoder, target, &src_bg);
