@@ -151,6 +151,19 @@ texels, while rt64 addresses the texel exactly. The fixture's coordinate-coded t
 half-texel disagreement into a large colour difference on purpose. This is the baseline the tile
 addressing and filter work (design PRs 6 and 7) has to close; rerun after those land.
 
+For PR 7 acceptance, require the maximum channel difference to be below 8 and no pixels over
+that limit. Use this stricter gate for each scene after rendering both frames:
+
+```sh
+devenv shell -- cargo run -p fast3d --example compare_rgba8 -- \
+  "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
+  320 240 --threshold 7 --max-diff-pixels 0 \
+  --diff-mask "/tmp/fast3d-oracle/$scene-diff.png"
+```
+
+The filter implementation and authored probe expectations are not a measured oracle result.
+The comparison still needs to run in an SDL/Metal session.
+
 Two things the oracle caught in the fixtures themselves, both invisible to fast3d because it never
 writes depth to memory: a Z-buffered scene needs `SETZIMG`, or rt64's RAM write-back puts depth
 values at address 0 and overwrites the display list; and it needs the depth buffer cleared, or

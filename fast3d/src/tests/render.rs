@@ -365,6 +365,7 @@ fn combiner_uniform_packs_raw_words() {
         tex_h: 1,
         selectors,
         cycle_type: 0, // 1-cycle
+        filter_mode: 0,
         prim: [255, 255, 255, 255],
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],
@@ -2826,6 +2827,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
         tex_h: 1,
         selectors: selectors.clone(),
         cycle_type: 0,
+        filter_mode: 0,
         prim: [255, 0, 0, 255], // RED
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],
@@ -2851,6 +2853,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
         tex_h: 1,
         selectors,
         cycle_type: 0,
+        filter_mode: 0,
         prim: [0, 0, 255, 255], // BLUE
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],
@@ -3002,6 +3005,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
         tex_h: 1,
         selectors: selectors.clone(),
         cycle_type: 0,
+        filter_mode: 0,
         prim: [0, 255, 0, 255], // GREEN — never the asserted output, only the texture is
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],
@@ -3027,6 +3031,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
         tex_h: 1,
         selectors,
         cycle_type: 0,
+        filter_mode: 0,
         prim: [0, 255, 0, 255], // GREEN
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],
@@ -3161,6 +3166,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
         tex_h: 1,
         selectors: selectors.clone(),
         cycle_type: 0,
+        filter_mode: 0,
         prim: [0, 255, 0, 255], // GREEN backdrop = framebuffer memory (CLR_MEM)
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],
@@ -3186,6 +3192,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
         tex_h: 1,
         selectors,
         cycle_type: 0,
+        filter_mode: 0,
         prim: [255, 0, 0, red_alpha], // RED prim; alpha drives the blender A coefficient
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],
@@ -3526,6 +3533,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
         tex_h: 1,
         selectors: selectors.clone(),
         cycle_type: 0,
+        filter_mode: 0,
         prim: [0, 0, 0, 255], // BLACK base — pre-impl, the hidden decal leaves this black
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],
@@ -3551,6 +3559,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
         tex_h: 1,
         selectors,
         cycle_type: 0,
+        filter_mode: 0,
         prim: [220, 40, 255, 255], // BRIGHT decal — only visible if the decal pass runs
         env: [0, 0, 0, 255],
         blend_color: [0, 0, 0, 255],

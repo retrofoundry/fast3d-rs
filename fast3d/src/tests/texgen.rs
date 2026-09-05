@@ -324,7 +324,7 @@ fn texgen_mixed_vertices_share_texel_units() {
         let pixels = render_scene_to_rgba8(&scene, 256, 256);
         for (x, y) in [(64, 96), (192, 96), (64, 160), (192, 160)] {
             let offset = (y * 256 + x) * 4;
-            assert_pixel(&pixels[offset..offset + 4], [123, 123, 128, 255]);
+            assert_pixel(&pixels[offset..offset + 4], [123, 123, 255, 255]);
         }
     }
 }
@@ -524,18 +524,17 @@ fn fixture_sm64_mario_metal_butt_state() {
 fn fixture_sm64_mario_metal_butt() {
     let scene = metal_butt_scene();
     let pixels = render_scene_to_rgba8(&scene, 256, 256);
-    // The current sampler is bilinear: integer UVs straddle texels, and UV 0 wraps.
     let expected_pixels = [
-        [128, 128, 128, 255],
-        [123, 128, 128, 255],
-        [251, 128, 128, 255],
-        [128, 123, 128, 255],
-        [123, 123, 128, 255],
-        [251, 123, 128, 255],
-        [128, 251, 128, 255],
-        [123, 251, 128, 255],
-        [251, 251, 128, 255],
-        [189, 91, 31, 255],
+        [0, 0, 0, 255],
+        [123, 0, 255, 255],
+        [255, 0, 0, 255],
+        [0, 123, 0, 255],
+        [123, 123, 255, 255],
+        [255, 123, 0, 255],
+        [0, 255, 0, 255],
+        [123, 255, 255, 255],
+        [255, 255, 0, 255],
+        [189, 90, 0, 255],
     ];
     for (group, expected) in expected_pixels.into_iter().enumerate() {
         let x = 32 + (group % 5) * 48;

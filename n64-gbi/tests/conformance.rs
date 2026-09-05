@@ -442,3 +442,14 @@ fn sm64_seed_macro_words_match_gbi() {
         "levels/castle_inside/areas/1/1/model.inc.c: inside_castle_seg7_dl_07023DB0 selected commands"
     );
 }
+#[test]
+fn texture_filter_words_match_gbi() {
+    use n64_gbi::encode::{gdp_set_other_mode_h, gsp_setothermode_h_f3d};
+    for (mode, data) in [(0, 0x0000_0000), (2, 0x0000_2000), (3, 0x0000_3000)] {
+        assert_eq!(
+            gsp_setothermode_h_f3d(12, 2, mode << 12),
+            (0xba00_0c02, data)
+        );
+        assert_eq!(gdp_set_other_mode_h(12, 2, mode << 12), (0xe300_1201, data));
+    }
+}

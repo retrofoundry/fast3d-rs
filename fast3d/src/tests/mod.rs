@@ -16,6 +16,9 @@ mod dl_plumbing;
 mod e2e;
 mod facade;
 mod fb_store;
+mod filter;
+#[cfg(feature = "capture")]
+mod filter_fixtures;
 mod fog;
 mod framebuffer;
 mod goldens;
