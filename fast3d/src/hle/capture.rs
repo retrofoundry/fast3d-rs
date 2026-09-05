@@ -575,6 +575,13 @@ impl DecodeMemory for ReplayRdram<'_> {
     }
 }
 impl Rdram for ReplayRdram<'_> {
+    fn capture_layout(&self) -> Option<SourceLayout> {
+        Some(SourceLayout {
+            memory: self.task.source.memory,
+            segments: self.segments,
+        })
+    }
+
     fn set_segment(&mut self, seg: u32, value: u64) {
         self.segments[(seg & 15) as usize] = match self.layout().address_space {
             AddressSpace::Image => value as u32 as u64,

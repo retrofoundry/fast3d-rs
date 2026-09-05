@@ -516,6 +516,60 @@ fn capture_checked_in_high_address_fixture_walks() {
 }
 
 #[test]
+fn capture_replayed_task_records_identical_spans() {
+    let mut image = Image(vec![0; 0x30]);
+    for (address, w0, w1) in [
+        (0, 0xde00_0000u32, 0x20u32),
+        (8, 0xdf00_0000, 0),
+        (0x20, 0xff10_003f, 0x0010_0000),
+        (0x28, 0xdf00_0000, 0),
+    ] {
+        image.0[address..address + 4].copy_from_slice(&w0.to_be_bytes());
+        image.0[address + 4..address + 8].copy_from_slice(&w1.to_be_bytes());
+    }
+    let recording = RecordingHardware::new(&image);
+    let result = crate::hle::interpret(
+        recording.rdram(),
+        0,
+        Microcode::F3dex2.into(),
+        DataFormat::Fixed,
+    );
+    assert!(result.diags.is_empty(), "{:?}", result.diags);
+    let image_task = recording
+        .finish(0, Microcode::F3dex2, DataFormat::Fixed, 7)
+        .unwrap();
+    assert_eq!(image_task.spans.len(), 2);
+    drop(image);
+    let host_fixture =
+        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    for mut task in [image_task, host_fixture.tasks[0].clone()] {
+        task.source.segments[4] = task.entry;
+        let replay = ReplayHardware::new(&task, None).unwrap();
+        let recording = RecordingHardware::new(&replay);
+        let result = crate::hle::interpret(
+            recording.rdram(),
+            task.entry,
+            task.microcode.into(),
+            task.data_format,
+        );
+        replay.check().unwrap();
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
+        let recorded = recording
+            .finish(task.entry, task.microcode, task.data_format, task.order)
+            .unwrap();
+        assert_eq!(recorded.spans, task.spans);
+        assert_eq!(recorded, task);
+
+        let mut memory = replay.rdram();
+        assert_eq!(memory.capture_layout(), Some(task.source));
+        memory.set_segment(4, 0x1234_5678);
+        let mut updated_source = task.source;
+        updated_source.segments[4] = 0x1234_5678;
+        assert_eq!(memory.capture_layout(), Some(updated_source));
+    }
+}
+
+#[test]
 fn capture_image_preserves_masking_endianness_and_typed_reads() {
     struct SegmentedImage(Vec<u8>);
     impl Hardware for SegmentedImage {

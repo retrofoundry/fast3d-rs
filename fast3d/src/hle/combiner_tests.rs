@@ -426,7 +426,12 @@ mod pixels {
         }
     }
 
-    fn check_cases(cases: Vec<(String, Rdp, [f32; 3], Option<f32>)>) {
+    enum AlphaProbe {
+        Threshold(f32),
+        Blend(f32),
+    }
+
+    fn check_cases(cases: Vec<(String, Rdp, [f32; 3], Option<AlphaProbe>)>) {
         let (device, queue, dual) = headless_device();
         assert!(dual, "selector acceptance requires a dual-source adapter");
         let (fallback, fallback_queue) = headless_device_forced_fallback();
@@ -446,33 +451,43 @@ mod pixels {
                 };
                 assert!(diags.is_empty(), "{diags:?}");
                 scene.materials = vec![mat];
-                // P=combiner, A=shade alpha, B=zero gives opaque replacement in the dual-source shader.
-                scene.render_modes = vec![RenderMode {
-                    blender_mux: 0x0a5f,
-                    blend_class: BlendClass::DualSrc,
-                    fallback_class: BlendClass::Replace,
-                    ..Default::default()
+                scene.render_modes = vec![if matches!(alpha, Some(AlphaProbe::Blend(_))) {
+                    RenderMode {
+                        blender_mux: 0x0050,
+                        force_blend: true,
+                        blend_class: BlendClass::DualSrc,
+                        fallback_class: BlendClass::AlphaOver,
+                        ..Default::default()
+                    }
+                } else {
+                    RenderMode {
+                        blender_mux: 0x0a5f,
+                        blend_class: BlendClass::DualSrc,
+                        fallback_class: BlendClass::Replace,
+                        ..Default::default()
+                    }
                 }];
-                let thresholds = alpha.map_or_else(
-                    || vec![0],
-                    |a| {
-                        vec![
-                            (a.floor() as u8).saturating_sub(1),
-                            (a.ceil() as u8).saturating_add(1),
-                        ]
-                    },
-                );
+                let thresholds = match alpha {
+                    Some(AlphaProbe::Threshold(a)) => vec![
+                        (a.floor() as u8).saturating_sub(1),
+                        (a.ceil() as u8).saturating_add(1),
+                    ],
+                    _ => vec![0],
+                };
                 for threshold in thresholds {
-                    if alpha.is_some() {
+                    if matches!(alpha, Some(AlphaProbe::Threshold(_))) {
                         scene.render_modes[0].alpha_compare = AlphaCompare::Threshold;
                         scene.materials[0].blend_color[3] = threshold;
                     }
                     let pixels = render_to_pixels(&device, &queue, &mut renderer, &scene, 64, 64);
                     let got = pixel(&pixels, 64, 32, 32);
-                    let expected = if alpha.is_some_and(|a| a < threshold as f32) {
-                        [13.0, 13.0, 20.0]
-                    } else {
-                        *expected_rgb
+                    let clear = [13.0, 13.0, 20.0];
+                    let expected = match alpha {
+                        Some(AlphaProbe::Threshold(a)) if *a < threshold as f32 => clear,
+                        Some(AlphaProbe::Blend(a)) => std::array::from_fn(|i| {
+                            clear[i] + (expected_rgb[i] - clear[i]) * a / 255.0
+                        }),
+                        _ => *expected_rgb,
                     };
                     if got[..3]
                         .iter()
@@ -602,7 +617,12 @@ gsSPEndDisplayList()
                     let (rgb, alpha) = if slot < 4 {
                         (value, None)
                     } else {
-                        ([255.0; 3], Some(value[0]))
+                        let alpha = if cycle == 1 {
+                            AlphaProbe::Blend(value[0])
+                        } else {
+                            AlphaProbe::Threshold(value[0])
+                        };
+                        ([255.0; 3], Some(alpha))
                     };
                     cases.push((
                         format!("cycle {cycle} {}={encoding}", SLOTS[slot]),
