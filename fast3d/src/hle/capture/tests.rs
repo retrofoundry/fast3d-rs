@@ -593,7 +593,7 @@ fn replay_host_big_endian_uses_recorded_byte_order() {
     let mut f =
         Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
     f.tasks[0].source.memory.byte_order = ByteOrder::Big;
-    for word in f.tasks[0].spans[0].bytes.chunks_exact_mut(8) {
+    for word in f.tasks[0].spans[0].bytes.as_chunks_mut::<8>().0.iter_mut() {
         word.reverse();
     }
     let replay = ReplayHardware::new(&f.tasks[0], None).unwrap();

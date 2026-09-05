@@ -16,8 +16,10 @@ async fn checked_in_high_address_fixture_renders() {
     assert_eq!(output.rgba8.len(), 64 * 48 * 4);
     assert!(output
         .rgba8
-        .chunks_exact(4)
-        .all(|pixel| pixel == [255, 0, 0, 255]));
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| *pixel == [255, 0, 0, 255]));
     assert_eq!(output.summaries.len(), 1);
     assert!(output.summaries[0].renderable);
     assert_eq!(output.summaries[0].errors, 0);
@@ -67,7 +69,7 @@ async fn public_replay_rejects_prior_framebuffer_dependence() {
     let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
     let mut changed = false;
     for span in &mut fixture.tasks[0].spans {
-        for command in span.bytes.chunks_exact_mut(16) {
+        for command in span.bytes.as_chunks_mut::<16>().0.iter_mut() {
             let w0 = u64::from_le_bytes(command[..8].try_into().unwrap());
             if w0 >> 24 == 0xF6 {
                 command[..8].copy_from_slice(&0xF603_C03Cu64.to_le_bytes());
@@ -215,15 +217,19 @@ async fn image_vi_selects_captured_framebuffer() {
     assert_eq!(first.diagnostics, [diagnostics]);
     assert!(first
         .rgba8
-        .chunks_exact(4)
-        .all(|pixel| pixel == [255, 0, 0, 255]));
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| *pixel == [255, 0, 0, 255]));
     fixture.frame.vi.as_mut().unwrap().origin = 0x8020_0000;
     let second = fixture.replay(device, queue).await.unwrap();
     assert_eq!(second.rgba8.len(), 64 * 48 * 4);
     assert!(second
         .rgba8
-        .chunks_exact(4)
-        .all(|pixel| pixel == [0, 255, 0, 255]));
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| *pixel == [0, 255, 0, 255]));
 }
 
 #[cfg(not(target_arch = "wasm32"))]
