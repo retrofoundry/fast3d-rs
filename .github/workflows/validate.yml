@@ -35,8 +35,9 @@ jobs:
     env:
       # WARP is a CPU rasterizer; parallel GPU tests starve each other and have crashed the
       # process with STATUS_ACCESS_VIOLATION.
-      RUST_TEST_THREADS: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+      RUST_TEST_THREADS: ${{ matrix.os == 'windows-latest' && '1' || '4' }}
       RUST_BACKTRACE: 1
+      WGPU_DX12_COMPILER: staticdxc
     steps:
       - uses: actions/checkout@v4
       - name: test (default)
