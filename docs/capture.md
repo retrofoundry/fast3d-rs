@@ -95,11 +95,12 @@ its output with explicit-device replay on the same adapter:
 cargo test -p fast3d --features "asm capture" --lib sm64_corpus_public_facade -- --nocapture
 ```
 
-CI runs Chrome on `macos-14`, using Metal WebGPU. `browser-actions/setup-chrome@v2`
-installs stable Chrome and a matching ChromeDriver. Locally, put matching Chrome and
-ChromeDriver binaries on PATH (or set `CHROMEDRIVER` to its absolute path). CI writes
-its installed Chrome path into `goog:chromeOptions.binary` in `fast3d/webdriver.json`;
-set that field locally too if Chrome is installed outside its usual location.
+CI runs Chrome on `macos-14`, using Metal WebGPU, with the runner image's own Google Chrome
+and the ChromeDriver at `$CHROMEWEBDRIVER`. A Chrome for Testing download does not work
+there: its child processes cannot reach the browser's Mach rendezvous port and the network
+service crash-loops before the page loads. Locally, put a matching Chrome and ChromeDriver on
+PATH (or set `CHROMEDRIVER` to the driver's absolute path); set `goog:chromeOptions.binary`
+in `fast3d/webdriver.json` only if Chrome is installed outside its usual location.
 The crate's [WebDriver configuration](https://wasm-bindgen.github.io/wasm-bindgen/wasm-bindgen-test/browsers.html#configuring-headless-browser-capabilities)
 enables headless Chrome and WebGPU with Metal. The checked-in arguments omit
 `--no-sandbox`; wasm-bindgen-test-runner appends it internally.

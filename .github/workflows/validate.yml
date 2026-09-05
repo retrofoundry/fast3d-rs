@@ -69,9 +69,6 @@ jobs:
     env:
       CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
       WASM_BINDGEN_TEST_TIMEOUT: 300
-      # The image's own Google Chrome and ChromeDriver. A downloaded Chrome for Testing cannot
-      # reach its Mach rendezvous port on these runners and its network service crash-loops.
-      CHROME: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
     steps:
       - uses: actions/checkout@v4
       - name: install matching wasm-bindgen runner
@@ -80,23 +77,14 @@ jobs:
             | awk '$1 == "wasm-bindgen" {print substr($2, 2); exit}')
           echo "wasm-bindgen $version"
           cargo install --locked wasm-bindgen-cli --version "$version"
-      - name: probe WebGPU in headless Chrome
-        run: |
-          "$CHROME" --version
-          "$CHROMEWEBDRIVER/chromedriver" --version
-          page='data:text/html,<body>pending</body><script>navigator.gpu ? navigator.gpu.requestAdapter().then(a => { document.body.textContent = a ? "adapter " + JSON.stringify(a.info || {}) : "no adapter"; }, e => { document.body.textContent = "error " + e; }) : document.body.textContent = "no navigator.gpu";</script>'
-          gtimeout 60 "$CHROME" --headless=new --no-sandbox --enable-unsafe-webgpu --enable-features=WebGPU --use-angle=metal \
-            --enable-logging=stderr --v=0 --virtual-time-budget=10000 --dump-dom "$page" 2> probe.log | tail -c 400; echo " (exit $?)"
-          grep -iE "gpu|angle|dawn|webgpu|metal|crash|rendezvous" probe.log | head -n 12
+      # The image's own Google Chrome and ChromeDriver. A downloaded Chrome for Testing cannot
+      # reach its Mach rendezvous port on these runners and its network service crash-loops.
       - name: browser WebGPU replay
         run: |
-          printf '#!/bin/sh\nexec "%s" --verbose --log-path="%s/chromedriver.log" "$@"\n' "$CHROMEWEBDRIVER/chromedriver" "$PWD" > chromedriver-wrapper.sh
-          chmod +x chromedriver-wrapper.sh
-          export CHROMEDRIVER="$PWD/chromedriver-wrapper.sh"
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version
+          "$CHROMEWEBDRIVER/chromedriver" --version
+          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
           export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
           cargo test -p fast3d --features capture --target wasm32-unknown-unknown \
             --test browser_sm64_fixture_replay --test capture_facade \
             --test capture_memory_wasm -- --nocapture
-      - name: chromedriver log
-        if: always()
-        run: grep -vE "rendezvous|shared_memory_switch" chromedriver.log 2>/dev/null | tail -n 120 || echo "no chromedriver log"
