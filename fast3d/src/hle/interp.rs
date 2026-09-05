@@ -261,6 +261,7 @@ pub fn interpret<M: Rdram>(
                     copy_mode,
                     material_index,
                     render_mode_index,
+                    fog_color: rdp.fog_color,
                     fb_source,
                 });
             pc += 3 * stride;
@@ -353,14 +354,6 @@ pub fn interpret<M: Rdram>(
         });
     }
     rsp.finish(&mut scene);
-    // C2/C3: thread scene-global fog state from the final RSP/RDP snapshot.
-    scene.fog_mul = rdp.fog_mul;
-    scene.fog_offset = rdp.fog_offset;
-    // "Fog present this frame" hint = any run needs fog (per-run `RenderMode.fog`, blender.rs). The
-    // actual per-vertex gate is `Scene::fog`; this stays as CPU-side metadata. (The old
-    // `geometry_mode & G_FOG` end-of-frame snapshot missed terrain once sm64 cleared G_FOG for the HUD.)
-    scene.fog_enable = scene.render_modes.iter().any(|rm| rm.fog);
-    scene.fog_color = rdp.fog_color;
     // The final color image — the pair-less renderer's internal-framebuffer key (spec §4).
     scene.color_image = rdp.color_image;
     InterpResult {
@@ -897,6 +890,7 @@ mod rect_encoding_tests {
                 copy_mode: false,
                 material_index: 0,
                 render_mode_index: 0,
+                fog_color: [0; 4],
                 fb_source: None,
             }]
         );
@@ -1022,6 +1016,7 @@ mod rect_encoding_tests {
                 copy_mode: false,
                 material_index: 0,
                 render_mode_index: 0,
+                fog_color: [0; 4],
                 fb_source: None,
             }]
         );

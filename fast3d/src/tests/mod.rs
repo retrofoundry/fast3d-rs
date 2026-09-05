@@ -13,6 +13,7 @@ mod dl_plumbing;
 mod e2e;
 mod facade;
 mod fb_store;
+mod fog;
 mod goldens;
 mod hud_power_meter;
 mod interp_tests;

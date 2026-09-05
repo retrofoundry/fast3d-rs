@@ -16,6 +16,7 @@ pub enum CullKind {
 pub struct DrawRun {
     pub material_index: u32,
     pub render_mode_index: u32,
+    pub fog_color: [u8; 4],
     pub cull: CullKind,
     pub index_count: u32,
     pub index_start: u32,
@@ -64,6 +65,7 @@ pub enum SceneOp {
         copy_mode: bool,
         material_index: u32,
         render_mode_index: u32,
+        fog_color: [u8; 4],
         fb_source: Option<u64>,
     },
     SetScissor(Scissor),
@@ -123,11 +125,10 @@ pub struct Scene {
     pub lights_table: Vec<([f32; 3], [f32; 3])>,
     /// Texgen mode per vertex: 0 = off, 1 = spherical, 2 = linear (gated on G_LIGHTING).
     pub texgen_mode: Vec<u32>,
-    /// Per-vertex fog flag: 1 when the G_FOG geometry bit was set at THIS vertex's load time, else 0.
-    /// Per-vertex fog indices — the kernel writes the depth fog factor
-    /// into color.a only for fogged vertices, so unfogged geometry (e.g. HUD/dialog) keeps its real
-    /// alpha instead of being clobbered by a scene-global fog flag.
+    /// Fog state at vertex load: 0 = disabled, n + 1 = `fog_table[n]`.
     pub fog: Vec<u32>,
+    /// Raw signed G_MW_FOG multiplier and offset pairs.
+    pub fog_table: Vec<[i16; 2]>,
     /// Index into `lookat_table` of the (S,T) axis pair active at this vertex (0 if no texgen).
     pub lookat_index: Vec<u32>,
     /// Concatenated object-space lookat pairs (axis_S_obj, axis_T_obj), deduped by (version, modelview).
@@ -135,15 +136,4 @@ pub struct Scene {
     /// Texgen ST-scale `[texgen_scale_s, texgen_scale_t]`, index-parallel to `texcoord_table`
     /// (same dedup, same `texcoord_index`). Separate from `texcoord_table` so this stays additive.
     pub texgen_scale_table: Vec<[f32; 2]>,
-    // --- Scene-global fog state (C2 / C3) ---
-    /// gSPFogPosition fm (scale): raw i16, converted to f32 when building RspProcessParams.
-    pub fog_mul: i16,
-    /// gSPFogPosition fo (offset): raw i16, converted to f32 when building RspProcessParams.
-    pub fog_offset: i16,
-    /// Scene-global "any run needs fog" hint (set in `interpret`). The per-vertex fog-factor
-    /// computation is gated by the per-vertex [`Scene::fog`] flag (fog indices), not this — this
-    /// stays as CPU-side metadata / `RspProcessParams.fog_enable`.
-    pub fog_enable: bool,
-    /// Scene-global fog color RGBA8 from gsDPSetFogColor; passed (normalized) to CombinerUniform.
-    pub fog_color: [u8; 4],
 }

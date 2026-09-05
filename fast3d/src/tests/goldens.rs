@@ -320,15 +320,7 @@ fn render_scene_with_device(
     for (i, run) in scene.draw_runs.iter().enumerate() {
         let mat = &scene.materials[run.material_index as usize];
         let rm = &scene.render_modes[run.render_mode_index as usize];
-        // C3: normalize scene.fog_color [u8;4] → [f32;4] for the combiner uniform.
-        let fc = scene.fog_color;
-        let fog_color = [
-            fc[0] as f32 / 255.0,
-            fc[1] as f32 / 255.0,
-            fc[2] as f32 / 255.0,
-            fc[3] as f32 / 255.0,
-        ];
-        let mut combiner = CombinerUniform::from_run(mat, rm, fog_color);
+        let mut combiner = CombinerUniform::from_run(mat, rm, run.fog_color);
         // Texcoord table is TEXEL-space: normalize by draw-time tile dims in the fragment.
         combiner.inv_tex_size = crate::render::triangle_inv_tex_size(mat);
         let slot = bytemuck::bytes_of(&combiner);
@@ -369,6 +361,7 @@ fn render_scene_with_device(
     let tc_buf = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
     let lt_buf = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
     let la_buf = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
+    let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
 
     // Output buffer: STORAGE for compute write, VERTEX for the raster draw.
     let dst = device.create_buffer(&wgpu::BufferDescriptor {
@@ -382,9 +375,7 @@ fn render_scene_with_device(
         label: Some("golden-rsp-params"),
         contents: bytemuck::bytes_of(&RspProcessParams {
             vertex_count: n,
-            fog_enable: u32::from(scene.fog_enable),
-            fog_mul: scene.fog_mul as f32,
-            fog_offset: scene.fog_offset as f32,
+            _pad: [0; 3],
         }),
         usage: wgpu::BufferUsages::UNIFORM,
     });
@@ -425,6 +416,10 @@ fn render_scene_with_device(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: dst.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: fog_table.as_entire_binding(),
             },
         ],
     });
@@ -1952,6 +1947,7 @@ fn golden_2d_rect_geometry_exact() {
                 copy_mode: true,
                 material_index: 0,
                 render_mode_index: 0,
+                fog_color: [0; 4],
                 fb_source: None,
             }],
             active_scissor: crate::hle::Scissor {
@@ -2345,6 +2341,7 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
                     copy_mode: true,
                     material_index: 0,
                     render_mode_index: 0,
+                    fog_color: [0; 4],
                     fb_source: None,
                 },
             ],
@@ -2477,6 +2474,7 @@ fn build_decal_scene() -> crate::hle::Scene {
     scene.indices.extend_from_slice(&[4, 5, 6, 4, 6, 7]);
     scene.draw_runs = vec![
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -2484,6 +2482,7 @@ fn build_decal_scene() -> crate::hle::Scene {
             index_start: 0,
         },
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 1,
             render_mode_index: 1,
             cull: crate::hle::CullKind::None,

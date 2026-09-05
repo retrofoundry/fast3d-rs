@@ -8,7 +8,7 @@ const FB_WIDTH:  f32 = 320.0;
 const FB_HEIGHT: f32 = 240.0;
 
 // Must mirror RspProcessParams (lib.rs) exactly — 16 bytes.
-struct Params { vertex_count: u32, fog_enable: u32, fog_mul: f32, fog_offset: f32 };
+struct Params { vertex_count: u32, _pad0: u32, _pad1: u32, _pad2: u32 };
 // Must mirror rsp_buffers::SrcVertex (render/mod.rs) exactly — 80 bytes.
 struct SrcVertex {
     pos: vec3<f32>,
@@ -39,6 +39,7 @@ struct OutVertex { pos: vec4<f32>, color: vec4<f32>, uv: vec2<f32> }; // std430 
 @group(0) @binding(5) var<storage, read> lights: array<GpuLight>;
 @group(0) @binding(6) var<storage, read> lookat: array<GpuLookAt>;
 @group(0) @binding(7) var<storage, read_write> out: array<OutVertex>;
+@group(0) @binding(8) var<storage, read> fog_table: array<vec2<f32>>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -117,7 +118,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // unfogged overlay geometry (HUD / dialog box) keeps its real alpha.
     if (v.fog != 0u) {
         let fz = max(clip.z, 0.0) / w;
-        let fog_alpha = clamp(fz * params.fog_mul + params.fog_offset, 0.0, 255.0) / 255.0;
+        let factors = fog_table[v.fog - 1u];
+        let fog_alpha = clamp(fz * factors.x + factors.y, 0.0, 255.0) / 255.0;
         o.color.a = fog_alpha;
     }
 

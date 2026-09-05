@@ -275,6 +275,7 @@ fn render_and_read_center_channel(
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -378,7 +379,7 @@ fn combiner_uniform_packs_raw_words() {
         mip_levels: Vec::new(),
         detail_tex: None,
     };
-    let u = CombinerUniform::from_run(&mat, &crate::hle::RenderMode::default(), [0.0; 4]);
+    let u = CombinerUniform::from_run(&mat, &crate::hle::RenderMode::default(), [0; 4]);
     assert_eq!(u.combine_l, 0xFC12_7E24);
     assert_eq!(u.combine_h, 0xFFFF_F9FC);
     assert_eq!(u.cycle_type, 0);
@@ -579,6 +580,7 @@ fn renders_red_triangle_center_and_clear_corner() {
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -788,6 +790,7 @@ fn depth_test_hides_the_farther_triangle() {
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -859,7 +862,7 @@ fn depth_test_hides_the_farther_triangle() {
 
 pub(super) struct GpuOut {
     pos: [f32; 4],
-    color: [f32; 4],
+    pub(super) color: [f32; 4],
     pub(super) uv: [f32; 2],
 }
 
@@ -888,6 +891,7 @@ pub(super) fn run_compute_outputs(
     let texcoord_table = mk(bytemuck::cast_slice(&rb::texcoord_table(scene)), s);
     let lights_table = mk(bytemuck::cast_slice(&rb::lights_table(scene)), s);
     let lookat_table = mk(bytemuck::cast_slice(&rb::lookat_table(scene)), s);
+    let fog_table = mk(bytemuck::cast_slice(&rb::fog_table(scene)), s);
     let out = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: (n as u64) * 48,
@@ -897,11 +901,7 @@ pub(super) fn run_compute_outputs(
     let params = mk(
         bytemuck::bytes_of(&crate::render::RspProcessParams {
             vertex_count: n,
-            // Mirror the real renderer (lib.rs): the per-vertex `fog` flag gates the fog write, so
-            // the fog scale/offset must be the scene's real values for fogged scenes (e.g. fogworld).
-            fog_enable: u32::from(scene.fog_enable),
-            fog_mul: scene.fog_mul as f32,
-            fog_offset: scene.fog_offset as f32,
+            _pad: [0; 3],
         }),
         wgpu::BufferUsages::UNIFORM,
     );
@@ -941,6 +941,10 @@ pub(super) fn run_compute_outputs(
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: out.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: fog_table.as_entire_binding(),
             },
         ],
     });
@@ -1040,7 +1044,8 @@ fn ref_color(scene: &crate::hle::Scene, i: usize) -> [f32; 4] {
         );
         let w = if clip[3] == 0.0 { 1e-6 } else { clip[3] };
         let fz = clip[2].max(0.0) / w;
-        (fz * scene.fog_mul as f32 + scene.fog_offset as f32).clamp(0.0, 255.0) / 255.0
+        let [mul, offset] = scene.fog_table[scene.fog[i] as usize - 1];
+        (fz * mul as f32 + offset as f32).clamp(0.0, 255.0) / 255.0
     } else {
         ((cn >> 24) & 0xff) as f32 / 255.0
     };
@@ -1412,6 +1417,7 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
     ];
     let indices: [u32; 6] = [0, 1, 2, 3, 4, 5];
     let runs = [crate::hle::DrawRun {
+        fog_color: [0; 4],
         material_index: 0,
         render_mode_index: 0,
         cull: crate::hle::CullKind::Cull,
@@ -1782,7 +1788,7 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
     );
 
     // Build CombinerUniform from the real scene material (not hand-constructed).
-    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0.0; 4]);
+    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
 
     // Run the RSP-process compute pass to get GPU-transformed OutVertex positions, colors, and UVs.
     let gpu_verts = run_compute_outputs(&device, &queue, &r.scene);
@@ -1980,7 +1986,7 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
     let mat = &r.scene.materials[0];
 
     // Build CombinerUniform from the real scene material.
-    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0.0; 4]);
+    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
 
     // Run the RSP-process compute pass to get GPU-transformed OutVertex positions and colors.
     let gpu_verts = run_compute_outputs(&device, &queue, &r.scene);
@@ -2190,7 +2196,7 @@ fn cycle_type_1_two_cycle_combiner_pixel() {
     let mat = &r.scene.materials[0];
 
     // Build CombinerUniform from the scene's material — NOT a hand-constructed uniform.
-    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0.0; 4]);
+    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
 
     // Primary assertion: the scene must have set 2-cycle mode.
     assert_eq!(
@@ -2487,8 +2493,7 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
         mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         ..Default::default()
     });
-    let combiner =
-        CombinerUniform::from_run(material, &crate::hle::RenderMode::default(), [0.0; 4]);
+    let combiner = CombinerUniform::from_run(material, &crate::hle::RenderMode::default(), [0; 4]);
     let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("smoke-uniform"),
         contents: bytemuck::bytes_of(&combiner),
@@ -2560,6 +2565,7 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
     let tc_buf = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
     let lt_buf = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
     let la_buf = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
+    let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
     let dst = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("smoke-dst"),
         size: (n as u64) * 48,
@@ -2570,9 +2576,7 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
         label: Some("smoke-params"),
         contents: bytemuck::bytes_of(&RspProcessParams {
             vertex_count: n,
-            fog_enable: 0,
-            fog_mul: 0.0,
-            fog_offset: 0.0,
+            _pad: [0; 3],
         }),
         usage: wgpu::BufferUsages::UNIFORM,
     });
@@ -2612,6 +2616,10 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: dst.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: fog_table.as_entire_binding(),
             },
         ],
     });
@@ -2900,6 +2908,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
 
     scene.draw_runs = vec![
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -2907,6 +2916,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
             index_start: 0,
         },
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 1,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -3066,6 +3076,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
 
     scene.draw_runs = vec![
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -3073,6 +3084,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
             index_start: 0,
         },
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 1,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -3221,6 +3233,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
     scene.indices.extend_from_slice(&[4, 5, 6, 4, 6, 7]);
     scene.draw_runs = vec![
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -3228,6 +3241,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
             index_start: 0,
         },
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 1,
             render_mode_index: 1,
             cull: crate::hle::CullKind::None,
@@ -3289,9 +3303,6 @@ fn dual_source_additive_diverges_from_alphaover_fallback() {
     );
 }
 
-/// Helper for the fog-factor test: dispatch the compute kernel with fog_enable=1 and a
-/// 1-vertex scene whose clip (z,w) is controlled by a custom MVP.
-///
 /// MVP construction (vertex pos=(0,0,1), row-vector convention):
 ///   mul_row_vec4([0,0,1,1], mvp) must yield clip [*,*,clip_z,clip_w].
 ///   Identity except mvp[2][2]=0, mvp[3][2]=clip_z, mvp[2][3]=0, mvp[3][3]=clip_w.
@@ -3324,9 +3335,8 @@ fn run_fog_kernel_alpha(clip_z: f32, clip_w: f32, fm: f32, fo: f32) -> f32 {
         cn: vec![0xFF00_0000u32],
         light_index: vec![0],
         light_count: vec![0],
-        // Per-vertex fog flag ON — the kernel now gates the fog-factor write on this (per-vertex fog indices),
-        // not the global params.fog_enable.
         fog: vec![1],
+        fog_table: vec![[fm as i16, fo as i16]],
         mvp_table: vec![mvp],
         viewport_table: vec![(
             [
@@ -3359,6 +3369,7 @@ fn run_fog_kernel_alpha(clip_z: f32, clip_w: f32, fm: f32, fo: f32) -> f32 {
     let tc_buf = mk(bytemuck::cast_slice(&rb::texcoord_table(&scene)), s);
     let lights_buf = mk(bytemuck::cast_slice(&rb::lights_table(&scene)), s);
     let lookat_buf = mk(bytemuck::cast_slice(&rb::lookat_table(&scene)), s);
+    let fog_table = mk(bytemuck::cast_slice(&rb::fog_table(&scene)), s);
     let out_buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: 48,
@@ -3368,9 +3379,7 @@ fn run_fog_kernel_alpha(clip_z: f32, clip_w: f32, fm: f32, fo: f32) -> f32 {
     let params = mk(
         bytemuck::bytes_of(&crate::render::RspProcessParams {
             vertex_count: n,
-            fog_enable: 1,
-            fog_mul: fm,
-            fog_offset: fo,
+            _pad: [0; 3],
         }),
         wgpu::BufferUsages::UNIFORM,
     );
@@ -3410,6 +3419,10 @@ fn run_fog_kernel_alpha(clip_z: f32, clip_w: f32, fm: f32, fo: f32) -> f32 {
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: out_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 8,
+                resource: fog_table.as_entire_binding(),
             },
         ],
     });
@@ -3586,6 +3599,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
     scene.indices.extend_from_slice(&[4, 5, 6, 4, 6, 7]);
     scene.draw_runs = vec![
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -3593,6 +3607,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
             index_start: 0,
         },
         crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 1,
             render_mode_index: 1,
             cull: crate::hle::CullKind::None,
@@ -3829,6 +3844,7 @@ fn render_two_texture_center(
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -4270,6 +4286,7 @@ fn render_lod_center(
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
+            fog_color: [0; 4],
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,

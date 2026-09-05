@@ -93,7 +93,7 @@ pub struct CombinerUniform {
     pub prim: [f32; 4],       // primitive color RGBA, normalized 0..1
     pub env: [f32; 4],        // environment color RGBA, normalized 0..1
     pub blend_color: [f32; 4], // blend color RGBA, normalized 0..1 (from mat.blend_color / G_SETBLENDCOLOR)
-    pub fog_color: [f32; 4],   // fog color RGBA (C3: normalized from scene.fog_color)
+    pub fog_color: [f32; 4],   // normalized draw fog color RGBA
     /// `.xy` = 1/(tex_w, tex_h): draw-time tile-size normalization applied to the TEXEL-space
     /// triangle texcoord in the fragment shader (`rsp.rs` emits texel-space texcoords; the tile-size
     /// division is deferred here to draw time). `(1,1)` for rects (already normalized).
@@ -127,18 +127,18 @@ pub struct CombinerUniform {
 const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 160);
 
 impl CombinerUniform {
-    /// Build a `CombinerUniform` from a material + run's render mode + per-frame fog color.
+    /// Build a `CombinerUniform` from a material + run's render mode + draw fog color.
     ///
-    /// Replaces `from_material`. The blender fields are wired from `rm`; `blend_color` is
+    /// The blender fields are wired from `rm`; `blend_color` is
     /// derived from `mat.blend_color` (set by G_SETBLENDCOLOR; default [0,0,0,255]); `fog_color`
-    /// is threaded through from the caller (C3: scene.fog_color normalized).
+    /// is captured by the draw.
     ///
     /// Phase D: `alpha_mode` is derived from `rm.cvg_x_alpha` (1 = CVG_X_ALPHA, threshold 0.125)
     /// and `rm.alpha_compare` (2 = THRESHOLD, threshold = mat.blend_color[3] / 255.0).
     pub fn from_run(
         mat: &crate::hle::Material,
         rm: &crate::hle::RenderMode,
-        fog_color: [f32; 4],
+        fog_color: [u8; 4],
     ) -> Self {
         let prim = [
             mat.prim[0] as f32 / 255.0,
@@ -181,7 +181,7 @@ impl CombinerUniform {
             prim,
             env,
             blend_color,
-            fog_color,
+            fog_color: fog_color.map(|c| c as f32 / 255.0),
             // Default = normalized-uv convention (rects). The TRIANGLE draw sites override
             // this to 1/(tex_w, tex_h) for the texel-space triangle texcoord path.
             inv_tex_size: [1.0, 1.0, 0.0, 0.0],
@@ -233,7 +233,7 @@ impl CombinerUniform {
     fn from_rect(
         mat: &crate::hle::Material,
         rm: &crate::hle::RenderMode,
-        fog_color: [f32; 4],
+        fog_color: [u8; 4],
     ) -> Self {
         let mut uniform = Self::from_run(mat, rm, fog_color);
         // TexRect UVs are already divided by the first binding's dimensions.
@@ -414,7 +414,7 @@ mod tests {
         // IMP5: renderer crate has no gbi-consts dep; use crate::hle::consts::rdp::* (gbi is a dev-dep
         // re-exporting gbi_consts as `consts`). `crate::hle::consts::rdp::…` would NOT resolve here.
         let rm = crate::hle::decode_render_mode(crate::hle::consts::rdp::G_RM_AA_ZB_XLU_SURF, 0, 0);
-        let u = CombinerUniform::from_run(&mat, &rm, [0.0; 4]);
+        let u = CombinerUniform::from_run(&mat, &rm, [0; 4]);
         assert_eq!(u.blender_mux, rm.blender_mux as u32);
         assert_eq!(u.force_blend, 1);
         assert!(std::mem::size_of::<CombinerUniform>() <= 256);
@@ -1484,18 +1484,11 @@ pub struct RspProcessPipeline {
 }
 
 /// Parameters uniform for the RSP-process compute kernel (binding 0, 16 bytes).
-/// WGSL `struct Params` must mirror this exactly:
-///   `{ vertex_count: u32, fog_enable: u32, fog_mul: f32, fog_offset: f32 }`.
-/// fog_enable=0 → kernel skips the fog-factor path; o.color.a comes from cn as before.
-/// fog_enable≠0 → kernel writes `clamp((max(clip.z,0)/clip.w)*fog_mul+fog_offset,0,255)/255`
-/// into o.color.a (raw clip-Z, NOT viewport-folded o.pos.z).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RspProcessParams {
     pub vertex_count: u32,
-    pub fog_enable: u32,
-    pub fog_mul: f32,
-    pub fog_offset: f32,
+    pub _pad: [u32; 3],
 }
 const _: () = assert!(std::mem::size_of::<RspProcessParams>() == 16);
 
@@ -1536,6 +1529,7 @@ impl RspProcessPipeline {
                 storage(5, true),  // lights_table (GpuLight)
                 storage(6, true),  // lookat_table (GpuLookAt)
                 storage(7, false), // output (OutVertex) read_write
+                storage(8, true),  // fog_table
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1561,7 +1555,7 @@ impl RspProcessPipeline {
         &self.bind_group_layout
     }
 
-    /// Encode the dispatch. `bind_group` must bind 0..=7 per the layout; `vertex_count` drives
+    /// Encode the dispatch. `bind_group` must bind 0..=8 per the layout; `vertex_count` drives
     /// both the uniform and the workgroup count.
     pub fn dispatch(
         &self,
@@ -2393,6 +2387,7 @@ impl SceneRenderer {
             let texcoord_table = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
             let lights_table = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
             let lookat_table = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
+            let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
             let dst = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("out-vertices"),
                 size: (n as u64) * 48,
@@ -2403,9 +2398,7 @@ impl SceneRenderer {
                 label: Some("rsp-params"),
                 contents: bytemuck::bytes_of(&RspProcessParams {
                     vertex_count: n,
-                    fog_enable: u32::from(scene.fog_enable),
-                    fog_mul: scene.fog_mul as f32,
-                    fog_offset: scene.fog_offset as f32,
+                    _pad: [0; 3],
                 }),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
@@ -2445,6 +2438,10 @@ impl SceneRenderer {
                         binding: 7,
                         resource: dst.as_entire_binding(),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: fog_table.as_entire_binding(),
+                    },
                 ],
             });
             self.rsp.dispatch(&mut encoder, &rsp_bg, n);
@@ -2473,15 +2470,7 @@ impl SceneRenderer {
             for (i, run) in scene.draw_runs.iter().enumerate() {
                 let mat = &scene.materials[run.material_index as usize];
                 let rm = &scene.render_modes[run.render_mode_index as usize];
-                // C3: fog_color threaded from scene-global rdp.fog_color (normalized u8→f32).
-                let fc = scene.fog_color;
-                let fog_color = [
-                    fc[0] as f32 / 255.0,
-                    fc[1] as f32 / 255.0,
-                    fc[2] as f32 / 255.0,
-                    fc[3] as f32 / 255.0,
-                ];
-                let mut combiner = CombinerUniform::from_run(mat, rm, fog_color);
+                let mut combiner = CombinerUniform::from_run(mat, rm, run.fog_color);
                 combiner.inv_tex_size = triangle_inv_tex_size(mat);
                 let slot = bytemuck::bytes_of(&combiner);
                 pool[i * 256..i * 256 + slot.len()].copy_from_slice(slot);
@@ -2680,6 +2669,7 @@ impl SceneRenderer {
             let texcoord_table = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
             let lights_table = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
             let lookat_table = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
+            let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
             let dst = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("out-vertices"),
                 size: (n as u64) * 48,
@@ -2690,9 +2680,7 @@ impl SceneRenderer {
                 label: Some("rsp-params"),
                 contents: bytemuck::bytes_of(&RspProcessParams {
                     vertex_count: n,
-                    fog_enable: u32::from(scene.fog_enable),
-                    fog_mul: scene.fog_mul as f32,
-                    fog_offset: scene.fog_offset as f32,
+                    _pad: [0; 3],
                 }),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
@@ -2731,6 +2719,10 @@ impl SceneRenderer {
                     wgpu::BindGroupEntry {
                         binding: 7,
                         resource: dst.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: fog_table.as_entire_binding(),
                     },
                 ],
             });
@@ -2772,15 +2764,7 @@ impl SceneRenderer {
             for (i, run) in scene.draw_runs.iter().enumerate() {
                 let mat = &scene.materials[run.material_index as usize];
                 let rm = &scene.render_modes[run.render_mode_index as usize];
-                // C3: fog_color threaded from scene-global rdp.fog_color (normalized u8→f32).
-                let fc = scene.fog_color;
-                let fog_color = [
-                    fc[0] as f32 / 255.0,
-                    fc[1] as f32 / 255.0,
-                    fc[2] as f32 / 255.0,
-                    fc[3] as f32 / 255.0,
-                ];
-                let mut combiner = CombinerUniform::from_run(mat, rm, fog_color);
+                let mut combiner = CombinerUniform::from_run(mat, rm, run.fog_color);
                 combiner.inv_tex_size = triangle_inv_tex_size(mat);
                 let slot = bytemuck::bytes_of(&combiner);
                 pool[i * 256..i * 256 + slot.len()].copy_from_slice(slot);
@@ -3237,13 +3221,6 @@ impl SceneRenderer {
 
         // --- Op-count uniform pool (BLOCKER 3): one 256-byte slot per DRAWING op (Tris/FillRect/
         // TexRect), walked across every pair in order. `SetScissor` carries no slot. ---
-        let fc = scene.fog_color;
-        let fog_color = [
-            fc[0] as f32 / 255.0,
-            fc[1] as f32 / 255.0,
-            fc[2] as f32 / 255.0,
-            fc[3] as f32 / 255.0,
-        ];
         // FB extent for a pair: color_image.width × size_extent.1 (scissor.lry, else 240).
         // Computed identically in the pool/vertex build below and the per-pair render loop.
         let fb_dims = |pair: &crate::hle::FramebufferPair| -> (u32, u32) {
@@ -3279,7 +3256,7 @@ impl SceneRenderer {
                     crate::hle::SceneOp::Tris(run) => {
                         let mat = &scene.materials[run.material_index as usize];
                         let rm = &scene.render_modes[run.render_mode_index as usize];
-                        let mut u = CombinerUniform::from_run(mat, rm, fog_color);
+                        let mut u = CombinerUniform::from_run(mat, rm, run.fog_color);
                         u.inv_tex_size = triangle_inv_tex_size(mat);
                         push_slot(&mut pool, &u);
                     }
@@ -3293,6 +3270,7 @@ impl SceneRenderer {
                         copy_mode,
                         material_index,
                         render_mode_index,
+                        fog_color,
                         ..
                     } => {
                         let mat = &scene.materials[*material_index as usize];
@@ -3307,7 +3285,7 @@ impl SceneRenderer {
                             CombinerUniform::tex_copy(rm, mat.fmt)
                         } else {
                             let rm = &scene.render_modes[*render_mode_index as usize];
-                            CombinerUniform::from_rect(mat, rm, fog_color)
+                            CombinerUniform::from_rect(mat, rm, *fog_color)
                         };
                         push_slot(&mut pool, &u);
                         // COPY cycle scales the horizontal step by 4 (4 px/cycle): dsdx >>= 2.
@@ -3698,13 +3676,6 @@ impl SceneRenderer {
         //    `rect_vbuf`, and the per-pair `fb_dims` closure). ──
         // --- Op-count uniform pool (BLOCKER 3): one 256-byte slot per DRAWING op (Tris/FillRect/
         // TexRect), walked across every pair in order. `SetScissor` carries no slot. ---
-        let fc = scene.fog_color;
-        let fog_color = [
-            fc[0] as f32 / 255.0,
-            fc[1] as f32 / 255.0,
-            fc[2] as f32 / 255.0,
-            fc[3] as f32 / 255.0,
-        ];
         // FB extent for a pair: color_image.width × size_extent.1 (scissor.lry, else 240).
         // Computed identically in the pool/vertex build below and the per-pair render loop.
         let fb_dims = |pair: &crate::hle::FramebufferPair| -> (u32, u32) {
@@ -3740,7 +3711,7 @@ impl SceneRenderer {
                     crate::hle::SceneOp::Tris(run) => {
                         let mat = &scene.materials[run.material_index as usize];
                         let rm = &scene.render_modes[run.render_mode_index as usize];
-                        let mut u = CombinerUniform::from_run(mat, rm, fog_color);
+                        let mut u = CombinerUniform::from_run(mat, rm, run.fog_color);
                         u.inv_tex_size = triangle_inv_tex_size(mat);
                         push_slot(&mut pool, &u);
                     }
@@ -3754,6 +3725,7 @@ impl SceneRenderer {
                         copy_mode,
                         material_index,
                         render_mode_index,
+                        fog_color,
                         ..
                     } => {
                         let mat = &scene.materials[*material_index as usize];
@@ -3768,7 +3740,7 @@ impl SceneRenderer {
                             CombinerUniform::tex_copy(rm, mat.fmt)
                         } else {
                             let rm = &scene.render_modes[*render_mode_index as usize];
-                            CombinerUniform::from_rect(mat, rm, fog_color)
+                            CombinerUniform::from_rect(mat, rm, *fog_color)
                         };
                         push_slot(&mut pool, &u);
                         // COPY cycle scales the horizontal step by 4 (4 px/cycle): dsdx >>= 2.
@@ -4222,6 +4194,18 @@ pub mod rsp_buffers {
                 modify_screen: scene.modify_screen.get(i).copied().unwrap_or([0.0; 4]),
             })
             .collect()
+    }
+
+    pub fn fog_table(scene: &crate::hle::Scene) -> Vec<[f32; 2]> {
+        if scene.fog_table.is_empty() {
+            vec![[0.0; 2]]
+        } else {
+            scene
+                .fog_table
+                .iter()
+                .map(|pair| pair.map(f32::from))
+                .collect()
+        }
     }
 
     pub fn lookat_table(scene: &crate::hle::Scene) -> Vec<GpuLookAt> {
