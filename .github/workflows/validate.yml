@@ -32,6 +32,11 @@ jobs:
       matrix:
         os: [macos-14, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      # WARP is a CPU rasterizer; parallel GPU tests starve each other and have crashed the
+      # process with STATUS_ACCESS_VIOLATION.
+      RUST_TEST_THREADS: ${{ matrix.os == 'windows-latest' && '1' || '' }}
+      RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@v4
       - name: test (default)
