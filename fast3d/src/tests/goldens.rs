@@ -226,9 +226,10 @@ fn render_scene_with_device(
     let pipeline = TexturedPipeline::new(&device, format, DEPTH_FORMAT);
     let mut material_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(scene.materials.len());
     for mat in &scene.materials {
+        let [upload_w, upload_h] = mat.sampling.allocation_extent();
         let tex_size = wgpu::Extent3d {
-            width: mat.tex_w,
-            height: mat.tex_h,
+            width: upload_w,
+            height: upload_h,
             depth_or_array_layers: 1,
         };
         let gpu_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -251,8 +252,8 @@ fn render_scene_with_device(
             &mat.texture,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(mat.tex_w * 4),
-                rows_per_image: Some(mat.tex_h),
+                bytes_per_row: Some(upload_w * 4),
+                rows_per_image: Some(upload_h),
             },
             tex_size,
         );
@@ -305,6 +306,9 @@ fn render_scene_with_device(
                 binding: b,
                 resource: wgpu::BindingResource::TextureView(&tex_view),
             }))
+            .chain([crate::render::sampling_entry(
+                &crate::render::sampling_buffer(&device, &crate::render::material_sampling(mat)),
+            )])
             .collect::<Vec<_>>(),
         });
         material_bgs.push(bg);
@@ -1826,6 +1830,7 @@ fn fill_rect_scene(
 /// A 1×1-texel material whose decoded RGBA8 is exactly `rgba` (so any sampled point returns it).
 fn tex1x1_material(rgba: [u8; 4]) -> crate::hle::Material {
     crate::hle::Material {
+        sampling: Default::default(),
         texture: rgba.to_vec(),
         tex_w: 1,
         tex_h: 1,
@@ -2278,6 +2283,18 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
         255, 0, 0, 0, 255, 0, 0, 0, // row 1 — α=0   (alpha-keyed hole)
     ];
     let material = Material {
+        sampling: crate::hle::tile_sampling::TileSampling::from_tile(
+            &crate::hle::rdp::TileDescriptor {
+                width: 2,
+                height: 2,
+                lrs: 4,
+                lrt: 4,
+                masks: 1,
+                maskt: 1,
+                ..Default::default()
+            },
+            0,
+        ),
         texture,
         tex_w: 2,
         tex_h: 2,
@@ -2401,6 +2418,7 @@ fn build_decal_scene() -> crate::hle::Scene {
     // PRIM-passthrough combiner (combine_l=0, combine_h=0xC3 → cd1=PRIM, ad1=PRIM).
     let selectors = crate::hle::combiner::decode_combine(0x0000_0000, 0x0000_00C3);
     let mat = |prim: [u8; 4]| crate::hle::Material {
+        sampling: Default::default(),
         texture: vec![255u8, 255, 255, 255],
         tex_w: 1,
         tex_h: 1,

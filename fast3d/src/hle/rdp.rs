@@ -196,9 +196,8 @@ fn set_tile_size<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     t.ult = c.p0(0, 12) as u16;
     t.lrs = c.p1(12, 12) as u16;
     t.lrt = c.p1(0, 12) as u16;
-    // lr_s/lr_t are in 10.2 fixed point; texel dims = (lrs>>2)+1, (lrt>>2)+1.
-    t.width = (t.lrs >> 2) + 1;
-    t.height = (t.lrt >> 2) + 1;
+    t.width = ((i32::from(t.lrs) - i32::from(t.uls)).div_euclid(4) + 1).max(1) as u16;
+    t.height = ((i32::from(t.lrt) - i32::from(t.ult)).div_euclid(4) + 1).max(1) as u16;
     cx.rsp.material_dirty = true;
 }
 
@@ -373,6 +372,29 @@ mod tests {
         };
         t[cmd.opcode() as usize](&cmd, &mut cx);
         (rdp, diags)
+    }
+
+    #[test]
+    fn tile_size_subtracts_origin() {
+        for (ul, lr, expected) in [
+            ([12, 20], [24, 28], [4, 3]),
+            ([3, 7], [6, 14], [1, 2]),
+            ([20, 40], [4, 0], [1, 1]),
+        ] {
+            let (rdp, diags) = run_cmd(
+                &[],
+                Rdp::default(),
+                0xf200_0000 | (ul[0] << 12) | ul[1],
+                (lr[0] << 12) | lr[1],
+            );
+            assert!(diags.is_empty());
+            let tile = &rdp.tiles[0];
+            assert_eq!([tile.width, tile.height], expected);
+            assert_eq!(
+                [tile.uls, tile.ult, tile.lrs, tile.lrt],
+                [ul[0] as u16, ul[1] as u16, lr[0] as u16, lr[1] as u16]
+            );
+        }
     }
 
     #[test]
