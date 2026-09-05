@@ -2,8 +2,12 @@
 //!
 //! Convention (pinned): combine_l = w0, combine_h = w1; combine64 = (w1 << 32) | w0.
 //!
-//! decode_combine exists ONLY for the unwired-selector diagnostic; the shader receives
+//! decode_combine validates support and texture dependencies; the shader receives
 //! raw combine_l/combine_h words (one source of truth).
+
+#[cfg(test)]
+#[path = "combiner_tests.rs"]
+mod fidelity_tests;
 
 /// Extract `n` bits from `v` starting at bit `pos`.
 #[inline]
@@ -61,6 +65,9 @@ impl ColorIn {
                 // `build_material` (this table is cycle-agnostic).
                 | ColorIn::Texel1
                 | ColorIn::Texel1Alpha
+                | ColorIn::PrimitiveAlpha
+                | ColorIn::ShadeAlpha
+                | ColorIn::EnvAlpha
                 // LOD_FRACTION / PRIM_LOD_FRAC wired: the WGSL color_c slot returns lod_fraction
                 // (the non-LOD default 1.0) / lod_params.z (prim_lod_frac). No golden references
                 // these (byte-identity guarded by the scene mux-decode regression test).
@@ -239,38 +246,7 @@ pub struct CycleSel {
 }
 
 impl CycleSel {
-    /// Returns the slot names of unwired selectors in this cycle.
-    /// Returns `["CA", "CB", ...]` for any selector where `.wired()` is false.
-    pub fn unwired(&self) -> Vec<&'static str> {
-        let mut out = Vec::new();
-        if !self.ca.wired() {
-            out.push("CA");
-        }
-        if !self.cb.wired() {
-            out.push("CB");
-        }
-        if !self.cc.wired() {
-            out.push("CC");
-        }
-        if !self.cd.wired() {
-            out.push("CD");
-        }
-        if !self.aa.wired() {
-            out.push("AA");
-        }
-        if !self.ab.wired() {
-            out.push("AB");
-        }
-        if !self.ac.wired() {
-            out.push("AC");
-        }
-        if !self.ad.wired() {
-            out.push("AD");
-        }
-        out
-    }
-
-    /// Bitmask of unwired slots (bit 0=CA … bit 7=AD; same order as `unwired`). `Copy`, feeds
+    /// Bitmask of unwired slots (bit 0=CA … bit 7=AD), feeding
     /// `DiagKind::UnwiredSelector`.
     pub fn unwired_mask(&self) -> u16 {
         let mut m = 0u16;
@@ -388,13 +364,13 @@ pub struct Material {
     pub texture: Vec<u8>,
     pub tex_w: u32,
     pub tex_h: u32,
-    /// Decoded selectors — used ONLY for the unwired diagnostic; shader gets raw words.
+    /// Decoded selectors for validation and texture dependencies; shader gets raw words.
     pub selectors: CombinerSelectors,
     /// Cycle type from othermode.H bits [21:20]. 0 = 1-cycle, 1 = 2-cycle.
     pub cycle_type: u32,
     pub prim: [u8; 4],
     pub env: [u8; 4],
-    /// True if SPTexture is on and the combiner uses TEXEL0.
+    /// Whether physical texture 0 is sampled; triangles also require SPTexture on.
     pub tex_enable: bool,
     /// Wrap mode from the render tile (cms/cmt): 0=WRAP 1=MIRROR 2=CLAMP. Consumed by the renderer sampler.
     pub wrap_s: u8,
@@ -517,25 +493,45 @@ fn cycle_uses_texel0(c: &CycleSel) -> bool {
         || c.ad == AlphaIn::Texel0
 }
 
-/// Returns true if the combiner words reference TEXEL0 in cycle 1 (the 1-cycle canonical slot).
-fn combiner_uses_texel0(combine_l: u32, combine_h: u32) -> bool {
-    cycle_uses_texel0(&decode_combine(combine_l, combine_h).cyc1)
+fn validate_combiner(
+    selectors: &CombinerSelectors,
+    cycle_type: u32,
+    diags: &mut Vec<crate::diag::Diagnostic>,
+    pc: u64,
+) -> bool {
+    let slots = match cycle_type {
+        0 => selectors.cyc1.unwired_mask() | selectors.cyc1.texel1_mask(),
+        1 => (selectors.cyc0.unwired_mask() << 8) | selectors.cyc1.unwired_mask(),
+        _ => 0,
+    };
+    if slots == 0 {
+        return true;
+    }
+    diags.push(crate::diag::Diagnostic {
+        at: pc,
+        kind: crate::diag::DiagKind::UnwiredSelector { slots },
+    });
+    false
+}
+
+fn physical_texture_uses(sel: &CombinerSelectors, cycle_type: u32) -> (bool, bool) {
+    match cycle_type {
+        0 => (cycle_uses_texel0(&sel.cyc1), false),
+        1 => (
+            cycle_uses_texel0(&sel.cyc0) || cyc_sel_uses_texel1(&sel.cyc1),
+            cycle_uses_texel1(sel, cycle_type),
+        ),
+        2 => (true, false),
+        _ => (false, false),
+    }
 }
 
 /// Returns true if a single combiner CYCLE references TEXEL1 in any color/alpha slot
-/// (TEXEL1 or TEXEL1_ALPHA). Cycle-agnostic; the 1-cycle gate lives in `cycle_uses_texel1`.
+/// (TEXEL1 or TEXEL1_ALPHA).
 fn cyc_sel_uses_texel1(c: &CycleSel) -> bool {
     c.texel1_mask() != 0
 }
 
-/// True iff the SECOND texture (tile base+1) is sampled. Only
-/// meaningful in 2-cycle mode, so 1-cycle / COPY / FILL always return false.
-///
-/// In 2-cycle mode this accounts for the N64 pipelined TEXEL0<->TEXEL1 role swap (
-/// in the second cycle a TEXEL0 selector reads `texVal1`, the base+1 tile). So the second texture is
-/// used iff `cyc0` references TEXEL1/_ALPHA (reads `texVal1` directly) OR `cyc1` references
-/// TEXEL0/_ALPHA (reads `texVal1` via the swap) — a raw TEXEL1 token scan of both cycles would be
-/// wrong, since a `cyc1` TEXEL1 reference reads `texVal0` under the swap.
 fn cycle_uses_texel1(sel: &CombinerSelectors, cycle_type: u32) -> bool {
     if cycle_type != 1 {
         return false;
@@ -611,138 +607,61 @@ fn decode_tile_texture(
     }
 }
 
-/// Build a `Material` from the final RDP/RSP state after the dispatch loop.
-///
-/// Called AFTER the dispatch loop in `interpret()` (covers ENDDL and run-off-end).
-/// Returns `None` if any combiner selector is unwired (and pushes a diagnostic).
+/// Build a triangle material, diagnosing unsupported selectors or missing textures.
 pub fn build_material(
     rdp: &crate::hle::rdp::Rdp,
     rsp: &crate::hle::rsp::Rsp,
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
 ) -> Option<Material> {
+    build_material_inner(rdp, rsp, diags, pc, false)
+}
+
+fn build_material_inner(
+    rdp: &crate::hle::rdp::Rdp,
+    rsp: &crate::hle::rsp::Rsp,
+    diags: &mut Vec<crate::diag::Diagnostic>,
+    pc: u64,
+    rect: bool,
+) -> Option<Material> {
     let selectors = decode_combine(rdp.combine_l, rdp.combine_h);
-    // cycle_type from bits [21:20] of other_mode_h.
     let cycle_type = (rdp.other_mode_h >> 20) & 3;
-
-    // usesTexel1: true only in 2-cycle mode with a TEXEL1 selector (false in 1-cycle).
-    let uses_texel1 = cycle_uses_texel1(&selectors, cycle_type);
-
-    // 1-cycle TEXEL1 gate: TEXEL1 is wired, so `cyc1.unwired()` no longer flags a stray TEXEL1 —
-    // refuse-to-draw + diagnose a TEXEL1 reference outside 2-cycle mode explicitly. Gating on
-    // `cycle_type != 1` (not `!uses_texel1`) keeps a legitimate 2-cycle `cyc1` TEXEL1 reference
-    // drawable: under the role swap it reads the FIRST texture, so `usesTexture(1)` is false and a
-    // `!uses_texel1` guard would wrongly refuse it. Runs before the empty-tmem split.
-    if cycle_type != 1 && cyc_sel_uses_texel1(&selectors.cyc1) {
-        diags.push(crate::diag::Diagnostic {
-            at: pc,
-            kind: crate::diag::DiagKind::UnwiredSelector {
-                slots: selectors.cyc1.texel1_mask(),
-            },
-        });
+    if !validate_combiner(&selectors, cycle_type, diags, pc) {
         return None;
     }
-
-    // TMEM gate: if no LoadBlock was executed, only diagnose+refuse when the combiner
-    // actually references TEXEL0 (a texture-sampling combiner with no texture loaded).
-    // SHADE-only / PRIMITIVE / ENVIRONMENT combiners are textureless by design; they
-    // proceed with an empty texture so the material is still produced and the scene renders.
-    if rdp.tmem.is_empty() {
-        if rdp.combine_l == 0 && rdp.combine_h == 0 {
-            // Combiner never configured — DL did not reach a SetCombine; skip silently.
+    let (uses_physical0, uses_physical1) = physical_texture_uses(&selectors, cycle_type);
+    if rdp.tmem.is_empty() && cycle_type < 2 {
+        if !rect && rdp.combine_l == 0 && rdp.combine_h == 0 {
             return None;
         }
-        if combiner_uses_texel0(rdp.combine_l, rdp.combine_h) {
+        if uses_physical0 || uses_physical1 {
             diags.push(crate::diag::Diagnostic {
                 at: pc,
                 kind: crate::diag::DiagKind::NoTextureLoaded,
             });
             return None;
         }
-        // Textureless combiner (SHADE / PRIMITIVE / etc.) — build a 1×1 dummy texture so
-        // the rest of build_material can proceed normally; tex_enable will be false.
-        let unwired = selectors.cyc1.unwired();
-        if !unwired.is_empty() {
-            diags.push(crate::diag::Diagnostic {
-                at: pc,
-                kind: crate::diag::DiagKind::UnwiredSelector {
-                    slots: selectors.cyc1.unwired_mask(),
-                },
-            });
-            return None;
-        }
-        return Some(Material {
-            texture: vec![0u8; 4], // 1×1 dummy — tex_enable will be false
-            tex_w: 1,
-            tex_h: 1,
-            selectors,
-            cycle_type,
-            prim: rdp.prim,
-            env: rdp.env,
-            tex_enable: false,
-            wrap_s: 2,
-            wrap_t: 2,
-            fmt: 0,
-            siz: 0,
-            blend_color: rdp.blend_color,
-            tile_count: 0, // textureless
-            tex1: None,
-            prim_lod_frac: rdp.prim_lod_frac,
-            prim_min_level: rdp.prim_min_level,
-            lod: false,
-            num_levels: 1,
-            text_detail: 0,
-            mip_levels: Vec::new(),
-            detail_tex: None,
-        });
     }
 
-    // 1-cycle mode uses cycle-1 (index-1) slots (F3DEX2 convention).
-    let unwired = selectors.cyc1.unwired();
-    if !unwired.is_empty() {
-        diags.push(crate::diag::Diagnostic {
-            at: pc,
-            kind: crate::diag::DiagKind::UnwiredSelector {
-                slots: selectors.cyc1.unwired_mask(),
-            },
-        });
-        return None;
-    }
-
-    // Base render tile = the G_TEXTURE tile field (tracked on `rsp.texture_state.tile`).
-    // TEXEL0 <- tiles[base]; TEXEL1 <- tiles[(base+1) & 7]. All existing goldens use
-    // G_TX_RENDERTILE (0), so base == 0 for them and tex0 is byte-identical to the old `tiles[0]`.
-    let base = (rsp.texture_state.tile & 7) as usize;
-    let tile = &rdp.tiles[base];
-    let tex_w = tile.width.max(1) as u32;
-    let tex_h = tile.height.max(1) as u32;
-
-    let tlut_fmt = ((rdp.other_mode_h >> 14) & 0x3) as u8; // G_MDSFT_TEXTLUT
-    let texture = decode_tile_texture(rdp, tile, tex_w, tex_h, tlut_fmt);
-
-    // tex_enable: SPTexture on AND the combiner samples the FIRST texture. This is the mirror of
-    // `cycle_uses_texel1`: the WGSL TEXEL0<->TEXEL1 role swap makes a cyc1
-    // TEXEL1 selector read the first texture. That swap is active only when `uses_texel1`
-    // (tex_enable1); for single-texture draws it collapses to no-swap, so the swap-aware form is
-    // gated on `uses_texel1` to keep every 1-cycle and single-texture 2-cycle golden byte-identical.
-    let uses_texel0 = if cycle_type == 1 && uses_texel1 {
-        // 2-cycle two-texture (swap active): usesTexture(0) = cyc0-TEXEL0 OR cyc1-TEXEL1.
-        cycle_uses_texel0(&selectors.cyc0) || cyc_sel_uses_texel1(&selectors.cyc1)
-    } else {
-        // 1-cycle, or 2-cycle single-texture (no swap). 2-cycle checks BOTH cycles (sm64 fog terrain
-        // puts TEXEL0*SHADE in cycle 0, fog/pass in cyc1).
-        cycle_uses_texel0(&selectors.cyc1)
-            || (cycle_type == 1 && cycle_uses_texel0(&selectors.cyc0))
-    };
-    let tex_enable = rsp.texture_state.on && uses_texel0;
-
-    // tileCount decision: usesTexel1 (2-cycle only) -> 2; else usesTexel0 -> 1; else 0.
-    let tile_count: u8 = if uses_texel1 {
-        2
-    } else if uses_texel0 {
-        1
-    } else {
+    let base = if rect {
         0
+    } else {
+        (rsp.texture_state.tile & 7) as usize
+    };
+    let tile = &rdp.tiles[base];
+    let tlut_fmt = ((rdp.other_mode_h >> 14) & 0x3) as u8;
+    let (texture, tex_w, tex_h) = if uses_physical0 {
+        let w = tile.width.max(1) as u32;
+        let h = tile.height.max(1) as u32;
+        (decode_tile_texture(rdp, tile, w, h, tlut_fmt), w, h)
+    } else {
+        (vec![0; 4], 1, 1)
+    };
+    let tex_enable = (rect || rsp.texture_state.on) && uses_physical0;
+    let tile_count = if uses_physical1 {
+        2
+    } else {
+        u8::from(uses_physical0)
     };
 
     // When tileCount == 2, decode the SECOND texture from tiles[(base+1)&7]. The legacy fallback
@@ -782,52 +701,55 @@ pub fn build_material(
     // takes the faithful `sample_tile` decode path; a level that would need the legacy linear
     // fallback (which ignores `tmem_addr` and could read the wrong bank) forces `lod = false`,
     // byte-identical to the non-LOD path. The count is capped at `MAX_LOD_LEVELS`.
-    let (lod, num_levels, mip_levels, text_detail, detail_tex) =
-        if rdp.lod_enable() && rsp.texture_state.level > 0 {
-            let n = (rsp.texture_state.level as u32 + 1).min(MAX_LOD_LEVELS);
-            let mut levels: Vec<MipLevel> = Vec::with_capacity(n as usize);
-            let mut faithful = true;
-            for k in 0..n {
-                let tk = &rdp.tiles[(base + k as usize) & 7];
-                let lw = tk.width.max(1) as u32;
-                let lh = tk.height.max(1) as u32;
-                if !tile_takes_faithful_path(rdp, tk, lw) {
-                    faithful = false;
-                    break;
-                }
-                levels.push(MipLevel {
-                    texture: decode_tile_texture(rdp, tk, lw, lh, tlut_fmt),
-                    w: lw,
-                    h: lh,
-                });
+    let (lod, num_levels, mip_levels, text_detail, detail_tex) = if !rect
+        && (uses_physical0 || uses_physical1)
+        && rdp.lod_enable()
+        && rsp.texture_state.level > 0
+    {
+        let n = (rsp.texture_state.level as u32 + 1).min(MAX_LOD_LEVELS);
+        let mut levels: Vec<MipLevel> = Vec::with_capacity(n as usize);
+        let mut faithful = true;
+        for k in 0..n {
+            let tk = &rdp.tiles[(base + k as usize) & 7];
+            let lw = tk.width.max(1) as u32;
+            let lh = tk.height.max(1) as u32;
+            if !tile_takes_faithful_path(rdp, tk, lw) {
+                faithful = false;
+                break;
             }
-            if faithful {
-                // DETAIL mode (text_detail bit1): the DETAIL tile is the finest tile (index 0),
-                // decoded independently. Only carried when it also takes the faithful path.
-                let td = rdp.text_detail();
-                let detail = if td & 0b10 != 0 {
-                    let dt = &rdp.tiles[0];
-                    let dw = dt.width.max(1) as u32;
-                    let dh = dt.height.max(1) as u32;
-                    if tile_takes_faithful_path(rdp, dt, dw) {
-                        Some(MipLevel {
-                            texture: decode_tile_texture(rdp, dt, dw, dh, tlut_fmt),
-                            w: dw,
-                            h: dh,
-                        })
-                    } else {
-                        None
-                    }
+            levels.push(MipLevel {
+                texture: decode_tile_texture(rdp, tk, lw, lh, tlut_fmt),
+                w: lw,
+                h: lh,
+            });
+        }
+        if faithful {
+            // DETAIL mode (text_detail bit1): the DETAIL tile is the finest tile (index 0),
+            // decoded independently. Only carried when it also takes the faithful path.
+            let td = rdp.text_detail();
+            let detail = if td & 0b10 != 0 {
+                let dt = &rdp.tiles[0];
+                let dw = dt.width.max(1) as u32;
+                let dh = dt.height.max(1) as u32;
+                if tile_takes_faithful_path(rdp, dt, dw) {
+                    Some(MipLevel {
+                        texture: decode_tile_texture(rdp, dt, dw, dh, tlut_fmt),
+                        w: dw,
+                        h: dh,
+                    })
                 } else {
                     None
-                };
-                (true, n as u8, levels, td, detail)
+                }
             } else {
-                (false, 1u8, Vec::new(), 0u8, None)
-            }
+                None
+            };
+            (true, n as u8, levels, td, detail)
         } else {
             (false, 1u8, Vec::new(), 0u8, None)
-        };
+        }
+    } else {
+        (false, 1u8, Vec::new(), 0u8, None)
+    };
 
     Some(Material {
         texture,
@@ -855,57 +777,14 @@ pub fn build_material(
     })
 }
 
-/// Build a `Material` for a 2D rectangle (TEXRECT). NON-generic, mirroring
-/// `build_material(rdp, rsp, diags, pc)` — but a TEXRECT ALWAYS samples its tile, so this path
-/// forces `tex_enable = true` and never returns `None` (it bypasses build_material's four
-/// `return None` gates: empty-tmem, TEXEL0-without-texture, and the two unwired-selector exits).
-/// `gsSPTexture(G_ON/G_OFF)` only scales triangle texcoords; it does NOT gate a texture rectangle.
-/// `cycle_type` is read from othermode.H bits [21:20] for both COPY and non-COPY rects.
-///
-/// `diags`/`pc` are accepted for signature-parity with `build_material` (no diagnostics are
-/// emitted on this path).
+/// Build a TexRect material independently of the triangle SPTexture enable and tile state.
 pub fn build_rect_material(
     rdp: &crate::hle::rdp::Rdp,
     rsp: &crate::hle::rsp::Rsp,
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
-) -> Material {
-    let _ = (diags, pc, rsp); // signature-parity with build_material; unused on this path.
-    let selectors = decode_combine(rdp.combine_l, rdp.combine_h);
-    let cycle_type = (rdp.other_mode_h >> 20) & 3;
-
-    let tile = &rdp.tiles[0];
-    let tex_w = tile.width.max(1) as u32;
-    let tex_h = tile.height.max(1) as u32;
-
-    let tlut_fmt = ((rdp.other_mode_h >> 14) & 0x3) as u8; // G_MDSFT_TEXTLUT
-    let texture = decode_tile_texture(rdp, tile, tex_w, tex_h, tlut_fmt);
-
-    Material {
-        texture,
-        tex_w,
-        tex_h,
-        selectors,
-        cycle_type,
-        prim: rdp.prim,
-        env: rdp.env,
-        tex_enable: true, // a TEXRECT always samples its tile, regardless of gsSPTexture state
-        wrap_s: tile.cms,
-        wrap_t: tile.cmt,
-        fmt: tile.fmt,
-        siz: tile.siz,
-        blend_color: rdp.blend_color,
-        // A TEXRECT always samples its single tile — one texture, never a second.
-        tile_count: 1,
-        tex1: None,
-        prim_lod_frac: rdp.prim_lod_frac,
-        prim_min_level: rdp.prim_min_level,
-        lod: false,
-        num_levels: 1,
-        text_detail: 0,
-        mip_levels: Vec::new(),
-        detail_tex: None,
-    }
+) -> Option<Material> {
+    build_material_inner(rdp, rsp, diags, pc, true)
 }
 
 #[cfg(test)]
@@ -928,8 +807,8 @@ mod tests {
         assert_eq!(cs.cyc1.ab, AlphaIn::Zero);
         assert_eq!(cs.cyc1.ac, AlphaIn::Zero);
         assert_eq!(cs.cyc1.ad, AlphaIn::Shade);
-        assert!(cs.cyc1.unwired().is_empty()); // all wired
-                                               // cycle 0 decodes identically (combine duplicated into both cycle slots)
+        assert!(cs.cyc1.unwired_mask() == 0); // all wired
+                                              // cycle 0 decodes identically (combine duplicated into both cycle slots)
         assert_eq!(cs.cyc0.ca, ColorIn::Texel0);
         assert_eq!(cs.cyc0.cc, ColorIn::Shade);
         assert_eq!(cs.cyc0.ad, AlphaIn::Shade);
@@ -1005,7 +884,7 @@ mod tests {
     fn normal_modulate_reports_no_unwired_alpha_c() {
         // alpha-C decodes to A_ZERO (index 7) in MODULATE -> NOT in the unwired list.
         let cs = decode_combine(0xFC12_7E24, 0xFFFF_F9FC);
-        assert!(!cs.cyc1.unwired().contains(&"AC"));
+        assert!(cs.cyc1.unwired_mask() & 0x40 == 0);
     }
 
     #[test]
@@ -1014,7 +893,7 @@ mod tests {
         let cs = decode_combine(0xFC00_0002, 0x001C_0000); // H bit18..20 = 7
         assert_eq!(cs.cyc1.cc, ColorIn::Texel1);
         // TEXEL1 is wired, so it no longer appears in the unwired diagnostic list...
-        assert!(cs.cyc1.unwired().is_empty());
+        assert!(cs.cyc1.unwired_mask() == 0);
         // ...but texel1_mask still flags color-C so the 1-cycle refuse path can diagnose it.
         assert_eq!(cs.cyc1.texel1_mask(), 0b0000_0100); // bit 2 = CC
         assert!(cyc_sel_uses_texel1(&cs.cyc1));

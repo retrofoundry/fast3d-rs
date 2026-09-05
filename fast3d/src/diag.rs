@@ -37,7 +37,7 @@ pub enum DiagKind {
     /// path; the legacy fallback ignores `tmem_addr` and would read tex0's TMEM, so we refuse-to-draw
     /// rather than mis-decode it.
     SecondTextureUndecodable,
-    /// CA/CB/CC/CD/AA/AB/AC/AD combiner-slot bitmask (bit i = slot i, see `SEL_SLOTS`).
+    /// CA/CB/CC/CD/AA/AB/AC/AD slots: low eight bits cycle 1, high eight bits cycle 0.
     UnwiredSelector {
         slots: u16,
     },
@@ -47,10 +47,10 @@ pub enum DiagKind {
 /// `combiner::CycleSel::unwired_mask` (which produces the mask this decodes).
 const SEL_SLOTS: [&str; 8] = ["CA", "CB", "CC", "CD", "AA", "AB", "AC", "AD"];
 
-fn unwired_slot_names(slots: u16) -> Vec<&'static str> {
-    (0..8)
+fn unwired_slot_names(slots: u16) -> Vec<String> {
+    (0..16)
         .filter(|i| slots & (1 << i) != 0)
-        .map(|i| SEL_SLOTS[i])
+        .map(|i| format!("cycle {} {}", if i < 8 { 1 } else { 0 }, SEL_SLOTS[i % 8]))
         .collect()
 }
 
@@ -223,7 +223,7 @@ mod tests {
         );
         assert_eq!(
             DiagKind::UnwiredSelector { slots: 0b0100 }.to_string(),
-            "combiner selector not implemented: [\"CC\"]"
+            "combiner selector not implemented: [\"cycle 1 CC\"]"
         );
         let d = Diagnostic {
             at: 0x1234,
