@@ -1118,11 +1118,11 @@ mod phase5_tests {
                 assert_eq!(*color_raw, 0xCAFE_F00D);
                 assert_eq!(
                     *tex_rect,
-                    Rect {
-                        ulx: 8,
-                        uly: 12,
-                        lrx: 31,
-                        lry: 35,
+                    crate::hle::TexRectBounds {
+                        ulx: 32,
+                        uly: 48,
+                        lrx: 124,
+                        lry: 140,
                     }
                 );
                 assert_eq!((*uls, *ult, *dsdx, *dtdy), (11, 13, 1024, 512));

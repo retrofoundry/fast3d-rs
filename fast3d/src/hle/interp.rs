@@ -182,22 +182,20 @@ pub fn interpret<M: Rdram>(
             }
             let cmd2 = mem.read_command(pc + 2 * stride);
 
-            // Screen rect (decoded to integer pixels via >>2). Fixed packs lrx/lry in cmd0.w0 and
-            // tile/ulx/uly in cmd0.w1; Float sign-extends 24-bit coords across cmd0/cmd1/cmd2.w0.
-            let (lrx, lry, _tile, ulx, uly) = match gbi.data_format {
+            let (lrx, lry, tile, ulx, uly) = match gbi.data_format {
                 crate::hle::mem::GbiDataFormat::Fixed => (
-                    (c.p0(12, 12) as i32) >> 2,
-                    (c.p0(0, 12) as i32) >> 2,
-                    c.p1(24, 3),
-                    (c.p1(12, 12) as i32) >> 2,
-                    (c.p1(0, 12) as i32) >> 2,
+                    c.p0(12, 12) as i32,
+                    c.p0(0, 12) as i32,
+                    c.p1(24, 3) as u8,
+                    c.p1(12, 12) as i32,
+                    c.p1(0, 12) as i32,
                 ),
                 crate::hle::mem::GbiDataFormat::Float => (
-                    sext24(c.w0) >> 2,
-                    sext24(c.w1) >> 2,
-                    c.p1(24, 3),
-                    sext24(cmd1.w0) >> 2,
-                    sext24(cmd2.w0) >> 2,
+                    sext24(c.w0),
+                    sext24(c.w1),
+                    c.p1(24, 3) as u8,
+                    sext24(cmd1.w0),
+                    sext24(cmd2.w0),
                 ),
             };
             // uls/ult/dsdx/dtdy occupy identical positions in both formats.
@@ -207,7 +205,7 @@ pub fn interpret<M: Rdram>(
             let dtdy = cmd2.w1 as i16;
             let flip = op == crate::hle::consts::G_TEXRECTFLIP;
             let copy_mode = ((rdp.other_mode_h >> 20) & 3) == crate::hle::consts::G_CYC_COPY;
-            let rect = crate::hle::rsp::Rect { ulx, uly, lrx, lry };
+            let rect = crate::hle::TexRectBounds { ulx, uly, lrx, lry };
 
             if !rec.have_seen_cimg {
                 // A 2D op needs a framebuffer target; one before the first CIMG is malformed → drop.
@@ -221,7 +219,7 @@ pub fn interpret<M: Rdram>(
             }
 
             let Some((material_index, render_mode_index)) =
-                crate::hle::rsp::snapshot_rect_run(&rsp, &rdp, &mut diags, &mut scene, pc)
+                crate::hle::rsp::snapshot_rect_run(&rsp, &rdp, tile, &mut diags, &mut scene, pc)
             else {
                 dropped_runs += 1;
                 pc += 3 * stride;
@@ -253,6 +251,7 @@ pub fn interpret<M: Rdram>(
                 .ops
                 .push(crate::hle::rsp::SceneOp::TexRect {
                     rect,
+                    tile,
                     uls,
                     ult,
                     dsdx,
@@ -876,12 +875,13 @@ mod rect_encoding_tests {
         assert_eq!(
             p.ops,
             vec![SceneOp::TexRect {
-                rect: Rect {
-                    ulx: 5,
-                    uly: 7,
-                    lrx: 320,
-                    lry: 240
+                rect: crate::hle::TexRectBounds {
+                    ulx: 20,
+                    uly: 28,
+                    lrx: 1280,
+                    lry: 960
                 },
+                tile: 0,
                 uls: 11,
                 ult: 13,
                 dsdx: 1024,
@@ -932,11 +932,11 @@ mod rect_encoding_tests {
                 assert!(*flip, "TEXRECTFLIP must set flip");
                 assert_eq!(
                     *rect,
-                    Rect {
-                        ulx: 5,
-                        uly: 7,
-                        lrx: 320,
-                        lry: 240
+                    crate::hle::TexRectBounds {
+                        ulx: 20,
+                        uly: 28,
+                        lrx: 1280,
+                        lry: 960
                     }
                 );
                 assert_eq!((*uls, *ult, *dsdx, *dtdy), (11, 13, 1024, 512));
@@ -1002,12 +1002,13 @@ mod rect_encoding_tests {
         assert_eq!(
             r.scene.framebuffer_pairs[0].ops,
             vec![SceneOp::TexRect {
-                rect: Rect {
-                    ulx: 5,
-                    uly: 7,
-                    lrx: 320,
-                    lry: 240
+                rect: crate::hle::TexRectBounds {
+                    ulx: 20,
+                    uly: 28,
+                    lrx: 1280,
+                    lry: 960
                 },
+                tile: 0,
                 uls: 11,
                 ult: 13,
                 dsdx: 1024,

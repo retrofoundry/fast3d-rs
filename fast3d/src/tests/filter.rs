@@ -61,7 +61,7 @@ fn assert_probes(cases: impl IntoIterator<Item = (Scene, [u8; 4])>) {
 }
 
 fn rect_scene(filters: &[(u32, bool)], uv: [i16; 2]) -> Scene {
-    use crate::hle::{ColorImage, FramebufferPair, Rect, SceneOp, Scissor};
+    use crate::hle::{ColorImage, FramebufferPair, SceneOp, Scissor};
     let mut result = scene(&state(0), [0.0; 2], 0, 0);
     result.materials.clear();
     result.draw_runs.clear();
@@ -76,12 +76,13 @@ fn rect_scene(filters: &[(u32, bool)], uv: [i16; 2]) -> Scene {
             .push(scene(&rdp, [0.0; 2], 0, 0).materials.remove(0));
         let x = 80 + i as i32 * 40;
         ops.push(SceneOp::TexRect {
-            rect: Rect {
-                ulx: x,
-                uly: 64,
-                lrx: x + 31,
-                lry: 95,
+            rect: crate::hle::TexRectBounds {
+                ulx: x * 4,
+                uly: 64 * 4,
+                lrx: (x + 31) * 4,
+                lry: 95 * 4,
             },
+            tile: 0,
             uls: uv[0],
             ult: uv[1],
             dsdx: 0,

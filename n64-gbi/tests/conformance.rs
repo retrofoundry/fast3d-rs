@@ -453,3 +453,23 @@ fn texture_filter_words_match_gbi() {
         assert_eq!(gdp_set_other_mode_h(12, 2, mode << 12), (0xe300_1201, data));
     }
 }
+
+#[test]
+fn texture_rectangle_words_match_gbi() {
+    assert_eq!(
+        gsp_texture_rectangle(5, 11, 38, 45, 3, 11, 0xfff3, 0xefff, 0xfdff, false),
+        [
+            (0xe402_602d, 0x0300_500b),
+            (0xe100_0000, 0x000b_fff3),
+            (0xf100_0000, 0xefff_fdff)
+        ]
+    );
+    assert_eq!(
+        gsp_texture_rectangle(0, 0, 36, 36, 7, 0, 0, 4096, 1024, true),
+        [
+            (0xe502_4024, 0x0700_0000),
+            (0xe100_0000, 0),
+            (0xf100_0000, 0x1000_0400)
+        ]
+    );
+}
