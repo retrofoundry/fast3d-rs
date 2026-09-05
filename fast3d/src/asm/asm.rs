@@ -286,6 +286,9 @@ fn build_palette_ci4(rgba8: &[u8]) -> Result<Vec<[u8; 4]>, String> {
 #[derive(Clone, Debug)]
 pub struct Image {
     pub rdram: Vec<u8>,
+    /// `(command byte address, 1-based source line)` for every 8-byte command word the assembler
+    /// emitted, sorted by address. Data (Vtx/Mtx/Vp/textures/lights) has no entry.
+    pub source_map: Vec<(u32, usize)>,
     /// Byte offset of the first command in `rdram` (8-aligned). The DL entry point.
     pub entry_addr: u32,
     pub vtx_addr: u32,
@@ -296,6 +299,17 @@ pub struct Image {
     pub light_addr: u32,
     /// Address of the first named LookAt block in `rdram` (0 if no LookAt was assembled).
     pub lookat_addr: u32,
+}
+
+impl Image {
+    /// The source line that produced the command word at `addr`, if `addr` is one.
+    pub fn line_at(&self, addr: u64) -> Option<usize> {
+        let addr = u32::try_from(addr).ok()?;
+        self.source_map
+            .binary_search_by_key(&addr, |&(addr, _)| addr)
+            .ok()
+            .map(|index| self.source_map[index].1)
+    }
 }
 
 fn push_word(buf: &mut Vec<u8>, w0: u32, w1: u32) {
@@ -999,6 +1013,7 @@ fn assemble_inner(
         persp_norm: &mtx_persp_norm,
         ci_pal: &encoded_textures.ci_palettes,
     };
+    let mut source_map = Vec::new();
     for (name, blk) in &blocks {
         // The pre-sized layout only holds when nothing has been diagnosed: a diagnosed command
         // (unknown symbol / texture) emits 0 words instead of its pre-sized count, desyncing the
@@ -1009,7 +1024,11 @@ fn assemble_inner(
             "block layout mismatch"
         );
         for (line, s) in blk {
+            let start = rdram.len();
             emit_stmt(&mut rdram, s, *line, &ctx, &mut diags);
+            for addr in (start..rdram.len()).step_by(8) {
+                source_map.push((addr as u32, *line));
+            }
         }
     }
 
@@ -1018,6 +1037,7 @@ fn assemble_inner(
     }
     Ok(Image {
         rdram,
+        source_map,
         entry_addr,
         vtx_addr,
         vp_addr,

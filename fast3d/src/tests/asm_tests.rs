@@ -31,6 +31,115 @@ gsSP1Triangle(0, 1, 2, 0)
 gsSPEndDisplayList()
 ";
 
+const SOURCE_MAP_SRC: &str = "\
+Mtx p = scale(0.015625)
+Mtx m = identity()
+Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
+Vtx { -48, -48, 0, 0, 0, 0, 255, 0, 0, 255 }
+Vtx {  48, -48, 0, 0, 0, 0, 0, 255, 0, 255 }
+Vtx {   0,  48, 0, 0, 0, 0, 0, 0, 255, 255 }
+
+gsSPMatrix(p, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPMatrix(m, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
+gsSPViewport(vp)
+gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE)
+gsSPVertex(verts, 3, 0)
+gsSP1Triangle(0, 1, 2, 0)
+gsSPEndDisplayList()
+";
+
+#[test]
+fn source_map_tracks_command_lines_and_excludes_data() {
+    let img = crate::asm::assemble_at_with_textures(SOURCE_MAP_SRC, 0.0, &[]).expect("assemble");
+    assert_eq!(img.source_map.len(), 9);
+    assert_eq!(img.rdram.len() - img.entry_addr as usize, 9 * 8);
+    for (index, line) in (8..=16).enumerate() {
+        let addr = img.entry_addr + index as u32 * 8;
+        assert_eq!(img.source_map[index], (addr, line));
+        assert_eq!(img.line_at(u64::from(addr)), Some(line));
+    }
+    assert_eq!(img.line_at(u64::from(img.vtx_addr)), None);
+    assert_eq!(img.line_at(u64::from(img.vp_addr)), None);
+    assert_eq!(img.line_at(u64::from(img.entry_addr) + 4), None);
+    assert_eq!(img.line_at(img.rdram.len() as u64), None);
+    assert_eq!(img.line_at((1u64 << 32) + u64::from(img.entry_addr)), None);
+    assert_eq!(img.line_at(u64::MAX), None);
+}
+
+#[test]
+fn source_map_tracks_every_texture_macro_word() {
+    for (format, gbi_format, size, words) in [("RGBA16", "RGBA", "16b", 7), ("CI8", "CI", "8b", 11)]
+    {
+        let source = format!(
+            "Texture tex = {{ 2, 2, {format} }}\n\n\
+gsDPLoadTextureBlock(tex, G_IM_FMT_{gbi_format}, G_IM_SIZ_{size}, 2, 2)\n\
+gsSPEndDisplayList()\n"
+        );
+        let rgba8 = [255; 16];
+        let img = crate::asm::assemble_at_with_textures(
+            &source,
+            0.0,
+            &[crate::asm::TextureInput {
+                name: "tex",
+                rgba8: &rgba8,
+                width: 2,
+                height: 2,
+            }],
+        )
+        .expect("assemble texture macro");
+        assert_eq!(img.source_map.len(), words + 1, "{format}");
+        assert_eq!(img.rdram.len() - img.entry_addr as usize, (words + 1) * 8);
+        for index in 0..words {
+            let addr = img.entry_addr + index as u32 * 8;
+            assert_eq!(img.source_map[index], (addr, 3));
+            assert_eq!(img.line_at(u64::from(addr)), Some(3));
+        }
+        assert_eq!(
+            img.source_map[words],
+            (img.entry_addr + words as u32 * 8, 4)
+        );
+        assert_eq!(img.line_at(u64::from(img.tex_addr)), None);
+    }
+}
+
+#[test]
+fn source_map_tracks_named_blocks_in_address_order() {
+    let source = "\
+Gfx sub[] = {
+  gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
+  gsSPEndDisplayList()
+}
+Gfx main[] = {
+  gsSPDisplayList(sub)
+  gsSPEndDisplayList()
+}
+";
+    let img = assemble(source).expect("assemble named blocks");
+    assert_eq!(img.source_map.len(), 4);
+    for (index, line) in [6, 7, 2, 3].into_iter().enumerate() {
+        let addr = img.entry_addr + index as u32 * 8;
+        assert_eq!(img.source_map[index], (addr, line));
+        assert_eq!(img.line_at(u64::from(addr)), Some(line));
+    }
+    assert_eq!(img.line_at(u64::from(img.entry_addr)), Some(6));
+}
+
+#[test]
+fn source_map_resolves_missing_render_mode_diagnostic() {
+    let source = SOURCE_MAP_SRC.replace("gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)", "");
+    let img = crate::asm::assemble_at_with_textures(&source, 0.0, &[]).expect("assemble");
+    let result = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    assert_eq!(result.diags.len(), 1, "{:?}", result.diags);
+    let diag = result
+        .diags
+        .iter()
+        .find(|diag| diag.kind == crate::diag::DiagKind::RenderModeNeverSet)
+        .expect("missing render mode diagnostic");
+    assert_eq!(img.line_at(diag.at), Some(16));
+}
+
 #[test]
 fn assembles_minimal_dl_layout() {
     let img: Image = assemble(SRC).expect("assemble ok");
