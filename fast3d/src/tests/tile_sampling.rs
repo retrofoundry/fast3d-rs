@@ -60,6 +60,41 @@ fn assert_probe(scene: &Scene, expected: [u8; 4]) {
 }
 
 #[test]
+fn filtered_triangles_sample_pixel_corners_with_perspective() {
+    for perspective in [false, true] {
+        for (cycle, filter, expected) in [(0, 0, 16), (0, 2, 54), (0, 3, 54), (2, 0, 16)] {
+            let mut state = rdp(tile());
+            state.combine_h = 0xfffc_f279;
+            state.other_mode_h = (cycle << 20) | (1 << 19) | (filter << 12);
+            let mut scene = scene(&state, [0.0; 2], 0);
+            scene.mvp_table.fill([
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0, if perspective { 1.0 } else { 0.0 }],
+                [0.0, 0.0, 0.0, 1.0],
+            ]);
+            for (pos, st) in scene.raw_pos.iter_mut().zip(&mut scene.raw_st) {
+                let x = 98.0 + (pos[0] + 32.0) / 4.0;
+                let y = 84.0 - pos[1] * (6.0 / 32.0);
+                let dx = x - 100.0;
+                let dy = y - 80.0;
+                let w = if perspective {
+                    1.0 / (1.0 + 0.1 * dx + 0.1 * dy)
+                } else {
+                    1.0
+                };
+                *pos = [(x - 160.0) / 160.0 * w, (120.0 - y) / 120.0 * w, w - 1.0];
+                *st = [
+                    (1.875 + 0.25 * dx + 0.5 * dy) * w,
+                    (0.75 - 0.125 * dx + 0.25 * dy) * w,
+                ];
+            }
+            assert_probe(&scene, [expected; 4]);
+        }
+    }
+}
+
+#[test]
 fn tile_origin_is_applied_after_shift_pixels() {
     assert_probe(
         &scene(
