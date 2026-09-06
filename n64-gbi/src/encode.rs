@@ -203,6 +203,27 @@ pub fn gsp_modifyvertex(vtx: u16, r#where: u8, val: u32) -> (u32, u32) {
     (w0, val)
 }
 
+/// F3DEX2 inclusive cache range; a common outside clip plane returns from the list.
+pub fn gsp_culldisplaylist(first: u16, last: u16) -> (u32, u32) {
+    (
+        shiftl(G_CULLDL as u32, 24, 8) | shiftl(first as u32, 1, 15),
+        shiftl(last as u32, 1, 15),
+    )
+}
+
+/// F3DEX2 RDPHALF_1 and BRANCH_Z: tail-branch when screen Z <= unsigned 16.16 `z`.
+pub fn gsp_branch_less_z_raw(addr: u32, vtx: u16, z: u32) -> [(u32, u32); 2] {
+    [
+        ((G_RDPHALF_1 as u32) << 24, addr),
+        (
+            shiftl(G_BRANCH_Z as u32, 24, 8)
+                | shiftl(vtx as u32 * 5, 12, 12)
+                | shiftl(vtx as u32 * 2, 0, 12),
+            z,
+        ),
+    ]
+}
+
 pub fn gsp_spnoop() -> (u32, u32) {
     ((G_SPNOOP as u32) << 24, 0)
 }

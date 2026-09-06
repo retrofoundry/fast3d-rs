@@ -556,3 +556,21 @@ fn quad_words_match_libultra() {
     assert_eq!(gsp_quad(3, 7, 12, 31), (0x0706_0e18, 0x0006_183e));
     assert_eq!(gsp_quad(127, 126, 125, 124), (0x07fe_fcfa, 0x00fe_faf8));
 }
+
+#[test]
+fn conditional_control_words_match_libultra() {
+    assert_eq!(gsp_culldisplaylist(0, 31), (0x0300_0000, 0x0000_003e));
+    assert_eq!(gsp_culldisplaylist(3, 7), (0x0300_0006, 0x0000_000e));
+    assert_eq!(
+        gsp_culldisplaylist(0x7ffe, 0x7fff),
+        (0x0300_fffc, 0x0000_fffe)
+    );
+    assert_eq!(
+        gsp_branch_less_z_raw(0x0700_1238, 3, 0x01ff_0000),
+        [(0xe100_0000, 0x0700_1238), (0x0400_f006, 0x01ff_0000)]
+    );
+    assert_eq!(
+        gsp_branch_less_z_raw(0x1234_5678, 31, u32::MAX),
+        [(0xe100_0000, 0x1234_5678), (0x0409_b03e, 0xffff_ffff)]
+    );
+}

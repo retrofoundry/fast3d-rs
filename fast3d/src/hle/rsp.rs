@@ -1,8 +1,8 @@
 //! Position and texcoord are transformed on the GPU (renderer compute kernel -> OutVertex);
-//! the CPU keeps the DL walk, RSP/RDP state, the G_CULL_FRONT swap, and state-index tables.
+//! the CPU keeps conditional control positions, RSP/RDP state, and state-index tables.
 
 use crate::hle::gbi::f3dex2::F3DEX2_CONSTS;
-use crate::hle::math::{identity, mul4, mul_col_vec3, Mat4};
+use crate::hle::math::{identity, mul4, mul_col_vec3, mul_row_vec4, Mat4};
 use crate::hle::mem::Rdram;
 pub use crate::scene::{
     ColorImage, CullKind, DrawRun, FramebufferPair, Rect, Scene, SceneOp, Scissor, TexRectBounds,
@@ -32,6 +32,8 @@ pub struct TextureState {
 pub struct Rsp {
     cache_global_index: [u32; RSP_MAX_VERTICES],
     loaded: [bool; RSP_MAX_VERTICES],
+    clip_codes: [Option<u8>; RSP_MAX_VERTICES],
+    screen_z: [Option<f64>; RSP_MAX_VERTICES],
     used: [bool; RSP_MAX_VERTICES],
     model_stack: [Mat4; RSP_MATRIX_STACK_SIZE],
     model_stack_size: usize,
@@ -79,6 +81,8 @@ impl Default for Rsp {
         Rsp {
             cache_global_index: [0u32; RSP_MAX_VERTICES],
             loaded: [false; RSP_MAX_VERTICES],
+            clip_codes: [None; RSP_MAX_VERTICES],
+            screen_z: [None; RSP_MAX_VERTICES],
             used: [false; RSP_MAX_VERTICES],
             model_stack: [identity(); RSP_MATRIX_STACK_SIZE],
             model_stack_size: 1,
@@ -360,6 +364,26 @@ impl Rsp {
             self.cache_global_index[slot] = gi;
             self.loaded[slot] = true;
             self.used[slot] = false;
+            let [x, y, z] = v.pos;
+            let clip = mul_row_vec4([x, y, z, 1.0], self.mvp);
+            self.clip_codes[slot] = clip.iter().all(|v| v.is_finite()).then(|| {
+                let [x, y, z, w] = clip;
+                [x < -w, x > w, y < -w, y > w, z < -w, z > w]
+                    .into_iter()
+                    .enumerate()
+                    .fold(0, |code, (plane, outside)| {
+                        code | (u8::from(outside) << plane)
+                    })
+            });
+            self.screen_z[slot] = self.clip_codes[slot].and_then(|_| {
+                if clip[3] == 0.0 {
+                    return None;
+                }
+                let z = (f64::from(clip[2]) / f64::from(clip[3]) * f64::from(self.vp_scale[2])
+                    + f64::from(self.vp_trans[2]))
+                    * f64::from(DEPTH_RANGE);
+                z.is_finite().then_some(z)
+            });
             scene.raw_pos.push(v.pos);
             scene.modify_flags.push(0);
             scene.modify_screen.push([0.0; 4]);
@@ -392,6 +416,45 @@ impl Rsp {
         let index = (self.texcoord_table.len() - 1) as u32;
         self.modify_unit_texcoord_index = Some(index);
         index
+    }
+
+    pub(crate) fn cull_display_list(
+        &self,
+        first: u32,
+        last: u32,
+    ) -> Result<bool, crate::diag::DiagKind> {
+        use crate::diag::DiagKind;
+        if first > last || last as usize >= RSP_MAX_VERTICES {
+            return Err(DiagKind::InvalidCullRange { first, last });
+        }
+        let mut common = 0x3f;
+        for index in first..=last {
+            if !self.loaded[index as usize] {
+                return Err(DiagKind::InvalidConditionalVertex {
+                    opcode: crate::hle::consts::G_CULLDL,
+                    index,
+                });
+            }
+            common &= self.clip_codes[index as usize]
+                .ok_or(DiagKind::InvalidVertexTransform { index })?;
+        }
+        Ok(common != 0)
+    }
+
+    pub(crate) fn branch_z(
+        &self,
+        index: u32,
+        threshold: u32,
+    ) -> Result<bool, crate::diag::DiagKind> {
+        use crate::diag::DiagKind;
+        if index as usize >= RSP_MAX_VERTICES || !self.loaded[index as usize] {
+            return Err(DiagKind::InvalidConditionalVertex {
+                opcode: crate::hle::consts::G_BRANCH_Z,
+                index,
+            });
+        }
+        let z = self.screen_z[index as usize].ok_or(DiagKind::InvalidVertexTransform { index })?;
+        Ok(z <= f64::from(threshold) / 65536.0)
     }
 
     /// Modify a loaded cache slot without changing vertices recorded by earlier draws.
@@ -459,6 +522,7 @@ impl Rsp {
             }
             0x1C => {
                 scene.modify_screen[gi][2] = value as f32 / 65536.0;
+                self.screen_z[slot] = self.screen_z[slot].map(|_| f64::from(value) / 65536.0);
                 scene.modify_flags[gi] |= 2;
             }
             _ => unreachable!(),
