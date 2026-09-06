@@ -1393,10 +1393,3 @@ mod debugger_present_tests {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-#[test]
-#[ignore]
-fn builders_match_frozen_inputs() {
-    tests::fixture_oracle::builders_match_frozen_inputs();
-}

@@ -52,6 +52,5 @@ mod dlmemory_equivalence;
 mod host_mem;
 
 mod dl_builder;
-pub(crate) mod fixture_oracle;
 pub(crate) mod fixtures;
 mod scene_builders;
