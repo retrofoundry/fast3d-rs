@@ -6,6 +6,37 @@ use crate::hle::texdec::FormatInfo;
 use crate::hle::tmem::Tmem;
 use n64_gbi::encode::*;
 
+#[test]
+fn unset_tile_reports_effective_default_format_at_draw() {
+    for configure in [false, true] {
+        let mut dl = DlBuilder::new();
+        let mut commands = vec![
+            gdp_set_color_image(0, 2, 32, 0x1000),
+            gdp_set_other_mode_h(20, 2, 2 << 20),
+        ];
+        if configure {
+            commands.push(gdp_set_tile(0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0));
+        }
+        let draw_offset = commands.len() as u64 * 8;
+        commands.extend(gsp_texture_rectangle(
+            0, 0, 12, 4, 3, 0, 0, 4096, 1024, false,
+        ));
+        commands.push(gsp_enddl());
+        dl.list("main", &commands);
+        let built = dl.finish("main");
+        let result = interpret_rdram(&built.rdram, built.entry);
+        assert_eq!(
+            result.diags,
+            [Diagnostic {
+                at: u64::from(built.entry) + draw_offset,
+                kind: DiagKind::UnsupportedTextureFormat { fmt: 0, siz: 0 },
+            }]
+        );
+        assert_eq!(result.dropped_runs, 1);
+        assert!(result.scene.materials.is_empty());
+    }
+}
+
 fn textured_rectangles(formats: &[(u8, u8)]) -> crate::hle::InterpResult {
     let mut dl = DlBuilder::new();
     let tex = dl.bytes(8, &[0xf8; 128]);

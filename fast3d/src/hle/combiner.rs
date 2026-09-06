@@ -553,7 +553,6 @@ fn tile_takes_faithful_path(
 ) -> bool {
     let line_bytes = ((tex_w as usize) << tile.siz) >> 1;
     line_bytes.is_multiple_of(8)
-        || (tile.fmt == 0 && tile.siz == 3 && tile.height <= 1)
         || rdp.load_via_tile
         || TileSampling::from_tile(tile, 0).image[2] == 1
 }
@@ -755,27 +754,21 @@ fn build_material_inner(
         && rsp.texture_state.level > 0
     {
         let n = (rsp.texture_state.level as u32 + 1).min(MAX_LOD_LEVELS);
-        let mut levels: Vec<MipLevel> = Vec::with_capacity(n as usize);
-        let mut faithful = true;
-        for k in 0..n {
+        let faithful = (0..n).all(|k| {
             let tk = &rdp.tiles[(base + k as usize) & 7];
-            let lw = tk.width.max(1) as u32;
-            texture_at_draw(validate_tile_texture(rdp, tk), diags, pc)?;
-            if !tile_takes_faithful_path(rdp, tk, lw) {
-                faithful = false;
-                continue;
-            }
-            levels.push(texture_at_draw(
-                decode_sampling_texture(rdp, tk, tlut_fmt),
-                diags,
-                pc,
-            )?);
-        }
-        let td = rdp.text_detail();
-        if td & 0b10 != 0 {
-            texture_at_draw(validate_tile_texture(rdp, &rdp.tiles[0]), diags, pc)?;
-        }
+            tile_takes_faithful_path(rdp, tk, u32::from(tk.width.max(1)))
+        });
         if faithful {
+            let mut levels: Vec<MipLevel> = Vec::with_capacity(n as usize);
+            for k in 0..n {
+                let tk = &rdp.tiles[(base + k as usize) & 7];
+                levels.push(texture_at_draw(
+                    decode_sampling_texture(rdp, tk, tlut_fmt),
+                    diags,
+                    pc,
+                )?);
+            }
+            let td = rdp.text_detail();
             // DETAIL mode (text_detail bit1): the DETAIL tile is the finest tile (index 0),
             // decoded independently. Only carried when it also takes the faithful path.
             let detail = if td & 0b10 != 0 {
@@ -1507,11 +1500,13 @@ mod tests {
         let mut rdp = rdp_two_distinct_rgba16_tiles(0, 0, 2);
         rdp.tiles[0].siz = 3;
         rdp.tiles[0].width = 3;
-        rdp.tiles[0].height = 2;
         let rsp = crate::hle::rsp::Rsp::default();
         let mut diags = Vec::new();
-        for pc in [0x40, 0x58] {
-            assert!(build_rect_material(&rdp, &rsp, 0, &mut diags, pc).is_none());
+        for height in [1, 2] {
+            rdp.tiles[0].height = height;
+            for pc in [0x40, 0x58] {
+                assert!(build_rect_material(&rdp, &rsp, 0, &mut diags, pc).is_none());
+            }
         }
         assert_eq!(
             diags,
@@ -1522,7 +1517,6 @@ mod tests {
         );
         for (width, height, load_via_tile, lookup) in [
             (4, 2, false, false),
-            (3, 1, false, false),
             (3, 2, true, false),
             (3, 2, false, true),
         ] {
@@ -1563,6 +1557,8 @@ mod tests {
             let mut rdp = rdp_three_level_chain(true);
             rdp.load_via_tile = load_via_tile;
             rdp.tiles[0].fmt = 6;
+            rdp.tiles[1].width = 4;
+            rdp.tiles[2].width = 4;
             let mut rsp = crate::hle::rsp::Rsp::default();
             rsp.texture_state.tile = 1;
             rsp.texture_state.level = 1;
@@ -1583,7 +1579,6 @@ mod tests {
     fn unsupported_lod_format_rejects_draw() {
         for unsupported_level in [1, 2] {
             let mut rdp = rdp_three_level_chain(false);
-            rdp.load_via_tile = false;
             rdp.tiles[unsupported_level].fmt = 5;
             let mut rsp = crate::hle::rsp::Rsp::default();
             rsp.texture_state.tile = 0;
@@ -1600,6 +1595,77 @@ mod tests {
                 }]
             );
         }
+    }
+
+    #[test]
+    fn lod_fallback_ignores_unsupported_uncarried_levels() {
+        for (unaligned_level, unsupported_level) in [(1, 2), (2, 1)] {
+            let mut rdp = rdp_three_level_chain(false);
+            rdp.load_via_tile = false;
+            rdp.tiles[unsupported_level].width = 4;
+            rdp.tiles[unsupported_level].fmt = 5;
+            rdp.tiles[unaligned_level].width = 1;
+            let mut rsp = crate::hle::rsp::Rsp::default();
+            rsp.texture_state.level = 2;
+            rsp.texture_state.on = true;
+
+            let mut diags = Vec::new();
+            let mat = build_material(&rdp, &rsp, &mut diags, 0x80)
+                .unwrap_or_else(|| panic!("unused level rejected draw: {diags:?}"));
+            assert!(diags.is_empty());
+            assert!(!mat.lod);
+            assert_eq!(mat.num_levels, 1);
+            assert!(mat.mip_levels.is_empty());
+            assert_eq!((mat.tex_w, mat.tex_h), (4, 4));
+            assert_eq!(&mat.texture[..4], &[0, 0, 0, 255]);
+        }
+    }
+
+    #[test]
+    fn lod_fallback_ignores_unsupported_detail_tile() {
+        let mut rdp = rdp_three_level_chain(true);
+        rdp.load_via_tile = false;
+        rdp.tiles[0].fmt = 6;
+        rdp.tiles[1].width = 4;
+        let mut rsp = crate::hle::rsp::Rsp::default();
+        rsp.texture_state.tile = 1;
+        rsp.texture_state.level = 1;
+        rsp.texture_state.on = true;
+
+        let mut diags = Vec::new();
+        let mat = build_material(&rdp, &rsp, &mut diags, 0x80)
+            .unwrap_or_else(|| panic!("unused detail rejected draw: {diags:?}"));
+        assert!(diags.is_empty());
+        assert!(!mat.lod);
+        assert_eq!(mat.num_levels, 1);
+        assert!(mat.mip_levels.is_empty());
+        assert!(mat.detail_tex.is_none());
+        assert_eq!(mat.text_detail, 0);
+        assert_eq!((mat.tex_w, mat.tex_h), (4, 2));
+        assert_eq!(&mat.texture[..4], &[33, 0, 132, 255]);
+    }
+
+    #[test]
+    fn lod_ignores_unsupported_detail_when_only_detail_is_uncarried() {
+        let mut rdp = rdp_three_level_chain(true);
+        rdp.load_via_tile = false;
+        rdp.tiles[0].fmt = 6;
+        rdp.tiles[0].width = 1;
+        rdp.tiles[1].width = 4;
+        rdp.tiles[2].width = 4;
+        let mut rsp = crate::hle::rsp::Rsp::default();
+        rsp.texture_state.tile = 1;
+        rsp.texture_state.level = 1;
+        rsp.texture_state.on = true;
+
+        let mut diags = Vec::new();
+        let mat = build_material(&rdp, &rsp, &mut diags, 0x80)
+            .unwrap_or_else(|| panic!("uncarried detail rejected draw: {diags:?}"));
+        assert!(diags.is_empty());
+        assert!(mat.lod);
+        assert_eq!(mat.num_levels, 2);
+        assert_eq!(mat.mip_levels.len(), 2);
+        assert!(mat.detail_tex.is_none());
     }
 
     #[test]

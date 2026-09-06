@@ -16,6 +16,32 @@ const CIMG: (u32, u32) = (0xff10_0003, 0x1000);
 const END: (u32, u32) = (0xdf00_0000, 0);
 
 #[test]
+fn rdphalf_canaries_survive_except_f3dex2_half1_latch() {
+    for (ucode, half, end, stray) in [
+        (GbiUcode::F3dex2, 0xe100_0000, END, false),
+        (GbiUcode::F3dex2, 0xf100_0000, END, true),
+        (GbiUcode::F3d, 0xe100_0000, (0xb800_0000, 0), true),
+        (GbiUcode::F3d, 0xf100_0000, (0xb800_0000, 0), true),
+        (GbiUcode::F3d, 0xb400_0000, (0xb800_0000, 0), false),
+        (GbiUcode::F3d, 0xb300_0000, (0xb800_0000, 0), false),
+    ] {
+        let result = walk(&[CIMG, (half, 0x1234_5678), FILL, end], ucode);
+        let expected = if stray {
+            vec![crate::diag::Diagnostic {
+                at: 8,
+                kind: DiagKind::StrayRdphalf,
+            }]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(result.diags, expected, "{ucode:?} {half:08x}");
+        assert_eq!(result.commands, 4);
+        assert_eq!(result.dropped_runs, 0);
+        assert_eq!(result.scene.framebuffer_pairs[0].ops.len(), 1);
+    }
+}
+
+#[test]
 fn f3dex2_known_stub_inventory() {
     for (opcode, severity, dropped) in [
         (0x08, Severity::Error, 1),
