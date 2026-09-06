@@ -24,7 +24,10 @@ pub(crate) fn equivalent<M: Rdram>(
         entry,
         ucode,
         format,
-        Some(&mut |_: WalkStep<'_>| {
+        Some(&mut |step: WalkStep<'_>| {
+            for &emission in step.emissions {
+                assert_emission(&ordinary.scene, emission);
+            }
             count += 1;
             ControlFlow::Continue(())
         }),
@@ -32,6 +35,96 @@ pub(crate) fn equivalent<M: Rdram>(
     assert_eq!(count, ordinary.commands);
     assert_eq!(ordinary, observed);
     ordinary
+}
+
+pub(super) fn assert_emission(scene: &crate::scene::Scene, emission: Emission<'_>) {
+    use crate::scene::SceneOp;
+    match emission {
+        Emission::Triangles {
+            target,
+            run_index,
+            op_index,
+            material_index,
+            render_mode_index,
+            index_start,
+            indices,
+        } => {
+            let run = match (target, run_index, op_index) {
+                (None, Some(index), None) => &scene.draw_runs[index as usize],
+                (Some(target), None, Some(index)) => {
+                    let SceneOp::Tris(run) =
+                        &scene.framebuffer_pairs[target.pair_index].ops[index as usize]
+                    else {
+                        panic!("triangle emission must resolve to a triangle op");
+                    };
+                    run
+                }
+                _ => panic!("triangle must identify exactly one flat run or paired op"),
+            };
+            assert!(run.index_start <= index_start);
+            assert!(index_start + indices.len() as u32 <= run.index_start + run.index_count);
+            assert_eq!(
+                &scene.indices[index_start as usize..index_start as usize + indices.len()],
+                indices
+            );
+            assert_eq!(run.material_index, material_index);
+            assert_eq!(run.render_mode_index, render_mode_index);
+        }
+        Emission::FillRect {
+            target,
+            op_index,
+            rect,
+            color_raw,
+        } => {
+            assert_eq!(
+                scene.framebuffer_pairs[target.pair_index].ops[op_index as usize],
+                SceneOp::FillRect { rect, color_raw }
+            );
+        }
+        Emission::TexRect {
+            target,
+            op_index,
+            rect,
+            tile,
+            uls,
+            ult,
+            dsdx,
+            dtdy,
+            flip,
+            copy_mode,
+            fb_source,
+        } => {
+            let SceneOp::TexRect {
+                rect: actual_rect,
+                tile: actual_tile,
+                uls: actual_uls,
+                ult: actual_ult,
+                dsdx: actual_dsdx,
+                dtdy: actual_dtdy,
+                flip: actual_flip,
+                copy_mode: actual_copy_mode,
+                fb_source: actual_source,
+                ..
+            } = scene.framebuffer_pairs[target.pair_index].ops[op_index as usize]
+            else {
+                panic!("texture rectangle emission must resolve to a texture rectangle op");
+            };
+            assert_eq!(
+                (rect, tile, uls, ult, dsdx, dtdy, flip, copy_mode, fb_source),
+                (
+                    actual_rect,
+                    actual_tile,
+                    actual_uls,
+                    actual_ult,
+                    actual_dsdx,
+                    actual_dtdy,
+                    actual_flip,
+                    actual_copy_mode,
+                    actual_source
+                )
+            );
+        }
+    }
 }
 
 fn bytes(words: impl IntoIterator<Item = (u32, u32)>) -> Vec<u8> {
@@ -200,6 +293,7 @@ fn fixed_rectangles_have_exact_dispatches_words_and_targets() {
                             target,
                             rect,
                             color_raw,
+                            ..
                         } = emission
                         else {
                             panic!("{emission:?}")
@@ -632,6 +726,7 @@ fn triangles_report_index_growth_even_when_runs_coalesce() {
                                     target,
                                     index_start,
                                     indices: new,
+                                    ..
                                 } = e
                                 else {
                                     panic!("{e:?}")
@@ -712,6 +807,7 @@ fn float_rectangles_consume_continuations_and_preserve_sentinel() {
                             rect,
                             color_raw,
                             target,
+                            ..
                         } => {
                             assert!(!tex);
                             assert_eq!((rect.ulx, rect.uly, rect.lrx, rect.lry), (0, 0, 320, 240));

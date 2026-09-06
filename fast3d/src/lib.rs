@@ -404,12 +404,36 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
     ) -> DlSummary {
-        let mem = hw.rdram();
-        // Contract #1/#3 (spec §3.2): record the backend kind BEFORE the reader is moved into the
-        // walk — `present` gates VI-origin selection on this. RdramImage ⇒ true, HostRam ⇒ false.
-        self.last_backend_was_image = mem.is_rdram_image();
+        self.process_dl_inner(hw, entry, ucode, diags, None)
+    }
 
-        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format, None);
+    /// Observe the walk that produces this DL's rendered scene, without the CPU `walk` cap.
+    /// Returning `Break(())` before root end or a fault cancels the DL: its scene is neither
+    /// rasterized nor retained, and earlier DLs remain intact. Counts include cancelled work;
+    /// `termination` is `ObserverStopped` and `renderable` is false on cancellation.
+    /// To bound collection without cancelling rendering, stop storing steps and return `Continue(())`.
+    pub fn process_dl_observed(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        observer: &mut dyn inspect::WalkObserver,
+    ) -> DlSummary {
+        self.process_dl_inner(hw, entry, ucode, diags, Some(observer))
+    }
+
+    fn process_dl_inner(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        observer: Option<&mut dyn inspect::WalkObserver>,
+    ) -> DlSummary {
+        let mem = hw.rdram();
+        let backend_was_image = mem.is_rdram_image();
+        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format, observer);
 
         // Stream structured diags into the caller's sink, tallying severity for the rollup.
         let (mut warns, mut errors) = (0u32, 0u32);
@@ -423,20 +447,22 @@ impl Renderer {
 
         let tris = (result.scene.indices.len() / 3) as u32;
 
-        // Rasterize into the persistent store. A draw-nothing walk returns None and leaves
-        // `last_scanout_addr` UNCHANGED (spec §4 step 4). RA: clear policy from self.config.
-        let scanout = self.inner.render_into_store(
-            &self.device,
-            &self.queue,
-            &result.scene,
-            self.config.clear_policy,
-        );
-        if let Some(addr) = scanout {
-            self.last_scanout_addr = Some(addr);
-        }
-
-        // Retained for the frame (P4 debugger reads all of them; cleared at begin_frame).
-        self.frame_scenes.push(result.scene);
+        let scanout = if result.termination == inspect::WalkTermination::ObserverStopped {
+            None
+        } else {
+            self.last_backend_was_image = backend_was_image;
+            let scanout = self.inner.render_into_store(
+                &self.device,
+                &self.queue,
+                &result.scene,
+                self.config.clear_policy,
+            );
+            if let Some(addr) = scanout {
+                self.last_scanout_addr = Some(addr);
+            }
+            self.frame_scenes.push(result.scene);
+            scanout
+        };
 
         DlSummary {
             commands: result.commands,
@@ -445,6 +471,7 @@ impl Renderer {
             errors,
             dropped_runs: result.dropped_runs,
             renderable: scanout.is_some(),
+            termination: result.termination,
         }
     }
 

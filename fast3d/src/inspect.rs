@@ -1,4 +1,4 @@
-//! CPU-only observation of the existing display-list interpreter.
+//! Observation of CPU-only and rendering display-list walks.
 
 use std::ops::ControlFlow;
 
@@ -8,7 +8,7 @@ pub use crate::hle::rdp::TileDescriptor;
 pub use crate::hle::rsp::TextureState;
 pub use crate::scene::{ColorImage, Rect, Scissor, TexRectBounds};
 
-/// Maximum dispatched commands in a public walk; this is not a time or heap limit.
+/// Maximum dispatched commands in [`walk`]; this is not a time or heap limit.
 pub const MAX_DISPATCHES: u32 = 4096;
 
 /// Interpreter matrix layout, without transposition.
@@ -16,6 +16,7 @@ pub type Matrix4 = [[f32; 4]; 4];
 
 /// A named, single-bit geometry flag for the selected microcode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct GeometryFlag {
     pub mask: u32,
     pub name: &'static str,
@@ -23,6 +24,7 @@ pub struct GeometryFlag {
 
 /// A successfully read command record, preserving its full address operand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CommandWord {
     /// Address of this record in the reader’s command stream.
     pub pc: u64,
@@ -34,6 +36,7 @@ pub struct CommandWord {
 
 /// Control flow after a dispatched command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WalkFlow {
     Next,
     Call,
@@ -45,6 +48,7 @@ pub enum WalkFlow {
 
 /// Why execution stopped, including partial walks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum WalkTermination {
     #[default]
     End,
@@ -56,6 +60,7 @@ pub enum WalkTermination {
 
 /// Post-command state. All borrows expire when the observer callback returns.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct StateView<'a> {
     pub geometry_mode: u32,
     /// Set single-bit flags in ascending mask order; unknown bits remain in `geometry_mode`.
@@ -96,6 +101,7 @@ pub struct StateView<'a> {
 
 /// The actual framebuffer pair receiving an emitted primitive.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FramebufferTarget {
     pub pair_index: usize,
     pub color_image: ColorImage,
@@ -104,22 +110,38 @@ pub struct FramebufferTarget {
 }
 
 /// New HLE output from one dispatch; this does not describe visible pixels.
+/// Pair, run, op, material and render-mode indices belong to the scene of one
+/// `process_dl`, `process_dl_observed` or CPU `walk` call and reset for each DL.
+/// Renderer batching makes these HLE identities, not GPU draw-call identifiers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Emission<'a> {
+    #[non_exhaustive]
     Triangles {
         /// `None` for triangles emitted before the first color-image command.
         target: Option<FramebufferTarget>,
+        /// Index into `scene.draw_runs` for pair-less triangles; otherwise `None`.
+        run_index: Option<u32>,
+        /// Index of `SceneOp::Tris` in the target pair's `ops`; `None` for pair-less triangles.
+        op_index: Option<u32>,
+        material_index: u32,
+        render_mode_index: u32,
         /// Offset of these newly appended indices in the scene index buffer.
         index_start: u32,
         indices: &'a [u32],
     },
+    #[non_exhaustive]
     FillRect {
         target: FramebufferTarget,
+        /// Index into the target framebuffer pair's `ops`.
+        op_index: u32,
         rect: Rect,
         color_raw: u32,
     },
+    #[non_exhaustive]
     TexRect {
         target: FramebufferTarget,
+        /// Index into the target framebuffer pair's `ops`.
+        op_index: u32,
         rect: TexRectBounds,
         tile: u8,
         uls: i16,
@@ -134,6 +156,7 @@ pub enum Emission<'a> {
 
 /// One post-command callback; continuation words share their parent dispatch.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct WalkStep<'a> {
     /// Zero-based execution identity; addresses may repeat.
     pub seq: u32,
@@ -163,6 +186,7 @@ pub trait WalkObserver {
 
 /// Counts and diagnostics from a completed or partial CPU walk.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct WalkSummary {
     pub dispatched: u32,
     /// Total emitted indices divided by three.

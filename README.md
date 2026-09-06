@@ -67,7 +67,11 @@ assert_eq!(counter.0, 1);
 assert_eq!(summary.termination, WalkTermination::End);
 ```
 
-Inspection walks on the CPU without a renderer or GPU device. Callbacks borrow state after each dispatched command; copy data you retain. Continuation words share their parent step, and emissions describe HLE output. Return `ControlFlow::Break(())` to cancel. Walks stop after at most 4,096 dispatches and report whether they completed, faulted, were cancelled, or reached the cap.
+`inspect::walk` walks on the CPU without a renderer or GPU device. Callbacks borrow state after each dispatched command; copy data you retain. Continuation words share their parent step, and emissions describe HLE output. Return `ControlFlow::Break(())` to cancel. Walks stop after at most 4,096 dispatches and report whether they completed, faulted, were cancelled, or reached the cap.
+
+Use `Renderer::process_dl_observed` to attach the same observer to the walk that renders, returning `DlSummary` with its termination reason.
+It has no inspection cap; cancellation skips rasterizing and retaining that DL while preserving earlier DLs, so memory-bounded collectors should stop storing steps and keep returning `Continue(())`.
+Use `inspect::walk` for tools and tests without a GPU device, and `process_dl_observed` to correlate emissions with the rendered scene.
 
 ## Features
 

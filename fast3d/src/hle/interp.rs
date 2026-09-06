@@ -363,6 +363,7 @@ pub fn interpret<M: Rdram>(
                 if let Some(observed) = &mut observed {
                     observed.emission = Some(Emission::TexRect {
                         target: framebuffer_target(&scene, cur),
+                        op_index: (scene.framebuffer_pairs[cur].ops.len() - 1) as u32,
                         rect,
                         tile,
                         uls,
@@ -436,6 +437,7 @@ pub fn interpret<M: Rdram>(
                 if let Some(observed) = &mut observed {
                     observed.emission = Some(Emission::FillRect {
                         target: framebuffer_target(&scene, rec.cur_pair),
+                        op_index: (scene.framebuffer_pairs[rec.cur_pair].ops.len() - 1) as u32,
                         rect,
                         color_raw,
                     });
@@ -488,7 +490,21 @@ pub fn interpret<M: Rdram>(
             let geometry_names =
                 crate::inspect::geometry_flags(ucode.into(), rsp.geometry_mode(), &mut names);
             let emission = if scene.indices.len() > observed.index_start {
+                let (run_index, op_index, run) = if rec.have_seen_cimg {
+                    let ops = &scene.framebuffer_pairs[rec.cur_pair].ops;
+                    let Some(crate::hle::rsp::SceneOp::Tris(run)) = ops.last() else {
+                        unreachable!("emitted triangle must have a recorded run");
+                    };
+                    (None, Some((ops.len() - 1) as u32), run)
+                } else {
+                    let index = scene.draw_runs.len() - 1;
+                    (Some(index as u32), None, &scene.draw_runs[index])
+                };
                 Some(Emission::Triangles {
+                    run_index,
+                    op_index,
+                    material_index: run.material_index,
+                    render_mode_index: run.render_mode_index,
                     target: rec
                         .have_seen_cimg
                         .then(|| framebuffer_target(&scene, rec.cur_pair)),

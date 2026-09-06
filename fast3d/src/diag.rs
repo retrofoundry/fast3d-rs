@@ -188,6 +188,8 @@ pub struct DlSummary {
     pub errors: u32,
     pub dropped_runs: u32,
     pub renderable: bool,
+    /// Interpretation outcome, including cancellation before any scene submission.
+    pub termination: crate::inspect::WalkTermination,
 }
 
 #[cfg(test)]
