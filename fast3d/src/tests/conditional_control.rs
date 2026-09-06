@@ -99,8 +99,8 @@ fn offsets(entry: u32, indices: &[u64]) -> Vec<u64> {
 }
 
 #[test]
-fn culldl_each_plane_and_boundary() {
-    for axis in 0..3 {
+fn culldl_each_side_plane_and_boundary() {
+    for axis in 0..2 {
         for sign in [-1, 1] {
             for (distance, culled) in [(1, false), (2, true)] {
                 let mut b = DlBuilder::new();
@@ -121,6 +121,28 @@ fn culldl_each_plane_and_boundary() {
             }
         }
     }
+}
+
+fn assert_culldl_retains_unverified_z(sign: i16) {
+    for distance in [1, 2, i16::MAX] {
+        let mut b = DlBuilder::new();
+        let z = distance * sign;
+        let v = vertex(&mut b, &[[0, 0, z], [1, 1, z]]);
+        let entry = b.list("main", &[gsp_vertex(0, 2, v), (CULL.0, 2), MARK, END]);
+        let r = walk(b, &offsets(entry, &[0, 1, 2, 3]));
+        assert!(r.diags.is_empty(), "z={z}: {:?}", r.diags);
+        assert_eq!(r.commands, 4, "z={z}");
+    }
+}
+
+#[test]
+fn culldl_near_z_plane_unused_until_rsp_convention_verified() {
+    assert_culldl_retains_unverified_z(-1);
+}
+
+#[test]
+fn culldl_far_z_plane_unused_until_rsp_convention_verified() {
+    assert_culldl_retains_unverified_z(1);
 }
 
 #[test]
