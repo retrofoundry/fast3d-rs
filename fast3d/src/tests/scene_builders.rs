@@ -263,8 +263,9 @@ fn texture_block(
         let palette = b.bytes(8, &packed.palette);
         commands.extend([
             gdp_set_texture_image(0, 2, 1, palette),
+            gdp_set_tile(0, 2, 0, 0x100, 7, 0, 0, 0, 0, 0, 0, 0),
             gdp_load_sync(),
-            gdp_load_tlut(7, (packed.palette.len() as u32 / 2 - 1) << 2),
+            gdp_load_tlut(7, packed.palette.len() as u32 / 2 - 1),
             gdp_pipe_sync(),
         ]);
     }

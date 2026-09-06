@@ -334,6 +334,33 @@ pub fn interpret<M: Rdram>(
             unknown_seen: &mut unknown_seen,
         };
         gbi.table[op as usize](&c, &mut cx);
+        if diags
+            .last()
+            .is_some_and(|d| d.kind == DiagKind::DlPastRdram)
+        {
+            dropped_runs += scene.draw_runs.len() as u32
+                + scene
+                    .framebuffer_pairs
+                    .iter()
+                    .flat_map(|pair| &pair.ops)
+                    .filter(|op| {
+                        matches!(
+                            op,
+                            crate::hle::rsp::SceneOp::Tris(_)
+                                | crate::hle::rsp::SceneOp::TexRect { .. }
+                                | crate::hle::rsp::SceneOp::FillRect { .. }
+                        )
+                    })
+                    .count() as u32;
+            return InterpResult {
+                scene: Scene::default(),
+                diags,
+                geometry_mode: rsp.geometry_mode(),
+                rdp,
+                commands: dispatched as u32,
+                dropped_runs,
+            };
+        }
         pc += stride;
     }
 

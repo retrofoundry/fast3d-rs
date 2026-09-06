@@ -6,6 +6,21 @@
 use n64_gbi::encode::*;
 
 #[test]
+fn tlut_words_match_libultra() {
+    for (tile, count_minus_one, expected) in [
+        (0, 0, (0xF000_0000, 0x0000_0000)),
+        (7, 0, (0xF000_0000, 0x0700_0000)),
+        (3, 2, (0xF000_0000, 0x0300_8000)),
+        (7, 3, (0xF000_0000, 0x0700_C000)),
+        (7, 15, (0xF000_0000, 0x0703_C000)),
+        (5, 255, (0xF000_0000, 0x053F_C000)),
+        (7, 1023, (0xF000_0000, 0x07FF_C000)),
+    ] {
+        assert_eq!(gdp_load_tlut(tile, count_minus_one), expected);
+    }
+}
+
+#[test]
 fn vtx_words_match_libultra() {
     // gsSPVertex(v0=0, n=3, addr): w0 bits[19:12]=3 (count), bits[7:1]=(0+3)=3. No *2.
     let (w0, w1) = gsp_vertex(0, 3, 0x0010_0000);

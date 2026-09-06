@@ -56,14 +56,12 @@ pub fn gdp_load_block(tile: u32, uls: u32, ult: u32, lrs: u32, dxt: u32) -> (u32
     (w0, w1)
 }
 
-/// gsDPLoadTLUT — load TLUT entries from the current tex_image address into TLUT TMEM.
-/// `tile` selects the tile descriptor (always 7 / G_TX_LOADTILE for palette loads).
-/// `lrt` encodes the palette count in 10.2 fixed-point: `(count-1) << 2`.
-/// w0 = G_LOADTLUT<<24; w1 = tile<<24 | lrt (bits [11:0]).
-/// The HLE handler recovers `count = (lrt>>2)+1` by reading bits [11:0] directly.
-pub fn gdp_load_tlut(tile: u32, lrt: u32) -> (u32, u32) {
+/// Load 1..1024 packed BE halfwords to the selected tile's TMEM word address.
+/// `count_minus_one` occupies bits 14..23; `tile` occupies bits 24..26.
+/// This replaces the old `(count - 1) << 2` argument and low-bit encoding.
+pub fn gdp_load_tlut(tile: u32, count_minus_one: u32) -> (u32, u32) {
     let w0 = shiftl(G_LOADTLUT as u32, 24, 8);
-    let w1 = shiftl(tile, 24, 3) | (lrt & 0xFFF);
+    let w1 = shiftl(tile, 24, 3) | shiftl(count_minus_one, 14, 10);
     (w0, w1)
 }
 

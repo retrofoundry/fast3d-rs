@@ -276,20 +276,29 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    // LoadTLUT: count = (lrt>>2)+1 packed 16-bit big-endian entries from tex_image.addr (count*2
-    // contiguous RDRAM bytes). gsDPLoadTLUT DMA copies packed RDRAM → strided TMEM (one entry per
-    // 8-byte slot); `write_tlut` performs that stride-8 expansion into the faithful bank's palette
-    // region at PALETTE_BASE. fast3d's DL builder loads TLUTs via tile 7 without setting its `tmem`,
-    // so palette 0 goes to PALETTE_BASE directly.
-    let (_fmt, _siz, _w, addr) = cx.rdp.tex_image;
-    let lrt = c.p1(0, 12);
-    let count = (lrt >> 2) + 1;
-    let packed_bytes = count as usize * 2; // 2 bytes/entry — packed RDRAM
+    if c.w0 & 0x00ff_ffff != 0 || c.w1 & 0x3fff != 0 {
+        cx.diags.push(Diagnostic {
+            at: cx.pc,
+            kind: DiagKind::UnsupportedCommandParameters { opcode: G_LOADTLUT },
+        });
+        return;
+    }
+    let addr = cx.rdp.tex_image.3;
+    let count = c.p1(14, 10) as usize + 1;
+    let packed_bytes = count * 2;
+    if addr.checked_add(packed_bytes as u64).is_none()
+        || !cx.mem.in_bounds(addr, packed_bytes as u64)
+    {
+        cx.diags.push(Diagnostic {
+            at: cx.pc,
+            kind: DiagKind::DlPastRdram,
+        });
+        return;
+    }
     let packed = cx.mem.read_bytes(addr, packed_bytes);
-    let dst_word = crate::hle::tmem::PALETTE_BASE >> 3; // 0x100 → base byte 0x800
-    cx.rdp
-        .tmem_bank
-        .write_tlut(&packed, count as usize, dst_word);
+    let tile = c.p1(24, 3) as usize;
+    let dst_word = usize::from(cx.rdp.tiles[tile].tmem_addr);
+    cx.rdp.tmem_bank.write_tlut(&packed, count, dst_word);
     cx.rsp.material_dirty = true;
 }
 
@@ -496,65 +505,202 @@ mod tests {
         assert_eq!((t.line, t.tmem_addr), (8, 0));
     }
 
-    #[test]
-    fn load_tlut_stores_be_entries() {
-        // 4 RGBA16 entries at addr 0; G_LOADTLUT loads count=(lrt>>2)+1.
-        // lrt = 3<<2 = 12 -> count = 4 -> packed_bytes = 4*2 = 8 (hardware-accurate RDRAM layout).
-        // load_tlut → write_tlut expands packed RDRAM → stride-8 into the faithful bank's palette
-        // region (upper 2 KiB at PALETTE_BASE): entry i at palette()[i*8..i*8+2], 6 pad bytes/slot.
-        // Use distinct per-entry bytes so the expand is actually verified (not all the same byte).
-        // Entry 0: [0xAA, 0xBB], Entry 1: [0xCC, 0xDD], Entry 2: [0xEE, 0xFF], Entry 3: [0x11, 0x22]
-        let rdram = vec![0xAAu8, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22];
-        let rdp = Rdp {
-            tex_image: (0, 2, 1, 0),
-            ..Rdp::default()
-        }; // addr=0
-           // w0 = G_LOADTLUT<<24 ; w1 = tile(7)<<24 | lrt(12)<<0  (uls/ult/lrs=0)
-        let w0 = 0xF000_0000u32;
-        let w1 = (7u32 << 24) | 12u32;
-        let (rdp, diags) = run_cmd(&rdram, rdp, w0, w1);
-        assert!(diags.is_empty());
-        let tlut = rdp.tmem_bank.palette();
-        // Entry 0 at palette()[0..2]; pad bytes [2..8] are 0.
-        assert_eq!(&tlut[0..2], &[0xAA, 0xBB], "entry 0 bytes");
-        assert_eq!(&tlut[2..8], &[0u8; 6], "entry 0 pad");
-        // Entry 1 at palette()[8..10]; pad bytes [10..16] are 0.
-        assert_eq!(&tlut[8..10], &[0xCC, 0xDD], "entry 1 bytes");
-        assert_eq!(&tlut[10..16], &[0u8; 6], "entry 1 pad");
-        // Entry 2 at palette()[16..18].
-        assert_eq!(&tlut[16..18], &[0xEE, 0xFF], "entry 2 bytes");
-        // Entry 3 at palette()[24..26].
-        assert_eq!(&tlut[24..26], &[0x11, 0x22], "entry 3 bytes");
-    }
-
-    #[test]
-    fn load_tlut_packed_rdram_sm64_shape_decodes_ci8_correctly() {
-        // Proof that a real packed RDRAM palette (sm64-shape — no stride-8 padding) loads and
-        // decodes correctly through load_tlut + decode_ci8.
-        // 3 entries: black(0x0001), red(0xF801), green(0x07C1) — 6 packed bytes.
-        let rdram = vec![0x00u8, 0x01, 0xF8, 0x01, 0x07, 0xC1];
-        let rdp = Rdp {
+    fn palette_state(tile: usize, destination: u16) -> Rdp {
+        let mut rdp = Rdp {
             tex_image: (0, 2, 1, 0),
             ..Rdp::default()
         };
-        // count=3 -> lrt = (3-1)<<2 = 8
-        let lrt = (3u32 - 1) << 2;
-        let w0 = 0xF000_0000u32;
-        let w1 = (7u32 << 24) | lrt;
-        let (rdp, diags) = run_cmd(&rdram, rdp, w0, w1);
-        assert!(diags.is_empty());
-        // write_tlut DMA-expands packed bytes → stride-8 into the faithful bank's palette region.
-        let tlut = rdp.tmem_bank.palette();
-        // Entry bytes land at stride-8 slots.
-        assert_eq!(&tlut[0..2], &[0x00, 0x01], "entry 0 = black RGBA16");
-        assert_eq!(&tlut[8..10], &[0xF8, 0x01], "entry 1 = red RGBA16");
-        assert_eq!(&tlut[16..18], &[0x07, 0xC1], "entry 2 = green RGBA16");
-        // decode_ci8 via the palette slice (single-sourced from the faithful bank).
-        let ci8_src = [0u8, 1, 2];
-        let out = crate::hle::texdec::decode_ci8(&ci8_src, 3, 1, tlut, 2 /* RGBA16 */);
-        assert_eq!(&out[0..4], &[0, 0, 0, 255], "index 0 -> black");
-        assert_eq!(&out[4..8], &[255, 0, 0, 255], "index 1 -> red");
-        assert_eq!(&out[8..12], &[0, 255, 0, 255], "index 2 -> green");
+        rdp.tiles[tile].tmem_addr = destination;
+        rdp.tmem_bank.write_block(&[0x55; 4096], 0, 0, 0, 512, 1);
+        rdp
+    }
+
+    #[test]
+    fn tlut_replicates_four_halfwords() {
+        let (rdp, diags) = run_cmd(
+            &[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22],
+            palette_state(7, 0x100),
+            0xf000_0000,
+            0x0700_c000,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(
+            &rdp.tmem_bank.palette()[..32],
+            &[
+                0xaa, 0xbb, 0xaa, 0xbb, 0xaa, 0xbb, 0xaa, 0xbb, 0xcc, 0xdd, 0xcc, 0xdd, 0xcc, 0xdd,
+                0xcc, 0xdd, 0xee, 0xff, 0xee, 0xff, 0xee, 0xff, 0xee, 0xff, 0x11, 0x22, 0x11, 0x22,
+                0x11, 0x22, 0x11, 0x22,
+            ],
+        );
+        assert!(rdp.tmem_bank.palette()[32..].iter().all(|&b| b == 0x55));
+        let alias = TileDescriptor {
+            fmt: 3,
+            siz: 2,
+            tmem_addr: 0x100,
+            width: 4,
+            height: 1,
+            ..TileDescriptor::default()
+        };
+        assert_eq!(
+            rdp.tmem_bank.sample_tile(&alias, 0),
+            [0xaa, 0xaa, 0xaa, 0xbb].repeat(4)
+        );
+    }
+
+    #[test]
+    fn tlut_ci4_bank15_partial_update() {
+        let (mut rdp, diags) = run_cmd(
+            &[0xf8, 0x01].repeat(16),
+            palette_state(6, 0x1f0),
+            0xf000_0000,
+            0x0603_c000,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        let before = rdp.tmem_bank.palette().to_vec();
+        rdp.tiles[3].tmem_addr = 0x1f5;
+        let (mut rdp, diags) = run_cmd(&[0x07, 0xc1, 0x00, 0x3f], rdp, 0xf000_0000, 0x0300_4000);
+        assert!(diags.is_empty(), "{diags:?}");
+        let palette = rdp.tmem_bank.palette();
+        assert_eq!(&palette[..0x7a8], &before[..0x7a8]);
+        assert_eq!(&palette[0x7b8..], &before[0x7b8..]);
+        assert_eq!(
+            &palette[0x7a8..0x7b8],
+            &[
+                0x07, 0xc1, 0x07, 0xc1, 0x07, 0xc1, 0x07, 0xc1, 0x00, 0x3f, 0x00, 0x3f, 0x00, 0x3f,
+                0x00, 0x3f
+            ]
+        );
+        rdp.tmem_bank
+            .write_block(&[0x45, 0x6f, 0, 0, 0, 0, 0, 0], 0, 0, 0, 1, 1);
+        let tile = TileDescriptor {
+            fmt: 2,
+            siz: 0,
+            palette: 15,
+            width: 4,
+            height: 1,
+            ..TileDescriptor::default()
+        };
+        assert_eq!(
+            rdp.tmem_bank.sample_tile(&tile, 2),
+            [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255,]
+        );
+    }
+
+    #[test]
+    fn tlut_ci8_256_entries() {
+        let source: Vec<_> = (0..256u16).flat_map(|i| [i as u8, 255 - i as u8]).collect();
+        let (mut rdp, diags) = run_cmd(&source, palette_state(5, 0x100), 0xf000_0000, 0x053f_c000);
+        assert!(diags.is_empty(), "{diags:?}");
+        for (i, word) in rdp
+            .tmem_bank
+            .palette()
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(word, &[i as u8, 255 - i as u8].repeat(4)[..]);
+        }
+        let indices: Vec<_> = (0..=255).collect();
+        rdp.tmem_bank.write_block(&indices, 0, 0, 0, 32, 1);
+        let tile = TileDescriptor {
+            fmt: 2,
+            siz: 1,
+            width: 256,
+            height: 1,
+            ..TileDescriptor::default()
+        };
+        let pixels = rdp.tmem_bank.sample_tile(&tile, 3);
+        for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(*pixel, [i as u8, i as u8, i as u8, 255 - i as u8]);
+        }
+    }
+
+    #[test]
+    fn tlut_rgba16_and_ia16() {
+        let (rdp, diags) = run_cmd(
+            &[0x00, 0x01, 0xf8, 0x01, 0x07, 0xc1],
+            palette_state(7, 0x100),
+            0xf000_0000,
+            0x0700_8000,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        let palette = rdp.tmem_bank.palette();
+        assert_eq!(
+            crate::hle::texdec::decode_ci8(&[0, 1, 2], 3, 1, palette, 2),
+            [0, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255]
+        );
+        assert_eq!(
+            crate::hle::texdec::decode_ci8(&[0, 1, 2], 3, 1, palette, 3),
+            [0, 0, 0, 1, 248, 248, 248, 1, 7, 7, 7, 193]
+        );
+    }
+
+    #[test]
+    fn tlut_wraps_tmem_without_clamping_count() {
+        let source: Vec<_> = (0..1024u16).flat_map(u16::to_be_bytes).collect();
+        for (word, count) in [(0x07ff_c000, 1024), (0x0740_0000, 257)] {
+            let (rdp, diags) = run_cmd(&source, palette_state(7, 0x1ff), 0xf000_0000, word);
+            assert!(diags.is_empty(), "{diags:?}");
+            let tile = TileDescriptor {
+                fmt: 3,
+                siz: 2,
+                width: 2048,
+                height: 1,
+                ..TileDescriptor::default()
+            };
+            let pixels = rdp.tmem_bank.sample_tile(&tile, 0);
+            for i in 0..512 {
+                let value = if count == 1024 {
+                    Some(if i == 511 { 512 } else { i + 513 })
+                } else if i == 511 {
+                    Some(0)
+                } else if i < 256 {
+                    Some(i + 1)
+                } else {
+                    None
+                };
+                let [hi, lo] = value.map(|v| (v as u16).to_be_bytes()).unwrap_or([0x55; 2]);
+                assert_eq!(
+                    &pixels[i * 16..(i + 1) * 16],
+                    [hi, hi, hi, lo].repeat(4),
+                    "word {i}, count {count}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tlut_legacy_row_fields_diagnosed() {
+        for (w0, w1) in [
+            (0xf000_0001, 0x0700_0000),
+            (0xf000_1000, 0x0700_0000),
+            (0xf000_0000, 0x0700_0001),
+            (0xf000_0000, 0x0700_000c),
+            (0xf000_0000, 0x0700_1000),
+            (0xf000_0000, 0x0700_2000),
+        ] {
+            let before = palette_state(7, 0x100);
+            let (after, diags) = run_cmd(&[], before.clone(), w0, w1);
+            assert_eq!(after, before);
+            assert_eq!(
+                diags,
+                [Diagnostic {
+                    at: 0,
+                    kind: DiagKind::UnsupportedCommandParameters { opcode: 0xf0 }
+                }]
+            );
+            assert_eq!(diags[0].kind.severity(), crate::diag::Severity::Error);
+        }
+        let (rdp, diags) = run_cmd(
+            &[0x12, 0x34],
+            palette_state(7, 0x100),
+            0xf000_0000,
+            0x0700_0000,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(&rdp.tmem_bank.palette()[..8], [0x12, 0x34].repeat(4));
+        assert!(rdp.tmem_bank.palette()[8..].iter().all(|&b| b == 0x55));
     }
 
     #[test]

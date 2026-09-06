@@ -67,8 +67,19 @@ Run each fixture through both renderers, then compare. The rt64 command opens a
 window. Its PNG comes from RDRAM readback, before VI filtering or presentation
 scaling. Claude should run this part in the GPU session.
 
+The `write_rt64_tlut_` writers produce `tlut-ci4-rgba16-banks` and
+`tlut-ci4-ia16-banks`. Each loads independent CI4 palettes into TMEM words
+`0x100` and `0x1f0` before drawing either of two 16x16 copy rectangles. They share
+indices 0..15 across each row. The rectangles occupy `[40,56) × [32,48)` and
+`[72,88) × [32,48)` on an opaque black 320x240 target. The RGBA16 palettes are
+ascending red and descending green with blue; IA16 uses opposing intensity
+ramps. `tlut_two_palettes_in_one_list` checks decoded texels without a GPU;
+`fixture_tlut_two_palettes_pixels` checks every output pixel on forced fallback.
+The second loop applies their separate RGBA16 oracle quantization budget.
+
 ```sh
-for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point; do
+for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point \
+  tlut-ci4-rgba16-banks tlut-ci4-ia16-banks; do
   devenv shell -- cargo run -p fast3d --features capture \
     --example export_capture_rdram -- \
     "/tmp/fast3d-oracle/$scene.f3dcap" "/tmp/fast3d-oracle/$scene" || break
@@ -84,6 +95,13 @@ for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point; 
   devenv shell -- cargo run -p fast3d --example compare_rgba8 -- \
     "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
     320 240 --diff-mask "/tmp/fast3d-oracle/$scene-diff.png" || break
+done
+
+for scene in tlut-ci4-rgba16-banks tlut-ci4-ia16-banks; do
+  devenv shell -- cargo run -p fast3d --example compare_rgba8 -- \
+    "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
+    320 240 --threshold 7 --max-diff-pixels 0 \
+    --diff-mask "/tmp/fast3d-oracle/$scene-diff.png" || break
 done
 ```
 

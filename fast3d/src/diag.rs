@@ -15,6 +15,9 @@ pub struct Diagnostic {
 #[non_exhaustive]
 pub enum DiagKind {
     UnknownOpcode(u8),
+    UnsupportedCommandParameters {
+        opcode: u8,
+    },
     RunawayDl {
         cap: u64,
     },
@@ -60,6 +63,7 @@ impl DiagKind {
     pub fn severity(&self) -> Severity {
         match self {
             DiagKind::UnknownOpcode(_)
+            | DiagKind::UnsupportedCommandParameters { .. }
             | DiagKind::RunawayDl { .. }
             | DiagKind::DlPastRdram
             | DiagKind::TruncatedRect { .. }
@@ -81,6 +85,9 @@ impl std::fmt::Display for DiagKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DiagKind::UnknownOpcode(op) => write!(f, "unknown opcode 0x{op:02X}"),
+            DiagKind::UnsupportedCommandParameters { opcode } => {
+                write!(f, "unsupported parameters for opcode 0x{opcode:02X}")
+            }
             DiagKind::RunawayDl { cap } => {
                 write!(f, "runaway DL: exceeded {cap} command dispatches")
             }
@@ -191,6 +198,7 @@ mod tests {
     fn severity_maps_every_variant_per_spec() {
         for k in [
             DiagKind::UnknownOpcode(0),
+            DiagKind::UnsupportedCommandParameters { opcode: 0xf0 },
             DiagKind::RunawayDl { cap: 1 },
             DiagKind::DlPastRdram,
             DiagKind::TruncatedRect { fill: false },
