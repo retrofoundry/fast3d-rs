@@ -30,6 +30,7 @@ fn decode(bounds: [u32; 4], base: [i16; 2], step: [i16; 2], cycle: u32, flip: bo
         0,
         GbiUcode::F3dex2,
         crate::DataFormat::Fixed,
+        None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     result.scene.framebuffer_pairs[0].ops[0].clone()
@@ -185,6 +186,7 @@ fn texrect_preserves_raw_fixed_and_float_bounds() {
         0,
         GbiUcode::F3dex2,
         crate::DataFormat::Float,
+        None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     let SceneOp::TexRect { rect, .. } = &result.scene.framebuffer_pairs[0].ops[0] else {

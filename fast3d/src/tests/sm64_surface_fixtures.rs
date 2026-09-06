@@ -257,6 +257,7 @@ fn sm64_surface_commands_preserve_alpha_depth_and_tiles() {
             0x3000,
             GbiUcode::F3d,
             DataFormat::Fixed,
+            None,
         );
         assert!(result.diags.is_empty(), "{:?}", result.diags);
         let scene = &result.scene;

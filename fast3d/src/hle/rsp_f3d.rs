@@ -239,9 +239,9 @@ fn set_texture_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 mod phase2_tests {
     use crate::hle::consts::{G_CULL_FRONT, G_FOG, G_RM_OPA_SURF, G_RM_OPA_SURF2};
     use crate::hle::gbi::GbiUcode;
-    use crate::hle::interp::interpret;
     use crate::hle::mem::RdramImage;
     use crate::hle::{CullKind, DrawRun, InterpResult};
+    use crate::tests::inspect::equivalent as interpret;
     use n64_gbi::encode::{
         gdp_load_texture_block, gdp_set_combine_lerp, gdp_set_cycle_type, gdp_set_cycle_type_f3d,
         gdp_set_render_mode, gdp_set_render_mode_f3d, gsp_1triangle_f3d, gsp_2triangles,
@@ -370,7 +370,7 @@ mod phase2_tests {
             push(&mut bytes, command);
         }
         interpret(
-            RdramImage::new(&bytes),
+            || RdramImage::new(&bytes),
             ENTRY_ADDR as u64,
             ucode,
             crate::hle::mem::GbiDataFormat::Fixed,
@@ -536,9 +536,10 @@ mod phase3_tests {
     };
     use crate::hle::consts::{G_LIGHTING, G_RM_OPA_SURF, G_RM_OPA_SURF2, G_TEXTURE_GEN};
     use crate::hle::gbi::GbiUcode;
-    use crate::hle::interp::{interpret, InterpResult};
+    use crate::hle::interp::InterpResult;
     use crate::hle::math::mul4;
     use crate::hle::mem::RdramImage;
+    use crate::tests::inspect::equivalent as interpret;
     use n64_gbi::encode::{
         gdp_load_texture_block, gdp_set_combine_lerp, gdp_set_cycle_type_f3d,
         gdp_set_render_mode_f3d, gsp_1triangle_f3d, gsp_enddl_f3d, gsp_forcematrix_f3d,
@@ -562,7 +563,7 @@ mod phase3_tests {
             push(&mut bytes, command);
         }
         interpret(
-            RdramImage::new(&bytes),
+            || RdramImage::new(&bytes),
             ENTRY as u64,
             GbiUcode::F3d,
             crate::hle::mem::GbiDataFormat::Fixed,
@@ -917,9 +918,10 @@ mod phase5_tests {
     };
     use crate::hle::consts::{G_RM_OPA_SURF, G_RM_OPA_SURF2};
     use crate::hle::gbi::GbiUcode;
-    use crate::hle::interp::{interpret, InterpResult};
+    use crate::hle::interp::InterpResult;
     use crate::hle::mem::RdramImage;
     use crate::hle::{Rect, SceneOp};
+    use crate::tests::inspect::equivalent as interpret;
     use n64_gbi::encode::{
         gdp_fill_rectangle, gdp_load_texture_block, gdp_set_color_image, gdp_set_combine_lerp,
         gdp_set_fill_color, gdp_set_render_mode_f3d, gdp_set_scissor, gsp_1triangle_f3d,
@@ -1016,7 +1018,7 @@ mod phase5_tests {
 
     fn run(bytes: &[u8], entry: usize) -> InterpResult {
         interpret(
-            RdramImage::new(bytes),
+            || RdramImage::new(bytes),
             entry as u64,
             GbiUcode::F3d,
             crate::hle::mem::GbiDataFormat::Fixed,
@@ -1196,8 +1198,8 @@ mod phase6_tests {
     };
     use crate::hle::consts::{G_RM_AA_ZB_OPA_SURF, G_RM_AA_ZB_OPA_SURF2};
     use crate::hle::gbi::GbiUcode;
-    use crate::hle::interp::interpret;
     use crate::hle::mem::RdramImage;
+    use crate::tests::inspect::equivalent as interpret;
     use n64_gbi::encode::{
         gdp_load_texture_block, gdp_set_combine_lerp, gdp_set_cycle_type_f3d,
         gdp_set_render_mode_f3d, gsp_1triangle_f3d, gsp_clear_geometrymode_f3d, gsp_enddl_f3d,
@@ -1362,7 +1364,7 @@ mod phase6_tests {
 
         let bytes = fixture_rdram();
         let result = interpret(
-            RdramImage::new(&bytes),
+            || RdramImage::new(&bytes),
             DL_ENTRY as u64,
             GbiUcode::F3d,
             crate::hle::mem::GbiDataFormat::Fixed,
@@ -1430,7 +1432,11 @@ mod phase6_tests {
         );
 
         let result = interpret(
-            mem,
+            || {
+                let mut reader = RdramImage::new(&bytes);
+                reader.set_segment(7, env_hex_u32("FAST3D_SM64_SEGMENT_07"));
+                reader
+            },
             entry as u64,
             GbiUcode::F3d,
             crate::hle::mem::GbiDataFormat::Fixed,

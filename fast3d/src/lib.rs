@@ -6,6 +6,7 @@ pub mod diag;
 pub mod hardware;
 pub(crate) mod hle;
 pub mod hooks;
+pub mod inspect;
 pub mod microcode;
 pub(crate) mod render;
 pub(crate) mod scene;
@@ -408,7 +409,7 @@ impl Renderer {
         // walk — `present` gates VI-origin selection on this. RdramImage ⇒ true, HostRam ⇒ false.
         self.last_backend_was_image = mem.is_rdram_image();
 
-        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format);
+        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format, None);
 
         // Stream structured diags into the caller's sink, tallying severity for the rollup.
         let (mut warns, mut errors) = (0u32, 0u32);
