@@ -275,3 +275,6 @@ fn observed_renderer_has_no_cpu_inspection_cap() {
     assert_eq!(count, summary.commands);
     assert_eq!(summary.termination, WalkTermination::End);
 }
+
+#[path = "renderer_dl_prefix.rs"]
+mod prefix;
