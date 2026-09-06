@@ -427,7 +427,9 @@ impl Rsp {
         if first > last || last as usize >= RSP_MAX_VERTICES {
             return Err(DiagKind::InvalidCullRange { first, last });
         }
-        let mut common = 0x3f;
+        // RSP CULLDL's z convention is unverified; ignore those codes until a reference
+        // establishes it, since a false cull would discard visible geometry.
+        let mut common = 0x0f;
         for index in first..=last {
             if !self.loaded[index as usize] {
                 return Err(DiagKind::InvalidConditionalVertex {
@@ -956,6 +958,35 @@ pub(crate) fn record_tri(
             scene,
             None,
         );
+    }
+}
+
+#[cfg(test)]
+mod clip_code_tests {
+    use super::*;
+    use crate::hle::mem::RdramImage;
+
+    #[test]
+    fn unverified_z_codes_still_computed_but_unused_by_culldl() {
+        for (z, code) in [(-3i16, 0x10), (-2, 0), (0, 0), (2, 0), (3, 0x20)] {
+            let mut projection = crate::hle::math::identity();
+            projection[3][3] = 2.0;
+            let mut bytes = n64_gbi::encode::mtx_to_bytes(projection).to_vec();
+            let mut vertex = [0u8; 16];
+            vertex[4..6].copy_from_slice(&z.to_be_bytes());
+            bytes.extend(vertex);
+            let mem = RdramImage::new(&bytes);
+            let mut rsp = Rsp::default();
+            let mut scene = Scene::default();
+            rsp.matrix(
+                &mem,
+                0,
+                crate::hle::consts::G_MTX_PROJECTION | crate::hle::consts::G_MTX_LOAD,
+            );
+            rsp.set_vertex(&mem, 64, 1, 0, &Default::default(), &mut scene);
+            assert_eq!(rsp.clip_codes[0], Some(code), "z={z}, w=2");
+            assert_eq!(rsp.cull_display_list(0, 0), Ok(false), "z={z}, w=2");
+        }
     }
 }
 
