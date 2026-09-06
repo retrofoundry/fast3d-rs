@@ -410,17 +410,9 @@ impl Renderer {
 
         let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format);
 
-        // Stream structured diags into the caller's sink, tallying severity for the rollup.
-        let (mut warns, mut errors) = (0u32, 0u32);
         for &d in &result.diags {
-            match d.kind.severity() {
-                Severity::Warn => warns += 1,
-                Severity::Error => errors += 1,
-            }
             diags.emit(d);
         }
-
-        let tris = (result.scene.indices.len() / 3) as u32;
 
         // Rasterize into the persistent store. A draw-nothing walk returns None and leaves
         // `last_scanout_addr` UNCHANGED (spec §4 step 4). RA: clear policy from self.config.
@@ -433,18 +425,12 @@ impl Renderer {
         if let Some(addr) = scanout {
             self.last_scanout_addr = Some(addr);
         }
+        let summary = result.summary(scanout.is_some());
 
         // Retained for the frame (P4 debugger reads all of them; cleared at begin_frame).
         self.frame_scenes.push(result.scene);
 
-        DlSummary {
-            commands: result.commands,
-            tris,
-            warns,
-            errors,
-            dropped_runs: result.dropped_runs,
-            renderable: scanout.is_some(),
-        }
+        summary
     }
 
     /// Explicit frame boundary. Resets per-frame accumulation: the inner store's first-touch clear

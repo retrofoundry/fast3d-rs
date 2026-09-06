@@ -9,6 +9,46 @@ fn interpret_commands(commands: impl IntoIterator<Item = (u32, u32)>) -> crate::
 }
 
 #[test]
+fn roundtrip_known_f3dex2_stubs() {
+    use crate::{DiagKind, Severity};
+
+    let r = interpret_commands([
+        gsp_spnoop(),
+        gsp_line3d(1, 3),
+        gsp_dma_io(true, 0x120, 0xffff_ffff, 32),
+        gsp_enddl(),
+    ]);
+    assert_eq!(r.commands, 4);
+    assert_eq!(r.dropped_runs, 1);
+    assert_eq!(r.diags.len(), 2);
+    assert_eq!(
+        r.diags[0].kind,
+        DiagKind::UnsupportedCommand {
+            opcode: 0x08,
+            w0: 0x0802_0600,
+            w1: 0
+        }
+    );
+    assert_eq!(r.diags[1].kind.severity(), Severity::Warn);
+
+    let load = interpret_commands(
+        gsp_load_ucode(0xffff_fff0, 0xffff_ffe0, 2048)
+            .into_iter()
+            .chain([gsp_line3d(0, 1), gsp_enddl()]),
+    );
+    assert_eq!(load.commands, 2);
+    assert_eq!(load.dropped_runs, 0);
+    assert_eq!(
+        load.diags[0].kind,
+        DiagKind::UnsupportedMicrocodeLoad {
+            w0: 0xdd00_07ff,
+            w1: 0xffff_fff0,
+            data_address: Some(0xffff_ffe0),
+        }
+    );
+}
+
+#[test]
 fn roundtrip_fill_rectangle() {
     let r = interpret_commands([
         gdp_set_color_image(0, 2, 320, 0x00100000),

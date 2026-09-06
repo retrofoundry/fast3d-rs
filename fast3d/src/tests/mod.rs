@@ -34,6 +34,7 @@ mod renderer_process_dl;
 mod rsp_tests;
 mod run_split;
 mod scene_walk;
+mod stubs;
 #[cfg(feature = "capture")]
 mod sm64_corpus;
 #[cfg(feature = "capture")]
