@@ -4,20 +4,7 @@
 //! (`.bin` raw-RGBA8 file).  Running with `UPDATE_GOLDENS=1` writes a new golden instead of
 //! comparing.
 //!
-//! `render_scene_to_rgba8` is the shared render path: it ports the manual headless flow from
-//! `tests/render.rs` (RSP-process compute pass + textured raster pass + `copy_texture_to_buffer`
-//! readback).  It does NOT use `SceneRenderer::render` because that path provides no pixel
-//! readback API.
-//!
-//! Golden storage: raw RGBA8 `.bin` files stored in `crates/renderer/goldens/`.  We use `.bin`
-//! rather than PNG because the `image` crate is not in the offline lockfile; the comparison is
-//! a byte-wise max-channel-diff ≤ `TOL`.
-
-use crate::render::{
-    headless_device, headless_device_forced_fallback, CombinerUniform, RspProcessParams,
-    RspProcessPipeline, TexturedPipeline, CLEAR_COLOR, DEPTH_FORMAT,
-};
-use wgpu::util::DeviceExt;
+use crate::render::{headless_device, headless_device_forced_fallback, CLEAR_COLOR};
 
 use crate::tests::common;
 
@@ -70,402 +57,21 @@ fn render_scene_with_device(
     queue: wgpu::Queue,
 ) -> Vec<u8> {
     let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
-
-    // --- Step 3: HLE interpret → Scene. ---
-    let interp = crate::hle::interpret_rdram(rdram, entry_addr as u32);
-    assert!(interp.diags.is_empty(), "HLE diags: {:?}", interp.diags);
-    let scene = &interp.scene;
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("golden-color"),
-        size: wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-
-    let depth_tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("golden-depth"),
-        size: wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: DEPTH_FORMAT,
-        // TEXTURE_BINDING so the decal pass can sample the depth pass 1 wrote (E2).
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
-    // A second view over the same depth texture, bound at `@group(2)` as `texture_depth_2d` in
-    // the decal pass (used only when the scene has ZMODE_DEC runs).
-    let depth_sample_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
-
-    // bytes_per_row must be padded to wgpu::COPY_BYTES_PER_ROW_ALIGNMENT (256).
-    // For w=64: raw=256, already aligned.  For other widths, ceil-divide to the next multiple.
-    let bytes_per_row_raw = w * 4;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let bytes_per_row = bytes_per_row_raw.div_ceil(align) * align;
-
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("golden-readback"),
-        size: (bytes_per_row * h) as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-
-    // --- Step 5: early-out for empty scenes (clear only). ---
-    if scene.draw_runs.is_empty() || scene.raw_pos.is_empty() || scene.indices.is_empty() {
-        let mut encoder =
-            device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("golden-clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(CLEAR_COLOR),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &target,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bytes_per_row),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        queue.submit(Some(encoder.finish()));
-        return finish_readback(readback, &device, bytes_per_row, w, h);
+    let mut result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
+    assert!(result.diags.is_empty(), "HLE diags: {:?}", result.diags);
+    for material in &mut result.scene.materials {
+        set_address_modes(&mut material.sampling, addr_u, addr_v);
     }
-
-    let pipeline = TexturedPipeline::new(&device, format, DEPTH_FORMAT);
-    let mut material_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(scene.materials.len());
-    for mat in &scene.materials {
-        let mut sampling = crate::render::material_sampling(mat);
-        set_address_modes(&mut sampling[0], addr_u, addr_v);
-        let [upload_w, upload_h] = mat.sampling.allocation_extent();
-        let tex_size = wgpu::Extent3d {
-            width: upload_w,
-            height: upload_h,
-            depth_or_array_layers: 1,
-        };
-        let gpu_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("golden-tex"),
-            size: tex_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &gpu_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &mat.texture,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(upload_w * 4),
-                rows_per_image: Some(upload_h),
-            },
-            tex_size,
-        );
-        let tex_view = gpu_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("golden-sampler"),
-            address_mode_u: addr_u,
-            address_mode_v: addr_v,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("golden-bg-g0"),
-            layout: pipeline.bind_group_layout(),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&tex_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                // TEXEL1 slot: these single-texture goldens never sample it — reuse tex0's
-                // view/sampler to satisfy the group(0) layout (tex_enable1 = 0). Output is unchanged.
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&tex_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                // DETAIL slot (4/5): never sampled by these goldens — reuse tex0's view/sampler.
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&tex_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ]
-            // LOD-level slots (6..=12): never sampled by these non-LOD goldens — reuse tex0's view.
-            .into_iter()
-            .chain((6..13u32).map(|b| wgpu::BindGroupEntry {
-                binding: b,
-                resource: wgpu::BindingResource::TextureView(&tex_view),
-            }))
-            .chain([crate::render::sampling_entry(
-                &crate::render::sampling_buffer(&device, &sampling),
-            )])
-            .collect::<Vec<_>>(),
-        });
-        material_bgs.push(bg);
-    }
-    let material_bg_refs: Vec<&wgpu::BindGroup> = material_bgs.iter().collect();
-
-    // --- Step 7: pooled uniform buffer (N_runs × 256 bytes) + @group(1) bind group. ---
-    // Each run's CombinerUniform sits at byte offset [i*256 .. i*256+48].  The BufferBinding
-    // with explicit `size` (not as_entire_binding) keeps the binding within WebGL2's 16 KiB
-    // max_uniform_buffer_binding_size for large run counts [MIN11].
-    let n_runs = scene.draw_runs.len();
-    let mut pool = vec![0u8; n_runs * 256];
-    for (i, run) in scene.draw_runs.iter().enumerate() {
-        let mat = &scene.materials[run.material_index as usize];
-        let rm = &scene.render_modes[run.render_mode_index as usize];
-        let mut combiner = CombinerUniform::from_run(mat, rm, run.fog_color);
-        // Texcoord table is TEXEL-space: normalize by draw-time tile dims in the fragment.
-        combiner.inv_tex_size = crate::render::triangle_inv_tex_size(mat);
-        let slot = bytemuck::bytes_of(&combiner);
-        pool[i * 256..i * 256 + slot.len()].copy_from_slice(slot);
-    }
-    let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("golden-uniform-pool"),
-        contents: &pool,
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-    let group1_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("golden-bg-g1"),
-        layout: pipeline.uniform_bind_group_layout(),
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                buffer: &uniform_buf,
-                offset: 0,
-                size: wgpu::BufferSize::new(std::mem::size_of::<CombinerUniform>() as u64),
-            }),
-        }],
-    });
-
-    // --- Step 8: RSP-process compute pass (transform vertices). ---
-    let n = scene.raw_pos.len() as u32;
-    use crate::render::rsp_buffers as rb;
-
-    let sb = |data: &[u8]| {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: data,
-            usage: wgpu::BufferUsages::STORAGE,
-        })
-    };
-    let source_buf = sb(bytemuck::cast_slice(&rb::src_vertices(scene)));
-    let mvp_buf = sb(bytemuck::cast_slice(&rb::mvp_table(scene)));
-    let vp_buf = sb(bytemuck::cast_slice(&rb::viewport_table(scene)));
-    let tc_buf = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
-    let lt_buf = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
-    let la_buf = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
-    let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
-
-    // Output buffer: STORAGE for compute write, VERTEX for the raster draw.
-    let dst = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("golden-dst-verts"),
-        size: (n as u64) * 48,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
-        mapped_at_creation: false,
-    });
-
-    let params_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("golden-rsp-params"),
-        contents: bytemuck::bytes_of(&RspProcessParams {
-            vertex_count: n,
-            _pad: 0,
-            fb_width: 320.0,
-            fb_height: 240.0,
-        }),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
-
-    let rsp_pipe = RspProcessPipeline::new(&device);
-    let rsp_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("golden-rsp-bg"),
-        layout: rsp_pipe.bind_group_layout(),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: source_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: mvp_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: vp_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: tc_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: lt_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 6,
-                resource: la_buf.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 7,
-                resource: dst.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 8,
-                resource: fog_table.as_entire_binding(),
-            },
-        ],
-    });
-
-    let ibuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("golden-ibuf"),
-        contents: bytemuck::cast_slice(&scene.indices),
-        usage: wgpu::BufferUsages::INDEX,
-    });
-
-    // --- Step 9: encode compute → raster → copy. ---
-    let mut encoder =
-        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-    rsp_pipe.dispatch(&mut encoder, &rsp_bg, n);
-
-    // E2: a scene with ZMODE_DEC runs takes the two-phase decal path (pass 1 writes depth, pass 2
-    // samples it for the in-shader occlusion/coplanar test). Scenes without decals take the exact
-    // single-pass `draw` path (byte-identical to before — guards the existing goldens).
-    let has_decal = scene.draw_runs.iter().any(|run| {
-        scene.render_modes[run.render_mode_index as usize].z_mode == crate::hle::ZMode::Decal
-    });
-    if has_decal {
-        let depth_sample_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("golden-decal-depth-sample-bg"),
-            layout: pipeline.depth_bind_group_layout(),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&depth_sample_view),
-            }],
-        });
-        pipeline.draw_with_decals(
-            &mut encoder,
-            &view,
-            &dst,
-            &ibuf,
-            scene,
-            CLEAR_COLOR,
-            &material_bg_refs,
-            &group1_bg,
-            256,
-            &depth_view,
-            &depth_sample_bg,
-        );
-    } else {
-        let depth = if scene.render_modes.iter().any(|r| r.z_test || r.z_write) {
-            Some(&depth_view)
-        } else {
-            None
-        };
-        pipeline.draw(
-            &mut encoder,
-            &view,
-            &dst,
-            &ibuf,
-            scene,
-            CLEAR_COLOR,
-            &material_bg_refs,
-            &group1_bg,
-            256,
-            depth,
-        );
-    }
-
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(bytes_per_row),
-                rows_per_image: Some(h),
-            },
-        },
-        wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
+    let mut renderer = crate::render::SceneRenderer::new(
+        &device,
+        wgpu::TextureFormat::Rgba8Unorm,
+        w,
+        h,
+        device
+            .features()
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING),
     );
-    queue.submit(Some(encoder.finish()));
-
-    finish_readback(readback, &device, bytes_per_row, w, h)
+    common::render_to_pixels(&device, &queue, &mut renderer, &result.scene, w, h)
 }
 
 /// Render a `.n64` test scene source using the primary headless device (dual-source when available)
@@ -516,32 +122,6 @@ fn render_scene_to_rgba8(name: &str, w: u32, h: u32) -> Vec<u8> {
     )
 }
 
-/// Map the readback buffer, strip row padding, return unpacked RGBA8.
-fn finish_readback(
-    readback: wgpu::Buffer,
-    device: &wgpu::Device,
-    bytes_per_row: u32,
-    w: u32,
-    h: u32,
-) -> Vec<u8> {
-    let slice = readback.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |res| tx.send(res).unwrap());
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    rx.recv().unwrap().unwrap();
-
-    let data = slice.get_mapped_range();
-    let row_bytes = (w * 4) as usize;
-    let mut result = Vec::with_capacity(row_bytes * h as usize);
-    for row in 0..h {
-        let start = (row * bytes_per_row) as usize;
-        result.extend_from_slice(&data[start..start + row_bytes]);
-    }
-    drop(data);
-    readback.unmap();
-    result
-}
-
 /// Compare `actual` RGBA8 pixels against the committed golden `.bin` file, or write the golden
 /// when `UPDATE_GOLDENS=1` is set.
 ///
@@ -549,6 +129,14 @@ fn finish_readback(
 /// The comparison tolerates a max per-channel absolute difference of `TOL` to absorb
 /// platform-specific rounding in GPU rasterisation.
 fn compare_or_write(name: &str, actual: &[u8], w: u32, h: u32) {
+    if let Ok(dir) = std::env::var("FAST3D_GOLDEN_OUTPUT") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join(format!("{name}.bin")),
+            actual,
+        )
+        .unwrap();
+    }
     let path = format!("{}/goldens/{name}.bin", env!("CARGO_MANIFEST_DIR"));
     if std::env::var("UPDATE_GOLDENS").is_ok() {
         std::fs::write(&path, actual)
@@ -1890,30 +1478,13 @@ fn build_decal_scene() -> crate::hle::Scene {
     scene
 }
 
-/// PAIRED coplanar-decal regression (the decal two-pass `render_decal_pair` fix).
-///
-/// Before this fix `render_pairs` drew every op in ONE depth-tested pass, so a coplanar DECAL run
-/// in a PAIRED scene (sm64's carpet / door overlays once CIMG made sm64 paired) z-fought the
-/// opaque surface and effectively vanished. The pair-LESS path always had the faithful
-/// depth-as-sampled-texture two-pass (`draw_with_decals`); the fix mirrors it per-pair.
-///
-/// **Hand-reasoning (BEFORE comparing):** the scene is a BLACK opaque base quad + a coplanar
-/// BRIGHT MAGENTA decal quad, both full-screen at Z=0. The decal MUST win the coplanar test and
-/// paint magenta over the base. Rendered pair-LESS it goes through `draw_with_decals`; rendered
-/// PAIRED (the SAME two runs moved into one `FramebufferPair` WITH a depth image) it goes through
-/// `render_decal_pair`. The two MUST be pixel-equal (within `TOL`): a decal looks the same paired
-/// or not. The center is asserted MAGENTA (R>180, B>180, G<90) — NOT the black base — so a broken
-/// two-pass (decal z-fights/vanishes → black center) fails the test outright.
 #[test]
 fn golden_paired_decal_matches_pair_less() {
     use crate::render::SceneRenderer;
     const DIM: u32 = 64;
     let (device, queue, dual) = headless_device();
 
-    // Pair-less decal scene (flat draw_runs → `draw_with_decals`).
     let pair_less = build_decal_scene();
-    // Paired form: move the two runs into one FramebufferPair WITH a depth image (so depth exists →
-    // `render_decal_pair` fires). CIMG width = DIM, scissor lry = DIM → a DIM×DIM FB, 1:1 blit.
     let mut paired = pair_less.clone();
     let ops: Vec<crate::hle::SceneOp> = paired
         .draw_runs
@@ -1965,23 +1536,10 @@ fn golden_paired_decal_matches_pair_less() {
     assert!(
         max <= TOL,
         "paired vs pair-less decal max per-channel diff {max} > {TOL} — \
-         the per-pair decal two-pass diverged from the pair-less `draw_with_decals`"
+         paired and pairless decal output diverged"
     );
 }
 
-/// PAIRED op-ORDER regression (the `render_decal_pair` in-order replay fix).
-///
-/// The interior-castle black-out: sm64's main 3D pair opens with a background FILLRECT, THEN draws
-/// opaque geometry, THEN decals (op stream `F T… D…`). The old `render_decal_pair` bucketed ops by
-/// KIND (opaque → decal → **rects last**), hoisting that leading FILLRECT into a trailing pass so it
-/// repainted OVER the finished scene → black. The fix replays ops in submission order (mirroring
-/// the N64 RDP's depth read/write mode switching), so a leading fill stays a background.
-///
-/// **Hand-reasoning (BEFORE rendering):** ops = [green full-FB FILLRECT, black opaque base quad,
-/// magenta coplanar decal quad], all full-screen. In N64 order: green (bg) → black (covers green) →
-/// magenta decal (covers black) → the whole FB is MAGENTA. If the FILLRECT is reordered LAST (the
-/// bug), it repaints green over everything → the whole FB is GREEN. The center is asserted MAGENTA,
-/// so the reorder bug (a green center) fails the test outright.
 #[test]
 fn golden_paired_decal_respects_op_order() {
     use crate::render::SceneRenderer;
@@ -2009,7 +1567,7 @@ fn golden_paired_decal_respects_op_order() {
             width: DIM as u16,
             addr: 0x0010_0000,
         },
-        depth_image: Some(0x0020_0000), // distinct from CIMG → real depth FB → `render_decal_pair`
+        depth_image: Some(0x0020_0000),
         ops,
         active_scissor: crate::hle::Scissor {
             ulx: 0,
