@@ -3,6 +3,8 @@
 //! Per-format decode formulas (nibble order + intensity replication) are documented on each
 //! decode function below. Nibble order for 4-bit formats: even column = high nibble.
 
+use crate::diag::DiagKind;
+
 /// Format + size descriptor for N64 texture tile.
 ///
 /// `fmt` matches the GBI `G_IM_FMT_*` constants (0=RGBA, 3=IA, 4=I).
@@ -13,6 +15,13 @@ pub struct FormatInfo {
 }
 
 impl FormatInfo {
+    pub fn validate(&self) -> Result<(), DiagKind> {
+        match (self.fmt, self.siz) {
+            (0, 2 | 3) | (2, 0 | 1) | (3, 0..=2) | (4, 0 | 1) => Ok(()),
+            (fmt, siz) => Err(DiagKind::UnsupportedTextureFormat { fmt, siz }),
+        }
+    }
+
     /// Number of TMEM bytes occupied by a `w × h` texture in this format.
     ///
     /// Dispatches only on `siz` — all formats with the same `siz` share the same byte count:
@@ -37,7 +46,7 @@ impl FormatInfo {
     /// - `(3, 1)` → IA8 intensity+alpha
     /// - `(3, 0)` → IA4 intensity+alpha
     /// - `(0, 2)` → RGBA16 (delegates to `combiner::decode_rgba16` for byte-identity)
-    /// - other    → warn + RGBA16 fallback (NOT silent)
+    /// - other    → error; RGBA32 requires the dual-bank TMEM decoder
     ///
     /// `tlut`/`palette`/`tlut_fmt` carry TLUT state for CI formats (Task 3); non-CI ignore them.
     pub fn decode(
@@ -48,8 +57,8 @@ impl FormatInfo {
         tlut: &[u8],
         palette: u8,
         tlut_fmt: u8,
-    ) -> Vec<u8> {
-        match (self.fmt, self.siz) {
+    ) -> Result<Vec<u8>, DiagKind> {
+        Ok(match (self.fmt, self.siz) {
             (4, 1) => decode_i8(src, w, h),
             (4, 0) => decode_i4(src, w, h),
             (3, 2) => decode_ia16(src, w, h),
@@ -58,11 +67,8 @@ impl FormatInfo {
             (0, 2) => crate::hle::combiner::decode_rgba16(src),
             (2, 1) => decode_ci8(src, w, h, tlut, tlut_fmt),
             (2, 0) => decode_ci4(src, w, h, tlut, palette, tlut_fmt),
-            (f, s) => {
-                eprintln!("texdec: unimplemented format (fmt={f}, siz={s}); decoding as RGBA16");
-                crate::hle::combiner::decode_rgba16(src)
-            }
-        }
+            (fmt, siz) => return Err(DiagKind::UnsupportedTextureFormat { fmt, siz }),
+        })
     }
 }
 
@@ -296,7 +302,9 @@ mod tests {
         let src: Vec<u8> = (0u8..8).collect(); // 2×2 RGBA16 (w*h*2 = 8 bytes)
         let src = &src[..8];
         assert_eq!(
-            FormatInfo { fmt: 0, siz: 2 }.decode(src, 2, 2, &[], 0, 2),
+            FormatInfo { fmt: 0, siz: 2 }
+                .decode(src, 2, 2, &[], 0, 2)
+                .unwrap(),
             crate::hle::combiner::decode_rgba16(src)
         );
     }

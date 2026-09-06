@@ -14,8 +14,9 @@
 //! 2 KiB of this same array (loaded via [`Tmem::write_tlut`]); and RGBA32 (0,3), the dual-bank
 //! format whose 32-bit texel is split R,G → low bank / B,A → high bank across the two 2 KiB halves.
 
+use crate::diag::DiagKind;
 use crate::hle::rdp::TileDescriptor;
-use crate::hle::texdec::{decode_ia16_entry, decode_rgba16_entry};
+use crate::hle::texdec::{decode_ia16_entry, decode_rgba16_entry, FormatInfo};
 
 /// Total TMEM size in bytes (4 KiB).
 pub const TMEM_BYTES: usize = 0x1000;
@@ -266,7 +267,12 @@ impl Tmem {
     ///
     /// `tlut_fmt` (othermode TT: 0=NONE, 2=RGBA16, 3=IA16) is consulted only by the CI4/CI8
     /// arms, which read a palette index from the low bank and resolve it against the TLUT region.
-    pub fn sample_tile(&self, tile: &TileDescriptor, tlut_fmt: u8) -> Vec<u8> {
+    pub fn sample_tile(&self, tile: &TileDescriptor, tlut_fmt: u8) -> Result<Vec<u8>, DiagKind> {
+        FormatInfo {
+            fmt: tile.fmt,
+            siz: tile.siz,
+        }
+        .validate()?;
         let w = tile.width as usize;
         let h = tile.height as usize;
         let base = (tile.tmem_addr as usize) << 3;
@@ -286,15 +292,24 @@ impl Tmem {
             for x in 0..w {
                 let rel = y * stride + ((x << tmem_shift) >> 1);
                 let px =
-                    self.decode_texel(tile.fmt, tile.siz, base, rel, odd, x, tlut_fmt, palette);
+                    self.decode_texel(tile.fmt, tile.siz, base, rel, odd, x, tlut_fmt, palette)?;
                 let o = (y * w + x) * 4;
                 out[o..o + 4].copy_from_slice(&px);
             }
         }
-        out
+        Ok(out)
     }
 
-    pub fn sampling_lookup(&self, tile: &TileDescriptor, tlut_fmt: u8) -> Vec<u8> {
+    pub fn sampling_lookup(
+        &self,
+        tile: &TileDescriptor,
+        tlut_fmt: u8,
+    ) -> Result<Vec<u8>, DiagKind> {
+        FormatInfo {
+            fmt: tile.fmt,
+            siz: tile.siz,
+        }
+        .validate()?;
         let mut out = Vec::with_capacity(TMEM_BYTES * 4 * 4);
         for odd in [false, true] {
             for parity in 0..2 {
@@ -308,11 +323,11 @@ impl Tmem {
                         parity,
                         tlut_fmt,
                         usize::from(tile.palette),
-                    ));
+                    )?);
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Decode a single texel to RGBA8, reproducing the `texdec` expansions exactly.
@@ -330,8 +345,8 @@ impl Tmem {
         x: usize,
         tlut_fmt: u8,
         palette: usize,
-    ) -> [u8; 4] {
-        match (fmt, siz) {
+    ) -> Result<[u8; 4], DiagKind> {
+        Ok(match (fmt, siz) {
             // RGBA16: big-endian 5/5/5/1 word, channel bit-replicated (c<<3)|(c>>2).
             (0, 2) => {
                 let hi = self.load_byte(base, rel, odd_row);
@@ -401,15 +416,8 @@ impl Tmem {
                 let a = if nib & 1 != 0 { 255 } else { 0 };
                 [i8, i8, i8, a]
             }
-            // Formats outside this phase (RGBA32, YUV, ...) are handled elsewhere; decode as
-            // RGBA16 rather than fail silently, matching texdec's fallback.
-            (f, s) => {
-                eprintln!("tmem::sample_tile: unimplemented format (fmt={f}, siz={s}); decoding as RGBA16");
-                let hi = self.load_byte(base, rel, odd_row);
-                let lo = self.load_byte(base, rel + 1, odd_row);
-                decode_rgba16_entry(((hi as u16) << 8) | lo as u16)
-            }
-        }
+            (fmt, siz) => return Err(DiagKind::UnsupportedTextureFormat { fmt, siz }),
+        })
     }
 
     /// Raw byte access into TMEM (for tests / diagnostics).
@@ -457,22 +465,24 @@ mod tests {
                     palette,
                     ..Default::default()
                 };
-                let lookup = tmem.sampling_lookup(&tile, tlut);
+                let lookup = tmem.sampling_lookup(&tile, tlut).unwrap();
                 assert_eq!(lookup.len(), 65536);
                 for odd in 0..2 {
                     for parity in 0..2 {
                         for rel in 0..4096 {
                             let offset = ((odd * 2 + parity) * 4096 + rel) * 4;
-                            let expected = tmem.decode_texel(
-                                fmt,
-                                siz,
-                                usize::from(base) * 8,
-                                rel + 4096,
-                                odd != 0,
-                                parity,
-                                tlut,
-                                usize::from(palette),
-                            );
+                            let expected = tmem
+                                .decode_texel(
+                                    fmt,
+                                    siz,
+                                    usize::from(base) * 8,
+                                    rel + 4096,
+                                    odd != 0,
+                                    parity,
+                                    tlut,
+                                    usize::from(palette),
+                                )
+                                .unwrap();
                             assert_eq!(lookup[offset..offset + 4], expected,
                                 "fmt {fmt}/{siz}, base {base}, rel {rel}, odd {odd}, parity {parity}");
                         }
@@ -544,7 +554,7 @@ mod tests {
 
         let mut tmem = Tmem::default();
         tmem.write_block(&src, 0, 0 /* load line */, dxt, word_count, siz);
-        let got = tmem.sample_tile(&tile(0, siz, w, h, line, 0), 0);
+        let got = tmem.sample_tile(&tile(0, siz, w, h, line, 0), 0).unwrap();
 
         let expected = crate::hle::combiner::decode_rgba16(&src);
         assert_eq!(
@@ -575,7 +585,9 @@ mod tests {
         }
 
         // ...and sampling recovers the original texels (the swap cancels on read).
-        let got = tmem.sample_tile(&tile(0, 2, 4, 2, render_line_words(4, 2), 0), 0);
+        let got = tmem
+            .sample_tile(&tile(0, 2, 4, 2, render_line_words(4, 2), 0), 0)
+            .unwrap();
         assert_eq!(got, crate::hle::combiner::decode_rgba16(&src));
     }
 
@@ -605,7 +617,7 @@ mod tests {
 
         let mut tmem = Tmem::default();
         tmem.write_block(&src, 0, 0, dxt, word_count, siz);
-        let got = tmem.sample_tile(&tile(4, siz, w, h, line, 0), 0);
+        let got = tmem.sample_tile(&tile(4, siz, w, h, line, 0), 0).unwrap();
 
         // Independently expand every texel from the source nibbles (even column = high nibble).
         for y in 0..h {
@@ -636,7 +648,7 @@ mod tests {
 
         let mut tmem = Tmem::default();
         tmem.write_block(&src, 0, 0, dxt, word_count, siz);
-        let got = tmem.sample_tile(&tile(3, siz, w, h, line, 0), 0);
+        let got = tmem.sample_tile(&tile(3, siz, w, h, line, 0), 0).unwrap();
 
         // IA16: [i, i, i, a] with i = src[2k], a = src[2k+1] in contiguous order.
         for k in 0..w * h {
@@ -663,7 +675,9 @@ mod tests {
 
         let mut tmem = Tmem::default();
         tmem.write_block(&src, base_words, 0, dxt, word_count, siz);
-        let got = tmem.sample_tile(&tile(4, siz, w, h, line, base_words), 0);
+        let got = tmem
+            .sample_tile(&tile(4, siz, w, h, line, base_words), 0)
+            .unwrap();
 
         for k in 0..w * h {
             let v = src[k];
@@ -695,7 +709,7 @@ mod tests {
 
         let mut tmem = Tmem::default();
         tmem.write_block(&src, 0, 0 /* load line */, dxt, word_count, siz);
-        let got = tmem.sample_tile(&tile(0, siz, w, h, line, 0), 0);
+        let got = tmem.sample_tile(&tile(0, siz, w, h, line, 0), 0).unwrap();
 
         // The drifting accumulator must still land the swap on every row boundary, so the result is
         // byte-identical to the plain linear decode of the contiguous source.
@@ -731,7 +745,9 @@ mod tests {
         tmem.write_block(&indices, 0, 0, dxt, word_count, siz);
         tmem.write_tlut(&pal, w * h, PALETTE_BASE >> 3); // dst_word 0x100 → base 0x800
 
-        let got = tmem.sample_tile(&tile(2, siz, w, h, line, 0), 2 /* RGBA16 TLUT */);
+        let got = tmem
+            .sample_tile(&tile(2, siz, w, h, line, 0), 2 /* RGBA16 TLUT */)
+            .unwrap();
 
         for k in 0..w * h {
             let v: u16 = ((k as u16 & 0x1F) << 11) | 1;
@@ -806,7 +822,7 @@ mod tests {
             }
         }
 
-        let got = tmem.sample_tile(&tile(0, 3, w, h, 1, 0), 0);
+        let got = tmem.sample_tile(&tile(0, 3, w, h, 1, 0), 0).unwrap();
         for k in 0..w * h {
             let want = texels[k];
             let px: [u8; 4] = got[k * 4..k * 4 + 4].try_into().unwrap();
@@ -842,7 +858,9 @@ mod tests {
 
         let mut tmem = Tmem::default();
         tmem.write_block(&src, 0, 0 /* load line */, dxt, word_count, 3);
-        let got = tmem.sample_tile(&tile(0, 3, w, h, render_line, 0), 0);
+        let got = tmem
+            .sample_tile(&tile(0, 3, w, h, render_line, 0), 0)
+            .unwrap();
 
         assert_eq!(
             got, src,
@@ -917,7 +935,9 @@ mod tests {
         // Sample through a render tile whose line == the padded LOAD stride (line_words = 2). The
         // write swap and read swap cancel per row, so recovery is byte-identical to a per-row linear
         // RGBA16 decode of the payload bytes (gap excluded).
-        let got = tmem.sample_tile(&tile(0, 2, w, h, line_words, 0), 0);
+        let got = tmem
+            .sample_tile(&tile(0, 2, w, h, line_words, 0), 0)
+            .unwrap();
         for r in 0..h {
             let payload = &src[r * src_stride..r * src_stride + w * 2];
             let want = crate::hle::combiner::decode_rgba16(payload);
@@ -949,7 +969,9 @@ mod tests {
 
         let mut tmem = Tmem::default();
         tmem.write_tile(&src, 0, line_words, h, words_per_row, src_stride, 3);
-        let got = tmem.sample_tile(&tile(0, 3, w, h, line_words, 0), 0);
+        let got = tmem
+            .sample_tile(&tile(0, 3, w, h, line_words, 0), 0)
+            .unwrap();
 
         assert_eq!(
             got, src,

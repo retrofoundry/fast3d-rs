@@ -6,6 +6,45 @@
 use n64_gbi::encode::*;
 
 #[test]
+fn f3dex2_stub_words_match_libultra() {
+    assert_eq!(gsp_spnoop(), (0xe000_0000, 0));
+    assert_eq!(gsp_line3d(1, 3), (0x0802_0600, 0));
+    assert_eq!(gsp_linew3d(3, 1, 5), (0x0806_0205, 0));
+    assert_eq!(
+        gsp_dma_io(false, 0x120, 0x1234_5678, 32),
+        (0xd604_801f, 0x1234_5678)
+    );
+    assert_eq!(
+        gsp_dma_io(true, 0x120, 0x1234_5678, 32),
+        (0xd684_801f, 0x1234_5678)
+    );
+    assert_eq!(
+        gsp_special_1(0xab12_3456, 0x9876_5432),
+        (0xd512_3456, 0x9876_5432)
+    );
+    assert_eq!(
+        gsp_special_2(0xab12_3456, 0x9876_5432),
+        (0xd412_3456, 0x9876_5432)
+    );
+    assert_eq!(
+        gsp_special_3(0xab12_3456, 0x9876_5432),
+        (0xd312_3456, 0x9876_5432)
+    );
+    assert_eq!(
+        gsp_load_ucode(0x1234_5678, 0x8765_4321, 2048),
+        [(0xe100_0000, 0x8765_4321), (0xdd00_07ff, 0x1234_5678)]
+    );
+    assert_eq!(
+        gsp_load_ucode(1, 2, 1),
+        [(0xe100_0000, 2), (0xdd00_0000, 1)]
+    );
+    assert_eq!(
+        gsp_load_ucode(1, 2, 65536),
+        [(0xe100_0000, 2), (0xdd00_ffff, 1)]
+    );
+}
+
+#[test]
 fn tlut_words_match_libultra() {
     for (tile, count_minus_one, expected) in [
         (0, 0, (0xF000_0000, 0x0000_0000)),

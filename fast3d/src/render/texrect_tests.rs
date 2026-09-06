@@ -7,6 +7,7 @@ fn decode(bounds: [u32; 4], base: [i16; 2], step: [i16; 2], cycle: u32, flip: bo
     let mut words = vec![
         gdp_set_color_image(0, 2, 32, 0x10000),
         gdp_set_other_mode_h(20, 2, cycle << 20),
+        gdp_set_tile(0, 2, 1, 0, 3, 0, 2, 0, 0, 2, 0, 0),
     ];
     words.extend(gsp_texture_rectangle(
         ulx,
@@ -195,8 +196,16 @@ fn texrect_preserves_raw_fixed_and_float_bounds() {
 
 #[test]
 fn texrect_uniform_uses_texel_units() {
-    let rdp = crate::hle::rdp::Rdp {
+    let mut rdp = crate::hle::rdp::Rdp {
         other_mode_h: 2 << 20,
+        ..Default::default()
+    };
+    rdp.tiles[0] = crate::hle::rdp::TileDescriptor {
+        fmt: 0,
+        siz: 2,
+        width: 16,
+        height: 8,
+        line: 4,
         ..Default::default()
     };
     let mut mat = crate::hle::combiner::build_rect_material(
@@ -208,8 +217,6 @@ fn texrect_uniform_uses_texel_units() {
     )
     .unwrap();
     mat.tex_enable = true;
-    mat.tex_w = 16;
-    mat.tex_h = 8;
     let rm = crate::hle::blender::decode_render_mode(0, 0, 0);
     let uniform = CombinerUniform::from_rect(&mat, &rm, [0; 4]);
     assert_eq!(uniform.inv_tex_size, [0.0625, 0.125, 1.0, 0.0]);

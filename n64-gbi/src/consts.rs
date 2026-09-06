@@ -140,6 +140,13 @@ pub mod rsp_f3dex2 {
     pub const G_VTX: u8 = 0x01;
     pub const G_TRI1: u8 = 0x05;
     pub const G_TRI2: u8 = 0x06;
+    pub const G_LINE3D: u8 = 0x08;
+    pub const G_SPECIAL_3: u8 = 0xD3;
+    pub const G_SPECIAL_2: u8 = 0xD4;
+    pub const G_SPECIAL_1: u8 = 0xD5;
+    pub const G_DMA_IO: u8 = 0xD6;
+    pub const G_LOAD_UCODE: u8 = 0xDD;
+    pub const G_SPNOOP: u8 = 0xE0;
     pub const G_GEOMETRYMODE: u8 = 0xD9;
     pub const G_MTX: u8 = 0xDA;
     pub const G_MOVEMEM: u8 = 0xDC;

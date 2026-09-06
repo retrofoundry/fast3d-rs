@@ -195,6 +195,54 @@ pub fn gsp_vertex(v0: u8, n: u8, addr: u32) -> (u32, u32) {
     (w0, addr)
 }
 
+pub fn gsp_spnoop() -> (u32, u32) {
+    ((G_SPNOOP as u32) << 24, 0)
+}
+
+pub fn gsp_line3d(v0: u8, v1: u8) -> (u32, u32) {
+    gsp_linew3d(v0, v1, 0)
+}
+
+pub fn gsp_linew3d(v0: u8, v1: u8, width: u8) -> (u32, u32) {
+    let w0 = ((G_LINE3D as u32) << 24)
+        | shiftl(v0 as u32 * 2, 16, 8)
+        | shiftl(v1 as u32 * 2, 8, 8)
+        | width as u32;
+    (w0, 0)
+}
+
+/// Encodes a DMEM transfer; `size` is 1..4096 bytes.
+pub fn gsp_dma_io(write: bool, dmem: u32, dram: u32, size: u32) -> (u32, u32) {
+    let w0 = ((G_DMA_IO as u32) << 24)
+        | shiftl(write as u32, 23, 1)
+        | shiftl(dmem / 8, 13, 10)
+        | shiftl(size - 1, 0, 12);
+    (w0, dram)
+}
+
+pub fn gsp_special_1(payload: u32, data: u32) -> (u32, u32) {
+    (((G_SPECIAL_1 as u32) << 24) | (payload & 0x00ff_ffff), data)
+}
+
+pub fn gsp_special_2(payload: u32, data: u32) -> (u32, u32) {
+    (((G_SPECIAL_2 as u32) << 24) | (payload & 0x00ff_ffff), data)
+}
+
+pub fn gsp_special_3(payload: u32, data: u32) -> (u32, u32) {
+    (((G_SPECIAL_3 as u32) << 24) | (payload & 0x00ff_ffff), data)
+}
+
+/// Encodes RDPHALF_1 and LOAD_UCODE; `data_size` is 1..65536 bytes.
+pub fn gsp_load_ucode(code_addr: u32, data_addr: u32, data_size: u32) -> [(u32, u32); 2] {
+    [
+        ((G_RDPHALF_1 as u32) << 24, data_addr),
+        (
+            ((G_LOAD_UCODE as u32) << 24) | shiftl(data_size - 1, 0, 16),
+            code_addr,
+        ),
+    ]
+}
+
 /// gsSP1Triangle(v0,v1,v2). Each index*2 packed at BYTE shifts 16/8/0.
 /// Decode p0(17,7)/p0(9,7)/p0(1,7) recovers the raw indices. For (0,1,2): w0 = 0x05000204.
 pub fn gsp_1triangle(v0: u8, v1: u8, v2: u8) -> (u32, u32) {

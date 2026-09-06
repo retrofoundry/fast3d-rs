@@ -15,6 +15,20 @@ pub struct Diagnostic {
 #[non_exhaustive]
 pub enum DiagKind {
     UnknownOpcode(u8),
+    UnsupportedCommand {
+        opcode: u8,
+        w0: u32,
+        w1: u64,
+    },
+    UnsupportedMicrocodeLoad {
+        w0: u32,
+        w1: u64,
+        data_address: Option<u64>,
+    },
+    UnsupportedTextureFormat {
+        fmt: u8,
+        siz: u8,
+    },
     UnsupportedCommandParameters {
         opcode: u8,
     },
@@ -62,7 +76,11 @@ impl DiagKind {
     /// drops/aborts draw data is `Error`; only cosmetic ones are `Warn` (spec §3.6).
     pub fn severity(&self) -> Severity {
         match self {
+            DiagKind::UnsupportedCommand { opcode: 0xd6, .. } => Severity::Warn,
             DiagKind::UnknownOpcode(_)
+            | DiagKind::UnsupportedCommand { .. }
+            | DiagKind::UnsupportedMicrocodeLoad { .. }
+            | DiagKind::UnsupportedTextureFormat { .. }
             | DiagKind::UnsupportedCommandParameters { .. }
             | DiagKind::RunawayDl { .. }
             | DiagKind::DlPastRdram
@@ -71,12 +89,12 @@ impl DiagKind {
             | DiagKind::VtxOutOfRange { .. }
             | DiagKind::NoTextureLoaded
             | DiagKind::SecondTextureUndecodable
-            | DiagKind::UnwiredSelector { .. } => Severity::Error,
-            DiagKind::RenderModeNeverSet
             | DiagKind::UnhandledMovemem(_)
             | DiagKind::UnhandledMoveword(_)
-            | DiagKind::NonCanonicalBlend
-            | DiagKind::StrayRdphalf => Severity::Warn,
+            | DiagKind::UnwiredSelector { .. } => Severity::Error,
+            DiagKind::RenderModeNeverSet | DiagKind::NonCanonicalBlend | DiagKind::StrayRdphalf => {
+                Severity::Warn
+            }
         }
     }
 }
@@ -85,6 +103,29 @@ impl std::fmt::Display for DiagKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DiagKind::UnknownOpcode(op) => write!(f, "unknown opcode 0x{op:02X}"),
+            DiagKind::UnsupportedCommand { opcode, w0, w1 } => {
+                write!(
+                    f,
+                    "unsupported opcode 0x{opcode:02X}: w0={w0:#010x}, w1={w1:#018x}"
+                )
+            }
+            DiagKind::UnsupportedMicrocodeLoad {
+                w0,
+                w1,
+                data_address,
+            } => {
+                write!(
+                    f,
+                    "unsupported microcode load: w0={w0:#010x}, w1={w1:#018x}, "
+                )?;
+                match data_address {
+                    Some(address) => write!(f, "data={address:#018x}"),
+                    None => write!(f, "missing RDPHALF_1 data address"),
+                }
+            }
+            DiagKind::UnsupportedTextureFormat { fmt, siz } => {
+                write!(f, "unsupported texture format: fmt={fmt}, siz={siz}")
+            }
             DiagKind::UnsupportedCommandParameters { opcode } => {
                 write!(f, "unsupported parameters for opcode 0x{opcode:02X}")
             }
@@ -198,6 +239,17 @@ mod tests {
     fn severity_maps_every_variant_per_spec() {
         for k in [
             DiagKind::UnknownOpcode(0),
+            DiagKind::UnsupportedCommand {
+                opcode: 0x08,
+                w0: 0,
+                w1: 0,
+            },
+            DiagKind::UnsupportedMicrocodeLoad {
+                w0: 0,
+                w1: 0,
+                data_address: None,
+            },
+            DiagKind::UnsupportedTextureFormat { fmt: 1, siz: 2 },
             DiagKind::UnsupportedCommandParameters { opcode: 0xf0 },
             DiagKind::RunawayDl { cap: 1 },
             DiagKind::DlPastRdram,
@@ -207,14 +259,19 @@ mod tests {
             DiagKind::VtxOutOfRange { count: 1, end: 2 },
             DiagKind::NoTextureLoaded,
             DiagKind::SecondTextureUndecodable,
+            DiagKind::UnhandledMovemem(0),
+            DiagKind::UnhandledMoveword(0),
             DiagKind::UnwiredSelector { slots: 0b0100 },
         ] {
             assert_eq!(k.severity(), Severity::Error, "{k} must be Error");
         }
         for k in [
+            DiagKind::UnsupportedCommand {
+                opcode: 0xd6,
+                w0: 0,
+                w1: 0,
+            },
             DiagKind::RenderModeNeverSet,
-            DiagKind::UnhandledMovemem(0),
-            DiagKind::UnhandledMoveword(0),
             DiagKind::NonCanonicalBlend,
             DiagKind::StrayRdphalf,
         ] {
@@ -233,6 +290,28 @@ mod tests {
             DiagKind::UnwiredSelector { slots: 0b0100 }.to_string(),
             "combiner selector not implemented: [\"cycle 1 CC\"]"
         );
+        for (kind, expected) in [
+            (
+                DiagKind::UnsupportedCommand { opcode: 0xd5, w0: 0xd512_3456, w1: 0x1234_5678_ffff_ffff },
+                "unsupported opcode 0xD5: w0=0xd5123456, w1=0x12345678ffffffff",
+            ),
+            (
+                DiagKind::UnsupportedTextureFormat { fmt: 7, siz: 3 },
+                "unsupported texture format: fmt=7, siz=3",
+            ),
+            (
+                DiagKind::UnsupportedMicrocodeLoad { w0: 0xdd00_07ff, w1: 0x1234_5678_0000_0000, data_address: Some(0x9876_5432_0000_0000) },
+                "unsupported microcode load: w0=0xdd0007ff, w1=0x1234567800000000, data=0x9876543200000000",
+            ),
+            (
+                DiagKind::UnsupportedMicrocodeLoad { w0: 0xdd00_0000, w1: 0, data_address: None },
+                "unsupported microcode load: w0=0xdd000000, w1=0x0000000000000000, missing RDPHALF_1 data address",
+            ),
+            (DiagKind::UnhandledMovemem(0x7f), "unhandled MOVEMEM index 0x7F"),
+            (DiagKind::UnhandledMoveword(0x7f), "unhandled G_MOVEWORD type 0x7F"),
+        ] {
+            assert_eq!(kind.to_string(), expected);
+        }
         let d = Diagnostic {
             at: 0x1234,
             kind: DiagKind::DrawBeforeCimg,

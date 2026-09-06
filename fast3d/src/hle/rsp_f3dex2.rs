@@ -1,8 +1,9 @@
 use crate::diag::{DiagKind, Diagnostic};
 use crate::hle::consts::rdp::G_SETTIMG;
 use crate::hle::consts::rsp_f3dex2::{
-    G_GEOMETRYMODE, G_MOVEMEM, G_MOVEWORD, G_MTX, G_POPMTX, G_SETOTHERMODE_H, G_SETOTHERMODE_L,
-    G_TEXTURE, G_TRI1, G_TRI2, G_VTX,
+    G_DMA_IO, G_GEOMETRYMODE, G_LINE3D, G_MOVEMEM, G_MOVEWORD, G_MTX, G_POPMTX, G_SETOTHERMODE_H,
+    G_SETOTHERMODE_L, G_SPECIAL_1, G_SPECIAL_2, G_SPECIAL_3, G_SPNOOP, G_TEXTURE, G_TRI1, G_TRI2,
+    G_VTX,
 };
 use crate::hle::interp::{Cmd, Ctx, Handler};
 use crate::hle::mem::Rdram;
@@ -21,6 +22,31 @@ pub(crate) fn install_overrides<M: Rdram>(t: &mut [Handler<M>; 256]) {
     t[G_SETTIMG as usize] = set_texture_image::<M>;
     t[G_MOVEWORD as usize] = move_word::<M>;
     t[G_POPMTX as usize] = pop_matrix::<M>;
+    t[G_SPNOOP as usize] = spnoop::<M>;
+    for opcode in [G_LINE3D, G_DMA_IO, G_SPECIAL_1, G_SPECIAL_2, G_SPECIAL_3] {
+        t[opcode as usize] = unsupported::<M>;
+    }
+}
+
+fn spnoop<M: Rdram>(_: &Cmd, _: &mut Ctx<M>) {}
+
+fn unsupported<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+    let opcode = c.opcode();
+    if opcode == G_LINE3D {
+        *cx.dropped_runs += 1;
+    }
+    if !cx.diags.iter().any(
+        |d| matches!(d.kind, DiagKind::UnsupportedCommand { opcode: seen, .. } if seen == opcode),
+    ) {
+        cx.diags.push(Diagnostic {
+            at: cx.pc,
+            kind: DiagKind::UnsupportedCommand {
+                opcode,
+                w0: c.w0,
+                w1: c.w1_addr,
+            },
+        });
+    }
 }
 
 fn vtx<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {

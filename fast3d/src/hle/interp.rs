@@ -81,11 +81,39 @@ pub struct InterpResult {
     pub dropped_runs: u32,
 }
 
+impl InterpResult {
+    pub(crate) fn summary(&self, renderable: bool) -> crate::diag::DlSummary {
+        let (mut warns, mut errors) = (0, 0);
+        for d in &self.diags {
+            match d.kind.severity() {
+                crate::diag::Severity::Warn => warns += 1,
+                crate::diag::Severity::Error => errors += 1,
+            }
+        }
+        crate::diag::DlSummary {
+            commands: self.commands,
+            tris: (self.scene.indices.len() / 3) as u32,
+            warns,
+            errors,
+            dropped_runs: self.dropped_runs,
+            renderable,
+        }
+    }
+}
+
 /// Max command dispatches before the runaway guard fires. Needed because we run
 /// user-authored DLs, not trusted hardware DLs.
 /// 1 << 20 cannot be reached by any valid finite DL in RDRAM yet terminates a
 /// self-branch loop quickly.
 const DISPATCH_CAP: u64 = 1 << 20;
+
+enum Control {
+    Continue,
+    Call(u64),
+    Branch(u64),
+    Return,
+    Abort,
+}
 
 pub fn interpret<M: Rdram>(
     mem: M,
@@ -101,6 +129,8 @@ pub fn interpret<M: Rdram>(
     let mut diags = Vec::new();
     let mut dropped_runs: u32 = 0;
     let mut unknown_seen = [false; 256];
+    let mut rdphalf_1 = None;
+    let mut rejected = false;
 
     let mut pc: u64 = entry;
     let mut return_stack: Vec<u64> = Vec::new();
@@ -134,22 +164,55 @@ pub fn interpret<M: Rdram>(
         };
         let op = c.opcode();
 
-        // Structural opcodes handled inline (they set pc / touch the return stack).
-        if op == gbi.consts.g_dl {
+        let control = if op == gbi.consts.g_dl {
+            let target = mem.resolve_masked(c.w1_addr);
             if c.p0(16, 1) == 0 {
-                return_stack.push(pc + stride);
+                Control::Call(target)
+            } else {
+                Control::Branch(target)
             }
-            pc = mem.resolve_masked(cmd.w1_addr); // call & branch both jump
-            continue; // NO post-advance
-        }
-        if op == gbi.consts.g_enddl {
-            match return_stack.pop() {
+        } else if op == gbi.consts.g_enddl {
+            Control::Return
+        } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
+            && op == crate::hle::consts::G_LOAD_UCODE
+        {
+            diags.push(Diagnostic {
+                at: pc,
+                kind: DiagKind::UnsupportedMicrocodeLoad {
+                    w0: c.w0,
+                    w1: c.w1_addr,
+                    data_address: rdphalf_1,
+                },
+            });
+            Control::Abort
+        } else {
+            Control::Continue
+        };
+        match control {
+            Control::Call(target) | Control::Branch(target) => {
+                if matches!(control, Control::Call(_)) {
+                    return_stack.push(pc + stride);
+                }
+                pc = target;
+                continue;
+            }
+            Control::Return => match return_stack.pop() {
                 Some(ret) => {
                     pc = ret;
                     continue;
                 }
-                None => break, // empty stack -> end the walk (behavior-preserving)
+                None => break,
+            },
+            Control::Abort => {
+                rejected = true;
+                break;
             }
+            Control::Continue => {}
+        }
+        if ucode == crate::hle::gbi::GbiUcode::F3dex2 && op == crate::hle::consts::G_RDPHALF_1 {
+            rdphalf_1 = Some(c.w1_addr);
+            pc += stride;
+            continue;
         }
 
         // First G_SETCIMG → the scene becomes "paired" (subsequent draws record into ordered
@@ -334,34 +397,47 @@ pub fn interpret<M: Rdram>(
             unknown_seen: &mut unknown_seen,
         };
         gbi.table[op as usize](&c, &mut cx);
-        if diags
-            .last()
-            .is_some_and(|d| d.kind == DiagKind::DlPastRdram)
-        {
-            dropped_runs += scene.draw_runs.len() as u32
-                + scene
-                    .framebuffer_pairs
-                    .iter()
-                    .flat_map(|pair| &pair.ops)
-                    .filter(|op| {
-                        matches!(
-                            op,
-                            crate::hle::rsp::SceneOp::Tris(_)
-                                | crate::hle::rsp::SceneOp::TexRect { .. }
-                                | crate::hle::rsp::SceneOp::FillRect { .. }
-                        )
-                    })
-                    .count() as u32;
-            return InterpResult {
-                scene: Scene::default(),
-                diags,
-                geometry_mode: rsp.geometry_mode(),
-                rdp,
-                commands: dispatched as u32,
-                dropped_runs,
-            };
+        if diags.last().is_some_and(|d| {
+            matches!(
+                d.kind,
+                DiagKind::DlPastRdram
+                    | DiagKind::UnhandledMovemem(_)
+                    | DiagKind::UnhandledMoveword(_)
+                    | DiagKind::UnsupportedCommand {
+                        opcode: 0xd3..=0xd5,
+                        ..
+                    }
+            )
+        }) {
+            rejected = true;
+            break;
         }
         pc += stride;
+    }
+
+    if rejected {
+        dropped_runs += scene.draw_runs.len() as u32
+            + scene
+                .framebuffer_pairs
+                .iter()
+                .flat_map(|pair| &pair.ops)
+                .filter(|op| {
+                    matches!(
+                        op,
+                        crate::hle::rsp::SceneOp::Tris(_)
+                            | crate::hle::rsp::SceneOp::TexRect { .. }
+                            | crate::hle::rsp::SceneOp::FillRect { .. }
+                    )
+                })
+                .count() as u32;
+        return InterpResult {
+            scene: Scene::default(),
+            diags,
+            geometry_mode: rsp.geometry_mode(),
+            rdp,
+            commands: dispatched as u32,
+            dropped_runs,
+        };
     }
 
     let geometry_mode = rsp.geometry_mode();

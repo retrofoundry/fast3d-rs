@@ -288,7 +288,7 @@ mod host {
                 [0xFF10_0040, 0x0000_0002_3456_7000],
                 [0xF700_0000, 0xF801_F801],
                 [0xF610_00BC, 0],
-                [0xBC00_00FF, 0],
+                [0xF100_0000, 0],
                 [0xB800_0000, 0],
             ]
             .into_boxed_slice();
@@ -481,7 +481,7 @@ mod host {
             assert_eq!(first.commands, 9);
             assert_eq!(second.commands, 9);
             assert_eq!(diagnostics[0].len(), 1);
-            assert_eq!(diagnostics[0][0].kind, DiagKind::UnhandledMoveword(0xFF));
+            assert_eq!(diagnostics[0][0].kind, DiagKind::StrayRdphalf);
             let fixture = Fixture::from_bytes(&fixture.to_bytes().unwrap()).unwrap();
             assert_eq!(fixture.frame.serial, 1);
             assert_eq!(fixture.frame.dither_seed, 123);
