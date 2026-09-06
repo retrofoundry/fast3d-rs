@@ -1363,6 +1363,7 @@ fn golden_2d_rect_geometry_exact() {
                 material_index: 0,
                 render_mode_index: 0,
                 fog_color: [0; 4],
+                prim_depth: Default::default(),
                 fb_source: None,
             }],
             active_scissor: crate::hle::Scissor {
@@ -1723,6 +1724,7 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
                     material_index: 0,
                     render_mode_index: 0,
                     fog_color: [0; 4],
+                    prim_depth: Default::default(),
                     fb_source: None,
                 },
             ],
@@ -1855,6 +1857,7 @@ fn build_decal_scene() -> crate::hle::Scene {
     scene.draw_runs = vec![
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -1863,6 +1866,7 @@ fn build_decal_scene() -> crate::hle::Scene {
         },
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 1,
             render_mode_index: 1,
             cull: crate::hle::CullKind::None,

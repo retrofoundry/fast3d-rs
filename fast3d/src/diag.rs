@@ -29,6 +29,7 @@ pub enum DiagKind {
         fmt: u8,
         siz: u8,
     },
+    UnsupportedPrimitiveDepthSource,
     UnsupportedCommandParameters {
         opcode: u8,
     },
@@ -97,6 +98,7 @@ impl DiagKind {
             | DiagKind::UnsupportedCommand { .. }
             | DiagKind::UnsupportedMicrocodeLoad { .. }
             | DiagKind::UnsupportedTextureFormat { .. }
+            | DiagKind::UnsupportedPrimitiveDepthSource
             | DiagKind::UnsupportedCommandParameters { .. }
             | DiagKind::RunawayDl { .. }
             | DiagKind::DlPastRdram
@@ -146,6 +148,9 @@ impl std::fmt::Display for DiagKind {
             }
             DiagKind::UnsupportedTextureFormat { fmt, siz } => {
                 write!(f, "unsupported texture format: fmt={fmt}, siz={siz}")
+            }
+            DiagKind::UnsupportedPrimitiveDepthSource => {
+                write!(f, "primitive depth source is unsupported")
             }
             DiagKind::UnsupportedCommandParameters { opcode } => {
                 write!(f, "unsupported parameters for opcode 0x{opcode:02X}")
@@ -284,6 +289,7 @@ mod tests {
                 data_address: None,
             },
             DiagKind::UnsupportedTextureFormat { fmt: 1, siz: 2 },
+            DiagKind::UnsupportedPrimitiveDepthSource,
             DiagKind::UnsupportedCommandParameters { opcode: 0xf0 },
             DiagKind::RunawayDl { cap: 1 },
             DiagKind::DlPastRdram,

@@ -89,6 +89,7 @@ fn framebuffer_640x480_triangles_align_with_texrect() {
             material_index: 0,
             render_mode_index: 0,
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             fb_source: None,
         }];
         for source in [&scene, &rect_scene] {
@@ -180,8 +181,8 @@ fn framebuffer_modify_xy_uses_pair_extent() {
         rsp.modify_vertex(slot as u32, 0x18, packed, &mut scene)
             .unwrap();
     }
-    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
-    rsp.draw_tri(0, 2, 3, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
+    rsp.draw_tri(0, 2, 3, 0, 0, [0; 4], Default::default(), &mut scene, None);
     rsp.finish(&mut scene);
     assert_eq!(scene.modify_screen[0], [400.0, 300.0, 0.0, 0.0]);
     assert_eq!(scene.modify_flags, [1; 4]);

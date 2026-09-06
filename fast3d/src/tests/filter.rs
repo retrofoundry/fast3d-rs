@@ -92,6 +92,7 @@ fn rect_scene(filters: &[(u32, bool)], uv: [i16; 2]) -> Scene {
             material_index: i as u32,
             render_mode_index: 0,
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             fb_source: None,
         });
     }

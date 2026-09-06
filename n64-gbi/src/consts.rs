@@ -7,6 +7,7 @@ pub mod rdp {
     pub const G_SETCOMBINE: u8 = 0xFC;
     pub const G_SETENVCOLOR: u8 = 0xFB;
     pub const G_SETPRIMCOLOR: u8 = 0xFA;
+    pub const G_SETPRIMDEPTH: u8 = 0xEE;
     pub const G_SETTILE: u8 = 0xF5;
     pub const G_LOADBLOCK: u8 = 0xF3;
     pub const G_LOADTILE: u8 = 0xF4;
@@ -15,6 +16,8 @@ pub mod rdp {
     pub const AC_NONE: u32 = 0;
     pub const AC_THRESHOLD: u32 = 1;
     pub const AC_DITHER: u32 = 3;
+    pub const G_ZS_PIXEL: u32 = 0;
+    pub const G_ZS_PRIM: u32 = 4;
     pub const AA_EN: u32 = 0x0008;
     pub const Z_CMP: u32 = 0x0010;
     pub const Z_UPD: u32 = 0x0020;

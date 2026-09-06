@@ -114,6 +114,13 @@ pub fn gdp_set_env_color(rgba: u32) -> (u32, u32) {
     (shiftl(G_SETENVCOLOR as u32, 24, 8), rgba)
 }
 
+pub fn gdp_set_prim_depth(z: u32, dz: u32) -> (u32, u32) {
+    (
+        shiftl(G_SETPRIMDEPTH as u32, 24, 8),
+        shiftl(z, 16, 16) | shiftl(dz, 0, 16),
+    )
+}
+
 pub fn gdp_set_other_mode_h(shift: u32, length: u32, data: u32) -> (u32, u32) {
     let w0 = shiftl(G_SETOTHERMODE_H as u32, 24, 8)
         | shiftl(32 - shift - length, 8, 8)

@@ -368,6 +368,7 @@ pub fn interpret<M: Rdram>(
                     material_index,
                     render_mode_index,
                     fog_color: rdp.fog_color,
+                    prim_depth: rdp.prim_depth,
                     fb_source,
                 });
             pc += 3 * stride;
@@ -1038,6 +1039,7 @@ mod rect_encoding_tests {
                 material_index: 0,
                 render_mode_index: 0,
                 fog_color: [0; 4],
+                prim_depth: Default::default(),
                 fb_source: None,
             }]
         );
@@ -1165,6 +1167,7 @@ mod rect_encoding_tests {
                 material_index: 0,
                 render_mode_index: 0,
                 fog_color: [0; 4],
+                prim_depth: Default::default(),
                 fb_source: None,
             }]
         );
