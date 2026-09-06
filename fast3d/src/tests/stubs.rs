@@ -201,6 +201,7 @@ fn diagnostic_severity_and_rollup() {
             errors: 1,
             dropped_runs: 2,
             renderable: true,
+            termination: crate::inspect::WalkTermination::End,
         }
     );
     let rejected = walk(&[CIMG, FILL, (0xd500_0000, 0), END], GbiUcode::F3dex2);
@@ -214,6 +215,7 @@ fn diagnostic_severity_and_rollup() {
             errors: 1,
             dropped_runs: 1,
             renderable: false,
+            termination: crate::inspect::WalkTermination::Rejected,
         }
     );
     assert_eq!(

@@ -439,6 +439,33 @@ impl Renderer {
         self.process_dl_memory(mem, entry, ucode, diags)
     }
 
+    /// Observe the walk that produces this DL's rendered scene, without the CPU `walk` cap.
+    /// Returning `Break(())` before root end or a fault cancels the DL: its scene is neither
+    /// rasterized nor retained, and earlier DLs remain intact. Counts include cancelled work;
+    /// `termination` is `ObserverStopped` and `renderable` is false on cancellation.
+    /// To bound collection without cancelling rendering, stop storing steps and return `Continue(())`.
+    pub fn process_dl_observed(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        observer: &mut dyn inspect::WalkObserver,
+    ) -> DlSummary {
+        self.process_dl_inner(hw, entry, ucode, diags, Some(observer))
+    }
+
+    fn process_dl_inner(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        observer: Option<&mut dyn inspect::WalkObserver>,
+    ) -> DlSummary {
+        self.process_dl_memory_observed(hw.rdram(), entry, ucode, diags, observer)
+    }
+
     pub(crate) fn process_dl_memory(
         &mut self,
         mem: impl Rdram,
@@ -446,18 +473,29 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
     ) -> DlSummary {
-        let is_image = mem.is_rdram_image();
+        self.process_dl_memory_observed(mem, entry, ucode, diags, None)
+    }
 
-        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format, None);
+    fn process_dl_memory_observed(
+        &mut self,
+        mem: impl Rdram,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        observer: Option<&mut dyn inspect::WalkObserver>,
+    ) -> DlSummary {
+        let is_image = mem.is_rdram_image();
+        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format, observer);
 
         for &d in &result.diags {
             diags.emit(d);
         }
 
-        if result
-            .diags
-            .iter()
-            .any(|diag| matches!(diag.kind, DiagKind::MemoryRead { .. }))
+        if result.termination == inspect::WalkTermination::ObserverStopped
+            || result
+                .diags
+                .iter()
+                .any(|diag| matches!(diag.kind, DiagKind::MemoryRead { .. }))
         {
             return result.summary(false);
         }
