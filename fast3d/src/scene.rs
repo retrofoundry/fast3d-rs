@@ -11,12 +11,19 @@ pub enum CullKind {
     Cull,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrimitiveDepth {
+    pub z: u16,
+    pub dz: u16,
+}
+
 /// A contiguous run of `scene.indices` sharing one cull state, emitted as one `draw_indexed`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DrawRun {
     pub material_index: u32,
     pub render_mode_index: u32,
     pub fog_color: [u8; 4],
+    pub prim_depth: PrimitiveDepth,
     pub cull: CullKind,
     pub index_count: u32,
     pub index_start: u32,
@@ -75,6 +82,7 @@ pub enum SceneOp {
         material_index: u32,
         render_mode_index: u32,
         fog_color: [u8; 4],
+        prim_depth: PrimitiveDepth,
         fb_source: Option<u64>,
     },
     SetScissor(Scissor),

@@ -29,6 +29,7 @@ pub enum DiagKind {
         fmt: u8,
         siz: u8,
     },
+    UnsupportedPrimitiveDepthSource,
     UnsupportedCommandParameters {
         opcode: u8,
     },
@@ -49,6 +50,18 @@ pub enum DiagKind {
         index: u32,
         attribute: u32,
     },
+    InvalidCullRange {
+        first: u32,
+        last: u32,
+    },
+    InvalidConditionalVertex {
+        opcode: u8,
+        index: u32,
+    },
+    InvalidVertexTransform {
+        index: u32,
+    },
+    MissingBranchTarget,
     UnhandledMovemem(u8),
     UnhandledMoveword(u8),
     NonCanonicalBlend,
@@ -85,6 +98,7 @@ impl DiagKind {
             | DiagKind::UnsupportedCommand { .. }
             | DiagKind::UnsupportedMicrocodeLoad { .. }
             | DiagKind::UnsupportedTextureFormat { .. }
+            | DiagKind::UnsupportedPrimitiveDepthSource
             | DiagKind::UnsupportedCommandParameters { .. }
             | DiagKind::RunawayDl { .. }
             | DiagKind::DlPastRdram
@@ -92,6 +106,10 @@ impl DiagKind {
             | DiagKind::DrawBeforeCimg
             | DiagKind::VtxOutOfRange { .. }
             | DiagKind::InvalidModifyVertex { .. }
+            | DiagKind::InvalidCullRange { .. }
+            | DiagKind::InvalidConditionalVertex { .. }
+            | DiagKind::InvalidVertexTransform { .. }
+            | DiagKind::MissingBranchTarget
             | DiagKind::NoTextureLoaded
             | DiagKind::SecondTextureUndecodable
             | DiagKind::UnhandledMovemem(_)
@@ -131,6 +149,9 @@ impl std::fmt::Display for DiagKind {
             DiagKind::UnsupportedTextureFormat { fmt, siz } => {
                 write!(f, "unsupported texture format: fmt={fmt}, siz={siz}")
             }
+            DiagKind::UnsupportedPrimitiveDepthSource => {
+                write!(f, "primitive depth source is unsupported")
+            }
             DiagKind::UnsupportedCommandParameters { opcode } => {
                 write!(f, "unsupported parameters for opcode 0x{opcode:02X}")
             }
@@ -158,6 +179,16 @@ impl std::fmt::Display for DiagKind {
             DiagKind::InvalidModifyVertex { index, attribute } => {
                 write!(f, "invalid MODIFYVTX slot or attribute: index={index}, attribute={attribute:#04x}")
             }
+            DiagKind::InvalidCullRange { first, last } => {
+                write!(f, "invalid CULLDL range: first={first}, last={last}")
+            }
+            DiagKind::InvalidConditionalVertex { opcode, index } => {
+                write!(f, "invalid vertex for opcode 0x{opcode:02X}: index={index}")
+            }
+            DiagKind::InvalidVertexTransform { index } => {
+                write!(f, "invalid vertex transform: index={index}")
+            }
+            DiagKind::MissingBranchTarget => write!(f, "BRANCH_Z missing RDPHALF_1 target"),
             DiagKind::UnhandledMovemem(idx) => write!(f, "unhandled MOVEMEM index 0x{idx:02X}"),
             DiagKind::UnhandledMoveword(ty) => write!(f, "unhandled G_MOVEWORD type 0x{ty:02X}"),
             DiagKind::NonCanonicalBlend => {
@@ -258,6 +289,7 @@ mod tests {
                 data_address: None,
             },
             DiagKind::UnsupportedTextureFormat { fmt: 1, siz: 2 },
+            DiagKind::UnsupportedPrimitiveDepthSource,
             DiagKind::UnsupportedCommandParameters { opcode: 0xf0 },
             DiagKind::RunawayDl { cap: 1 },
             DiagKind::DlPastRdram,
@@ -265,6 +297,13 @@ mod tests {
             DiagKind::TruncatedRect { fill: true },
             DiagKind::DrawBeforeCimg,
             DiagKind::VtxOutOfRange { count: 1, end: 2 },
+            DiagKind::InvalidCullRange { first: 2, last: 1 },
+            DiagKind::InvalidConditionalVertex {
+                opcode: 0x04,
+                index: 3,
+            },
+            DiagKind::InvalidVertexTransform { index: 0 },
+            DiagKind::MissingBranchTarget,
             DiagKind::NoTextureLoaded,
             DiagKind::SecondTextureUndecodable,
             DiagKind::UnhandledMovemem(0),

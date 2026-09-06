@@ -114,6 +114,13 @@ pub fn gdp_set_env_color(rgba: u32) -> (u32, u32) {
     (shiftl(G_SETENVCOLOR as u32, 24, 8), rgba)
 }
 
+pub fn gdp_set_prim_depth(z: u32, dz: u32) -> (u32, u32) {
+    (
+        shiftl(G_SETPRIMDEPTH as u32, 24, 8),
+        shiftl(z, 16, 16) | shiftl(dz, 0, 16),
+    )
+}
+
 pub fn gdp_set_other_mode_h(shift: u32, length: u32, data: u32) -> (u32, u32) {
     let w0 = shiftl(G_SETOTHERMODE_H as u32, 24, 8)
         | shiftl(32 - shift - length, 8, 8)
@@ -201,6 +208,27 @@ pub fn gsp_modifyvertex(vtx: u16, r#where: u8, val: u32) -> (u32, u32) {
         | shiftl(r#where as u32, 16, 8)
         | shiftl(vtx as u32, 1, 15);
     (w0, val)
+}
+
+/// F3DEX2 inclusive cache range; a common outside clip plane returns from the list.
+pub fn gsp_culldisplaylist(first: u16, last: u16) -> (u32, u32) {
+    (
+        shiftl(G_CULLDL as u32, 24, 8) | shiftl(first as u32, 1, 15),
+        shiftl(last as u32, 1, 15),
+    )
+}
+
+/// F3DEX2 RDPHALF_1 and BRANCH_Z: tail-branch when screen Z <= unsigned 16.16 `z`.
+pub fn gsp_branch_less_z_raw(addr: u32, vtx: u16, z: u32) -> [(u32, u32); 2] {
+    [
+        ((G_RDPHALF_1 as u32) << 24, addr),
+        (
+            shiftl(G_BRANCH_Z as u32, 24, 8)
+                | shiftl(vtx as u32 * 5, 12, 12)
+                | shiftl(vtx as u32 * 2, 0, 12),
+            z,
+        ),
+    ]
 }
 
 pub fn gsp_spnoop() -> (u32, u32) {
