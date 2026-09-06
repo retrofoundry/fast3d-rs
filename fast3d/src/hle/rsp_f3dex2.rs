@@ -1,9 +1,9 @@
 use crate::diag::{DiagKind, Diagnostic};
 use crate::hle::consts::rdp::G_SETTIMG;
 use crate::hle::consts::rsp_f3dex2::{
-    G_DMA_IO, G_GEOMETRYMODE, G_LINE3D, G_MOVEMEM, G_MOVEWORD, G_MTX, G_POPMTX, G_SETOTHERMODE_H,
-    G_SETOTHERMODE_L, G_SPECIAL_1, G_SPECIAL_2, G_SPECIAL_3, G_SPNOOP, G_TEXTURE, G_TRI1, G_TRI2,
-    G_VTX,
+    G_DMA_IO, G_GEOMETRYMODE, G_LINE3D, G_MODIFYVTX, G_MOVEMEM, G_MOVEWORD, G_MTX, G_POPMTX,
+    G_QUAD, G_SETOTHERMODE_H, G_SETOTHERMODE_L, G_SPECIAL_1, G_SPECIAL_2, G_SPECIAL_3, G_SPNOOP,
+    G_TEXTURE, G_TRI1, G_TRI2, G_VTX,
 };
 use crate::hle::interp::{Cmd, Ctx, Handler};
 use crate::hle::mem::Rdram;
@@ -11,6 +11,8 @@ use crate::hle::rsp::RSP_MAX_VERTICES;
 
 pub(crate) fn install_overrides<M: Rdram>(t: &mut [Handler<M>; 256]) {
     t[G_VTX as usize] = vtx::<M>;
+    t[G_MODIFYVTX as usize] = modify_vertex::<M>;
+    t[G_QUAD as usize] = tri2::<M>;
     t[G_TRI1 as usize] = tri1::<M>;
     t[G_TRI2 as usize] = tri2::<M>;
     t[G_GEOMETRYMODE as usize] = geometry_mode::<M>;
@@ -62,6 +64,15 @@ fn vtx<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
             at: cx.pc,
             kind: DiagKind::VtxOutOfRange { count, end },
         }),
+    }
+}
+
+fn modify_vertex<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+    if let Err(kind) = cx
+        .rsp
+        .modify_vertex(c.p0(1, 15), c.p0(16, 8), c.w1, cx.scene)
+    {
+        cx.diags.push(Diagnostic { at: cx.pc, kind });
     }
 }
 

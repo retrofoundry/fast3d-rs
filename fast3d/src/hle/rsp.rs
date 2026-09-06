@@ -31,6 +31,7 @@ pub struct TextureState {
 
 pub struct Rsp {
     cache_global_index: [u32; RSP_MAX_VERTICES],
+    loaded: [bool; RSP_MAX_VERTICES],
     used: [bool; RSP_MAX_VERTICES],
     model_stack: [Mat4; RSP_MATRIX_STACK_SIZE],
     model_stack_size: usize,
@@ -77,6 +78,7 @@ impl Default for Rsp {
     fn default() -> Self {
         Rsp {
             cache_global_index: [0u32; RSP_MAX_VERTICES],
+            loaded: [false; RSP_MAX_VERTICES],
             used: [false; RSP_MAX_VERTICES],
             model_stack: [identity(); RSP_MATRIX_STACK_SIZE],
             model_stack_size: 1,
@@ -356,6 +358,7 @@ impl Rsp {
             let slot = (dst + i) as usize;
             let gi = scene.raw_pos.len() as u32;
             self.cache_global_index[slot] = gi;
+            self.loaded[slot] = true;
             self.used[slot] = false;
             scene.raw_pos.push(v.pos);
             scene.modify_flags.push(0);
@@ -391,16 +394,25 @@ impl Rsp {
         index
     }
 
-    /// gSPModifyVertex (F3D G_MW_POINTS). `attr` is `where % 40` and `value` is w1.
-    pub fn modify_vertex(&mut self, dst_index: u32, attr: u32, value: u32, scene: &mut Scene) {
+    /// Modify a loaded cache slot without changing vertices recorded by earlier draws.
+    pub fn modify_vertex(
+        &mut self,
+        dst_index: u32,
+        attr: u32,
+        value: u32,
+        scene: &mut Scene,
+    ) -> Result<(), crate::diag::DiagKind> {
         let slot = dst_index as usize;
-        if slot >= RSP_MAX_VERTICES {
-            return;
+        if slot >= RSP_MAX_VERTICES
+            || !self.loaded[slot]
+            || !matches!(attr, 0x10 | 0x14 | 0x18 | 0x1C)
+        {
+            return Err(crate::diag::DiagKind::InvalidModifyVertex {
+                index: dst_index,
+                attribute: attr,
+            });
         }
         let mut gi = self.cache_global_index[slot] as usize;
-        if gi >= scene.raw_pos.len() {
-            return;
-        }
 
         // RT64 copy-on-use: a modify must not edit a vertex row already recorded by a draw.
         // Intentional RT64 divergence: carry modify state into the clone, matching in-place DMEM writes.
@@ -449,8 +461,9 @@ impl Rsp {
                 scene.modify_screen[gi][2] = value as f32 / 65536.0;
                 scene.modify_flags[gi] |= 2;
             }
-            _ => {}
+            _ => unreachable!(),
         }
+        Ok(())
     }
 
     /// Record a triangle. `pair_target` routes the per-triangle `DrawRun`:

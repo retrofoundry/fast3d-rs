@@ -527,3 +527,32 @@ fn texture_rectangle_words_match_gbi() {
         ]
     );
 }
+
+#[test]
+fn modifyvertex_words_match_libultra() {
+    assert_eq!(
+        gsp_modifyvertex(0, 0x10, 0x1234_5678),
+        (0x0210_0000, 0x1234_5678)
+    );
+    assert_eq!(
+        gsp_modifyvertex(3, 0x14, 0xffe0_0040),
+        (0x0214_0006, 0xffe0_0040)
+    );
+    assert_eq!(
+        gsp_modifyvertex(31, 0x18, 0xfffc_0081),
+        (0x0218_003e, 0xfffc_0081)
+    );
+    assert_eq!(
+        gsp_modifyvertex(127, 0x1c, 0x03ff_8000),
+        (0x021c_00fe, 0x03ff_8000)
+    );
+    assert_eq!(gsp_modifyvertex(0x1234, 0x10, 1), (0x0210_2468, 1));
+    assert_eq!(gsp_modifyvertex(0x7fff, 0xff, 0), (0x02ff_fffe, 0));
+}
+
+#[test]
+fn quad_words_match_libultra() {
+    assert_eq!(gsp_quad(0, 1, 2, 3), (0x0700_0204, 0x0000_0406));
+    assert_eq!(gsp_quad(3, 7, 12, 31), (0x0706_0e18, 0x0006_183e));
+    assert_eq!(gsp_quad(127, 126, 125, 124), (0x07fe_fcfa, 0x00fe_faf8));
+}

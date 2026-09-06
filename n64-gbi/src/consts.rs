@@ -138,8 +138,10 @@ pub mod rdp {
 pub mod rsp_f3dex2 {
     // RSP F3DEX2 opcodes (top byte of w0, bits [31:24]).
     pub const G_VTX: u8 = 0x01;
+    pub const G_MODIFYVTX: u8 = 0x02;
     pub const G_TRI1: u8 = 0x05;
     pub const G_TRI2: u8 = 0x06;
+    pub const G_QUAD: u8 = 0x07;
     pub const G_LINE3D: u8 = 0x08;
     pub const G_SPECIAL_3: u8 = 0xD3;
     pub const G_SPECIAL_2: u8 = 0xD4;
@@ -177,6 +179,11 @@ pub mod rsp_f3dex2 {
     pub const G_MW_NUMLIGHT: u8 = 0x02;
     /// G_MOVEWORD byte-offset within the numlight word (always 0x00 for F3DEX2).
     pub const G_MWO_NUMLIGHT: u8 = 0x00;
+
+    pub const G_MWO_POINT_RGBA: u8 = 0x10;
+    pub const G_MWO_POINT_ST: u8 = 0x14;
+    pub const G_MWO_POINT_XYSCREEN: u8 = 0x18;
+    pub const G_MWO_POINT_ZSCREEN: u8 = 0x1C;
 
     // G_MTX param bits (post-XOR logical values; F3DEX2 microcode).
     pub const G_MTX_MODELVIEW: u8 = 0x00;

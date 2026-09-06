@@ -13,6 +13,8 @@ mod culling;
 mod decode;
 mod dl_plumbing;
 mod e2e;
+#[cfg(feature = "capture")]
+mod f3dex2_fixtures;
 mod facade;
 mod fb_store;
 mod filter;

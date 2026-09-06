@@ -1,5 +1,4 @@
 use crate::capture::{Fixture, Frame, Provenance, RecordingHardware};
-use crate::hle::gbi::GbiUcode;
 use crate::{ClearPolicy, DataFormat, Hardware, Microcode, Rdram, RdramImage, RendererConfig};
 use n64_gbi::encode::{
     gdp_fill_rectangle, gdp_set_color_image, gdp_set_cycle_type_f3d, gdp_set_fill_color,
@@ -80,17 +79,28 @@ pub(super) fn make(
     provenance: Provenance,
 ) -> Fixture {
     let entry = wrapper(&mut bytes, scene_entry, width, height);
+    make_image(bytes, entry, Microcode::F3d, width, height, provenance)
+}
+
+pub(super) fn make_image(
+    bytes: Vec<u8>,
+    entry: u32,
+    microcode: Microcode,
+    width: u32,
+    height: u32,
+    provenance: Provenance,
+) -> Fixture {
     let hardware = Image(bytes);
     let recording = RecordingHardware::new(&hardware);
     let result = crate::hle::interpret(
         recording.rdram(),
         entry.into(),
-        GbiUcode::F3d,
+        microcode.into(),
         DataFormat::Fixed,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     let task = recording
-        .finish(entry.into(), Microcode::F3d, DataFormat::Fixed, 0)
+        .finish(entry.into(), microcode, DataFormat::Fixed, 0)
         .unwrap();
     let color_image = task.final_color_image().unwrap();
     assert_eq!(color_image.addr, FRAMEBUFFER_ADDRESS.into());
