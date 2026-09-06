@@ -251,6 +251,8 @@ fn phase4_prim_material(prim: [u8; 4]) -> crate::hle::Material {
         filter_mode: 0,
         prim,
         env: [0, 0, 0, 255],
+        convert: Default::default(),
+        key: Default::default(),
         blend_color: [0, 0, 0, 255],
         tex_enable: false,
         wrap_s: 2,
