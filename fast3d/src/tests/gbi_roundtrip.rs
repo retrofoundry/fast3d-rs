@@ -212,7 +212,7 @@ fn tlut_count_and_destination_roundtrip() {
         ..Default::default()
     };
     assert_eq!(
-        result.rdp.tmem_bank.sample_tile(&tile, 0),
+        result.rdp.tmem_bank.sample_tile(&tile, 0).unwrap(),
         [
             0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a,
             0x9a, 0xbc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

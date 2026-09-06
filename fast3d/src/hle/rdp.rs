@@ -542,7 +542,7 @@ mod tests {
             ..TileDescriptor::default()
         };
         assert_eq!(
-            rdp.tmem_bank.sample_tile(&alias, 0),
+            rdp.tmem_bank.sample_tile(&alias, 0).unwrap(),
             [0xaa, 0xaa, 0xaa, 0xbb].repeat(4)
         );
     }
@@ -581,7 +581,7 @@ mod tests {
             ..TileDescriptor::default()
         };
         assert_eq!(
-            rdp.tmem_bank.sample_tile(&tile, 2),
+            rdp.tmem_bank.sample_tile(&tile, 2).unwrap(),
             [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255,]
         );
     }
@@ -610,7 +610,7 @@ mod tests {
             height: 1,
             ..TileDescriptor::default()
         };
-        let pixels = rdp.tmem_bank.sample_tile(&tile, 3);
+        let pixels = rdp.tmem_bank.sample_tile(&tile, 3).unwrap();
         for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
             assert_eq!(*pixel, [i as u8, i as u8, i as u8, 255 - i as u8]);
         }
@@ -649,7 +649,7 @@ mod tests {
                 height: 1,
                 ..TileDescriptor::default()
             };
-            let pixels = rdp.tmem_bank.sample_tile(&tile, 0);
+            let pixels = rdp.tmem_bank.sample_tile(&tile, 0).unwrap();
             for i in 0..512 {
                 let value = if count == 1024 {
                     Some(if i == 511 { 512 } else { i + 513 })

@@ -545,53 +545,67 @@ fn cycle_uses_texel1(sel: &CombinerSelectors, cycle_type: u32) -> bool {
     cyc_sel_uses_texel1(&sel.cyc0) || cycle_uses_texel0(&sel.cyc1)
 }
 
-/// Whether `tile` can be decoded through the N64-faithful byte-addressable path
-/// (`Tmem::sample_tile`) rather than the legacy linear `FormatInfo::decode` fallback. The nine
-/// supported formats (six non-paletted, CI4/CI8, RGBA32) qualify; faithful-vs-legacy then depends
-/// on which load path populated the bank:
-///   * LoadBlock packs rows contiguously, so the write and read swaps only cancel when each texel
-///     row is a whole number of 64-bit words — hence the `line_bytes % 8 == 0` gate.
-///   * LoadTile (`rdp.load_via_tile`) writes a genuine per-row `line<<3` stride, so `sample_tile`
-///     reads it via the render tile's `line` for ANY width, regardless of alignment.
-///
-/// CRITICAL for the second texture (TEXEL1): the legacy fallback reads `rdp.tmem[..needed]` and
-/// IGNORES `tile.tmem_addr`, so a tex1 that falls to it would silently read tex0's TMEM. Callers
-/// building a second texture gate on this predicate and refuse-to-draw when false (see
-/// `build_material`).
+// Multi-row LoadBlock swaps cancel only for word-aligned rows.
 fn tile_takes_faithful_path(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
     tex_w: u32,
 ) -> bool {
     let line_bytes = ((tex_w as usize) << tile.siz) >> 1;
-    let format_ok = matches!(
-        (tile.fmt, tile.siz),
-        (0, 2) | (0, 3) | (4, 1) | (4, 0) | (3, 2) | (3, 1) | (3, 0) | (2, 0) | (2, 1)
-    );
-    format_ok
-        && (line_bytes.is_multiple_of(8)
-            || rdp.load_via_tile
-            || TileSampling::from_tile(tile, 0).image[2] == 1)
+    line_bytes.is_multiple_of(8)
+        || (tile.fmt == 0 && tile.siz == 3 && tile.height <= 1)
+        || rdp.load_via_tile
+        || TileSampling::from_tile(tile, 0).image[2] == 1
 }
 
-/// Decode `tile` to a `tex_w * tex_h * 4` RGBA8 buffer for a `Material`, via the N64-faithful path
-/// when [`tile_takes_faithful_path`] allows (byte-identical to the linear decode where the
-/// LoadBlock swaps cancel), else the historical linear `FormatInfo::decode`. The returned buffer is
-/// always `tex_w * tex_h * 4` bytes, satisfying the renderer's `write_texture` contract.
+fn validate_tile_texture(
+    rdp: &crate::hle::rdp::Rdp,
+    tile: &crate::hle::rdp::TileDescriptor,
+) -> Result<(), crate::diag::DiagKind> {
+    crate::hle::texdec::FormatInfo {
+        fmt: tile.fmt,
+        siz: tile.siz,
+    }
+    .validate()?;
+    if tile.fmt == 0
+        && tile.siz == 3
+        && !tile_takes_faithful_path(rdp, tile, u32::from(tile.width.max(1)))
+    {
+        return Err(crate::diag::DiagKind::UnsupportedCommandParameters {
+            opcode: crate::hle::consts::G_LOADBLOCK,
+        });
+    }
+    Ok(())
+}
+
+fn texture_at_draw<T>(
+    result: Result<T, crate::diag::DiagKind>,
+    diags: &mut Vec<crate::diag::Diagnostic>,
+    pc: u64,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(kind) => {
+            if !diags.iter().any(|diag| diag.kind == kind) {
+                diags.push(crate::diag::Diagnostic { at: pc, kind });
+            }
+            None
+        }
+    }
+}
+
 fn decode_tile_texture(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
     tex_w: u32,
     tex_h: u32,
     tlut_fmt: u8,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, crate::diag::DiagKind> {
+    validate_tile_texture(rdp, tile)?;
     if tile_takes_faithful_path(rdp, tile, tex_w) {
         return rdp.tmem_bank.sample_tile(tile, tlut_fmt);
     }
 
-    // Legacy linear fallback (sub-word rows, or formats sample_tile does not handle). The palette
-    // is single-sourced from the faithful bank: `tmem_bank.palette()` is the upper 2 KiB, so entry
-    // i of palette 0 sits at byte i*8 — exactly what decode_ci4/ci8 expect from `tlut`.
     let tlut = rdp.tmem_bank.palette();
     let fi = crate::hle::texdec::FormatInfo {
         fmt: tile.fmt,
@@ -620,21 +634,22 @@ fn decode_sampling_texture(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
     tlut_fmt: u8,
-) -> MipLevel {
+) -> Result<MipLevel, crate::diag::DiagKind> {
+    validate_tile_texture(rdp, tile)?;
     let sampling = TileSampling::from_tile(tile, tlut_fmt);
     let w = u32::from(tile.width.max(1));
     let h = u32::from(tile.height.max(1));
     let texture = if sampling.image[2] == 1 {
-        rdp.tmem_bank.sampling_lookup(tile, tlut_fmt)
+        rdp.tmem_bank.sampling_lookup(tile, tlut_fmt)?
     } else {
-        decode_tile_texture(rdp, tile, w, h, tlut_fmt)
+        decode_tile_texture(rdp, tile, w, h, tlut_fmt)?
     };
-    MipLevel {
+    Ok(MipLevel {
         sampling,
         texture,
         w,
         h,
-    }
+    })
 }
 
 /// Build a triangle material, diagnosing unsupported selectors or missing textures.
@@ -678,7 +693,7 @@ fn build_material_inner(
     let tile = &rdp.tiles[base];
     let tlut_fmt = ((rdp.other_mode_h >> 14) & 0x3) as u8;
     let decoded = if uses_physical0 {
-        decode_sampling_texture(rdp, tile, tlut_fmt)
+        texture_at_draw(decode_sampling_texture(rdp, tile, tlut_fmt), diags, pc)?
     } else {
         MipLevel {
             sampling: TileSampling::default(),
@@ -701,6 +716,7 @@ fn build_material_inner(
         let t1 = &rdp.tiles[(base + 1) & 7];
         let t1_w = t1.width.max(1) as u32;
         let t1_h = t1.height.max(1) as u32;
+        texture_at_draw(validate_tile_texture(rdp, t1), diags, pc)?;
         if !tile_takes_faithful_path(rdp, t1, t1_w) {
             diags.push(crate::diag::Diagnostic {
                 at: pc,
@@ -708,7 +724,7 @@ fn build_material_inner(
             });
             return None;
         }
-        let decoded = decode_sampling_texture(rdp, t1, tlut_fmt);
+        let decoded = texture_at_draw(decode_sampling_texture(rdp, t1, tlut_fmt), diags, pc)?;
         Some(Tex1 {
             sampling: decoded.sampling,
             texture: decoded.texture,
@@ -744,21 +760,33 @@ fn build_material_inner(
         for k in 0..n {
             let tk = &rdp.tiles[(base + k as usize) & 7];
             let lw = tk.width.max(1) as u32;
+            texture_at_draw(validate_tile_texture(rdp, tk), diags, pc)?;
             if !tile_takes_faithful_path(rdp, tk, lw) {
                 faithful = false;
-                break;
+                continue;
             }
-            levels.push(decode_sampling_texture(rdp, tk, tlut_fmt));
+            levels.push(texture_at_draw(
+                decode_sampling_texture(rdp, tk, tlut_fmt),
+                diags,
+                pc,
+            )?);
+        }
+        let td = rdp.text_detail();
+        if td & 0b10 != 0 {
+            texture_at_draw(validate_tile_texture(rdp, &rdp.tiles[0]), diags, pc)?;
         }
         if faithful {
             // DETAIL mode (text_detail bit1): the DETAIL tile is the finest tile (index 0),
             // decoded independently. Only carried when it also takes the faithful path.
-            let td = rdp.text_detail();
             let detail = if td & 0b10 != 0 {
                 let dt = &rdp.tiles[0];
                 let dw = dt.width.max(1) as u32;
                 if tile_takes_faithful_path(rdp, dt, dw) {
-                    Some(decode_sampling_texture(rdp, dt, tlut_fmt))
+                    Some(texture_at_draw(
+                        decode_sampling_texture(rdp, dt, tlut_fmt),
+                        diags,
+                        pc,
+                    )?)
                 } else {
                     None
                 }
@@ -1046,7 +1074,7 @@ mod tests {
         let line_bytes = ((rdp.tiles[0].width as usize) << rdp.tiles[0].siz) >> 1;
         assert_eq!(line_bytes, 3, "precondition: sub-word row (not 8-aligned)");
 
-        let got = decode_tile_texture(&rdp, &rdp.tiles[0], 3, 3, 0);
+        let got = decode_tile_texture(&rdp, &rdp.tiles[0], 3, 3, 0).unwrap();
         assert_eq!(got.len(), 3 * 3 * 4);
 
         // Hand-computed expectation: I8 texel (r, c) = 0x10 + r*16 + c → RGBA [v, v, v, v].
@@ -1131,7 +1159,7 @@ mod tests {
 
         let tex1 = mat.tex1.as_ref().expect("tex1 built when tileCount == 2");
         // tex1 is the decode of tiles[(base+1)&7] = tiles[1] ...
-        let expect1 = decode_tile_texture(&rdp, &rdp.tiles[1], 4, 1, 0);
+        let expect1 = decode_tile_texture(&rdp, &rdp.tiles[1], 4, 1, 0).unwrap();
         assert_eq!(tex1.texture, expect1);
         // ... and it genuinely differs from tex0 (tiles[0]), proving two distinct tiles were decoded.
         assert_ne!(
@@ -1140,7 +1168,7 @@ mod tests {
         );
         assert_eq!(
             mat.texture,
-            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 1, 0)
+            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 1, 0).unwrap()
         );
     }
 
@@ -1428,7 +1456,7 @@ mod tests {
         assert_eq!((detail.w, detail.h), (4, 4));
         assert_eq!(
             detail.texture,
-            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 4, 0),
+            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 4, 0).unwrap(),
             "detail tile is the independent decode of tiles[0]"
         );
     }
@@ -1475,30 +1503,103 @@ mod tests {
     }
 
     #[test]
-    fn lod_falls_back_to_single_level_when_a_level_is_not_faithfully_decodable() {
-        // The ONLY remaining LOD build-gate constraint after the per-level rework: every level must
-        // take the faithful `sample_tile` decode path (a level needing the legacy linear fallback —
-        // which ignores `tmem_addr` and could read the wrong bank — forces `lod = false`). Here level
-        // 1 uses a format `sample_tile` does not handle (fmt 5 / YUV), so the gate must reject the set
-        // and fall back to a single level-0, byte-identical to a non-LOD material.
-        let mut rdp = rdp_three_level_chain(false);
-        rdp.load_via_tile = false; // force the LoadBlock alignment path for the fallback decision
-        rdp.tiles[1].fmt = 5; // YUV — not one of the nine faithful formats
-        let mut rsp = crate::hle::rsp::Rsp::default();
-        rsp.texture_state.tile = 0;
-        rsp.texture_state.level = 2;
-        rsp.texture_state.on = true;
-
+    fn rgba32_loadblock_layout_is_checked_at_draw() {
+        let mut rdp = rdp_two_distinct_rgba16_tiles(0, 0, 2);
+        rdp.tiles[0].siz = 3;
+        rdp.tiles[0].width = 3;
+        rdp.tiles[0].height = 2;
+        let rsp = crate::hle::rsp::Rsp::default();
         let mut diags = Vec::new();
-        let mat =
-            build_material(&rdp, &rsp, &mut diags, 0).expect("must still build (single level)");
-        assert!(!mat.lod, "unfaithful level → gate fails → lod = false");
-        assert_eq!(mat.num_levels, 1);
-        assert!(
-            mat.mip_levels.is_empty(),
-            "fallback carries no per-level set"
+        for pc in [0x40, 0x58] {
+            assert!(build_rect_material(&rdp, &rsp, 0, &mut diags, pc).is_none());
+        }
+        assert_eq!(
+            diags,
+            [crate::diag::Diagnostic {
+                at: 0x40,
+                kind: crate::diag::DiagKind::UnsupportedCommandParameters { opcode: 0xf3 },
+            }]
         );
-        assert!(mat.detail_tex.is_none());
+        for (width, height, load_via_tile, lookup) in [
+            (4, 2, false, false),
+            (3, 1, false, false),
+            (3, 2, true, false),
+            (3, 2, false, true),
+        ] {
+            rdp.tiles[0].width = width;
+            rdp.tiles[0].height = height;
+            rdp.tiles[0].cms = if lookup { 0 } else { 2 };
+            rdp.tiles[0].masks = if lookup { 3 } else { 0 };
+            rdp.load_via_tile = load_via_tile;
+            diags.clear();
+            assert!(build_rect_material(&rdp, &rsp, 0, &mut diags, 0x80).is_some());
+            assert!(diags.is_empty());
+        }
+    }
+
+    #[test]
+    fn unsupported_second_and_lookup_formats_reject_draw() {
+        let rsp = crate::hle::rsp::Rsp::default();
+        for lookup in [false, true] {
+            let mut rdp = rdp_two_distinct_rgba16_tiles(0x0088_7f10, 0x88fc_fc7e, 1);
+            rdp.tiles[1].fmt = 7;
+            rdp.tiles[1].cms = if lookup { 0 } else { 2 };
+            rdp.tiles[1].masks = if lookup { 4 } else { 0 };
+            let mut diags = Vec::new();
+            assert!(build_material(&rdp, &rsp, &mut diags, 0x90).is_none());
+            assert_eq!(
+                diags,
+                [crate::diag::Diagnostic {
+                    at: 0x90,
+                    kind: crate::diag::DiagKind::UnsupportedTextureFormat { fmt: 7, siz: 2 },
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_detail_format_rejects_draw() {
+        for load_via_tile in [false, true] {
+            let mut rdp = rdp_three_level_chain(true);
+            rdp.load_via_tile = load_via_tile;
+            rdp.tiles[0].fmt = 6;
+            let mut rsp = crate::hle::rsp::Rsp::default();
+            rsp.texture_state.tile = 1;
+            rsp.texture_state.level = 1;
+            rsp.texture_state.on = true;
+            let mut diags = Vec::new();
+            assert!(build_material(&rdp, &rsp, &mut diags, 0xa0).is_none());
+            assert_eq!(
+                diags,
+                [crate::diag::Diagnostic {
+                    at: 0xa0,
+                    kind: crate::diag::DiagKind::UnsupportedTextureFormat { fmt: 6, siz: 2 },
+                }]
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_lod_format_rejects_draw() {
+        for unsupported_level in [1, 2] {
+            let mut rdp = rdp_three_level_chain(false);
+            rdp.load_via_tile = false;
+            rdp.tiles[unsupported_level].fmt = 5;
+            let mut rsp = crate::hle::rsp::Rsp::default();
+            rsp.texture_state.tile = 0;
+            rsp.texture_state.level = 2;
+            rsp.texture_state.on = true;
+
+            let mut diags = Vec::new();
+            assert!(build_material(&rdp, &rsp, &mut diags, 0x80).is_none());
+            assert_eq!(
+                diags,
+                [crate::diag::Diagnostic {
+                    at: 0x80,
+                    kind: crate::diag::DiagKind::UnsupportedTextureFormat { fmt: 5, siz: 2 },
+                }]
+            );
+        }
     }
 
     #[test]
@@ -1540,7 +1641,7 @@ mod tests {
         assert_eq!((mat.mip_levels[0].w, mat.mip_levels[0].h), (2, 2));
         assert_eq!(
             mat.mip_levels[0].texture,
-            decode_tile_texture(&rdp, &rdp.tiles[7], 2, 2, 0),
+            decode_tile_texture(&rdp, &rdp.tiles[7], 2, 2, 0).unwrap(),
             "level 0 is the decode of the base tile tiles[7]"
         );
 
@@ -1549,7 +1650,7 @@ mod tests {
         assert_eq!((mat.mip_levels[1].w, mat.mip_levels[1].h), (4, 4));
         assert_eq!(
             mat.mip_levels[1].texture,
-            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 4, 0),
+            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 4, 0).unwrap(),
             "level 1 wraps to tiles[0] (`% RDP_TILES`), not clamp to tiles[7]"
         );
 
