@@ -68,11 +68,13 @@ pub trait Rdram {
 
     fn read_command(&self, address: u64) -> Result<Command, MemoryError>;
     fn command_stride(&self) -> u64;
+    /// An advisory range query that returns false if `address + length` overflows.
     fn in_bounds(&self, address: u64, length: u64) -> bool;
     fn read_u8(&self, address: u64) -> Result<u8, MemoryError>;
     fn read_i8(&self, address: u64) -> Result<i8, MemoryError>;
     fn read_i16(&self, address: u64) -> Result<i16, MemoryError>;
     fn read_u16(&self, address: u64) -> Result<u16, MemoryError>;
+    /// Returns exactly `length` bytes or an error.
     fn read_bytes(&self, address: u64, length: usize) -> Result<Cow<'_, [u8]>, MemoryError>;
     fn read_matrix(&self, address: u64, format: GbiDataFormat) -> Result<Matrix, MemoryError>;
 
