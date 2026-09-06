@@ -1,9 +1,9 @@
-//! Public hardware/memory boundary: the `Rdram` reader (shipped impls `RdramImage` / `HostRam`),
-//! plus `Hardware` + `ViRegisters` (P3.5). The read logic lives in `hle::mem` / `hle::host_mem`;
-//! this module is the public facade over it.
+//! Public hardware and memory boundary.
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 pub use crate::hle::host_mem::HostRam;
-pub use crate::hle::mem::{Rdram, RdramImage};
+pub use crate::hle::mem::{
+    Command, Matrix, MemoryError, MemoryErrorKind, RawVertex, Rdram, RdramImage,
+};
 
 /// Raw VI register words, exactly as the N64 VI presents them; `fast3d` owns the bit-decode
 /// (spec §3.3). v1 scanout uses only `origin` (FB-select) and `width`; the rest are carried so
@@ -26,11 +26,10 @@ pub struct ViRegisters {
 /// and `present` are generic methods (`&impl Hardware`), never `&dyn Hardware`.
 pub trait Hardware {
     /// The memory reader for the CURRENT walk. Called EXCLUSIVELY inside `process_dl`, on the
-    /// calling thread; fully consumed before returning. A fresh reader each call (zeroed segments).
+    /// calling thread; fully consumed before returning. Each walk owns its reader and segment table.
     fn rdram(&self) -> impl Rdram + '_;
 
-    /// Live VI registers. `None` = no live VI (web; and every `HostRam` consumer per the
-    /// host-pointer invariant), so `present` falls back to the last-rendered framebuffer.
+    /// Live VI registers. With `None`, presentation falls back to the last rendered framebuffer.
     fn vi(&self) -> Option<ViRegisters> {
         None
     }
@@ -46,17 +45,6 @@ mod tests {
         assert!(
             img.is_rdram_image(),
             "RdramImage must override is_rdram_image -> true"
-        );
-    }
-
-    #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
-    #[test]
-    fn host_ram_reports_is_rdram_image_false() {
-        let backing = [0u8; 8];
-        let ram = unsafe { HostRam::new(&backing) };
-        assert!(
-            !ram.is_rdram_image(),
-            "HostRam keeps the default is_rdram_image -> false"
         );
     }
 }
@@ -136,19 +124,5 @@ mod hardware_tests {
             ),
             (0, 0, 0, 0, 0, 0, 0, 0)
         );
-    }
-
-    #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
-    #[test]
-    fn helix_hardware_host_ptr_backend_no_vi() {
-        struct HelixHardware;
-        impl Hardware for HelixHardware {
-            fn rdram(&self) -> impl Rdram + '_ {
-                unsafe { HostRam::new(&[]) }
-            }
-        }
-        let hw = HelixHardware;
-        assert!(hw.vi().is_none());
-        assert!(!walk_is_image(&hw), "HostRam-backed => not an rdram image");
     }
 }

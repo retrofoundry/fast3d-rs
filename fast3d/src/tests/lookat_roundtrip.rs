@@ -29,7 +29,7 @@ fn sp_lookat_emit_decode_sets_lookat_axes() {
             let byte_off = ((w0 >> 8) & 0xFF) * 8; // p0(8,8) * 8
             let light_idx = byte_off / 24;
             assert!(light_idx < 2, "lookat MOVEMEM slot must be 0 (S) or 1 (T)");
-            rsp.set_lookat(&rd, light_idx, w1 as u64);
+            rsp.set_lookat(&rd, light_idx, w1 as u64).unwrap();
             saw_lookat_movemem = true;
         }
     }

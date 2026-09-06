@@ -270,7 +270,14 @@ fn tlut_truncated_source_rejects_task() {
         result.diags,
         [crate::Diagnostic {
             at: 48,
-            kind: crate::DiagKind::DlPastRdram
+            kind: crate::DiagKind::MemoryRead {
+                access: crate::MemoryAccess::Tlut,
+                error: crate::MemoryError {
+                    address: 0x82,
+                    length: 8,
+                    kind: crate::MemoryErrorKind::OutOfBounds
+                },
+            }
         }]
     );
     assert_eq!(result.commands, 7);

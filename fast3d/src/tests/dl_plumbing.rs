@@ -83,14 +83,14 @@ fn segment_masked_vs_unmasked_resolution() {
     let mut rd = RdramImage::new(&bytes);
     rd.set_segment(7, 0x05);
     // Unmasked (SETTIMG path): 0x05 + 3 = 0x08.
-    assert_eq!(rd.from_segmented(0x0700_0003), 0x08);
+    assert_eq!(rd.from_segmented(0x0700_0003).unwrap(), 0x08);
     // Masked (vtx/mtx/viewport path): (0x05 + 3) & 0x00FFFFF8 = 0x08 (8 is already 8-aligned).
     // Note: the plan had a comment error saying 0x00; the correct value is 0x08 (plan errata,
     // documented in interp_tests.rs:segment_store_then_resolve_masked_and_unmasked).
-    assert_eq!(rd.from_segmented_masked(0x0700_0003), 0x08);
+    assert_eq!(rd.from_segmented_masked(0x0700_0003).unwrap(), 0x08);
     // Identity map for segment 0 (preserves the existing sample):
-    assert_eq!(rd.from_segmented(0x0000_0040), 0x40);
-    assert_eq!(rd.from_segmented_masked(0x0000_0040), 0x40);
+    assert_eq!(rd.from_segmented(0x0000_0040).unwrap(), 0x40);
+    assert_eq!(rd.from_segmented_masked(0x0000_0040).unwrap(), 0x40);
 }
 
 #[test]
@@ -102,9 +102,13 @@ fn no_enddl_runs_past_rdram_and_diagnoses_bounds() {
     put(&mut rdram, 0x08, 0x0000_0000, 0); // G_NOOP
     let r = interpret_rdram(&rdram, 0x00);
     assert!(
-        r.diags
-            .iter()
-            .any(|d| d.kind.to_string().contains("past RDRAM")),
+        r.diags.iter().any(|d| matches!(
+            d.kind,
+            crate::DiagKind::MemoryRead {
+                access: crate::MemoryAccess::Command,
+                ..
+            }
+        )),
         "expected a bounds diagnostic for the no-ENDDL run-off: {:?}",
         r.diags
     );
