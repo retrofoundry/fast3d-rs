@@ -8,7 +8,13 @@ fn walk(commands: &[(u32, u32)], ucode: GbiUcode) -> InterpResult {
         .iter()
         .flat_map(|(w0, w1)| w0.to_be_bytes().into_iter().chain(w1.to_be_bytes()))
         .collect();
-    interpret(RdramImage::new(&bytes), 0, ucode, GbiDataFormat::Fixed)
+    interpret(
+        RdramImage::new(&bytes),
+        0,
+        ucode,
+        GbiDataFormat::Fixed,
+        None,
+    )
 }
 
 const FILL: (u32, u32) = (0xf601_0010, 0);
@@ -300,6 +306,7 @@ fn load_ucode_latch_preserves_full_address_across_calls_and_rects() {
         0,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,
+        None,
     );
     assert_eq!(r.scene, Scene::default());
     assert_eq!(r.commands, 8);
@@ -336,6 +343,7 @@ fn unsupported_stubs_preserve_full_raw_operands_without_data_access() {
             0,
             GbiUcode::F3dex2,
             GbiDataFormat::Fixed,
+            None,
         );
         assert_eq!(
             r.diags[0].kind,

@@ -201,6 +201,7 @@ fn filter_fixture_commands_preserve_load_order_and_lod_storage() {
             0x4000,
             GbiUcode::F3d,
             DataFormat::Fixed,
+            None,
         );
         assert!(result.diags.is_empty(), "{:?}", result.diags);
         assert_eq!(result.scene.raw_st[0][0], 0.0);

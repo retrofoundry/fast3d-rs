@@ -64,6 +64,7 @@ fn interpret_memory(bytes: Vec<u8>, entry: u32) -> Scene {
         entry.into(),
         GbiUcode::F3d,
         GbiDataFormat::Fixed,
+        None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     result.scene

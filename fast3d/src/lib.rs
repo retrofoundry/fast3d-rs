@@ -6,6 +6,7 @@ pub mod diag;
 pub mod hardware;
 pub(crate) mod hle;
 pub mod hooks;
+pub mod inspect;
 pub mod microcode;
 pub(crate) mod render;
 pub(crate) mod scene;
@@ -447,7 +448,7 @@ impl Renderer {
     ) -> DlSummary {
         let is_image = mem.is_rdram_image();
 
-        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format);
+        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format, None);
 
         for &d in &result.diags {
             diags.emit(d);

@@ -160,6 +160,7 @@ impl Task {
             self.entry,
             self.microcode.into(),
             self.data_format,
+            None,
         );
         hardware.check()?;
         if let Some(diagnostic) = result.diags.first() {

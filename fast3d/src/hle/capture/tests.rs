@@ -108,6 +108,7 @@ fn recording_preserves_typed_failure_when_bytes_are_available() {
         0,
         crate::hle::gbi::GbiUcode::F3dex2,
         DataFormat::Fixed,
+        None,
     );
     let recording = RecordingHardware::new(&hardware);
     let captured = crate::hle::interpret(
@@ -115,6 +116,7 @@ fn recording_preserves_typed_failure_when_bytes_are_available() {
         0,
         crate::hle::gbi::GbiUcode::F3dex2,
         DataFormat::Fixed,
+        None,
     );
     assert_eq!(captured.diags, direct.diags);
     assert_eq!(captured.commands, direct.commands);
@@ -363,6 +365,7 @@ fn recording_and_replay_reject_every_missing_input_kind() {
             0,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         let hardware = Image(bytes.clone());
         let recording = RecordingHardware::new(&hardware);
@@ -371,6 +374,7 @@ fn recording_and_replay_reject_every_missing_input_kind() {
             0,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         assert_eq!(captured.diags, direct.diags, "recording {access:?}");
         assert_eq!(captured.commands, direct.commands, "recording {access:?}");
@@ -401,6 +405,7 @@ fn recording_and_replay_reject_every_missing_input_kind() {
             0,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         assert_eq!(replayed.commands, direct.commands, "replay {access:?}");
         assert!(
@@ -543,12 +548,14 @@ mod host {
             at,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         let recorded = crate::hle::interpret(
             rec.rdram(),
             at,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         assert_eq!(recorded.scene, live.scene);
         assert_eq!(recorded.diags, live.diags);
@@ -570,6 +577,7 @@ mod host {
             at,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         replay.check().unwrap();
         assert_eq!(got.commands, 3);
@@ -788,6 +796,7 @@ mod host {
             entry,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         let t = task(rec, entry, DataFormat::Fixed);
         assert_eq!(live.scene.raw_pos, vec![[-12., 23., 45.]]);
@@ -804,6 +813,7 @@ mod host {
             entry,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         replay.check().unwrap();
         assert_eq!(got.diags, live.diags);
@@ -850,6 +860,7 @@ mod host {
                 entry,
                 crate::hle::gbi::GbiUcode::F3dex2,
                 DataFormat::Fixed,
+                None,
             );
             assert!(
                 replay.check().is_err(),
@@ -923,6 +934,7 @@ fn capture_checked_in_high_address_fixture_walks() {
         task.entry,
         task.microcode.into(),
         task.data_format,
+        None,
     );
     replay.check().unwrap();
     assert_eq!(result.commands, 6);
@@ -959,6 +971,7 @@ fn capture_replayed_task_records_identical_spans() {
         0,
         Microcode::F3dex2.into(),
         DataFormat::Fixed,
+        None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     let image_task = recording
@@ -977,6 +990,7 @@ fn capture_replayed_task_records_identical_spans() {
             task.entry,
             task.microcode.into(),
             task.data_format,
+            None,
         );
         replay.check().unwrap();
         assert!(result.diags.is_empty(), "{:?}", result.diags);
@@ -1110,6 +1124,7 @@ fn capture_missing_span_near_address_limit_does_not_panic() {
             task.entry,
             task.microcode.into(),
             task.data_format,
+            None,
         );
         let error = result
             .diags

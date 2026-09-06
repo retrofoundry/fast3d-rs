@@ -1,9 +1,14 @@
 //! F3DEX2 opcode dispatch loop. Reads big-endian w0/w1 command pairs from the image's
 //! command stream and drives the RSP, producing a Scene + decode diagnostics.
 
+use std::ops::ControlFlow;
+
 use crate::diag::{DiagKind, Diagnostic, MemoryAccess};
 use crate::hle::mem::{MemoryError, MemoryErrorKind, Rdram, RdramImage};
 use crate::hle::rsp::Scene;
+use crate::inspect::{
+    CommandWord, Emission, FramebufferTarget, GeometryFlag, WalkFlow, WalkStep, WalkTermination,
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Cmd {
@@ -123,6 +128,62 @@ pub struct InterpResult {
     pub commands: u32,
     /// Draw runs discarded during the walk.
     pub dropped_runs: u32,
+    pub termination: WalkTermination,
+    pub final_diagnostics_start: usize,
+}
+
+struct ObservedDispatch {
+    words: [CommandWord; 3],
+    word_count: usize,
+    diagnostics_start: usize,
+    index_start: usize,
+    depth_before: usize,
+    emission: Option<Emission<'static>>,
+}
+
+impl ObservedDispatch {
+    fn new(
+        pc: u64,
+        cmd: &crate::hle::mem::Command,
+        diagnostics_start: usize,
+        index_start: usize,
+        depth_before: usize,
+    ) -> Self {
+        let word = CommandWord {
+            pc,
+            w0: cmd.w0,
+            w1: cmd.w1,
+            w1_addr: cmd.w1_addr,
+        };
+        Self {
+            words: [word; 3],
+            word_count: 1,
+            diagnostics_start,
+            index_start,
+            depth_before,
+            emission: None,
+        }
+    }
+
+    fn push_word(&mut self, pc: u64, cmd: &crate::hle::mem::Command) {
+        self.words[self.word_count] = CommandWord {
+            pc,
+            w0: cmd.w0,
+            w1: cmd.w1,
+            w1_addr: cmd.w1_addr,
+        };
+        self.word_count += 1;
+    }
+}
+
+fn framebuffer_target(scene: &Scene, pair_index: usize) -> FramebufferTarget {
+    let pair = &scene.framebuffer_pairs[pair_index];
+    FramebufferTarget {
+        pair_index,
+        color_image: pair.color_image,
+        depth_image: pair.depth_image,
+        is_depth_clear: pair.is_depth_clear,
+    }
 }
 
 impl InterpResult {
@@ -159,11 +220,25 @@ enum Control {
     Abort,
 }
 
+fn fault_termination(diags: &[Diagnostic]) -> WalkTermination {
+    match diags.last().map(|diag| &diag.kind) {
+        Some(DiagKind::DlPastRdram) => WalkTermination::Bounds,
+        Some(DiagKind::MemoryRead { error, .. }) => match error.kind {
+            MemoryErrorKind::OutOfBounds | MemoryErrorKind::AddressOverflow => {
+                WalkTermination::Bounds
+            }
+            _ => WalkTermination::MemoryRead,
+        },
+        _ => WalkTermination::Rejected,
+    }
+}
+
 pub fn interpret<M: Rdram>(
     mem: M,
     entry: u64,
     ucode: crate::hle::gbi::GbiUcode,
     data_format: crate::hle::mem::GbiDataFormat,
+    mut observer: Option<&mut dyn crate::inspect::WalkObserver>,
 ) -> InterpResult {
     let mut mem = mem;
     let gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
@@ -181,6 +256,9 @@ pub fn interpret<M: Rdram>(
     let mut dispatched: u64 = 0;
     let mut rec = crate::hle::rsp::PairRec::default();
 
+    let mut termination = WalkTermination::End;
+    let mut final_diagnostics_start = 0;
+
     macro_rules! walk_try {
         ($access:ident, $result:expr) => {
             match $result {
@@ -194,6 +272,7 @@ pub fn interpret<M: Rdram>(
                         },
                     });
                     rejected = true;
+                    termination = fault_termination(&diags);
                     break;
                 }
             }
@@ -207,6 +286,7 @@ pub fn interpret<M: Rdram>(
                 at: pc,
                 kind: DiagKind::RunawayDl { cap: DISPATCH_CAP },
             });
+            termination = WalkTermination::Runaway;
             break;
         }
         let stride = mem.command_stride();
@@ -219,315 +299,417 @@ pub fn interpret<M: Rdram>(
         };
         let op = c.opcode();
 
-        let control = if op == gbi.consts.g_dl {
-            let target = walk_try!(Command, mem.resolve_masked(c.w1_addr));
-            if c.p0(16, 1) == 0 {
-                Control::Call(target)
-            } else {
-                Control::Branch(target)
-            }
-        } else if op == gbi.consts.g_enddl {
-            Control::Return
-        } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
-            && matches!(
-                op,
-                crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
+        let mut observed = observer.as_ref().map(|_| {
+            ObservedDispatch::new(
+                pc,
+                &cmd,
+                diags.len(),
+                scene.indices.len(),
+                return_stack.len(),
             )
-        {
-            let conditional = if op == crate::hle::consts::G_CULLDL {
-                rsp.cull_display_list(c.p0(1, 15), c.p1(1, 15))
-                    .map(|culled| {
-                        if culled {
-                            Control::Return
-                        } else {
-                            Control::Continue
+        });
+        let mut flow = WalkFlow::Next;
+        // Every post-fetch exit passes through the observer epilogue.
+        'dispatch: {
+            macro_rules! walk_try {
+                ($access:ident, $result:expr) => {
+                    match $result {
+                        Ok(value) => value,
+                        Err(error) => {
+                            diags.push(Diagnostic {
+                                at: pc,
+                                kind: DiagKind::MemoryRead {
+                                    access: MemoryAccess::$access,
+                                    error,
+                                },
+                            });
+                            rejected = true;
+                            break 'dispatch;
                         }
-                    })
-            } else {
-                rdphalf_1
-                    .ok_or(DiagKind::MissingBranchTarget)
-                    .and_then(|target| {
-                        rsp.branch_z(c.p0(1, 11), c.w1).and_then(|taken| {
-                            if taken {
-                                mem.resolve_masked(target)
-                                    .map(Control::Branch)
-                                    .map_err(|error| DiagKind::MemoryRead {
-                                        access: MemoryAccess::Command,
-                                        error,
-                                    })
-                            } else {
-                                Ok(Control::Continue)
-                            }
-                        })
-                    })
-            };
-            match conditional {
-                Ok(control) => control,
-                Err(kind) => {
-                    diags.push(Diagnostic { at: pc, kind });
-                    Control::Abort
-                }
-            }
-        } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
-            && op == crate::hle::consts::G_LOAD_UCODE
-        {
-            diags.push(Diagnostic {
-                at: pc,
-                kind: DiagKind::UnsupportedMicrocodeLoad {
-                    w0: c.w0,
-                    w1: c.w1_addr,
-                    data_address: rdphalf_1,
-                },
-            });
-            Control::Abort
-        } else {
-            Control::Continue
-        };
-        match control {
-            Control::Call(target) | Control::Branch(target) => {
-                if matches!(control, Control::Call(_)) {
-                    return_stack.push(walk_try!(Command, checked_span(pc, stride)));
-                }
-                pc = target;
-                continue;
-            }
-            Control::Return => match return_stack.pop() {
-                Some(ret) => {
-                    pc = ret;
-                    continue;
-                }
-                None => break,
-            },
-            Control::Abort => {
-                rejected = true;
-                break;
-            }
-            Control::Continue => {}
-        }
-        if ucode == crate::hle::gbi::GbiUcode::F3dex2 && op == crate::hle::consts::G_RDPHALF_1 {
-            rdphalf_1 = Some(c.w1_addr);
-            pc = walk_try!(Command, checked_span(pc, stride));
-            continue;
-        }
-        if ucode == crate::hle::gbi::GbiUcode::F3dex2
-            && matches!(
-                op,
-                crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
-            )
-        {
-            pc = walk_try!(Command, checked_span(pc, stride));
-            continue;
-        }
-
-        // First G_SETCIMG → the scene becomes "paired" (subsequent draws record into ordered
-        // FramebufferPairs). The CIMG itself still dispatches below to update RDP state.
-        if op == crate::hle::consts::G_SETCIMG {
-            rec.have_seen_cimg = true;
-        }
-
-        if op == crate::hle::consts::G_TEXRECT || op == crate::hle::consts::G_TEXRECTFLIP {
-            let pc1 = walk_try!(Continuation, checked_span(pc, stride));
-            let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
-            let pc2 = walk_try!(Continuation, checked_span(pc1, stride));
-            let cmd2 = walk_try!(Continuation, mem.read_command(pc2));
-            let next_pc = walk_try!(Command, checked_span(pc2, stride));
-
-            let (lrx, lry, tile, ulx, uly) = match gbi.data_format {
-                crate::hle::mem::GbiDataFormat::Fixed => (
-                    c.p0(12, 12) as i32,
-                    c.p0(0, 12) as i32,
-                    c.p1(24, 3) as u8,
-                    c.p1(12, 12) as i32,
-                    c.p1(0, 12) as i32,
-                ),
-                crate::hle::mem::GbiDataFormat::Float => (
-                    sext24(c.w0),
-                    sext24(c.w1),
-                    c.p1(24, 3) as u8,
-                    sext24(cmd1.w0),
-                    sext24(cmd2.w0),
-                ),
-            };
-            // uls/ult/dsdx/dtdy occupy identical positions in both formats.
-            let uls = (cmd1.w1 >> 16) as i16;
-            let ult = cmd1.w1 as i16;
-            let dsdx = (cmd2.w1 >> 16) as i16;
-            let dtdy = cmd2.w1 as i16;
-            let flip = op == crate::hle::consts::G_TEXRECTFLIP;
-            let copy_mode = ((rdp.other_mode_h >> 20) & 3) == crate::hle::consts::G_CYC_COPY;
-            let rect = crate::hle::TexRectBounds { ulx, uly, lrx, lry };
-
-            if !rec.have_seen_cimg {
-                // A 2D op needs a framebuffer target; one before the first CIMG is malformed → drop.
-                dropped_runs += 1;
-                diags.push(Diagnostic {
-                    at: pc,
-                    kind: DiagKind::DrawBeforeCimg,
-                });
-                pc = next_pc;
-                continue;
-            }
-
-            let Some((material_index, render_mode_index)) =
-                crate::hle::rsp::snapshot_rect_run(&rsp, &rdp, tile, &mut diags, &mut scene, pc)
-            else {
-                dropped_runs += 1;
-                pc = next_pc;
-                continue;
-            };
-            crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
-            crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
-
-            // fb_source: the latest PRIOR pair whose framebuffer byte-range contains the texture
-            // image address (a framebuffer-as-texture read-back). The current pair is excluded
-            // (it is not yet recorded as a finished framebuffer).
-            let tex_addr = rdp.tex_image.3;
-            let cur = rec.cur_pair;
-            let fb_source = scene.framebuffer_pairs[..cur]
-                .iter()
-                .rev()
-                .filter(|p| !p.is_depth_clear)
-                .find(|p| {
-                    let start = p.color_image.addr;
-                    let length = (p.color_image.width as u64)
-                        * (p.size_extent.1 as u64)
-                        * crate::hle::rsp::bpp(p.color_image.siz);
-                    start
-                        .checked_add(length)
-                        .is_some_and(|end| (start..end).contains(&tex_addr))
-                })
-                .map(|p| p.color_image.addr);
-
-            scene.framebuffer_pairs[cur]
-                .ops
-                .push(crate::hle::rsp::SceneOp::TexRect {
-                    rect,
-                    tile,
-                    uls,
-                    ult,
-                    dsdx,
-                    dtdy,
-                    flip,
-                    copy_mode,
-                    material_index,
-                    render_mode_index,
-                    fog_color: rdp.fog_color,
-                    prim_depth: rdp.prim_depth,
-                    fb_source,
-                });
-            pc = next_pc;
-            continue;
-        }
-        if op == crate::hle::consts::G_FILLRECT {
-            // Fixed: 1 word (lrx/lry in w0, ulx/uly in w1). Float: 2 words (F6 + E1), all coords
-            // sign-extended 24-bit across cmd0.w0/w1 and cmd1.w0/w1.
-            let (rect, words) = match gbi.data_format {
-                crate::hle::mem::GbiDataFormat::Fixed => (
-                    crate::hle::rsp::Rect {
-                        lrx: (c.p0(12, 12) as i32) >> 2,
-                        lry: (c.p0(0, 12) as i32) >> 2,
-                        ulx: (c.p1(12, 12) as i32) >> 2,
-                        uly: (c.p1(0, 12) as i32) >> 2,
-                    },
-                    1u64,
-                ),
-                crate::hle::mem::GbiDataFormat::Float => {
-                    let pc1 = walk_try!(Continuation, checked_span(pc, stride));
-                    let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
-                    (
-                        crate::hle::rsp::Rect {
-                            lrx: sext24(c.w0) >> 2,
-                            lry: sext24(c.w1) >> 2,
-                            ulx: sext24(cmd1.w0) >> 2,
-                            uly: sext24(cmd1.w1) >> 2,
-                        },
-                        2u64,
-                    )
-                }
-            };
-
-            let mut next_pc = pc;
-            for _ in 0..words {
-                next_pc = match checked_span(next_pc, stride) {
-                    Ok(next) => next,
-                    Err(error) => {
-                        diags.push(Diagnostic {
-                            at: pc,
-                            kind: DiagKind::MemoryRead {
-                                access: MemoryAccess::Command,
-                                error,
-                            },
-                        });
-                        rejected = true;
-                        break;
                     }
                 };
             }
-            if rejected {
-                break;
-            }
-
-            if !rec.have_seen_cimg {
-                dropped_runs += 1;
+            let control = if op == gbi.consts.g_dl {
+                let target = walk_try!(Command, mem.resolve_masked(c.w1_addr));
+                if c.p0(16, 1) == 0 {
+                    Control::Call(target)
+                } else {
+                    Control::Branch(target)
+                }
+            } else if op == gbi.consts.g_enddl {
+                Control::Return
+            } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
+                && matches!(
+                    op,
+                    crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
+                )
+            {
+                let conditional = if op == crate::hle::consts::G_CULLDL {
+                    rsp.cull_display_list(c.p0(1, 15), c.p1(1, 15))
+                        .map(|culled| {
+                            if culled {
+                                Control::Return
+                            } else {
+                                Control::Continue
+                            }
+                        })
+                } else {
+                    rdphalf_1
+                        .ok_or(DiagKind::MissingBranchTarget)
+                        .and_then(|target| {
+                            rsp.branch_z(c.p0(1, 11), c.w1).and_then(|taken| {
+                                if taken {
+                                    mem.resolve_masked(target).map(Control::Branch).map_err(
+                                        |error| DiagKind::MemoryRead {
+                                            access: MemoryAccess::Command,
+                                            error,
+                                        },
+                                    )
+                                } else {
+                                    Ok(Control::Continue)
+                                }
+                            })
+                        })
+                };
+                match conditional {
+                    Ok(control) => control,
+                    Err(kind) => {
+                        diags.push(Diagnostic { at: pc, kind });
+                        Control::Abort
+                    }
+                }
+            } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
+                && op == crate::hle::consts::G_LOAD_UCODE
+            {
                 diags.push(Diagnostic {
                     at: pc,
-                    kind: DiagKind::DrawBeforeCimg,
+                    kind: DiagKind::UnsupportedMicrocodeLoad {
+                        w0: c.w0,
+                        w1: c.w1_addr,
+                        data_address: rdphalf_1,
+                    },
                 });
-                pc = next_pc;
-                continue;
-            }
-
-            if !crate::hle::combiner::validate_fill_inputs(&rdp, &mut diags, pc) {
-                dropped_runs += 1;
-                pc = next_pc;
-                continue;
-            }
-
-            crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
-            crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
-            let color_raw = rdp.fill_color_raw;
-            scene.framebuffer_pairs[rec.cur_pair]
-                .ops
-                .push(crate::hle::rsp::SceneOp::FillRect {
-                    rect,
-                    color_raw,
-                    convert: rdp.convert,
-                    key: rdp.key,
-                });
-            pc = next_pc;
-            continue;
-        }
-
-        let mut cx = Ctx {
-            rsp: &mut rsp,
-            rdp: &mut rdp,
-            mem: &mut mem,
-            scene: &mut scene,
-            diags: &mut diags,
-            pc,
-            gbi_consts: gbi.consts,
-            rec: &mut rec,
-            dropped_runs: &mut dropped_runs,
-            unknown_seen: &mut unknown_seen,
-        };
-        gbi.table[op as usize](&c, &mut cx);
-        if diags.last().is_some_and(|d| {
-            matches!(
-                d.kind,
-                DiagKind::MemoryRead { .. }
-                    | DiagKind::DlPastRdram
-                    | DiagKind::UnhandledMovemem(_)
-                    | DiagKind::UnhandledMoveword(_)
-                    | DiagKind::UnsupportedCommand {
-                        opcode: 0xd3..=0xd5,
-                        ..
+                Control::Abort
+            } else {
+                Control::Continue
+            };
+            match control {
+                Control::Call(target) | Control::Branch(target) => {
+                    if matches!(control, Control::Call(_)) {
+                        return_stack.push(walk_try!(Command, checked_span(pc, stride)));
                     }
-            )
-        }) {
-            rejected = true;
+                    flow = if matches!(control, Control::Call(_)) {
+                        WalkFlow::Call
+                    } else {
+                        WalkFlow::Branch
+                    };
+                    pc = target;
+                    break 'dispatch;
+                }
+                Control::Return => match return_stack.pop() {
+                    Some(ret) => {
+                        flow = if op == crate::hle::consts::G_CULLDL
+                            && ucode == crate::hle::gbi::GbiUcode::F3dex2
+                        {
+                            WalkFlow::Branch
+                        } else {
+                            WalkFlow::Return
+                        };
+                        pc = ret;
+                        break 'dispatch;
+                    }
+                    None => {
+                        flow = WalkFlow::End;
+                        break 'dispatch;
+                    }
+                },
+                Control::Abort => {
+                    rejected = true;
+                    break 'dispatch;
+                }
+                Control::Continue => {}
+            }
+            if ucode == crate::hle::gbi::GbiUcode::F3dex2 && op == crate::hle::consts::G_RDPHALF_1 {
+                rdphalf_1 = Some(c.w1_addr);
+                pc = walk_try!(Command, checked_span(pc, stride));
+                break 'dispatch;
+            }
+            if ucode == crate::hle::gbi::GbiUcode::F3dex2
+                && matches!(
+                    op,
+                    crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
+                )
+            {
+                pc = walk_try!(Command, checked_span(pc, stride));
+                break 'dispatch;
+            }
+
+            // First G_SETCIMG → the scene becomes "paired" (subsequent draws record into ordered
+            // FramebufferPairs). The CIMG itself still dispatches below to update RDP state.
+            if op == crate::hle::consts::G_SETCIMG {
+                rec.have_seen_cimg = true;
+            }
+
+            if op == crate::hle::consts::G_TEXRECT || op == crate::hle::consts::G_TEXRECTFLIP {
+                let pc1 = walk_try!(Continuation, checked_span(pc, stride));
+                let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
+                if let Some(observed) = &mut observed {
+                    observed.push_word(pc1, &cmd1);
+                }
+                let pc2 = walk_try!(Continuation, checked_span(pc1, stride));
+                let cmd2 = walk_try!(Continuation, mem.read_command(pc2));
+                if let Some(observed) = &mut observed {
+                    observed.push_word(pc2, &cmd2);
+                }
+                let next_pc = walk_try!(Command, checked_span(pc2, stride));
+
+                let (lrx, lry, tile, ulx, uly) = match gbi.data_format {
+                    crate::hle::mem::GbiDataFormat::Fixed => (
+                        c.p0(12, 12) as i32,
+                        c.p0(0, 12) as i32,
+                        c.p1(24, 3) as u8,
+                        c.p1(12, 12) as i32,
+                        c.p1(0, 12) as i32,
+                    ),
+                    crate::hle::mem::GbiDataFormat::Float => (
+                        sext24(c.w0),
+                        sext24(c.w1),
+                        c.p1(24, 3) as u8,
+                        sext24(cmd1.w0),
+                        sext24(cmd2.w0),
+                    ),
+                };
+                // uls/ult/dsdx/dtdy occupy identical positions in both formats.
+                let uls = (cmd1.w1 >> 16) as i16;
+                let ult = cmd1.w1 as i16;
+                let dsdx = (cmd2.w1 >> 16) as i16;
+                let dtdy = cmd2.w1 as i16;
+                let flip = op == crate::hle::consts::G_TEXRECTFLIP;
+                let copy_mode = ((rdp.other_mode_h >> 20) & 3) == crate::hle::consts::G_CYC_COPY;
+                let rect = crate::hle::TexRectBounds { ulx, uly, lrx, lry };
+
+                if !rec.have_seen_cimg {
+                    // A 2D op needs a framebuffer target; one before the first CIMG is malformed → drop.
+                    dropped_runs += 1;
+                    diags.push(Diagnostic {
+                        at: pc,
+                        kind: DiagKind::DrawBeforeCimg,
+                    });
+                    pc = next_pc;
+                    break 'dispatch;
+                }
+
+                let Some((material_index, render_mode_index)) = crate::hle::rsp::snapshot_rect_run(
+                    &rsp, &rdp, tile, &mut diags, &mut scene, pc,
+                ) else {
+                    dropped_runs += 1;
+                    pc = next_pc;
+                    break 'dispatch;
+                };
+                crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
+                crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
+
+                // fb_source: the latest PRIOR pair whose framebuffer byte-range contains the texture
+                // image address (a framebuffer-as-texture read-back). The current pair is excluded
+                // (it is not yet recorded as a finished framebuffer).
+                let tex_addr = rdp.tex_image.3;
+                let cur = rec.cur_pair;
+                let fb_source = scene.framebuffer_pairs[..cur]
+                    .iter()
+                    .rev()
+                    .filter(|p| !p.is_depth_clear)
+                    .find(|p| {
+                        let start = p.color_image.addr;
+                        let length = (p.color_image.width as u64)
+                            * (p.size_extent.1 as u64)
+                            * crate::hle::rsp::bpp(p.color_image.siz);
+                        start
+                            .checked_add(length)
+                            .is_some_and(|end| (start..end).contains(&tex_addr))
+                    })
+                    .map(|p| p.color_image.addr);
+
+                scene.framebuffer_pairs[cur]
+                    .ops
+                    .push(crate::hle::rsp::SceneOp::TexRect {
+                        rect,
+                        tile,
+                        uls,
+                        ult,
+                        dsdx,
+                        dtdy,
+                        flip,
+                        copy_mode,
+                        material_index,
+                        render_mode_index,
+                        fog_color: rdp.fog_color,
+                        prim_depth: rdp.prim_depth,
+                        fb_source,
+                    });
+                if let Some(observed) = &mut observed {
+                    observed.emission = Some(Emission::TexRect {
+                        target: framebuffer_target(&scene, cur),
+                        rect,
+                        tile,
+                        uls,
+                        ult,
+                        dsdx,
+                        dtdy,
+                        flip,
+                        copy_mode,
+                        fb_source,
+                    });
+                }
+                pc = next_pc;
+                break 'dispatch;
+            }
+            if op == crate::hle::consts::G_FILLRECT {
+                // Fixed: 1 word (lrx/lry in w0, ulx/uly in w1). Float: 2 words (F6 + E1), all coords
+                // sign-extended 24-bit across cmd0.w0/w1 and cmd1.w0/w1.
+                let (rect, words) = match gbi.data_format {
+                    crate::hle::mem::GbiDataFormat::Fixed => (
+                        crate::hle::rsp::Rect {
+                            lrx: (c.p0(12, 12) as i32) >> 2,
+                            lry: (c.p0(0, 12) as i32) >> 2,
+                            ulx: (c.p1(12, 12) as i32) >> 2,
+                            uly: (c.p1(0, 12) as i32) >> 2,
+                        },
+                        1u64,
+                    ),
+                    crate::hle::mem::GbiDataFormat::Float => {
+                        let pc1 = walk_try!(Continuation, checked_span(pc, stride));
+                        let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
+                        if let Some(observed) = &mut observed {
+                            observed.push_word(pc1, &cmd1);
+                        }
+                        (
+                            crate::hle::rsp::Rect {
+                                lrx: sext24(c.w0) >> 2,
+                                lry: sext24(c.w1) >> 2,
+                                ulx: sext24(cmd1.w0) >> 2,
+                                uly: sext24(cmd1.w1) >> 2,
+                            },
+                            2u64,
+                        )
+                    }
+                };
+
+                let mut next_pc = pc;
+                for _ in 0..words {
+                    next_pc = walk_try!(Command, checked_span(next_pc, stride));
+                }
+
+                if !rec.have_seen_cimg {
+                    dropped_runs += 1;
+                    diags.push(Diagnostic {
+                        at: pc,
+                        kind: DiagKind::DrawBeforeCimg,
+                    });
+                    pc = next_pc;
+                    break 'dispatch;
+                }
+
+                if !crate::hle::combiner::validate_fill_inputs(&rdp, &mut diags, pc) {
+                    dropped_runs += 1;
+                    pc = next_pc;
+                    break 'dispatch;
+                }
+
+                crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
+                crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
+                let color_raw = rdp.fill_color_raw;
+                scene.framebuffer_pairs[rec.cur_pair].ops.push(
+                    crate::hle::rsp::SceneOp::FillRect {
+                        rect,
+                        color_raw,
+                        convert: rdp.convert,
+                        key: rdp.key,
+                    },
+                );
+                if let Some(observed) = &mut observed {
+                    observed.emission = Some(Emission::FillRect {
+                        target: framebuffer_target(&scene, rec.cur_pair),
+                        rect,
+                        color_raw,
+                    });
+                }
+                pc = next_pc;
+                break 'dispatch;
+            }
+
+            let mut cx = Ctx {
+                rsp: &mut rsp,
+                rdp: &mut rdp,
+                mem: &mut mem,
+                scene: &mut scene,
+                diags: &mut diags,
+                pc,
+                gbi_consts: gbi.consts,
+                rec: &mut rec,
+                dropped_runs: &mut dropped_runs,
+                unknown_seen: &mut unknown_seen,
+            };
+            gbi.table[op as usize](&c, &mut cx);
+            if diags.last().is_some_and(|d| {
+                matches!(
+                    d.kind,
+                    DiagKind::MemoryRead { .. }
+                        | DiagKind::DlPastRdram
+                        | DiagKind::UnhandledMovemem(_)
+                        | DiagKind::UnhandledMoveword(_)
+                        | DiagKind::UnsupportedCommand {
+                            opcode: 0xd3..=0xd5,
+                            ..
+                        }
+                )
+            }) {
+                rejected = true;
+                break 'dispatch;
+            }
+            pc = walk_try!(Command, checked_span(pc, stride));
+        }
+        if rejected {
+            flow = WalkFlow::Fault;
+            termination = fault_termination(&diags);
+        }
+        final_diagnostics_start = diags.len();
+        if let (Some(observer), Some(observed)) = (observer.as_deref_mut(), observed) {
+            let mut names = [GeometryFlag { mask: 0, name: "" }; 12];
+            let geometry_names =
+                crate::inspect::geometry_flags(ucode.into(), rsp.geometry_mode(), &mut names);
+            let emission = if scene.indices.len() > observed.index_start {
+                Some(Emission::Triangles {
+                    target: rec
+                        .have_seen_cimg
+                        .then(|| framebuffer_target(&scene, rec.cur_pair)),
+                    index_start: observed.index_start as u32,
+                    indices: &scene.indices[observed.index_start..],
+                })
+            } else {
+                observed.emission
+            };
+            let outcome = observer.command(WalkStep {
+                seq: (dispatched - 1) as u32,
+                pc: observed.words[0].pc,
+                words: &observed.words[..observed.word_count],
+                depth_before: observed.depth_before,
+                depth_after: return_stack.len(),
+                flow,
+                next_pc: (!matches!(flow, WalkFlow::End | WalkFlow::Fault)).then_some(pc),
+                state: rsp.inspect_state(&rdp, geometry_names),
+                emissions: emission.as_slice(),
+                diagnostics_start: observed.diagnostics_start,
+                diagnostics: &diags[observed.diagnostics_start..],
+            });
+            if !matches!(flow, WalkFlow::End | WalkFlow::Fault) && outcome == ControlFlow::Break(())
+            {
+                termination = WalkTermination::ObserverStopped;
+                break;
+            }
+        }
+        if matches!(flow, WalkFlow::End | WalkFlow::Fault) {
             break;
         }
-        pc = walk_try!(Command, checked_span(pc, stride));
     }
 
     if rejected {
@@ -552,6 +734,8 @@ pub fn interpret<M: Rdram>(
             rdp,
             commands: dispatched as u32,
             dropped_runs,
+            termination,
+            final_diagnostics_start,
         };
     }
 
@@ -580,6 +764,8 @@ pub fn interpret<M: Rdram>(
         rdp,
         commands: dispatched as u32,
         dropped_runs,
+        termination,
+        final_diagnostics_start,
     }
 }
 
@@ -590,6 +776,7 @@ pub fn interpret_rdram(bytes: &[u8], entry_addr: u32) -> InterpResult {
         entry_addr as u64,
         crate::hle::gbi::GbiUcode::F3dex2,
         crate::hle::mem::GbiDataFormat::Fixed,
+        None,
     )
 }
 
@@ -1042,8 +1229,8 @@ mod rect_encoding_tests {
         )
     }
     fn run(buf: &[u8], ucode: GbiUcode) -> InterpResult {
-        interpret(
-            crate::hle::mem::RdramImage::new(buf),
+        crate::tests::inspect::equivalent(
+            || crate::hle::mem::RdramImage::new(buf),
             0,
             ucode,
             crate::hle::mem::GbiDataFormat::Fixed,
@@ -1052,8 +1239,8 @@ mod rect_encoding_tests {
     /// `GBI_FLOATS` variant of `run`: F3DEX2 command table read with the float data layout —
     /// the sm64/wafel PC-port path (formerly selected via the removed `F3dex2e` ucode).
     fn run_float(buf: &[u8]) -> InterpResult {
-        interpret(
-            crate::hle::mem::RdramImage::new(buf),
+        crate::tests::inspect::equivalent(
+            || crate::hle::mem::RdramImage::new(buf),
             0,
             GbiUcode::F3dex2,
             crate::hle::mem::GbiDataFormat::Float,
@@ -1455,6 +1642,7 @@ mod structured_diag_tests {
             0,
             GbiUcode::F3dex2,
             crate::hle::mem::GbiDataFormat::Fixed,
+            None,
         );
         assert_eq!(
             r.diags,
@@ -1479,6 +1667,7 @@ mod structured_diag_tests {
             0,
             GbiUcode::F3dex2,
             crate::hle::mem::GbiDataFormat::Fixed,
+            None,
         );
         let n = r
             .diags
@@ -1505,6 +1694,7 @@ mod structured_diag_tests {
             0,
             GbiUcode::F3dex2,
             crate::hle::mem::GbiDataFormat::Fixed,
+            None,
         );
         assert_eq!(r.commands, 2, "SETCIMG + ENDDL == 2 dispatches");
     }
@@ -1521,6 +1711,7 @@ mod structured_diag_tests {
             0,
             GbiUcode::F3dex2,
             crate::hle::mem::GbiDataFormat::Fixed,
+            None,
         );
         assert!(r.diags.iter().any(|d| d.kind == DiagKind::DrawBeforeCimg));
         assert_eq!(r.dropped_runs, 1);
