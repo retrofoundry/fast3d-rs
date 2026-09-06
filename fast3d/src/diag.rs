@@ -49,6 +49,18 @@ pub enum DiagKind {
         index: u32,
         attribute: u32,
     },
+    InvalidCullRange {
+        first: u32,
+        last: u32,
+    },
+    InvalidConditionalVertex {
+        opcode: u8,
+        index: u32,
+    },
+    InvalidVertexTransform {
+        index: u32,
+    },
+    MissingBranchTarget,
     UnhandledMovemem(u8),
     UnhandledMoveword(u8),
     NonCanonicalBlend,
@@ -92,6 +104,10 @@ impl DiagKind {
             | DiagKind::DrawBeforeCimg
             | DiagKind::VtxOutOfRange { .. }
             | DiagKind::InvalidModifyVertex { .. }
+            | DiagKind::InvalidCullRange { .. }
+            | DiagKind::InvalidConditionalVertex { .. }
+            | DiagKind::InvalidVertexTransform { .. }
+            | DiagKind::MissingBranchTarget
             | DiagKind::NoTextureLoaded
             | DiagKind::SecondTextureUndecodable
             | DiagKind::UnhandledMovemem(_)
@@ -158,6 +174,16 @@ impl std::fmt::Display for DiagKind {
             DiagKind::InvalidModifyVertex { index, attribute } => {
                 write!(f, "invalid MODIFYVTX slot or attribute: index={index}, attribute={attribute:#04x}")
             }
+            DiagKind::InvalidCullRange { first, last } => {
+                write!(f, "invalid CULLDL range: first={first}, last={last}")
+            }
+            DiagKind::InvalidConditionalVertex { opcode, index } => {
+                write!(f, "invalid vertex for opcode 0x{opcode:02X}: index={index}")
+            }
+            DiagKind::InvalidVertexTransform { index } => {
+                write!(f, "invalid vertex transform: index={index}")
+            }
+            DiagKind::MissingBranchTarget => write!(f, "BRANCH_Z missing RDPHALF_1 target"),
             DiagKind::UnhandledMovemem(idx) => write!(f, "unhandled MOVEMEM index 0x{idx:02X}"),
             DiagKind::UnhandledMoveword(ty) => write!(f, "unhandled G_MOVEWORD type 0x{ty:02X}"),
             DiagKind::NonCanonicalBlend => {

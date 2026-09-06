@@ -139,6 +139,8 @@ pub mod rsp_f3dex2 {
     // RSP F3DEX2 opcodes (top byte of w0, bits [31:24]).
     pub const G_VTX: u8 = 0x01;
     pub const G_MODIFYVTX: u8 = 0x02;
+    pub const G_CULLDL: u8 = 0x03;
+    pub const G_BRANCH_Z: u8 = 0x04;
     pub const G_TRI1: u8 = 0x05;
     pub const G_TRI2: u8 = 0x06;
     pub const G_QUAD: u8 = 0x07;

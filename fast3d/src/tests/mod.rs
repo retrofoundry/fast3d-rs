@@ -9,6 +9,7 @@ mod browser_fixtures;
 #[cfg(feature = "capture")]
 #[path = "../../../tools/rt64-oracle/fixture.rs"]
 mod capture_fixture;
+mod conditional_control;
 mod culling;
 mod decode;
 mod dl_plumbing;

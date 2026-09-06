@@ -174,6 +174,41 @@ pub fn interpret<M: Rdram>(
         } else if op == gbi.consts.g_enddl {
             Control::Return
         } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
+            && matches!(
+                op,
+                crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
+            )
+        {
+            let conditional = if op == crate::hle::consts::G_CULLDL {
+                rsp.cull_display_list(c.p0(1, 15), c.p1(1, 15))
+                    .map(|culled| {
+                        if culled {
+                            Control::Return
+                        } else {
+                            Control::Continue
+                        }
+                    })
+            } else {
+                rdphalf_1
+                    .ok_or(DiagKind::MissingBranchTarget)
+                    .and_then(|target| {
+                        rsp.branch_z(c.p0(1, 11), c.w1).map(|taken| {
+                            if taken {
+                                Control::Branch(mem.resolve_masked(target))
+                            } else {
+                                Control::Continue
+                            }
+                        })
+                    })
+            };
+            match conditional {
+                Ok(control) => control,
+                Err(kind) => {
+                    diags.push(Diagnostic { at: pc, kind });
+                    Control::Abort
+                }
+            }
+        } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
             && op == crate::hle::consts::G_LOAD_UCODE
         {
             diags.push(Diagnostic {
@@ -211,6 +246,15 @@ pub fn interpret<M: Rdram>(
         }
         if ucode == crate::hle::gbi::GbiUcode::F3dex2 && op == crate::hle::consts::G_RDPHALF_1 {
             rdphalf_1 = Some(c.w1_addr);
+            pc += stride;
+            continue;
+        }
+        if ucode == crate::hle::gbi::GbiUcode::F3dex2
+            && matches!(
+                op,
+                crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
+            )
+        {
             pc += stride;
             continue;
         }
