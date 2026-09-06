@@ -73,6 +73,33 @@ impl DlBuilder {
         self.bytes(8, &bytes)
     }
 
+    pub fn set_lights(&mut self, ambient: [u8; 3], lights: &[Light]) -> Vec<Command> {
+        use n64_gbi::consts::{G_MOVEMEM, G_MOVEWORD, G_MV_LIGHT, G_MW_NUMLIGHT};
+        let base = self.lights(ambient, lights);
+        let mut commands = vec![(
+            u32::from(G_MOVEWORD) << 24 | u32::from(G_MW_NUMLIGHT) << 16,
+            lights.len() as u32 * 24,
+        )];
+        commands.extend((0..=lights.len() as u32).map(|i| {
+            (
+                u32::from(G_MOVEMEM) << 24 | ((i + 2) * 3) << 8 | u32::from(G_MV_LIGHT),
+                base + i * 16,
+            )
+        }));
+        commands
+    }
+
+    pub fn set_look_at(&mut self, axes: ([i8; 3], [i8; 3])) -> [Command; 2] {
+        use n64_gbi::consts::{G_MOVEMEM, G_MV_LIGHT};
+        let base = self.look_at(axes);
+        [0, 1].map(|i| {
+            (
+                u32::from(G_MOVEMEM) << 24 | (i * 3) << 8 | u32::from(G_MV_LIGHT),
+                base + i * 16,
+            )
+        })
+    }
+
     pub fn list(&mut self, name: &'static str, commands: &[Command]) -> u32 {
         assert!(
             !self.lists.contains_key(name),

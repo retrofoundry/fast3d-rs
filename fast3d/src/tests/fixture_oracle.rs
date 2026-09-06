@@ -43,8 +43,12 @@ pub(crate) fn builders_match_frozen_inputs() {
         eprintln!("{}: equal", fixture.name);
         checked += 1;
     }
-    assert_eq!(checked, 27, "all pilot variants must be compared");
-    eprintln!("{checked} builders match normalized frozen inputs");
+    assert_eq!(checked, 115, "all authored variants must be compared");
+    std::io::Write::write_fmt(
+        &mut std::io::stdout(),
+        format_args!("{checked} builders match normalized frozen inputs\n"),
+    )
+    .unwrap();
 }
 
 fn normalize(mut result: InterpResult, bytes: &[u8], entry: u32) -> InterpResult {
