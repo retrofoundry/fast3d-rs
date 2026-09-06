@@ -133,9 +133,9 @@ fn tlut_two_palettes_in_one_list() {
         assert_eq!(materials.len(), 2);
         for (bank, material) in materials.into_iter().enumerate() {
             assert_eq!(material.texture.len(), 16 * 16 * 4);
-            for (i, pixel) in material.texture.chunks_exact(4).enumerate() {
+            for (i, pixel) in material.texture.as_chunks::<4>().0.iter().enumerate() {
                 assert_eq!(
-                    pixel,
+                    *pixel,
                     expected(ia16, bank, i % 16),
                     "ia16={ia16}, bank={bank}, texel={i}"
                 );
@@ -159,7 +159,7 @@ fn fixture_tlut_two_palettes_pixels() {
             "{:?}",
             output.diagnostics
         );
-        for (i, pixel) in output.rgba8.chunks_exact(4).enumerate() {
+        for (i, pixel) in output.rgba8.as_chunks::<4>().0.iter().enumerate() {
             let (x, y) = (i % 320, i / 320);
             let want = if (32..48).contains(&y) && (40..56).contains(&x) {
                 expected(ia16, 0, x - 40)
@@ -168,7 +168,7 @@ fn fixture_tlut_two_palettes_pixels() {
             } else {
                 [0, 0, 0, 255]
             };
-            assert_eq!(pixel, want, "ia16={ia16}, ({x},{y})");
+            assert_eq!(*pixel, want, "ia16={ia16}, ({x},{y})");
         }
     }
 }
