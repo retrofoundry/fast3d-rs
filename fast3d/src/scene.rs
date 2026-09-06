@@ -100,9 +100,18 @@ pub struct FramebufferPair {
     pub is_depth_clear: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DrawOrigin {
+    pub pc: u64,
+    pub scissor: Scissor,
+    pub indices: std::ops::Range<u32>,
+    pub rectangle: Option<(usize, usize)>,
+}
+
 /// The flat scene the renderer consumes: vertex buffer + triangle index buffer + per-run materials.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
+    pub(crate) draw_origins: Vec<DrawOrigin>,
     pub indices: Vec<u32>,
     pub materials: Vec<crate::hle::combiner::Material>,
     pub render_modes: Vec<crate::hle::blender::RenderMode>,
