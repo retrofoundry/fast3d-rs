@@ -31,8 +31,9 @@ impl From<GbiUcode> for Microcode {
     }
 }
 
-/// Table lookup for a real-ROM consumer that has already hashed a microcode image (spec §3.6/§8.4;
-/// no live caller today — reuses the internal `detect_from_ucode_hash` fixture table).
+/// Returns `None` for every hash until a ROM consumer supplies verified microcode
+/// records and a defined hash algorithm. Select [`Microcode`] explicitly for ports
+/// and web consumers; [`crate::DataFormat`] is a separate data-layout choice.
 pub fn detect_microcode(ucode_hash: u64) -> Option<Microcode> {
     detect_from_ucode_hash(ucode_hash).map(Microcode::from)
 }
@@ -48,19 +49,5 @@ mod tests {
         assert_eq!(Microcode::from(GbiUcode::F3dex2), Microcode::F3dex2);
         assert_eq!(Microcode::from(GbiUcode::F3d), Microcode::F3d);
         assert_eq!(Microcode::default(), Microcode::F3dex2);
-    }
-
-    #[test]
-    fn detect_resolves_known_and_rejects_unknown() {
-        // Reuses the populated fixture table (hle/gbi/detect.rs), NOT an always-None stub.
-        assert_eq!(
-            detect_microcode(0xF3D2_0000_0000_0001),
-            Some(Microcode::F3dex2)
-        );
-        assert_eq!(
-            detect_microcode(0xF3D0_0000_0000_0003),
-            Some(Microcode::F3d)
-        );
-        assert_eq!(detect_microcode(0xDEAD_BEEF), None);
     }
 }
