@@ -1,6 +1,6 @@
 use super::math::Mat4;
 use super::mem::{Command, RawVertex};
-use crate::{DataFormat, Hardware, Microcode, Rdram, ViRegisters};
+use crate::{DataFormat, Hardware, MemoryError, MemoryErrorKind, Microcode, Rdram, ViRegisters};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -42,6 +42,14 @@ impl std::error::Error for CaptureError {}
 type Result<T> = std::result::Result<T, CaptureError>;
 fn invalid(s: &str) -> CaptureError {
     CaptureError::Invalid(s.into())
+}
+
+fn memory_error(address: u64, length: u64, kind: MemoryErrorKind) -> MemoryError {
+    MemoryError {
+        address,
+        length,
+        kind,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,13 +221,25 @@ impl ReadLog {
             .spans
             .range(..=address)
             .next_back()
-            .filter(|(a, b)| **a + b.len() as u64 >= address)
+            .filter(|(a, b)| {
+                u64::try_from(b.len())
+                    .ok()
+                    .and_then(|length| a.checked_add(length))
+                    .is_some_and(|span_end| span_end >= address)
+            })
             .map_or(address, |(&a, _)| a);
         let keys: Vec<u64> = self.spans.range(start..=end).map(|(&a, _)| a).collect();
         for &a in &keys {
             let old = &self.spans[&a];
+            let Some(old_end) = u64::try_from(old.len())
+                .ok()
+                .and_then(|length| a.checked_add(length))
+            else {
+                self.fail(invalid("snapshot address overflow"));
+                return;
+            };
             let lo = a.max(address);
-            let hi = (a + old.len() as u64).min(end);
+            let hi = old_end.min(end);
             if lo < hi {
                 for at in lo..hi {
                     if old[(at - a) as usize] != bytes[(at - address) as usize] {
@@ -229,9 +249,15 @@ impl ReadLog {
                 }
             }
         }
-        let merged_end = keys
-            .last()
-            .map_or(end, |a| end.max(*a + self.spans[a].len() as u64));
+        let Some(merged_end) = keys.last().map_or(Some(end), |a| {
+            u64::try_from(self.spans[a].len())
+                .ok()
+                .and_then(|length| a.checked_add(length))
+                .map(|old_end| end.max(old_end))
+        }) else {
+            self.fail(invalid("snapshot address overflow"));
+            return;
+        };
         let Ok(len) = usize::try_from(merged_end - start) else {
             self.fail(invalid("snapshot too large"));
             return;
@@ -267,25 +293,34 @@ impl<'a, H: Hardware> RecordingHardware<'a, H> {
         data_format: DataFormat,
         order: u32,
     ) -> Result<Task> {
-        let log = self.log.into_inner();
-        if let Some(e) = log.error {
-            return Err(e);
-        }
-        let task = Task {
-            entry,
-            microcode,
-            data_format,
-            order,
-            source: log.source.ok_or_else(|| invalid("task was not consumed"))?,
-            spans: log
-                .spans
-                .into_iter()
-                .map(|(address, bytes)| MemorySpan { address, bytes })
-                .collect(),
-        };
-        task.validate()?;
-        Ok(task)
+        finish_recording(self.log.into_inner(), entry, microcode, data_format, order)
     }
+}
+
+fn finish_recording(
+    log: ReadLog,
+    entry: u64,
+    microcode: Microcode,
+    data_format: DataFormat,
+    order: u32,
+) -> Result<Task> {
+    if let Some(error) = log.error {
+        return Err(error);
+    }
+    let task = Task {
+        entry,
+        microcode,
+        data_format,
+        order,
+        source: log.source.ok_or_else(|| invalid("task was not consumed"))?,
+        spans: log
+            .spans
+            .into_iter()
+            .map(|(address, bytes)| MemorySpan { address, bytes })
+            .collect(),
+    };
+    task.validate()?;
+    Ok(task)
 }
 
 impl<H: Hardware> Hardware for RecordingHardware<'_, H> {
@@ -323,24 +358,43 @@ pub struct RecordingRdram<'a, R> {
 
 trait DecodeMemory {
     fn layout(&self) -> MemoryLayout;
-    fn bytes(&self, address: u64, length: usize) -> Cow<'_, [u8]>;
-    fn word(&self, address: u64, length: usize) -> u64 {
-        self.layout().word(&self.bytes(address, length))
+    fn bytes(&self, address: u64, length: usize)
+        -> std::result::Result<Cow<'_, [u8]>, MemoryError>;
+
+    fn word(&self, address: u64, length: usize) -> std::result::Result<u64, MemoryError> {
+        let bytes = self.bytes(address, length)?;
+        Ok(self.layout().word(&bytes))
     }
-    fn command(&self, address: u64) -> Command {
+
+    fn command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
         let layout = self.layout();
-        let b = self.bytes(address, layout.command_stride as usize);
+        let bytes = self.bytes(address, layout.command_stride as usize)?;
         let width = layout.command_word_bytes as usize;
-        let w0 = layout.word(&b[..width]) as u32;
-        let w1_addr = layout.word(&b[width..2 * width]);
-        Command {
+        let words = bytes.get(..2 * width).ok_or_else(|| {
+            memory_error(
+                address,
+                u64::from(layout.command_stride),
+                MemoryErrorKind::Unavailable,
+            )
+        })?;
+        let w0 = layout.word(&words[..width]) as u32;
+        let w1_addr = layout.word(&words[width..]);
+        Ok(Command {
             w0,
             w1: w1_addr as u32,
             w1_addr,
-        }
+        })
     }
-    fn matrix(&self, address: u64, format: DataFormat) -> Mat4 {
-        let bytes = self.bytes(address, 64);
+
+    fn matrix(&self, address: u64, format: DataFormat) -> std::result::Result<Mat4, MemoryError> {
+        if self.layout().address_space == AddressSpace::Image && format == DataFormat::Float {
+            return Err(memory_error(
+                address,
+                64,
+                MemoryErrorKind::UnsupportedFormat,
+            ));
+        }
+        let bytes = self.bytes(address, 64)?;
         let word = |off: usize, n: usize| self.layout().word(&bytes[off..off + n]) as u32;
         let mut out = [[0.0; 4]; 4];
         for (k, v) in out.iter_mut().flatten().enumerate() {
@@ -350,7 +404,7 @@ trait DecodeMemory {
                     let (hi, lo) = match self.layout().fixed_matrix_packing {
                         FixedMatrixPacking::SplitHalfwords => (word(k * 2, 2), word(32 + k * 2, 2)),
                         FixedMatrixPacking::PackedWords => {
-                            let shift = if k % 2 == 0 { 16 } else { 0 };
+                            let shift = if k.is_multiple_of(2) { 16 } else { 0 };
                             (
                                 (word(k / 2 * 4, 4) >> shift) & 0xffff,
                                 (word(32 + k / 2 * 4, 4) >> shift) & 0xffff,
@@ -361,15 +415,30 @@ trait DecodeMemory {
                 }
             };
         }
-        out
+        Ok(out)
     }
-    fn vertex(&self, address: u64, format: DataFormat) -> RawVertex {
+
+    fn vertex(
+        &self,
+        address: u64,
+        format: DataFormat,
+    ) -> std::result::Result<RawVertex, MemoryError> {
+        if self.layout().address_space == AddressSpace::Image && format == DataFormat::Float {
+            return Err(memory_error(
+                address,
+                24,
+                MemoryErrorKind::UnsupportedFormat,
+            ));
+        }
         let (pos_len, st_off) = match format {
             DataFormat::Fixed => (6, 8),
             DataFormat::Float => (12, 14),
         };
-        let pos = self.bytes(address, pos_len);
-        let rest = self.bytes(address.saturating_add(st_off), 8);
+        let rest_address = address
+            .checked_add(st_off)
+            .ok_or_else(|| memory_error(address, st_off, MemoryErrorKind::AddressOverflow))?;
+        let pos = self.bytes(address, pos_len as usize)?;
+        let rest = self.bytes(rest_address, 8)?;
         let mut out = RawVertex {
             pos: [0.; 3],
             st: [0; 2],
@@ -386,7 +455,21 @@ trait DecodeMemory {
         for (i, v) in out.st.iter_mut().enumerate() {
             *v = self.layout().word(&rest[i * 2..i * 2 + 2]) as i16;
         }
-        out
+        Ok(out)
+    }
+}
+
+impl<R: Rdram> RecordingRdram<'_, R> {
+    fn source<T>(
+        &self,
+        result: std::result::Result<T, MemoryError>,
+    ) -> std::result::Result<T, MemoryError> {
+        result.inspect_err(|error| {
+            self.log.borrow_mut().fail(CaptureError::MissingSpan {
+                address: error.address,
+                length: error.length,
+            });
+        })
     }
 }
 
@@ -394,88 +477,119 @@ impl<R: Rdram> DecodeMemory for RecordingRdram<'_, R> {
     fn layout(&self) -> MemoryLayout {
         self.layout
     }
-    fn bytes(&self, address: u64, length: usize) -> Cow<'_, [u8]> {
+    fn bytes(
+        &self,
+        address: u64,
+        length: usize,
+    ) -> std::result::Result<Cow<'_, [u8]>, MemoryError> {
+        let length_u64 = u64::try_from(length)
+            .map_err(|_| memory_error(address, u64::MAX, MemoryErrorKind::AddressOverflow))?;
         if self.log.borrow().error.is_some() {
-            return Cow::Owned(vec![0; length]);
+            return Err(memory_error(
+                address,
+                length_u64,
+                MemoryErrorKind::Unavailable,
+            ));
         }
-        let bytes = self.inner.read_bytes(address, length).into_owned();
+        let bytes = match self.inner.read_bytes(address, length) {
+            Ok(bytes) => bytes.into_owned(),
+            Err(error) => return self.source(Err(error)),
+        };
         if bytes.len() != length {
             self.log.borrow_mut().fail(CaptureError::MissingSpan {
                 address,
-                length: length as u64,
+                length: length_u64,
             });
-            return Cow::Owned(vec![0; length]);
+            return Err(memory_error(
+                address,
+                length_u64,
+                MemoryErrorKind::Unavailable,
+            ));
         }
         self.log.borrow_mut().insert(address, &bytes);
-        Cow::Owned(bytes)
+        if self.log.borrow().error.is_some() {
+            return Err(memory_error(
+                address,
+                length_u64,
+                MemoryErrorKind::Unavailable,
+            ));
+        }
+        Ok(Cow::Owned(bytes))
     }
-}
-
-macro_rules! decoded_reads {
-    () => {
-        fn read_command(&self, pc: u64) -> Command {
-            self.command(pc)
-        }
-        fn command_stride(&self) -> u64 {
-            self.layout().command_stride as u64
-        }
-        fn read_u8(&self, a: u64) -> u8 {
-            self.word(a, 1) as u8
-        }
-        fn read_i8(&self, a: u64) -> i8 {
-            self.word(a, 1) as i8
-        }
-        fn read_u16(&self, a: u64) -> u16 {
-            self.word(a, 2) as u16
-        }
-        fn read_i16(&self, a: u64) -> i16 {
-            self.word(a, 2) as i16
-        }
-        fn read_bytes<'s>(&'s self, a: u64, len: usize) -> Cow<'s, [u8]> {
-            self.bytes(a, len)
-        }
-        fn read_matrix(&self, a: u64, fmt: DataFormat) -> Mat4 {
-            self.matrix(a, fmt)
-        }
-        fn read_vertex(&self, a: u64, fmt: DataFormat) -> RawVertex {
-            self.vertex(a, fmt)
-        }
-        fn vertex_stride(&self, fmt: DataFormat) -> u64 {
-            match fmt {
-                DataFormat::Fixed => 16,
-                DataFormat::Float => 24,
-            }
-        }
-        fn is_rdram_image(&self) -> bool {
-            self.layout().address_space == AddressSpace::Image
-        }
-    };
 }
 
 impl<R: Rdram> Rdram for RecordingRdram<'_, R> {
     fn set_segment(&mut self, seg: u32, value: u64) {
         self.inner.set_segment(seg, value);
     }
-    fn resolve(&self, addr: u64) -> u64 {
+    fn resolve(&self, addr: u64) -> std::result::Result<u64, MemoryError> {
         self.inner.resolve(addr)
     }
-    fn resolve_masked(&self, addr: u64) -> u64 {
+    fn resolve_masked(&self, addr: u64) -> std::result::Result<u64, MemoryError> {
         self.inner.resolve_masked(addr)
     }
-    fn in_bounds(&self, pc: u64, stride: u64) -> bool {
-        if self.log.borrow().error.is_some() {
-            return false;
-        }
-        let valid = self.inner.in_bounds(pc, stride);
-        if !valid {
-            self.log.borrow_mut().fail(CaptureError::MissingSpan {
-                address: pc,
-                length: stride,
-            });
-        }
-        valid
+    fn read_command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
+        let command = self.source(self.inner.read_command(address))?;
+        self.bytes(address, self.layout.command_stride as usize)?;
+        Ok(command)
     }
-    decoded_reads!();
+    fn command_stride(&self) -> u64 {
+        u64::from(self.layout.command_stride)
+    }
+    fn in_bounds(&self, address: u64, length: u64) -> bool {
+        self.inner.in_bounds(address, length)
+    }
+    fn read_u8(&self, address: u64) -> std::result::Result<u8, MemoryError> {
+        let value = self.source(self.inner.read_u8(address))?;
+        self.bytes(address, 1)?;
+        Ok(value)
+    }
+    fn read_i8(&self, address: u64) -> std::result::Result<i8, MemoryError> {
+        let value = self.source(self.inner.read_i8(address))?;
+        self.bytes(address, 1)?;
+        Ok(value)
+    }
+    fn read_u16(&self, address: u64) -> std::result::Result<u16, MemoryError> {
+        let value = self.source(self.inner.read_u16(address))?;
+        self.bytes(address, 2)?;
+        Ok(value)
+    }
+    fn read_i16(&self, address: u64) -> std::result::Result<i16, MemoryError> {
+        let value = self.source(self.inner.read_i16(address))?;
+        self.bytes(address, 2)?;
+        Ok(value)
+    }
+    fn read_bytes(
+        &self,
+        address: u64,
+        length: usize,
+    ) -> std::result::Result<Cow<'_, [u8]>, MemoryError> {
+        self.bytes(address, length)
+    }
+    fn read_matrix(
+        &self,
+        address: u64,
+        format: DataFormat,
+    ) -> std::result::Result<Mat4, MemoryError> {
+        let matrix = self.source(self.inner.read_matrix(address, format))?;
+        self.bytes(address, 64)?;
+        Ok(matrix)
+    }
+    fn vertex_stride(&self, format: DataFormat) -> std::result::Result<u64, MemoryError> {
+        self.inner.vertex_stride(format)
+    }
+    fn read_vertex(
+        &self,
+        address: u64,
+        format: DataFormat,
+    ) -> std::result::Result<RawVertex, MemoryError> {
+        let vertex = self.source(self.inner.read_vertex(address, format))?;
+        self.vertex(address, format)?;
+        Ok(vertex)
+    }
+    fn is_rdram_image(&self) -> bool {
+        self.layout.address_space == AddressSpace::Image
+    }
 }
 
 pub struct ReplayHardware<'a> {
@@ -523,37 +637,72 @@ impl ReplayRdram<'_> {
             *slot = Some(error);
         }
     }
-    fn find(&self, address: u64, length: u64) -> Option<Cow<'_, [u8]>> {
+    fn find(
+        &self,
+        address: u64,
+        length: u64,
+    ) -> std::result::Result<Option<Cow<'_, [u8]>>, MemoryError> {
         if length == 0 {
-            return Some(Cow::Borrowed(&[]));
+            return Ok(Some(Cow::Borrowed(&[])));
         }
-        address.checked_add(length)?;
+        address
+            .checked_add(length)
+            .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
         let i = self
             .task
             .spans
             .partition_point(|span| span.address <= address)
-            .checked_sub(1)?;
-        let mut parts = Vec::new();
+            .checked_sub(1);
+        let Some(i) = i else {
+            return Ok(None);
+        };
+        let output_len = usize::try_from(length)
+            .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+        let mut output = Vec::new();
         let mut cursor = address;
         let mut remaining = length;
         for span in &self.task.spans[i..] {
-            let offset = cursor.checked_sub(span.address)?;
-            let available = (span.bytes.len() as u64).checked_sub(offset)?;
+            let Some(offset) = cursor.checked_sub(span.address) else {
+                return Ok(None);
+            };
+            let span_len = u64::try_from(span.bytes.len())
+                .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+            let Some(available) = span_len.checked_sub(offset) else {
+                return Ok(None);
+            };
             let count = remaining.min(available);
-            let offset = usize::try_from(offset).ok()?;
-            let count_usize = usize::try_from(count).ok()?;
-            let bytes = span.bytes.get(offset..offset.checked_add(count_usize)?)?;
-            if parts.is_empty() && count == remaining {
-                return Some(Cow::Borrowed(bytes));
+            let offset = usize::try_from(offset)
+                .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+            let count_usize = usize::try_from(count)
+                .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+            let Some(end) = offset.checked_add(count_usize) else {
+                return Err(memory_error(
+                    address,
+                    length,
+                    MemoryErrorKind::AddressOverflow,
+                ));
+            };
+            let Some(bytes) = span.bytes.get(offset..end) else {
+                return Ok(None);
+            };
+            if output.is_empty() && count == remaining {
+                return Ok(Some(Cow::Borrowed(bytes)));
             }
-            parts.push(bytes);
-            cursor = cursor.checked_add(count)?;
+            if output.is_empty() {
+                output
+                    .try_reserve_exact(output_len)
+                    .map_err(|_| memory_error(address, length, MemoryErrorKind::Unavailable))?;
+            }
+            output.extend_from_slice(bytes);
+            cursor = cursor
+                .checked_add(count)
+                .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
             remaining -= count;
             if remaining == 0 {
-                return Some(Cow::Owned(parts.concat()));
+                return Ok(Some(Cow::Owned(output)));
             }
         }
-        None
+        Ok(None)
     }
 }
 
@@ -561,15 +710,18 @@ impl DecodeMemory for ReplayRdram<'_> {
     fn layout(&self) -> MemoryLayout {
         self.task.source.memory
     }
-    fn bytes(&self, address: u64, length: usize) -> Cow<'_, [u8]> {
-        match self.find(address, length as u64) {
-            Some(bytes) => bytes,
+    fn bytes(
+        &self,
+        address: u64,
+        length: usize,
+    ) -> std::result::Result<Cow<'_, [u8]>, MemoryError> {
+        let length = u64::try_from(length)
+            .map_err(|_| memory_error(address, u64::MAX, MemoryErrorKind::AddressOverflow))?;
+        match self.find(address, length)? {
+            Some(bytes) => Ok(bytes),
             None => {
-                self.fail(CaptureError::MissingSpan {
-                    address,
-                    length: length as u64,
-                });
-                Cow::Owned(vec![0; length])
+                self.fail(CaptureError::MissingSpan { address, length });
+                Err(memory_error(address, length, MemoryErrorKind::Unavailable))
             }
         }
     }
@@ -588,39 +740,108 @@ impl Rdram for ReplayRdram<'_> {
             AddressSpace::Host => value,
         };
     }
-    fn resolve(&self, addr: u64) -> u64 {
-        let base = self.segments[((addr >> 24) & 15) as usize];
+    fn resolve(&self, addr: u64) -> std::result::Result<u64, MemoryError> {
         match self.layout().address_space {
-            AddressSpace::Image => (base as u32).wrapping_add(addr as u32 & 0x00ff_ffff) as u64,
-            AddressSpace::Host if base == 0 => addr,
-            AddressSpace::Host => base.checked_add(addr & 0x00ff_ffff).unwrap_or_else(|| {
-                self.fail(invalid("segment address overflow"));
-                0
-            }),
+            AddressSpace::Image => {
+                let address = u32::try_from(addr)
+                    .map_err(|_| memory_error(addr, 0, MemoryErrorKind::AddressOverflow))?;
+                let base = self.segments[((address >> 24) & 15) as usize] as u32;
+                Ok(base.wrapping_add(address & 0x00ff_ffff) as u64)
+            }
+            AddressSpace::Host => {
+                let base = self.segments[((addr >> 24) & 15) as usize];
+                if base == 0 {
+                    Ok(addr)
+                } else {
+                    base.checked_add(addr & 0x00ff_ffff)
+                        .ok_or_else(|| memory_error(addr, 0, MemoryErrorKind::AddressOverflow))
+                }
+            }
         }
     }
-    fn resolve_masked(&self, addr: u64) -> u64 {
-        let resolved = self.resolve(addr);
+    fn resolve_masked(&self, addr: u64) -> std::result::Result<u64, MemoryError> {
+        let resolved = self.resolve(addr)?;
         match self.layout().address_space {
-            AddressSpace::Image => resolved & 0x00ff_fff8,
-            AddressSpace::Host => resolved,
+            AddressSpace::Image => Ok(resolved & 0x00ff_fff8),
+            AddressSpace::Host => Ok(resolved),
         }
     }
-    fn in_bounds(&self, pc: u64, stride: u64) -> bool {
-        if self.error.borrow().is_some() {
-            return false;
-        }
-        if self.find(pc, stride).is_some() {
-            true
+    fn read_command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
+        self.command(address)
+    }
+    fn command_stride(&self) -> u64 {
+        u64::from(self.layout().command_stride)
+    }
+    fn in_bounds(&self, address: u64, length: u64) -> bool {
+        matches!(self.find(address, length), Ok(Some(_)))
+    }
+    fn read_u8(&self, address: u64) -> std::result::Result<u8, MemoryError> {
+        Ok(self.word(address, 1)? as u8)
+    }
+    fn read_i8(&self, address: u64) -> std::result::Result<i8, MemoryError> {
+        Ok(self.word(address, 1)? as i8)
+    }
+    fn read_u16(&self, address: u64) -> std::result::Result<u16, MemoryError> {
+        Ok(self.word(address, 2)? as u16)
+    }
+    fn read_i16(&self, address: u64) -> std::result::Result<i16, MemoryError> {
+        Ok(self.word(address, 2)? as i16)
+    }
+    fn read_bytes(
+        &self,
+        address: u64,
+        length: usize,
+    ) -> std::result::Result<Cow<'_, [u8]>, MemoryError> {
+        self.bytes(address, length)
+    }
+    fn read_matrix(
+        &self,
+        address: u64,
+        format: DataFormat,
+    ) -> std::result::Result<Mat4, MemoryError> {
+        self.matrix(address, format)
+    }
+    fn vertex_stride(&self, format: DataFormat) -> std::result::Result<u64, MemoryError> {
+        if self.layout().address_space == AddressSpace::Image && format == DataFormat::Float {
+            Err(memory_error(0, 0, MemoryErrorKind::UnsupportedFormat))
         } else {
+            Ok(match format {
+                DataFormat::Fixed => 16,
+                DataFormat::Float => 24,
+            })
+        }
+    }
+    fn read_vertex(
+        &self,
+        address: u64,
+        format: DataFormat,
+    ) -> std::result::Result<RawVertex, MemoryError> {
+        if self.layout().address_space == AddressSpace::Image && format == DataFormat::Float {
+            return self.vertex(address, format);
+        }
+        let stride = match format {
+            DataFormat::Fixed => 16,
+            DataFormat::Float => 24,
+        };
+        address
+            .checked_add(stride)
+            .ok_or_else(|| memory_error(address, stride, MemoryErrorKind::AddressOverflow))?;
+        let position_length = match format {
+            DataFormat::Fixed => 6,
+            DataFormat::Float => 12,
+        };
+        if self.find(address, position_length)?.is_none() {
             self.fail(CaptureError::MissingSpan {
-                address: pc,
+                address,
                 length: stride,
             });
-            false
+            return Err(memory_error(address, stride, MemoryErrorKind::Unavailable));
         }
+        self.vertex(address, format)
     }
-    decoded_reads!();
+    fn is_rdram_image(&self) -> bool {
+        self.layout().address_space == AddressSpace::Image
+    }
 }
 
 #[cfg(test)]
