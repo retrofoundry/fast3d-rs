@@ -591,8 +591,15 @@ mod tests {
         let source: Vec<_> = (0..256u16).flat_map(|i| [i as u8, 255 - i as u8]).collect();
         let (mut rdp, diags) = run_cmd(&source, palette_state(5, 0x100), 0xf000_0000, 0x053f_c000);
         assert!(diags.is_empty(), "{diags:?}");
-        for (i, word) in rdp.tmem_bank.palette().chunks_exact(8).enumerate() {
-            assert_eq!(word, [i as u8, 255 - i as u8].repeat(4));
+        for (i, word) in rdp
+            .tmem_bank
+            .palette()
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .enumerate()
+        {
+            assert_eq!(word, &[i as u8, 255 - i as u8].repeat(4)[..]);
         }
         let indices: Vec<_> = (0..=255).collect();
         rdp.tmem_bank.write_block(&indices, 0, 0, 0, 32, 1);
@@ -604,8 +611,8 @@ mod tests {
             ..TileDescriptor::default()
         };
         let pixels = rdp.tmem_bank.sample_tile(&tile, 3);
-        for (i, pixel) in pixels.chunks_exact(4).enumerate() {
-            assert_eq!(pixel, [i as u8, i as u8, i as u8, 255 - i as u8]);
+        for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(*pixel, [i as u8, i as u8, i as u8, 255 - i as u8]);
         }
     }
 

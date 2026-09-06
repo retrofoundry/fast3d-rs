@@ -196,7 +196,7 @@ impl Tmem {
         for i in 0..count {
             let entry = &entries_be[i * 2..i * 2 + 2];
             let addr = (base + i * 8) & MASK8;
-            for halfword in self.bytes[addr..addr + 8].chunks_exact_mut(2) {
+            for halfword in self.bytes[addr..addr + 8].as_chunks_mut::<2>().0 {
                 halfword.copy_from_slice(entry);
             }
         }
