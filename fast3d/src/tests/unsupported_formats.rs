@@ -59,6 +59,8 @@ fn unsupported_format_emits_once_at_draw() {
         ]
     );
     assert_eq!(result.dropped_runs, 4);
+    assert_eq!(result.summary(false).errors, 2);
+    assert_eq!(result.summary(false).warns, 0);
     assert!(result.scene.framebuffer_pairs.is_empty());
     assert!(result.scene.materials.is_empty());
 }

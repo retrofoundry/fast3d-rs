@@ -114,7 +114,14 @@ impl std::fmt::Display for DiagKind {
                 w1,
                 data_address,
             } => {
-                write!(f, "unsupported microcode load: w0={w0:#010x}, w1={w1:#018x}, data={data_address:#x?}")
+                write!(
+                    f,
+                    "unsupported microcode load: w0={w0:#010x}, w1={w1:#018x}, "
+                )?;
+                match data_address {
+                    Some(address) => write!(f, "data={address:#018x}"),
+                    None => write!(f, "missing RDPHALF_1 data address"),
+                }
             }
             DiagKind::UnsupportedTextureFormat { fmt, siz } => {
                 write!(f, "unsupported texture format: fmt={fmt}, siz={siz}")
@@ -283,6 +290,28 @@ mod tests {
             DiagKind::UnwiredSelector { slots: 0b0100 }.to_string(),
             "combiner selector not implemented: [\"cycle 1 CC\"]"
         );
+        for (kind, expected) in [
+            (
+                DiagKind::UnsupportedCommand { opcode: 0xd5, w0: 0xd512_3456, w1: 0x1234_5678_ffff_ffff },
+                "unsupported opcode 0xD5: w0=0xd5123456, w1=0x12345678ffffffff",
+            ),
+            (
+                DiagKind::UnsupportedTextureFormat { fmt: 7, siz: 3 },
+                "unsupported texture format: fmt=7, siz=3",
+            ),
+            (
+                DiagKind::UnsupportedMicrocodeLoad { w0: 0xdd00_07ff, w1: 0x1234_5678_0000_0000, data_address: Some(0x9876_5432_0000_0000) },
+                "unsupported microcode load: w0=0xdd0007ff, w1=0x1234567800000000, data=0x9876543200000000",
+            ),
+            (
+                DiagKind::UnsupportedMicrocodeLoad { w0: 0xdd00_0000, w1: 0, data_address: None },
+                "unsupported microcode load: w0=0xdd000000, w1=0x0000000000000000, missing RDPHALF_1 data address",
+            ),
+            (DiagKind::UnhandledMovemem(0x7f), "unhandled MOVEMEM index 0x7F"),
+            (DiagKind::UnhandledMoveword(0x7f), "unhandled G_MOVEWORD type 0x7F"),
+        ] {
+            assert_eq!(kind.to_string(), expected);
+        }
         let d = Diagnostic {
             at: 0x1234,
             kind: DiagKind::DrawBeforeCimg,
