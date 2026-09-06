@@ -44,6 +44,8 @@ mod sm64_surface_fixtures;
 mod texgen;
 mod texrect;
 mod tile_sampling;
+#[cfg(feature = "capture")]
+mod tlut_fixtures;
 
 // `HostRam`-dependent → 64-bit non-wasm only (preserves host_mem.rs:14 / dlmemory_equivalence.rs:13).
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
