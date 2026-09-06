@@ -2155,7 +2155,7 @@ fn lod_selectors_unreferenced_in_every_non_lod_scene() {
     let mut scene_count = 0;
     let mut material_count = 0;
     let mut violations = Vec::new();
-    for &scene in crate::tests::fixtures::SCENES {
+    for scene in crate::tests::fixtures::scenes() {
         let name = format!("{scene}--white64");
         let (rdram, entry_addr) = crate::tests::fixtures::fixture(&name);
         let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
