@@ -6,6 +6,7 @@ pub mod diag;
 pub mod hardware;
 pub(crate) mod hle;
 pub mod hooks;
+pub mod inspect;
 pub mod microcode;
 pub(crate) mod render;
 pub(crate) mod scene;
@@ -192,6 +193,27 @@ pub struct Renderer {
     #[allow(dead_code)] // permanent lifetime anchor; never read.
     instance: Option<wgpu::Instance>,
     _not_send: std::marker::PhantomData<*const ()>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Submission {
+    DiscardOnStop,
+    RasterizePrefix,
+}
+
+struct PrefixObserver {
+    remaining: u32,
+}
+
+impl inspect::WalkObserver for PrefixObserver {
+    fn command(&mut self, _: inspect::WalkStep<'_>) -> std::ops::ControlFlow<()> {
+        self.remaining -= 1;
+        if self.remaining == 0 {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    }
 }
 
 impl Renderer {
@@ -403,12 +425,102 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
     ) -> DlSummary {
-        let mem = hw.rdram();
-        // Contract #1/#3 (spec §3.2): record the backend kind BEFORE the reader is moved into the
-        // walk — `present` gates VI-origin selection on this. RdramImage ⇒ true, HostRam ⇒ false.
-        self.last_backend_was_image = mem.is_rdram_image();
+        self.process_dl_inner(hw, entry, ucode, diags, None, Submission::DiscardOnStop)
+    }
 
-        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format);
+    /// Interpret at most `command_count` dispatched commands and rasterize the finalized prefix
+    /// into the current framebuffer store. Row `seq` selects `command_count = seq + 1`;
+    /// continuation words belong to their parent dispatch. Report `Cap` when the count stops
+    /// execution; root end or a terminating fault on the last dispatch takes precedence. The
+    /// ordinary runaway guard still applies; there is no implicit 4,096-command limit.
+    /// `command_count == u32::MAX` behaves as [`Self::process_dl`].
+    ///
+    /// Zero executes nothing, emits no diagnostics, changes no renderer state, and returns zero
+    /// counts, `Cap`, and `renderable = false`. Otherwise, counts and diagnostics describe the
+    /// prefix, including finalization diagnostics. Use ordinary scene retention and scanout
+    /// rules. This method neither begins a frame nor presents, resets, or restores framebuffer
+    /// contents.
+    ///
+    /// Pre-CIMG flat triangles target the final CIMG address of the walk, so a prefix may target
+    /// a different address than the full display list. A culled draw can open a framebuffer pair
+    /// before rejecting its triangles: no emission does not mean no framebuffer effect.
+    ///
+    /// The prefix renders under current renderer state. With [`ClearPolicy::Persist`], paired
+    /// color loads existing contents, so replaying a shorter prefix cannot erase what a longer
+    /// one already drew. [`ClearPolicy::PerFrame`] clears each touched target on its first touch
+    /// after [`Self::begin_frame`]. Flat rendering always clears, and paired depth is transient.
+    /// `begin_frame` also advances the dither serial, so repeated captures of a dithered list
+    /// are not bit-identical.
+    pub fn process_dl_prefix(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        command_count: u32,
+    ) -> DlSummary {
+        if command_count == 0 {
+            return DlSummary {
+                termination: inspect::WalkTermination::Cap,
+                ..DlSummary::default()
+            };
+        }
+        if command_count == u32::MAX {
+            return self.process_dl(hw, entry, ucode, diags);
+        }
+        self.process_dl_inner(
+            hw,
+            entry,
+            ucode,
+            diags,
+            Some(&mut PrefixObserver {
+                remaining: command_count,
+            }),
+            Submission::RasterizePrefix,
+        )
+    }
+
+    /// Observe the walk that produces this DL's rendered scene, without the CPU `walk` cap.
+    /// Returning `Break(())` before root end or a fault cancels the DL: its scene is neither
+    /// rasterized nor retained, and earlier DLs remain intact. Counts include cancelled work;
+    /// `termination` is `ObserverStopped` and `renderable` is false on cancellation.
+    /// To bound collection without cancelling rendering, stop storing steps and return `Continue(())`.
+    pub fn process_dl_observed(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        observer: &mut dyn inspect::WalkObserver,
+    ) -> DlSummary {
+        self.process_dl_inner(
+            hw,
+            entry,
+            ucode,
+            diags,
+            Some(observer),
+            Submission::DiscardOnStop,
+        )
+    }
+
+    fn process_dl_inner(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        observer: Option<&mut dyn inspect::WalkObserver>,
+        submission: Submission,
+    ) -> DlSummary {
+        let mem = hw.rdram();
+        let backend_was_image = mem.is_rdram_image();
+        let mut result =
+            crate::hle::interpret(mem, entry, ucode.into(), self.data_format, observer);
+        if submission == Submission::RasterizePrefix
+            && result.termination == inspect::WalkTermination::ObserverStopped
+        {
+            result.termination = inspect::WalkTermination::Cap;
+        }
 
         // Stream structured diags into the caller's sink, tallying severity for the rollup.
         let (mut warns, mut errors) = (0u32, 0u32);
@@ -422,20 +534,22 @@ impl Renderer {
 
         let tris = (result.scene.indices.len() / 3) as u32;
 
-        // Rasterize into the persistent store. A draw-nothing walk returns None and leaves
-        // `last_scanout_addr` UNCHANGED (spec §4 step 4). RA: clear policy from self.config.
-        let scanout = self.inner.render_into_store(
-            &self.device,
-            &self.queue,
-            &result.scene,
-            self.config.clear_policy,
-        );
-        if let Some(addr) = scanout {
-            self.last_scanout_addr = Some(addr);
-        }
-
-        // Retained for the frame (P4 debugger reads all of them; cleared at begin_frame).
-        self.frame_scenes.push(result.scene);
+        let scanout = if result.termination == inspect::WalkTermination::ObserverStopped {
+            None
+        } else {
+            self.last_backend_was_image = backend_was_image;
+            let scanout = self.inner.render_into_store(
+                &self.device,
+                &self.queue,
+                &result.scene,
+                self.config.clear_policy,
+            );
+            if let Some(addr) = scanout {
+                self.last_scanout_addr = Some(addr);
+            }
+            self.frame_scenes.push(result.scene);
+            scanout
+        };
 
         DlSummary {
             commands: result.commands,
@@ -444,6 +558,7 @@ impl Renderer {
             errors,
             dropped_runs: result.dropped_runs,
             renderable: scanout.is_some(),
+            termination: result.termination,
         }
     }
 

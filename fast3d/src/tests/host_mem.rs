@@ -72,7 +72,7 @@ fn cmd_addr(w0: u32, ptr: u64) -> [usize; 2] {
 fn hostptr_walks_native_dl_and_decodes_scene() {
     use crate::hle::consts::rsp_f3dex2::{G_MOVEMEM, G_MOVEWORD, G_MV_LIGHT, G_MW_NUMLIGHT};
     use crate::hle::consts::{G_ENDDL, G_LIGHTING, G_MTX as G_MTX_OP};
-    use crate::hle::interpret;
+    use crate::tests::inspect::equivalent as interpret;
 
     let g_enddl_w0: u32 = (G_ENDDL as u32) << 24;
 
@@ -269,9 +269,8 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
         )
     };
     let dl_ptr = dl.as_ptr() as u64;
-    let host = unsafe { HostRam::new(frame) };
     let res = interpret(
-        host,
+        || unsafe { HostRam::new(frame) },
         dl_ptr,
         crate::hle::GbiUcode::F3dex2,
         crate::DataFormat::Float,

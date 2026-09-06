@@ -23,6 +23,7 @@ mod framebuffer;
 mod gbi_roundtrip;
 mod goldens;
 mod hud_power_meter;
+pub(crate) mod inspect;
 mod interp_tests;
 mod lookat_roundtrip;
 mod math_rdram;

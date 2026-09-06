@@ -37,6 +37,42 @@ renderer.present(&hw)?;
 
 Diagnostics stream through a `DiagSink` (`LogSink`, `NopSink`, or your own).
 
+## Inspect a display list
+
+```rust
+use std::ops::ControlFlow;
+use fast3d::{DataFormat, Microcode, RdramImage};
+use fast3d::inspect::{walk, WalkObserver, WalkStep, WalkTermination};
+
+struct Counter(u32);
+
+impl WalkObserver for Counter {
+    fn command(&mut self, step: WalkStep<'_>) -> ControlFlow<()> {
+        assert_eq!(step.seq, self.0);
+        self.0 += 1;
+        ControlFlow::Continue(())
+    }
+}
+
+let bytes = [0xDF, 0, 0, 0, 0, 0, 0, 0]; // F3DEX2 ENDDL
+let mut counter = Counter(0);
+let summary = walk(
+    RdramImage::new(&bytes),
+    0,
+    Microcode::F3dex2,
+    DataFormat::Fixed,
+    &mut counter,
+);
+assert_eq!(counter.0, 1);
+assert_eq!(summary.termination, WalkTermination::End);
+```
+
+`inspect::walk` walks on the CPU without a renderer or GPU device. Callbacks borrow state after each dispatched command; copy data you retain. Continuation words share their parent step, and emissions describe HLE output. Return `ControlFlow::Break(())` to cancel. Walks stop after at most 4,096 dispatches and report whether they completed, faulted, were cancelled, or reached the cap.
+
+Use `Renderer::process_dl_observed` to attach the same observer to the walk that renders, returning `DlSummary` with its termination reason.
+It has no inspection cap; cancellation skips rasterizing and retaining that DL while preserving earlier DLs, so memory-bounded collectors should stop storing steps and keep returning `Continue(())`.
+Use `inspect::walk` for tools and tests without a GPU device, and `process_dl_observed` to correlate emissions with the rendered scene.
+
 ## Features
 
 - **`debug-ui`** — an egui overlay showing per-frame scene and triangle counts.

@@ -138,6 +138,47 @@ impl Rsp {
         self.geom
     }
 
+    pub(crate) fn inspect_state<'a>(
+        &'a self,
+        rdp: &'a crate::hle::rdp::Rdp,
+        geometry_names: &'a [crate::inspect::GeometryFlag],
+    ) -> crate::inspect::StateView<'a> {
+        crate::inspect::StateView {
+            geometry_mode: self.geom,
+            geometry_names,
+            texture: self.texture_state,
+            modelview_depth: self.model_stack_size,
+            modelview: &self.model_stack[self.model_stack_size - 1],
+            projection: &self.viewproj,
+            viewport_scale: self.vp_scale,
+            viewport_translation: self.vp_trans,
+            light_count: self.num_dir,
+            lights: &self.lights,
+            ambient: self.ambient_col,
+            lookat_axes: &self.lookat_axes,
+            tiles: &rdp.tiles,
+            load_via_tile: rdp.load_via_tile,
+            texture_image: ColorImage {
+                fmt: rdp.tex_image.0,
+                siz: rdp.tex_image.1,
+                width: rdp.tex_image.2 + 1,
+                addr: rdp.tex_image.3,
+            },
+            combine_l: rdp.combine_l,
+            combine_h: rdp.combine_h,
+            other_mode_h: rdp.other_mode_h,
+            other_mode_l: rdp.other_mode_l,
+            prim_color: rdp.prim,
+            env_color: rdp.env,
+            fog_color: rdp.fog_color,
+            blend_color: rdp.blend_color,
+            fill_color_raw: rdp.fill_color_raw,
+            color_image: rdp.color_image,
+            depth_image: rdp.depth_image,
+            scissor: rdp.scissor,
+        }
+    }
+
     /// Flush the accumulated state tables onto the scene (call once after the DL walk).
     ///
     /// NOTE: mvp_table/viewport_table/texcoord_table are only copied onto the Scene here. A caller

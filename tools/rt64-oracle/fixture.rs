@@ -87,6 +87,7 @@ pub(super) fn make(
         entry.into(),
         GbiUcode::F3d,
         DataFormat::Fixed,
+        None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     let task = recording

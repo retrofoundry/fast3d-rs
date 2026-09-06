@@ -56,8 +56,8 @@ fn hud_memory(eu: bool) -> Vec<u8> {
 }
 
 fn interpret(bytes: &[u8]) -> crate::hle::interp::InterpResult {
-    let result = crate::hle::interpret(
-        RdramImage::new(bytes),
+    let result = super::inspect::equivalent(
+        || RdramImage::new(bytes),
         0x2000,
         GbiUcode::F3d,
         DataFormat::Fixed,

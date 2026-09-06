@@ -10,7 +10,8 @@
 //! arithmetic.  Every resolve_masked target resolves to an 8-byte-aligned address so
 //! `RdramImage`'s `& 0x00FFFFF8` mask is a provable no-op and both backends land at the same
 //! physical bytes.
-use crate::hle::{interpret, interpret_rdram, HostRam};
+use crate::hle::{interpret_rdram, HostRam};
+use crate::tests::inspect::equivalent as interpret;
 
 /// Encode a row-major float matrix to native-endian s15.16 split fixed-point (16 `i32` words:
 /// `[0..8]` integer halves, `[8..16]` fraction halves) — the inverse of `HostRam`'s fixed
@@ -546,9 +547,8 @@ fn rdram_image_and_host_ptr_produce_identical_scene() {
             dl.len() * core::mem::size_of::<[usize; 2]>(),
         )
     };
-    let host = unsafe { HostRam::new(frame_bytes) };
     let res_host = interpret(
-        host,
+        || unsafe { HostRam::new(frame_bytes) },
         entry_ptr,
         crate::hle::GbiUcode::F3dex2,
         crate::DataFormat::Fixed,

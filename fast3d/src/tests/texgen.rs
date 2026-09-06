@@ -200,7 +200,7 @@ fn interpret_commands(mut bytes: Vec<u8>, commands: &[(u32, u32)]) -> Scene {
 fn interpret_memory(bytes: Vec<u8>, entry: u32) -> Scene {
     let mut mem = RdramImage::new(&bytes);
     mem.set_segment(4, 0);
-    let result = interpret(mem, entry.into(), GbiUcode::F3d, GbiDataFormat::Fixed);
+    let result = interpret(mem, entry.into(), GbiUcode::F3d, GbiDataFormat::Fixed, None);
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     result.scene
 }

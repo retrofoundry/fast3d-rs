@@ -25,7 +25,7 @@ pub struct ViRegisters {
 /// Because `rdram` uses RPITIT (`impl Rdram`), `Hardware` is NOT dyn-compatible, so `process_dl`
 /// and `present` are generic methods (`&impl Hardware`), never `&dyn Hardware`.
 pub trait Hardware {
-    /// The memory reader for the CURRENT walk. Called EXCLUSIVELY inside `process_dl`, on the
+    /// The memory reader for the CURRENT walk. Called inside `process_dl` or `process_dl_observed`, on the
     /// calling thread; fully consumed before returning. A fresh reader each call (zeroed segments).
     fn rdram(&self) -> impl Rdram + '_;
 

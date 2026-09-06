@@ -141,12 +141,14 @@ mod host {
             at,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         let recorded = crate::hle::interpret(
             rec.rdram(),
             at,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         assert_eq!(recorded.scene, live.scene);
         assert_eq!(recorded.diags, live.diags);
@@ -168,6 +170,7 @@ mod host {
             at,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         replay.check().unwrap();
         assert_eq!(got.commands, 3);
@@ -374,6 +377,7 @@ mod host {
             entry,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         let t = task(rec, entry, DataFormat::Fixed);
         assert_eq!(live.scene.raw_pos, vec![[-12., 23., 45.]]);
@@ -390,6 +394,7 @@ mod host {
             entry,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,
+            None,
         );
         replay.check().unwrap();
         assert_eq!(got.diags, live.diags);
@@ -430,6 +435,7 @@ mod host {
                 entry,
                 crate::hle::gbi::GbiUcode::F3dex2,
                 DataFormat::Fixed,
+                None,
             );
             assert!(
                 replay.check().is_err(),
@@ -497,6 +503,7 @@ fn capture_checked_in_high_address_fixture_walks() {
         task.entry,
         task.microcode.into(),
         task.data_format,
+        None,
     );
     replay.check().unwrap();
     assert_eq!(result.commands, 6);
@@ -533,6 +540,7 @@ fn capture_replayed_task_records_identical_spans() {
         0,
         Microcode::F3dex2.into(),
         DataFormat::Fixed,
+        None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     let image_task = recording
@@ -551,6 +559,7 @@ fn capture_replayed_task_records_identical_spans() {
             task.entry,
             task.microcode.into(),
             task.data_format,
+            None,
         );
         replay.check().unwrap();
         assert!(result.diags.is_empty(), "{:?}", result.diags);
@@ -681,6 +690,7 @@ fn capture_missing_span_near_address_limit_does_not_panic() {
             task.entry,
             task.microcode.into(),
             task.data_format,
+            None,
         );
         assert!(matches!(
             replay.check(),
