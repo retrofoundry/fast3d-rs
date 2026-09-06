@@ -224,7 +224,6 @@ fn combiner_ignores_inactive_selectors() {
 
 #[test]
 fn combiner_texrect_uses_shared_validation() {
-    #[cfg(feature = "asm")]
     {
         let (rdram, entry_addr) = crate::tests::fixtures::fixture("texrect--invalid-combiner");
         let result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
@@ -346,7 +345,7 @@ fn combiner_missing_texture_checks_both_cycles() {
     }
 }
 
-#[cfg(all(feature = "asm", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod pixels {
     use super::*;
     use crate::hle::{AlphaCompare, BlendClass, RenderMode};

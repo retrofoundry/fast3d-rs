@@ -35,12 +35,12 @@ The temporary `XDG_CACHE_HOME` lets devenv run when the usual Nix cache is outsi
 the writable sandbox.
 
 Generate the fixtures without a GPU. The tests are ignored by default and need
-both `asm` (the existing in-crate test module gate) and `capture`.
+`capture`.
 
 ```sh
 mkdir -p /tmp/fast3d-oracle
 FAST3D_WRITE_FIXTURES=/tmp/fast3d-oracle \
-  devenv shell -- cargo test -p fast3d --features 'asm capture' --lib \
+  devenv shell -- cargo test -p fast3d --features 'capture' --lib \
   write_rt64_ -- --ignored
 ```
 

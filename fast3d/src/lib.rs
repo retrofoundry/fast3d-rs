@@ -1,10 +1,3 @@
-//! `fast3d` — N64 HLE + wgpu renderer. The renderer is the default product. The
-//! assembler is available through the opt-in `asm` cargo feature. Its supported items are
-//! re-exported at `fast3d::asm::*`. The GBI vocabulary, command encoders and libultra `gu`
-//! math live in the `n64-gbi` leaf crate; depend on it directly rather than through fast3d.
-
-#[cfg(feature = "asm")]
-pub mod asm;
 #[cfg(feature = "debug-ui")]
 pub mod debug;
 #[cfg(feature = "capture")]
@@ -745,7 +738,7 @@ mod source_select_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod begin_frame_tests {
     use super::*;
 
@@ -1267,12 +1260,7 @@ mod hook_lifecycle_tests {
     }
 }
 
-#[cfg(all(
-    test,
-    feature = "asm",
-    feature = "debug-ui",
-    not(target_arch = "wasm32")
-))]
+#[cfg(all(test, feature = "debug-ui", not(target_arch = "wasm32")))]
 mod debugger_present_tests {
     use super::*;
     use crate::render::headless_device;
@@ -1403,5 +1391,5 @@ mod debugger_present_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod tests;

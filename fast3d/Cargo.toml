@@ -31,7 +31,6 @@ wgpu = { version = "29.0", features = ["static-dxc"] }
 
 [features]
 default = []
-asm = []
 capture = ["dep:futures-channel"]
 debug-ui = ["dep:egui", "dep:egui-wgpu"]
 

@@ -215,7 +215,6 @@ fn texrect_uniform_uses_texel_units() {
     assert_eq!(uniform.inv_tex_size, [0.0625, 0.125, 1.0, 0.0]);
 }
 
-#[cfg(feature = "asm")]
 #[test]
 fn texrect_coverage_pixels() {
     // The readback helper needs 256-byte rows, so the target is 64 wide.
