@@ -226,19 +226,8 @@ fn combiner_ignores_inactive_selectors() {
 fn combiner_texrect_uses_shared_validation() {
     #[cfg(feature = "asm")]
     {
-        let source = r#"
-gsDPSetColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00100000)
-gsDPSetScissor(0, 0, 0, 256, 256)
-gsDPSetOtherMode_H(G_CYC_2CYCLE)
-gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
-gsDPSetCombineLERP(7, 0, SHADE, 0, 0, 0, 0, 1, 0, 0, 0, COMBINED, 0, 0, 0, 1)
-gsSPTextureRectangle(0, 0, 64, 64, 0, 0, 0, 1024, 1024)
-gsDPSetCombineLERP(0, 0, 0, PRIMITIVE, 0, 0, 0, 1, 0, 0, 0, PRIMITIVE, 0, 0, 0, 1)
-gsSPTextureRectangle(64, 64, 128, 128, 0, 0, 0, 1024, 1024)
-gsSPEndDisplayList()
-"#;
-        let image = crate::asm::assemble_with_texture(source, &[255; 4], 1, 1).unwrap();
-        let result = crate::hle::interpret_rdram(&image.rdram, image.entry_addr);
+        let (rdram, entry_addr) = crate::tests::fixtures::fixture("texrect--invalid-combiner");
+        let result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
         assert_eq!(
             result.dropped_runs, 1,
             "invalid TexRect must be dropped while the following rectangle survives"
@@ -365,10 +354,8 @@ mod pixels {
     use crate::tests::common::{pixel, render_to_pixels};
 
     fn scene() -> Scene {
-        let src = include_str!("../../tests/scenes/flat-color.n64")
-            .replace("255,255,255,255", "96,128,160,144");
-        let image = crate::asm::assemble_with_texture(&src, &[255; 4], 1, 1).unwrap();
-        let result = crate::hle::interpret_rdram(&image.rdram, image.entry_addr);
+        let (rdram, entry_addr) = crate::tests::fixtures::fixture("flat-color--vertex-colors");
+        let result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
         assert!(result.diags.is_empty(), "{:?}", result.diags);
         result.scene
     }
@@ -507,17 +494,8 @@ mod pixels {
     }
 
     fn check_rect_roles() {
-        let src = r#"
-gsDPSetColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 64, 0x00100000)
-gsDPSetScissor(0, 0, 0, 256, 256)
-gsDPSetOtherMode_H(G_CYC_2CYCLE)
-gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
-gsDPSetCombineLERP(0, 0, 0, PRIMITIVE, 0, 0, 0, 1, 0, 0, 0, PRIMITIVE, 0, 0, 0, 1)
-gsSPTextureRectangle(0, 0, 252, 252, 0, 48, 0, 0, 0)
-gsSPEndDisplayList()
-"#;
-        let image = crate::asm::assemble_with_texture(src, &[255; 4], 1, 1).unwrap();
-        let result = crate::hle::interpret_rdram(&image.rdram, image.entry_addr);
+        let (rdram, entry_addr) = crate::tests::fixtures::fixture("texrect--combiner-roles");
+        let result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
         assert!(result.diags.is_empty(), "{:?}", result.diags);
         let mut scene = result.scene;
         let (device, queue, dual) = headless_device();

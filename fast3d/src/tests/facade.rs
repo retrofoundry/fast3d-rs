@@ -8,7 +8,7 @@
 use crate::tests::common;
 
 use crate::render::{headless_device, SceneRenderer};
-use common::{clear_color_rgb, pixel, render_to_pixels, scene_from_source, solid_env_texture};
+use common::{clear_color_rgb, pixel, render_to_pixels, scene_from_fixture};
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -20,8 +20,7 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 #[test]
 fn scene_renderer_textured_linear_depth_matches_toolbox() {
     let (device, queue, dual_source) = headless_device();
-    let env = solid_env_texture([200, 100, 50]);
-    let scene = scene_from_source("chrome-icosphere.n64", &env, 32, 32);
+    let scene = scene_from_fixture("chrome-icosphere--orange");
     assert!(
         scene.render_modes.iter().any(|r| r.z_test || r.z_write),
         "chrome-icosphere must have a depth render mode (exercises the owned-depth attachment)"
@@ -48,8 +47,7 @@ fn scene_renderer_textured_linear_depth_matches_toolbox() {
 #[test]
 fn scene_renderer_shade_only_matches_toolbox() {
     let (device, queue, dual_source) = headless_device();
-    let white1x1 = vec![255u8; 4];
-    let scene = scene_from_source("flat-color.n64", &white1x1, 1, 1);
+    let scene = scene_from_fixture("flat-color--white1");
 
     let mut sr = SceneRenderer::new(&device, FORMAT, W, H, dual_source);
     let buf = render_to_pixels(&device, &queue, &mut sr, &scene, W, H);
@@ -71,7 +69,7 @@ fn scene_renderer_shade_only_matches_toolbox() {
 #[test]
 fn scene_renderer_clear_only_empty_verts() {
     let (device, queue, dual_source) = headless_device();
-    let mut scene = scene_from_source("flat-color.n64", &[255u8; 4], 1, 1);
+    let mut scene = scene_from_fixture("flat-color--white1");
     scene.raw_pos.clear(); // force the clear-only branch via the first disjunct
 
     let mut sr = SceneRenderer::new(&device, FORMAT, W, H, dual_source);
@@ -91,7 +89,7 @@ fn scene_renderer_clear_only_empty_verts() {
 #[test]
 fn scene_renderer_clear_only_empty_indices() {
     let (device, queue, dual_source) = headless_device();
-    let mut scene = scene_from_source("flat-color.n64", &[255u8; 4], 1, 1);
+    let mut scene = scene_from_fixture("flat-color--white1");
     scene.indices.clear(); // force the clear-only branch via the second disjunct
 
     let mut sr = SceneRenderer::new(&device, FORMAT, W, H, dual_source);
@@ -117,15 +115,15 @@ fn scene_renderer_tex_cache_rebuilds_on_content_change() {
     let mut sr = SceneRenderer::new(&device, FORMAT, W, H, dual_source);
 
     // Frame 1: orange-ish env (≈206, 99, 49 after RGBA16 round-trip).
-    let env1 = solid_env_texture([200, 100, 50]);
-    let scene1 = scene_from_source("chrome-icosphere.n64", &env1, 32, 32);
+
+    let scene1 = scene_from_fixture("chrome-icosphere--orange");
     let buf1 = render_to_pixels(&device, &queue, &mut sr, &scene1, W, H);
     let [r1, _, b1, _] = pixel(&buf1, W, 32, 32);
 
     // Frame 2: a CLEARLY different env (blue-dominant: low R, high B), same 32×32 size, same scene.
     // RGBA16 round-trip of (40, 60, 220): r≈41, g≈57, b≈222 — disjoint from frame 1's (206,_,49).
-    let env2 = solid_env_texture([40, 60, 220]);
-    let scene2 = scene_from_source("chrome-icosphere.n64", &env2, 32, 32);
+
+    let scene2 = scene_from_fixture("chrome-icosphere--blue");
     assert_ne!(
         scene1.materials.first().unwrap().texture,
         scene2.materials.first().unwrap().texture,
@@ -155,7 +153,7 @@ fn scene_renderer_paired_tris_matches_pair_less() {
     let (device, queue, dual_source) = headless_device();
 
     // Path A: the unmodified pair-less scene (flat-color → one draw_run, no depth, PRIM combine).
-    let pair_less = scene_from_source("flat-color.n64", &[255u8; 4], 1, 1);
+    let pair_less = scene_from_fixture("flat-color--white1");
     assert!(
         !pair_less.draw_runs.is_empty() && pair_less.framebuffer_pairs.is_empty(),
         "flat-color must be a pair-less draw_runs scene"
@@ -222,8 +220,7 @@ fn scene_renderer_paired_tris_matches_pair_less() {
 #[test]
 fn pair_less_depth_decouples_from_target_size() {
     let (device, queue, dual_source) = headless_device();
-    let env = solid_env_texture([200, 100, 50]);
-    let scene = scene_from_source("chrome-icosphere.n64", &env, 32, 32);
+    let scene = scene_from_fixture("chrome-icosphere--orange");
     assert!(
         scene.framebuffer_pairs.is_empty()
             && scene.render_modes.iter().any(|r| r.z_test || r.z_write),

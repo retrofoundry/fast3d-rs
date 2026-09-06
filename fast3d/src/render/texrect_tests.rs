@@ -220,7 +220,7 @@ fn texrect_uniform_uses_texel_units() {
 fn texrect_coverage_pixels() {
     // The readback helper needs 256-byte rows, so the target is 64 wide.
     use crate::hle::{ColorImage, FramebufferPair, Scissor};
-    use crate::tests::common::{pixel, render_to_pixels, scene_from_source};
+    use crate::tests::common::{pixel, render_to_pixels, scene_from_fixture};
     let (device, queue) = headless_device_forced_fallback();
     let mut renderer = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, false);
     for (cycle, raw, expected) in [
@@ -229,7 +229,7 @@ fn texrect_coverage_pixels() {
         (2, [3, 3, 36, 36], [0, 0, 10, 10]),
         (0, [5, 11, 38, 45], [2, 3, 10, 12]),
     ] {
-        let mut scene = scene_from_source("framebuffer-extent.n64", &[255; 4], 1, 1);
+        let mut scene = scene_from_fixture("framebuffer-extent--white1");
         scene.materials[0].tex_enable = true;
         scene.materials[0].texture = vec![255; 4];
         scene.materials[0].tex_w = 1;

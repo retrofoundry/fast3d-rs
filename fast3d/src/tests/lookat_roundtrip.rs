@@ -1,14 +1,3 @@
-//! gbi -> hle emit/decode roundtrip for gsSPLookAt (Test D).
-//!
-//! Assembles a `gsSPLookAt` source via the real gbi assembler, then decodes the two emitted
-//! G_MOVEMEM(G_MV_LIGHT) command words from the command stream and drives them through the real
-//! hle `byte_off / 24` slot-routing path (replicated here from rsp_f3dex2::move_mem, since that fn
-//! is crate-private and `interpret` does not expose the post-walk Rsp). This genuinely exercises:
-//!   - the assembler's S/T basis emit (gu_look_at_reflect -> s8 axes, two 16B Light_t-shaped slots),
-//!   - the MOVEMEM `p0(8,8)*8 / 24` slot-index derivation (slot 0 = S, slot 1 = T),
-//!   - the hle `Rsp::set_lookat` s8 decode (/127) into `lookat_axes`.
-
-use crate::asm::assemble;
 use crate::hle::consts::rsp_f3dex2::{G_ENDDL, G_MOVEMEM, G_MV_LIGHT};
 use crate::hle::mem::RdramImage;
 use crate::hle::rsp::Rsp;
@@ -16,21 +5,14 @@ use crate::hle::rsp::Rsp;
 #[test]
 fn sp_lookat_emit_decode_sets_lookat_axes() {
     // Eye on +Z looking at origin, up +Y -> Right (S) = +X, Up' (T) = +Y (see gu_look_at_reflect).
-    let src = "\
-LookAt la = lookat_reflect(0, 0, 100, 0, 0, 0, 0, 1, 0)
-Gfx main[] = {
-  gsSPLookAt(la)
-  gsSPEndDisplayList()
-}
-";
-    let img = assemble(src).expect("assemble gsSPLookAt");
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("lookat--positive-z");
 
     // Decode (w0, w1) pairs from entry_addr until G_ENDDL.
-    let mut off = img.entry_addr as usize;
+    let mut off = entry_addr as usize;
     let mut cmds: Vec<(u32, u32)> = Vec::new();
     loop {
-        let w0 = u32::from_be_bytes(img.rdram[off..off + 4].try_into().unwrap());
-        let w1 = u32::from_be_bytes(img.rdram[off + 4..off + 8].try_into().unwrap());
+        let w0 = u32::from_be_bytes(rdram.to_vec()[off..off + 4].try_into().unwrap());
+        let w1 = u32::from_be_bytes(rdram.to_vec()[off + 4..off + 8].try_into().unwrap());
         cmds.push((w0, w1));
         off += 8;
         if (w0 >> 24) as u8 == G_ENDDL {
@@ -39,7 +21,7 @@ Gfx main[] = {
     }
 
     // Drive the two MOVEMEM(G_MV_LIGHT) words through the real byte_off/24 slot routing.
-    let rd = RdramImage::new(&img.rdram);
+    let rd = RdramImage::new(rdram);
     let mut rsp = Rsp::default();
     let mut saw_lookat_movemem = false;
     for (w0, w1) in cmds {

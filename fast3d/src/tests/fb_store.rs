@@ -5,7 +5,7 @@ use crate::tests::common;
 
 use crate::render::{headless_device, SceneRenderer};
 use crate::ClearPolicy;
-use common::{dl_2d_fill, dl_2d_fill_rect, pixel, scene_from_source}; // B1: no `solid_env_texture` (unused → -D warnings error)
+use common::{dl_2d_fill, dl_2d_fill_rect, pixel, scene_from_fixture}; // B1: no `solid_env_texture` (unused → -D warnings error)
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -100,7 +100,7 @@ fn store_to_pixels(
 #[test]
 fn pairless_walk_stores_and_scans_out() {
     let (device, queue, dual) = headless_device();
-    let scene = scene_from_source("flat-color.n64", &[255u8; 4], 1, 1);
+    let scene = scene_from_fixture("flat-color--white1");
     assert!(
         scene.framebuffer_pairs.is_empty(),
         "flat-color is pair-less"
@@ -159,7 +159,7 @@ fn draw_nothing_walk_returns_none_and_touches_nothing() {
 #[test]
 fn store_fb_recreates_on_resize() {
     let (device, queue, dual) = headless_device();
-    let scene = scene_from_source("perspective-cube.n64", &[255u8; 4], 1, 1);
+    let scene = scene_from_fixture("perspective-cube--white1");
     assert!(
         scene.framebuffer_pairs.is_empty(),
         "perspective-cube must be pair-less (no SetColorImage)"

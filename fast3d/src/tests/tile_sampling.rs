@@ -1,4 +1,4 @@
-use super::common::{pixel, render_to_pixels, scene_from_source};
+use super::common::{pixel, render_to_pixels, scene_from_fixture};
 use crate::hle::combiner::build_material;
 use crate::hle::rdp::{Rdp, TileDescriptor};
 use crate::hle::rsp::Rsp;
@@ -41,7 +41,7 @@ fn scene(rdp: &Rdp, uv: [f32; 2], levels: u8) -> Scene {
 }
 
 fn scene_for_base(rdp: &Rdp, uv: [f32; 2], levels: u8, base: u8) -> Scene {
-    let mut scene = scene_from_source("framebuffer-extent.n64", &[255; 4], 1, 1);
+    let mut scene = scene_from_fixture("framebuffer-extent--white1");
     let mut rsp = Rsp::default();
     rsp.set_texture(base, levels, true, 65535, 65535);
     let mut diags = Vec::new();

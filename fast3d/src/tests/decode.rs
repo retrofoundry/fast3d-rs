@@ -1,6 +1,5 @@
 use crate::tests::common;
 
-use crate::asm::assemble_with_texture;
 use crate::hle::interpret_rdram;
 
 #[test]
@@ -66,31 +65,10 @@ fn g_tri2_emits_two_triangles_in_order() {
     assert_eq!(r.scene.indices, vec![0, 1, 2, 0, 2, 3]);
 }
 
-const SAMPLE: &str = "\
-// Walking-skeleton sample: one vertex-colored triangle (F3DEX2).
-Mtx proj = scale(0.015625)
-Mtx model = identity()
-Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
-Vtx { -48, -48, 0, 0, 0, 0, 255,   0,   0, 255 }
-Vtx {  48, -48, 0, 0, 0, 0,   0, 255,   0, 255 }
-Vtx {   0,  48, 0, 0, 0, 0,   0,   0, 255, 255 }
-gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
-gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
-gsSPViewport(vp)
-gsSPClearGeometryMode(G_LIGHTING, G_CULL_BACK)
-gsSPSetGeometryMode(G_SHADE, G_SHADING_SMOOTH)
-gsDPSetOtherMode_H(G_CYC_1CYCLE)
-gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
-gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE)
-gsSPVertex(verts, 3, 0)
-gsSP1Triangle(0, 1, 2, 0)
-gsSPEndDisplayList()
-";
-
 #[test]
 fn sample_dl_decodes_to_one_colored_triangle() {
-    let img = assemble_with_texture(SAMPLE, &[255u8; 4], 1, 1).expect("assemble ok");
-    let res = interpret_rdram(&img.rdram, img.entry_addr);
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("colored-triangle--white1");
+    let res = interpret_rdram(rdram, entry_addr as u32);
     assert!(res.diags.is_empty(), "diags: {:?}", res.diags);
 
     // 3 vertices, one triangle (3 indices, in order).
@@ -140,8 +118,8 @@ fn sample_dl_decodes_to_one_colored_triangle() {
 #[test]
 fn tri_index_x2_convention_round_trips() {
     // gsSP1Triangle(0,1,2) must decode back to cache slots 0,1,2 (index*2 encode, /2 decode).
-    let img = assemble_with_texture(SAMPLE, &[255u8; 4], 1, 1).expect("assemble ok");
-    let res = interpret_rdram(&img.rdram, img.entry_addr);
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("colored-triangle--white1");
+    let res = interpret_rdram(rdram, entry_addr as u32);
     assert_eq!(res.scene.indices, vec![0, 1, 2]);
 }
 
@@ -150,7 +128,7 @@ fn geometry_mode_clear_then_set_is_asymmetric_masked() {
     // Clear(G_LIGHTING|G_CULL_BACK) then Set(G_SHADE|G_SHADING_SMOOTH), starting from the
     // initial G_CLIPPING (0x800000). Result preserves G_CLIPPING and adds the set bits:
     // 0x800000 (G_CLIPPING) | 0x4 (G_SHADE) | 0x200000 (G_SHADING_SMOOTH) = 0x00A0_0004.
-    let img = assemble_with_texture(SAMPLE, &[255u8; 4], 1, 1).expect("assemble ok");
-    let res = interpret_rdram(&img.rdram, img.entry_addr);
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("colored-triangle--white1");
+    let res = interpret_rdram(rdram, entry_addr as u32);
     assert_eq!(res.geometry_mode, 0x00A0_0004);
 }

@@ -1,28 +1,11 @@
 use crate::tests::common;
 
-use std::fs;
-use std::path::PathBuf;
-
-fn scenes_dir() -> PathBuf {
-    // fast3d/ crate root -> tests/scenes
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes")
-}
-
 #[test]
-fn every_curated_scene_assembles_and_renders_clean() {
-    // 32x32 white RGBA8 — >= every scene's declared texture dims (2x2 or 32x32).
-    let white = vec![255u8; 32 * 32 * 4];
+fn every_curated_scene_interprets_and_renders_clean() {
     let mut checked = 0;
-    for entry in fs::read_dir(scenes_dir()).expect("tests/scenes must exist") {
-        let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) != Some("n64") {
-            continue;
-        }
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let source = fs::read_to_string(&path).unwrap();
-        let img = crate::asm::assemble_with_texture(&source, &white, 32, 32)
-            .unwrap_or_else(|d| panic!("{name}: assemble failed: {d:?}"));
-        let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    for &name in crate::tests::fixtures::SCENES {
+        let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
+        let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
         assert!(r.diags.is_empty(), "{name}: interp diags: {:?}", r.diags);
         // 2D scenes (those that open a framebuffer pair via gsDPSetColorImage) may have no
         // flat triangle indices and no 3D vertex buffer — skip the 3D-only assertions.

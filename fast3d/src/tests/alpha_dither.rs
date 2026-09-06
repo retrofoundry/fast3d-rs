@@ -1,4 +1,4 @@
-use super::common::{render_to_pixels, scene_from_source};
+use super::common::{render_to_pixels, scene_from_fixture};
 use crate::hle::{AlphaCompare, BlendClass, RenderMode, Scene, ZMode};
 use crate::render::{headless_device_forced_fallback, CombinerUniform, SceneRenderer};
 
@@ -73,7 +73,7 @@ const FRAME_1: [u64; 32] = [
 ];
 
 fn scene(alpha: f32) -> Scene {
-    let mut scene = scene_from_source("framebuffer-extent.n64", &[255; 4], 1, 1);
+    let mut scene = scene_from_fixture("framebuffer-extent--white1");
     scene.raw_pos = vec![
         [-64.0, 64.0, 0.0],
         [-64.0, -64.0, 0.0],

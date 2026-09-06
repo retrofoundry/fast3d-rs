@@ -128,16 +128,16 @@ Gfx main[] = {
 
 #[test]
 fn source_map_resolves_missing_render_mode_diagnostic() {
-    let source = SOURCE_MAP_SRC.replace("gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)", "");
-    let img = crate::asm::assemble_at_with_textures(&source, 0.0, &[]).expect("assemble");
-    let result = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    let (rdram, entry_addr) =
+        crate::tests::fixtures::fixture("colored-triangle--missing-render-mode");
+    let result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert_eq!(result.diags.len(), 1, "{:?}", result.diags);
     let diag = result
         .diags
         .iter()
         .find(|diag| diag.kind == crate::diag::DiagKind::RenderModeNeverSet)
         .expect("missing render mode diagnostic");
-    assert_eq!(img.line_at(diag.at), Some(16));
+    assert_eq!(diag.at, entry_addr + 7 * 8);
 }
 
 #[test]
@@ -276,23 +276,12 @@ fn ia4_pair_packs_high_nibble_even_then_decodes() {
 /// the real palette size.  The fix `(lrt & 0xFFF)` at bits[11:0] makes the round-trip correct.
 #[test]
 fn ci8_assembler_hle_tlut_roundtrip_correct_count_and_content() {
-    let src_n64 = "\
-Texture tex = { 3, 1, CI8 }
-gsDPLoadTextureBlock(tex, G_IM_FMT_CI, G_IM_SIZ_8b, 3, 1)
-gsSPEndDisplayList()
-";
-    // 3 distinct colors → 3-entry palette.
-    let rgba: [u8; 12] = [
-        0, 0, 0, 255, // black  → index 0 → RGBA16 0x0001
-        255, 0, 0, 255, // red    → index 1 → RGBA16 0xF801
-        0, 255, 0, 255, // green  → index 2 → RGBA16 0x07C1
-    ];
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("ci8--three-color-tlut");
+
     let palette_count: usize = 3;
 
-    let img = assemble_with_texture(src_n64, &rgba, 3, 1).expect("CI8 assembly must succeed");
-
     // Interpret through the full HLE pipeline.
-    let result = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    let result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     // Allow the known "combiner selector not implemented" diagnostic (non-fatal).
     // Any other diagnostic would indicate a structural problem with the DL.
     let fatal_diags: Vec<_> = result
