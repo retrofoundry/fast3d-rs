@@ -291,6 +291,13 @@ mod tests {
             DiagKind::TruncatedRect { fill: true },
             DiagKind::DrawBeforeCimg,
             DiagKind::VtxOutOfRange { count: 1, end: 2 },
+            DiagKind::InvalidCullRange { first: 2, last: 1 },
+            DiagKind::InvalidConditionalVertex {
+                opcode: 0x04,
+                index: 3,
+            },
+            DiagKind::InvalidVertexTransform { index: 0 },
+            DiagKind::MissingBranchTarget,
             DiagKind::NoTextureLoaded,
             DiagKind::SecondTextureUndecodable,
             DiagKind::UnhandledMovemem(0),
