@@ -200,6 +200,27 @@ pub struct Renderer {
     _not_send: std::marker::PhantomData<*const ()>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Submission {
+    DiscardOnStop,
+    RasterizePrefix,
+}
+
+struct PrefixObserver {
+    remaining: u32,
+}
+
+impl inspect::WalkObserver for PrefixObserver {
+    fn command(&mut self, _: inspect::WalkStep<'_>) -> std::ops::ControlFlow<()> {
+        self.remaining -= 1;
+        if self.remaining == 0 {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    }
+}
+
 impl Renderer {
     /// SECONDARY constructor: adopt a device/queue the consumer already created (wafel; headless
     /// tests). Synchronous. Capability probing (`DUAL_SOURCE_BLENDING`) is internal — no
@@ -439,6 +460,58 @@ impl Renderer {
         self.process_dl_memory(mem, entry, ucode, diags)
     }
 
+    /// Interpret at most `command_count` dispatched commands and rasterize the finalized prefix
+    /// into the current framebuffer store. Row `seq` selects `command_count = seq + 1`;
+    /// continuation words belong to their parent dispatch. Report `Cap` when the count stops
+    /// execution; root end or a terminating fault on the last dispatch takes precedence. The
+    /// ordinary runaway guard still applies; there is no implicit 4,096-command limit.
+    /// `command_count == u32::MAX` behaves as [`Self::process_dl`].
+    ///
+    /// Zero executes nothing, emits no diagnostics, changes no renderer state, and returns zero
+    /// counts, `Cap`, and `renderable = false`. Otherwise, counts and diagnostics describe the
+    /// prefix, including finalization diagnostics. Use ordinary scene retention and scanout
+    /// rules. This method neither begins a frame nor presents, resets, or restores framebuffer
+    /// contents.
+    ///
+    /// Pre-CIMG flat triangles target the final CIMG address of the walk, so a prefix may target
+    /// a different address than the full display list. A culled draw can open a framebuffer pair
+    /// before rejecting its triangles: no emission does not mean no framebuffer effect.
+    ///
+    /// The prefix renders under current renderer state. With [`ClearPolicy::Persist`], paired
+    /// color loads existing contents, so replaying a shorter prefix cannot erase what a longer
+    /// one already drew. [`ClearPolicy::PerFrame`] clears each touched target on its first touch
+    /// after [`Self::begin_frame`]. Flat rendering always clears, and paired depth is transient.
+    /// `begin_frame` also advances the dither serial, so repeated captures of a dithered list
+    /// are not bit-identical.
+    pub fn process_dl_prefix(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        command_count: u32,
+    ) -> DlSummary {
+        if command_count == 0 {
+            return DlSummary {
+                termination: inspect::WalkTermination::Cap,
+                ..DlSummary::default()
+            };
+        }
+        if command_count == u32::MAX {
+            return self.process_dl(hw, entry, ucode, diags);
+        }
+        self.process_dl_inner(
+            hw,
+            entry,
+            ucode,
+            diags,
+            Some(&mut PrefixObserver {
+                remaining: command_count,
+            }),
+            Submission::RasterizePrefix,
+        )
+    }
+
     /// Observe the walk that produces this DL's rendered scene, without the CPU `walk` cap.
     /// Returning `Break(())` before root end or a fault cancels the DL: its scene is neither
     /// rasterized nor retained, and earlier DLs remain intact. Counts include cancelled work;
@@ -452,7 +525,14 @@ impl Renderer {
         diags: &mut dyn DiagSink,
         observer: &mut dyn inspect::WalkObserver,
     ) -> DlSummary {
-        self.process_dl_inner(hw, entry, ucode, diags, Some(observer))
+        self.process_dl_inner(
+            hw,
+            entry,
+            ucode,
+            diags,
+            Some(observer),
+            Submission::DiscardOnStop,
+        )
     }
 
     fn process_dl_inner(
@@ -462,8 +542,9 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
         observer: Option<&mut dyn inspect::WalkObserver>,
+        submission: Submission,
     ) -> DlSummary {
-        self.process_dl_memory_observed(hw.rdram(), entry, ucode, diags, observer)
+        self.process_dl_memory_observed(hw.rdram(), entry, ucode, diags, observer, submission)
     }
 
     pub(crate) fn process_dl_memory(
@@ -473,7 +554,7 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
     ) -> DlSummary {
-        self.process_dl_memory_observed(mem, entry, ucode, diags, None)
+        self.process_dl_memory_observed(mem, entry, ucode, diags, None, Submission::DiscardOnStop)
     }
 
     fn process_dl_memory_observed(
@@ -483,9 +564,16 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
         observer: Option<&mut dyn inspect::WalkObserver>,
+        submission: Submission,
     ) -> DlSummary {
         let is_image = mem.is_rdram_image();
-        let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format, observer);
+        let mut result =
+            crate::hle::interpret(mem, entry, ucode.into(), self.data_format, observer);
+        if submission == Submission::RasterizePrefix
+            && result.termination == inspect::WalkTermination::ObserverStopped
+        {
+            result.termination = inspect::WalkTermination::Cap;
+        }
 
         for &d in &result.diags {
             diags.emit(d);
