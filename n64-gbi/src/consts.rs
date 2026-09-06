@@ -8,6 +8,16 @@ pub mod rdp {
     pub const G_SETENVCOLOR: u8 = 0xFB;
     pub const G_SETPRIMCOLOR: u8 = 0xFA;
     pub const G_SETPRIMDEPTH: u8 = 0xEE;
+    pub const G_SETCONVERT: u8 = 0xEC;
+    pub const G_SETKEYR: u8 = 0xEB;
+    pub const G_SETKEYGB: u8 = 0xEA;
+    pub const G_MDSFT_TEXTCONV: u32 = 9;
+    pub const G_TC_CONV: u32 = 0 << G_MDSFT_TEXTCONV;
+    pub const G_TC_FILTCONV: u32 = 5 << G_MDSFT_TEXTCONV;
+    pub const G_TC_FILT: u32 = 6 << G_MDSFT_TEXTCONV;
+    pub const G_MDSFT_COMBKEY: u32 = 8;
+    pub const G_CK_NONE: u32 = 0;
+    pub const G_CK_KEY: u32 = 1 << G_MDSFT_COMBKEY;
     pub const G_SETTILE: u8 = 0xF5;
     pub const G_LOADBLOCK: u8 = 0xF3;
     pub const G_LOADTILE: u8 = 0xF4;

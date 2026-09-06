@@ -2,11 +2,18 @@ use crate::diag::{DiagKind, Diagnostic};
 use crate::hle::consts::rdp::{
     G_LOADBLOCK, G_LOADTILE, G_LOADTLUT, G_NOOP, G_RDPFULLSYNC, G_RDPHALF_1, G_RDPHALF_2,
     G_RDPLOADSYNC, G_RDPPIPESYNC, G_RDPSETOTHERMODE, G_RDPTILESYNC, G_SETBLENDCOLOR, G_SETCIMG,
-    G_SETCOMBINE, G_SETENVCOLOR, G_SETFILLCOLOR, G_SETFOGCOLOR, G_SETPRIMCOLOR, G_SETPRIMDEPTH,
-    G_SETSCISSOR, G_SETTILE, G_SETTILESIZE, G_SETZIMG,
+    G_SETCOMBINE, G_SETCONVERT, G_SETENVCOLOR, G_SETFILLCOLOR, G_SETFOGCOLOR, G_SETKEYGB,
+    G_SETKEYR, G_SETPRIMCOLOR, G_SETPRIMDEPTH, G_SETSCISSOR, G_SETTILE, G_SETTILESIZE, G_SETZIMG,
 };
 use crate::hle::interp::{Cmd, Ctx, Handler};
 use crate::hle::mem::Rdram;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KeyChannel {
+    pub center: u8,
+    pub scale: u8,
+    pub width: u16,
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TileDescriptor {
@@ -55,6 +62,8 @@ pub struct Rdp {
     pub fog_offset: i16,   // gSPFogPosition fo
     pub prim: [u8; 4],
     pub prim_depth: crate::scene::PrimitiveDepth,
+    pub convert: [i16; 6],
+    pub key: [KeyChannel; 3],
     /// LOD fraction captured from G_SETPRIMCOLOR w0 low byte. On N64 hardware the
     /// primitive LOD fraction = lodFrac / 256.0. Feeds the combiner PRIM_LOD_FRAC selector. Default 0.0.
     pub prim_lod_frac: f32,
@@ -106,6 +115,9 @@ pub(crate) fn install_defaults<M: Rdram>(t: &mut [Handler<M>; 256]) {
     t[G_LOADTLUT as usize] = load_tlut::<M>;
     t[G_SETPRIMCOLOR as usize] = set_prim_color::<M>;
     t[G_SETPRIMDEPTH as usize] = set_prim_depth::<M>;
+    t[G_SETCONVERT as usize] = set_convert::<M>;
+    t[G_SETKEYR as usize] = set_key_r::<M>;
+    t[G_SETKEYGB as usize] = set_key_gb::<M>;
     t[G_SETENVCOLOR as usize] = set_env_color::<M>;
     t[G_SETFOGCOLOR as usize] = set_fog_color::<M>;
     t[G_SETBLENDCOLOR as usize] = set_blend_color::<M>;
@@ -167,6 +179,42 @@ fn set_prim_depth<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
         z: (c.w1 >> 16) as u16,
         dz: c.w1 as u16,
     };
+}
+
+fn set_convert<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+    cx.rdp.convert = [
+        c.p0(13, 9),
+        c.p0(4, 9),
+        (c.p0(0, 4) << 5) | c.p1(27, 5),
+        c.p1(18, 9),
+        c.p1(9, 9),
+        c.p1(0, 9),
+    ]
+    .map(|value| ((value as i16) << 7) >> 7);
+    cx.rsp.material_dirty = true;
+}
+
+fn set_key_r<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+    cx.rdp.key[0] = KeyChannel {
+        center: c.p1(8, 8) as u8,
+        scale: c.p1(0, 8) as u8,
+        width: c.p1(16, 12) as u16,
+    };
+    cx.rsp.material_dirty = true;
+}
+
+fn set_key_gb<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+    cx.rdp.key[1] = KeyChannel {
+        center: c.p1(24, 8) as u8,
+        scale: c.p1(16, 8) as u8,
+        width: c.p0(12, 12) as u16,
+    };
+    cx.rdp.key[2] = KeyChannel {
+        center: c.p1(8, 8) as u8,
+        scale: c.p1(0, 8) as u8,
+        width: c.p0(0, 12) as u16,
+    };
+    cx.rsp.material_dirty = true;
 }
 
 fn set_fog_color<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
