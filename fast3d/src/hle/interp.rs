@@ -1,8 +1,8 @@
 //! F3DEX2 opcode dispatch loop. Reads big-endian w0/w1 command pairs from the image's
 //! command stream and drives the RSP, producing a Scene + decode diagnostics.
 
-use crate::diag::{DiagKind, Diagnostic};
-use crate::hle::mem::{Rdram, RdramImage};
+use crate::diag::{DiagKind, Diagnostic, MemoryAccess};
+use crate::hle::mem::{MemoryError, MemoryErrorKind, Rdram, RdramImage};
 use crate::hle::rsp::Scene;
 
 #[derive(Clone, Copy)]
@@ -46,6 +46,50 @@ pub(crate) struct Ctx<'a, M: Rdram> {
     pub dropped_runs: &'a mut u32,
     /// Anti-flood set for `UnknownOpcode`: emit each distinct unknown opcode ONCE (spec §3.6).
     pub unknown_seen: &'a mut [bool; 256],
+}
+
+macro_rules! memory_try {
+    ($cx:expr, $access:ident, $result:expr) => {
+        match $result {
+            Ok(value) => value,
+            Err(error) => {
+                $cx.diags.push(crate::diag::Diagnostic {
+                    at: $cx.pc,
+                    kind: crate::diag::DiagKind::MemoryRead {
+                        access: crate::diag::MemoryAccess::$access,
+                        error,
+                    },
+                });
+                return;
+            }
+        }
+    };
+}
+pub(crate) use memory_try;
+
+pub(crate) fn checked_span(address: u64, length: u64) -> Result<u64, MemoryError> {
+    address.checked_add(length).ok_or(MemoryError {
+        address,
+        length,
+        kind: MemoryErrorKind::AddressOverflow,
+    })
+}
+
+pub(crate) fn read_bytes_exact<M: Rdram>(
+    mem: &M,
+    address: u64,
+    length: usize,
+) -> Result<std::borrow::Cow<'_, [u8]>, MemoryError> {
+    checked_span(address, length as u64)?;
+    let bytes = mem.read_bytes(address, length)?;
+    if bytes.len() != length {
+        return Err(MemoryError {
+            address,
+            length: length as u64,
+            kind: MemoryErrorKind::Unavailable,
+        });
+    }
+    Ok(bytes)
 }
 
 /// Sign-extend the low 24 bits of `w` (RDP float-GBI rect coords are s23 in the command word).
@@ -137,8 +181,27 @@ pub fn interpret<M: Rdram>(
     let mut dispatched: u64 = 0;
     let mut rec = crate::hle::rsp::PairRec::default();
 
+    macro_rules! walk_try {
+        ($access:ident, $result:expr) => {
+            match $result {
+                Ok(value) => value,
+                Err(error) => {
+                    diags.push(Diagnostic {
+                        at: pc,
+                        kind: DiagKind::MemoryRead {
+                            access: MemoryAccess::$access,
+                            error,
+                        },
+                    });
+                    rejected = true;
+                    break;
+                }
+            }
+        };
+    }
+
     loop {
-        // Runaway guard: dispatch cap + per-read bounds check.
+        // A dispatch cap bounds liveness; native pointer validity is the caller's obligation.
         if dispatched >= DISPATCH_CAP {
             diags.push(Diagnostic {
                 at: pc,
@@ -147,16 +210,8 @@ pub fn interpret<M: Rdram>(
             break;
         }
         let stride = mem.command_stride();
-        if !mem.in_bounds(pc, stride) {
-            diags.push(Diagnostic {
-                at: pc,
-                kind: DiagKind::DlPastRdram,
-            });
-            break;
-        }
         dispatched += 1;
-
-        let cmd = mem.read_command(pc);
+        let cmd = walk_try!(Command, mem.read_command(pc));
         let c = Cmd {
             w0: cmd.w0,
             w1: cmd.w1,
@@ -165,7 +220,7 @@ pub fn interpret<M: Rdram>(
         let op = c.opcode();
 
         let control = if op == gbi.consts.g_dl {
-            let target = mem.resolve_masked(c.w1_addr);
+            let target = walk_try!(Command, mem.resolve_masked(c.w1_addr));
             if c.p0(16, 1) == 0 {
                 Control::Call(target)
             } else {
@@ -192,11 +247,16 @@ pub fn interpret<M: Rdram>(
                 rdphalf_1
                     .ok_or(DiagKind::MissingBranchTarget)
                     .and_then(|target| {
-                        rsp.branch_z(c.p0(1, 11), c.w1).map(|taken| {
+                        rsp.branch_z(c.p0(1, 11), c.w1).and_then(|taken| {
                             if taken {
-                                Control::Branch(mem.resolve_masked(target))
+                                mem.resolve_masked(target)
+                                    .map(Control::Branch)
+                                    .map_err(|error| DiagKind::MemoryRead {
+                                        access: MemoryAccess::Command,
+                                        error,
+                                    })
                             } else {
-                                Control::Continue
+                                Ok(Control::Continue)
                             }
                         })
                     })
@@ -226,7 +286,7 @@ pub fn interpret<M: Rdram>(
         match control {
             Control::Call(target) | Control::Branch(target) => {
                 if matches!(control, Control::Call(_)) {
-                    return_stack.push(pc + stride);
+                    return_stack.push(walk_try!(Command, checked_span(pc, stride)));
                 }
                 pc = target;
                 continue;
@@ -246,7 +306,7 @@ pub fn interpret<M: Rdram>(
         }
         if ucode == crate::hle::gbi::GbiUcode::F3dex2 && op == crate::hle::consts::G_RDPHALF_1 {
             rdphalf_1 = Some(c.w1_addr);
-            pc += stride;
+            pc = walk_try!(Command, checked_span(pc, stride));
             continue;
         }
         if ucode == crate::hle::gbi::GbiUcode::F3dex2
@@ -255,7 +315,7 @@ pub fn interpret<M: Rdram>(
                 crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
             )
         {
-            pc += stride;
+            pc = walk_try!(Command, checked_span(pc, stride));
             continue;
         }
 
@@ -269,25 +329,11 @@ pub fn interpret<M: Rdram>(
         // cannot express (it cannot advance `pc`); decoded here from RAW locals, gated on the
         // opcode. Each continuation read is bounds-checked (mirrors the loop-top guard). ---
         if op == crate::hle::consts::G_TEXRECT || op == crate::hle::consts::G_TEXRECTFLIP {
-            // cmd0 == c (already bounds-checked at loop top). Read the two continuation words.
-            if !mem.in_bounds(pc + stride, stride) {
-                dropped_runs += 1;
-                diags.push(Diagnostic {
-                    at: pc,
-                    kind: DiagKind::TruncatedRect { fill: false },
-                });
-                break;
-            }
-            let cmd1 = mem.read_command(pc + stride);
-            if !mem.in_bounds(pc + 2 * stride, stride) {
-                dropped_runs += 1;
-                diags.push(Diagnostic {
-                    at: pc,
-                    kind: DiagKind::TruncatedRect { fill: false },
-                });
-                break;
-            }
-            let cmd2 = mem.read_command(pc + 2 * stride);
+            let pc1 = walk_try!(Continuation, checked_span(pc, stride));
+            let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
+            let pc2 = walk_try!(Continuation, checked_span(pc1, stride));
+            let cmd2 = walk_try!(Continuation, mem.read_command(pc2));
+            let next_pc = walk_try!(Command, checked_span(pc2, stride));
 
             let (lrx, lry, tile, ulx, uly) = match gbi.data_format {
                 crate::hle::mem::GbiDataFormat::Fixed => (
@@ -321,7 +367,7 @@ pub fn interpret<M: Rdram>(
                     at: pc,
                     kind: DiagKind::DrawBeforeCimg,
                 });
-                pc += 3 * stride;
+                pc = next_pc;
                 continue;
             }
 
@@ -329,7 +375,7 @@ pub fn interpret<M: Rdram>(
                 crate::hle::rsp::snapshot_rect_run(&rsp, &rdp, tile, &mut diags, &mut scene, pc)
             else {
                 dropped_runs += 1;
-                pc += 3 * stride;
+                pc = next_pc;
                 continue;
             };
             crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
@@ -346,11 +392,12 @@ pub fn interpret<M: Rdram>(
                 .filter(|p| !p.is_depth_clear)
                 .find(|p| {
                     let start = p.color_image.addr;
-                    let end = start
-                        + (p.color_image.width as u64)
-                            * (p.size_extent.1 as u64)
-                            * crate::hle::rsp::bpp(p.color_image.siz);
-                    (start..end).contains(&tex_addr)
+                    let length = (p.color_image.width as u64)
+                        * (p.size_extent.1 as u64)
+                        * crate::hle::rsp::bpp(p.color_image.siz);
+                    start
+                        .checked_add(length)
+                        .is_some_and(|end| (start..end).contains(&tex_addr))
                 })
                 .map(|p| p.color_image.addr);
 
@@ -371,7 +418,7 @@ pub fn interpret<M: Rdram>(
                     prim_depth: rdp.prim_depth,
                     fb_source,
                 });
-            pc += 3 * stride;
+            pc = next_pc;
             continue;
         }
         if op == crate::hle::consts::G_FILLRECT {
@@ -388,15 +435,8 @@ pub fn interpret<M: Rdram>(
                     1u64,
                 ),
                 crate::hle::mem::GbiDataFormat::Float => {
-                    if !mem.in_bounds(pc + stride, stride) {
-                        dropped_runs += 1;
-                        diags.push(Diagnostic {
-                            at: pc,
-                            kind: DiagKind::TruncatedRect { fill: true },
-                        });
-                        break;
-                    }
-                    let cmd1 = mem.read_command(pc + stride);
+                    let pc1 = walk_try!(Continuation, checked_span(pc, stride));
+                    let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
                     (
                         crate::hle::rsp::Rect {
                             lrx: sext24(c.w0) >> 2,
@@ -409,19 +449,41 @@ pub fn interpret<M: Rdram>(
                 }
             };
 
+            let mut next_pc = pc;
+            for _ in 0..words {
+                // Propagate outside the inner loop so failure aborts the task.
+                next_pc = match checked_span(next_pc, stride) {
+                    Ok(next) => next,
+                    Err(error) => {
+                        diags.push(Diagnostic {
+                            at: pc,
+                            kind: DiagKind::MemoryRead {
+                                access: MemoryAccess::Command,
+                                error,
+                            },
+                        });
+                        rejected = true;
+                        break;
+                    }
+                };
+            }
+            if rejected {
+                break;
+            }
+
             if !rec.have_seen_cimg {
                 dropped_runs += 1;
                 diags.push(Diagnostic {
                     at: pc,
                     kind: DiagKind::DrawBeforeCimg,
                 });
-                pc += words * stride;
+                pc = next_pc;
                 continue;
             }
 
             if !crate::hle::combiner::validate_fill_inputs(&rdp, &mut diags, pc) {
                 dropped_runs += 1;
-                pc += words * stride;
+                pc = next_pc;
                 continue;
             }
 
@@ -436,7 +498,7 @@ pub fn interpret<M: Rdram>(
                     convert: rdp.convert,
                     key: rdp.key,
                 });
-            pc += words * stride;
+            pc = next_pc;
             continue;
         }
 
@@ -456,7 +518,8 @@ pub fn interpret<M: Rdram>(
         if diags.last().is_some_and(|d| {
             matches!(
                 d.kind,
-                DiagKind::DlPastRdram
+                DiagKind::MemoryRead { .. }
+                    | DiagKind::DlPastRdram
                     | DiagKind::UnhandledMovemem(_)
                     | DiagKind::UnhandledMoveword(_)
                     | DiagKind::UnsupportedCommand {
@@ -468,7 +531,7 @@ pub fn interpret<M: Rdram>(
             rejected = true;
             break;
         }
-        pc += stride;
+        pc = walk_try!(Command, checked_span(pc, stride));
     }
 
     if rejected {
@@ -1303,9 +1366,13 @@ mod rect_encoding_tests {
         push(&mut b, ((G_TEXRECT as u32) << 24 | (1280 << 12) | 960, 0)); // cmd0 only; buffer ends
         let r = run(&b, GbiUcode::F3dex2);
         assert!(
-            r.diags
-                .iter()
-                .any(|d| d.kind == crate::diag::DiagKind::TruncatedRect { fill: false }),
+            r.diags.iter().any(|d| matches!(
+                d.kind,
+                crate::DiagKind::MemoryRead {
+                    access: crate::MemoryAccess::Continuation,
+                    ..
+                }
+            )),
             "expected a truncation diag, got {:?}",
             r.diags
         );

@@ -546,7 +546,7 @@ fn rdram_image_and_host_ptr_produce_identical_scene() {
             dl.len() * core::mem::size_of::<[usize; 2]>(),
         )
     };
-    let host = unsafe { HostRam::new(frame_bytes) };
+    let host = unsafe { crate::hle::host_mem::HostMemory::new(HostRam::new(frame_bytes)) };
     let res_host = interpret(
         host,
         entry_ptr,

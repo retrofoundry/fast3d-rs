@@ -2,8 +2,10 @@
 //! the CPU keeps conditional control positions, RSP/RDP state, and state-index tables.
 
 use crate::hle::gbi::f3dex2::F3DEX2_CONSTS;
+use crate::hle::interp::checked_span;
 use crate::hle::math::{identity, mul4, mul_col_vec3, mul_row_vec4, Mat4};
 use crate::hle::mem::Rdram;
+use crate::hle::mem::{MemoryError, MemoryErrorKind};
 pub use crate::scene::{
     ColorImage, CullKind, DrawRun, FramebufferPair, Rect, Scene, SceneOp, Scissor, TexRectBounds,
 };
@@ -165,8 +167,8 @@ impl Rsp {
         }
     }
 
-    pub fn matrix<M: Rdram>(&mut self, mem: &M, addr: u64, params: u8) {
-        let m = mem.read_matrix(addr, self.data_format);
+    pub fn matrix<M: Rdram>(&mut self, mem: &M, addr: u64, params: u8) -> Result<(), MemoryError> {
+        let m = mem.read_matrix(addr, self.data_format)?;
         let is_proj = params & self.consts.g_mtx_projection != 0;
         let is_load = params & self.consts.g_mtx_load != 0;
         let is_push = params & self.consts.g_mtx_push != 0;
@@ -190,17 +192,19 @@ impl Rsp {
             };
         }
         self.recompute_mvp();
+        Ok(())
     }
 
     /// F3D G_MV_MATRIX_1: overwrite the current MVP with a full matrix loaded directly from
     /// RDRAM. The matrix stacks remain unchanged, so the next matrix operation recomputes from
     /// their state.
-    pub fn force_matrix<M: Rdram>(&mut self, mem: &M, addr: u64) {
-        self.mvp = mem.read_matrix(addr, self.data_format);
+    pub fn force_matrix<M: Rdram>(&mut self, mem: &M, addr: u64) -> Result<(), MemoryError> {
+        self.mvp = mem.read_matrix(addr, self.data_format)?;
         if self.mvp_table.last() != Some(&self.mvp) {
             self.mvp_table.push(self.mvp);
         }
         self.cur_mvp_index = (self.mvp_table.len() - 1) as u32;
+        Ok(())
     }
 
     /// G_POPMTX: pop `count` modelview frames, never below 1.
@@ -226,18 +230,19 @@ impl Rsp {
         }
     }
 
-    pub fn set_viewport<M: Rdram>(&mut self, mem: &M, addr: u64) {
+    pub fn set_viewport<M: Rdram>(&mut self, mem: &M, addr: u64) -> Result<(), MemoryError> {
+        checked_span(addr, 16)?;
         let vscale = [
-            mem.read_i16(addr),
-            mem.read_i16(addr.saturating_add(2)),
-            mem.read_i16(addr.saturating_add(4)),
-            mem.read_i16(addr.saturating_add(6)),
+            mem.read_i16(addr)?,
+            mem.read_i16(addr + 2)?,
+            mem.read_i16(addr + 4)?,
+            mem.read_i16(addr + 6)?,
         ];
         let vtrans = [
-            mem.read_i16(addr.saturating_add(8)),
-            mem.read_i16(addr.saturating_add(10)),
-            mem.read_i16(addr.saturating_add(12)),
-            mem.read_i16(addr.saturating_add(14)),
+            mem.read_i16(addr + 8)?,
+            mem.read_i16(addr + 10)?,
+            mem.read_i16(addr + 12)?,
+            mem.read_i16(addr + 14)?,
         ];
         // Authentic libultra order: X=index0, Y=index1, Z=index2 / DepthRange.
         // Some ports read vscale[1] for X / vscale[0] for Y; that swap is a host-byteswap
@@ -257,6 +262,7 @@ impl Rsp {
             self.viewport_table.push(entry);
             self.cur_viewport_index = (self.viewport_table.len() - 1) as u32;
         }
+        Ok(())
     }
 
     pub fn set_vertex<M: Rdram>(
@@ -267,7 +273,29 @@ impl Rsp {
         dst: u32,
         rdp: &crate::hle::rdp::Rdp,
         scene: &mut Scene,
-    ) {
+    ) -> Result<(), MemoryError> {
+        let stride = mem.vertex_stride(self.data_format).map_err(|mut error| {
+            error.address = addr;
+            error
+        })?;
+        let length = u64::from(count).checked_mul(stride).ok_or(MemoryError {
+            address: addr,
+            length: u64::MAX,
+            kind: MemoryErrorKind::AddressOverflow,
+        })?;
+        checked_span(addr, length)?;
+        let mut vertices = Vec::new();
+        vertices
+            .try_reserve_exact(count as usize)
+            .map_err(|_| MemoryError {
+                address: addr,
+                length,
+                kind: MemoryErrorKind::Unavailable,
+            })?;
+        for i in 0..count {
+            vertices.push(mem.read_vertex(addr + u64::from(i) * stride, self.data_format)?);
+        }
+
         // NOTE: mtx_index/viewport_index/texcoord_index pushed per-vertex here only resolve to
         // their respective tables after `finish()` copies them onto the Scene.
         // Texel-space texcoord scale: sc/(65536*32) with NO tile-size division. Tile normalization
@@ -344,7 +372,6 @@ impl Rsp {
         }
         // Vertex stride + field layout are backend-decided (fixed-point vs GBI_FLOATS) — see
         // `Rdram::read_vertex`. Decoding a float-GBI vertex as s16 misreads every position.
-        let stride = mem.vertex_stride(self.data_format);
         let fog_index = if (self.geom & self.consts.g_fog_geom) != 0 {
             let factors = [rdp.fog_mul, rdp.fog_offset];
             let index = scene.fog_table.iter().position(|&entry| entry == factors);
@@ -356,10 +383,8 @@ impl Rsp {
         } else {
             0
         };
-        for i in 0..count {
-            let o = addr.saturating_add((i as u64) * stride);
-            let v = mem.read_vertex(o, self.data_format);
-            let slot = (dst + i) as usize;
+        for (i, v) in vertices.into_iter().enumerate() {
+            let slot = dst as usize + i;
             let gi = scene.raw_pos.len() as u32;
             self.cache_global_index[slot] = gi;
             self.loaded[slot] = true;
@@ -405,6 +430,7 @@ impl Rsp {
                 0
             });
         }
+        Ok(())
     }
 
     fn modify_unit_texcoord_index(&mut self) -> u32 {
@@ -711,28 +737,35 @@ impl Rsp {
     /// G_MV_LIGHT: load a directional or ambient light from RDRAM.
     /// `light_idx`: slot index (0-based, after removing lookat slots 0/1).
     /// `addr`: pre-resolved physical address of the Light_t or Ambient_t struct.
-    pub fn set_light<M: Rdram>(&mut self, mem: &M, light_idx: u32, addr: u64) {
+    pub fn set_light<M: Rdram>(
+        &mut self,
+        mem: &M,
+        light_idx: u32,
+        addr: u64,
+    ) -> Result<(), MemoryError> {
+        checked_span(addr, if light_idx == self.num_dir { 3 } else { 11 })?;
         if light_idx == self.num_dir {
             // ambient (8B Ambient_t: col@0..2, no dir)
             self.ambient_col = [
-                mem.read_u8(addr) as f32 / 255.0,
-                mem.read_u8(addr.saturating_add(1)) as f32 / 255.0,
-                mem.read_u8(addr.saturating_add(2)) as f32 / 255.0,
+                mem.read_u8(addr)? as f32 / 255.0,
+                mem.read_u8(addr + 1)? as f32 / 255.0,
+                mem.read_u8(addr + 2)? as f32 / 255.0,
             ];
         } else if (light_idx as usize) < self.lights.len() {
             let col = [
-                mem.read_u8(addr) as f32 / 255.0,
-                mem.read_u8(addr.saturating_add(1)) as f32 / 255.0,
-                mem.read_u8(addr.saturating_add(2)) as f32 / 255.0,
+                mem.read_u8(addr)? as f32 / 255.0,
+                mem.read_u8(addr + 1)? as f32 / 255.0,
+                mem.read_u8(addr + 2)? as f32 / 255.0,
             ];
             let dir = [
-                mem.read_i8(addr.saturating_add(8)) as f32 / 127.0,
-                mem.read_i8(addr.saturating_add(9)) as f32 / 127.0,
-                mem.read_i8(addr.saturating_add(10)) as f32 / 127.0,
+                mem.read_i8(addr + 8)? as f32 / 127.0,
+                mem.read_i8(addr + 9)? as f32 / 127.0,
+                mem.read_i8(addr + 10)? as f32 / 127.0,
             ];
             self.lights[light_idx as usize] = (dir, col);
         }
         self.light_version += 1;
+        Ok(())
     }
 
     /// F3D G_MW_LIGHTCOL: update one light's color from packed 0xRRGGBBAA while preserving its
@@ -752,15 +785,22 @@ impl Rsp {
     }
 
     /// G_MV_LIGHT DMEM slot 0/1: load the s8 lookat axis (S=0, T=1) into object-relative eye space.
-    pub fn set_lookat<M: Rdram>(&mut self, mem: &M, slot: u32, addr: u64) {
+    pub fn set_lookat<M: Rdram>(
+        &mut self,
+        mem: &M,
+        slot: u32,
+        addr: u64,
+    ) -> Result<(), MemoryError> {
+        checked_span(addr, 11)?;
         if (slot as usize) < self.lookat_axes.len() {
             self.lookat_axes[slot as usize] = [
-                mem.read_i8(addr.saturating_add(8)) as f32 / 127.0,
-                mem.read_i8(addr.saturating_add(9)) as f32 / 127.0,
-                mem.read_i8(addr.saturating_add(10)) as f32 / 127.0,
+                mem.read_i8(addr + 8)? as f32 / 127.0,
+                mem.read_i8(addr + 9)? as f32 / 127.0,
+                mem.read_i8(addr + 10)? as f32 / 127.0,
             ];
         }
         self.lookat_version += 1;
+        Ok(())
     }
 }
 
@@ -1006,8 +1046,10 @@ mod clip_code_tests {
                 &mem,
                 0,
                 crate::hle::consts::G_MTX_PROJECTION | crate::hle::consts::G_MTX_LOAD,
-            );
-            rsp.set_vertex(&mem, 64, 1, 0, &Default::default(), &mut scene);
+            )
+            .unwrap();
+            rsp.set_vertex(&mem, 64, 1, 0, &Default::default(), &mut scene)
+                .unwrap();
             assert_eq!(rsp.clip_codes[0], Some(code), "z={z}, w=2");
             assert_eq!(rsp.cull_display_list(0, 0), Ok(false), "z={z}, w=2");
         }
@@ -1092,7 +1134,8 @@ mod lights_load_tests {
         let bytes = vec![0u8; 16];
         let rdram = RdramImage::new(&bytes);
         let mut scene = Scene::default();
-        rsp.set_vertex(&rdram, 0, 1, 0, &Default::default(), &mut scene);
+        rsp.set_vertex(&rdram, 0, 1, 0, &Default::default(), &mut scene)
+            .unwrap();
         // light_count = num_dir + 1 ambient = 8
         assert_eq!(scene.light_count[0], RSP_MAX_LIGHTS + 1);
     }
@@ -1110,13 +1153,13 @@ mod lights_load_tests {
         dir_l[9] = 0;
         dir_l[10] = 0;
         let rd = RdramImage::new(&dir_l);
-        rsp.set_light(&rd, 0, 0);
+        rsp.set_light(&rd, 0, 0).unwrap();
         assert_eq!(rsp.lights[0].0, [1.0, 0.0, 0.0]); // dir 127/127
         assert_eq!(rsp.lights[0].1, [1.0, 128.0 / 255.0, 64.0 / 255.0]); // col
                                                                          // Ambient_t (8B): col@0..2 only (no dir). Loaded as light_idx == num_dir (==1).
         let amb = vec![16u8, 32, 48, 0, 0, 0, 0, 0];
         let rda = RdramImage::new(&amb);
-        rsp.set_light(&rda, 1, 0);
+        rsp.set_light(&rda, 1, 0).unwrap();
         assert_eq!(rsp.ambient_col, [16.0 / 255.0, 32.0 / 255.0, 48.0 / 255.0]);
     }
 
@@ -1178,7 +1221,7 @@ mod phase3_state_tests {
         let mut rsp = Rsp::default();
         let mut scene = Scene::default();
 
-        rsp.force_matrix(&mem, 0);
+        rsp.force_matrix(&mem, 0).unwrap();
         rsp.finish(&mut scene);
 
         assert_eq!(scene.mvp_table.last(), Some(&forced));
@@ -1307,7 +1350,8 @@ mod draw_runs_tests {
                 !0,
                 crate::hle::consts::G_LIGHTING | crate::hle::consts::G_TEXTURE_GEN,
             );
-            rsp.set_vertex(&rd, 0, 3, 0, &Default::default(), &mut scene);
+            rsp.set_vertex(&rd, 0, 3, 0, &Default::default(), &mut scene)
+                .unwrap();
             rsp.draw_tri(
                 0,
                 1,
@@ -1320,7 +1364,8 @@ mod draw_runs_tests {
                 pair_target,
             );
             rsp.modify_geometry_mode(!crate::hle::consts::G_TEXTURE_GEN, 0);
-            rsp.set_vertex(&rd, 0, 3, 3, &Default::default(), &mut scene);
+            rsp.set_vertex(&rd, 0, 3, 3, &Default::default(), &mut scene)
+                .unwrap();
             rsp.draw_tri(
                 3,
                 4,
@@ -1380,7 +1425,8 @@ mod lights_table_tests {
         let bytes = vec![0u8; 16];
         let rdram = RdramImage::new(&bytes);
         let mut scene = Scene::default();
-        rsp.set_vertex(&rdram, 0, 1, 0, &Default::default(), &mut scene);
+        rsp.set_vertex(&rdram, 0, 1, 0, &Default::default(), &mut scene)
+            .unwrap();
         rsp.finish(&mut scene);
         assert_eq!(scene.light_count, vec![2]); // 1 dir + ambient
         assert_eq!(scene.light_index, vec![0]);
@@ -1421,7 +1467,8 @@ mod lights_table_tests {
         let mut rsp = Rsp::default();
         // Load the rotation as modelview (G_MTX_MODELVIEW=0x00 | G_MTX_LOAD=0x02 | G_MTX_NOPUSH=0x00).
         // `matrix` reads at from_segmented_masked(seg_addr) which masks to &0x00FFFFF8; addr=0 is fine.
-        rsp.matrix(&rdram, 0, crate::hle::consts::G_MTX_LOAD);
+        rsp.matrix(&rdram, 0, crate::hle::consts::G_MTX_LOAD)
+            .unwrap();
 
         // One directional light pointing +X (camera space).
         rsp.lights[0] = ([1.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
@@ -1432,7 +1479,8 @@ mod lights_table_tests {
         // set_vertex reads from rdram at the address masked from seg_addr=64.
         // rdram.from_segmented_masked(64) = 64 & 0x00FFFFF8 = 64. Vertex bytes are all zeros.
         let mut scene = Scene::default();
-        rsp.set_vertex(&rdram, 64, 1, 0, &Default::default(), &mut scene);
+        rsp.set_vertex(&rdram, 64, 1, 0, &Default::default(), &mut scene)
+            .unwrap();
         rsp.finish(&mut scene);
 
         // WORLD-FIXEDNESS INVARIANT (convention-independent): the light is world-fixed iff
@@ -1461,7 +1509,8 @@ mod lights_table_tests {
         let bytes = vec![0u8; 16];
         let rdram = RdramImage::new(&bytes);
         let mut scene = Scene::default();
-        rsp.set_vertex(&rdram, 0, 1, 0, &Default::default(), &mut scene);
+        rsp.set_vertex(&rdram, 0, 1, 0, &Default::default(), &mut scene)
+            .unwrap();
         assert_eq!(scene.light_count, vec![0]);
     }
 }
@@ -1497,13 +1546,13 @@ mod texcoord_table_tests {
         let rdram = RdramImage::new(&bytes);
         let mut scene = Scene::default();
 
-        rsp.set_vertex(&rdram, 0, 1, 0, &rdp, &mut scene);
-        rsp.set_vertex(&rdram, 0, 1, 1, &rdp, &mut scene);
+        rsp.set_vertex(&rdram, 0, 1, 0, &rdp, &mut scene).unwrap();
+        rsp.set_vertex(&rdram, 0, 1, 1, &rdp, &mut scene).unwrap();
         assert_eq!(scene.texcoord_index, vec![1, 1]); // entry 0 is default [0,0]
         assert_eq!(scene.raw_st, vec![[0.0, 0.0], [0.0, 0.0]]);
 
         rdp.tiles[0].width = 64; // tile-size change no longer affects the scale -> SAME entry
-        rsp.set_vertex(&rdram, 0, 1, 2, &rdp, &mut scene);
+        rsp.set_vertex(&rdram, 0, 1, 2, &rdp, &mut scene).unwrap();
         assert_eq!(scene.texcoord_index, vec![1, 1, 1]);
 
         rsp.finish(&mut scene);
@@ -1532,8 +1581,8 @@ mod lookat_tests {
         b[16 + 9] = 127;
         b[16 + 10] = 0; // T = +Y
         let rd = RdramImage::new(&b);
-        rsp.set_lookat(&rd, 0, 0);
-        rsp.set_lookat(&rd, 1, 16);
+        rsp.set_lookat(&rd, 0, 0).unwrap();
+        rsp.set_lookat(&rd, 1, 16).unwrap();
         assert_eq!(rsp.lookat_axes[0], [1.0, 0.0, 0.0]);
         assert_eq!(rsp.lookat_axes[1], [0.0, 1.0, 0.0]);
     }
@@ -1551,7 +1600,7 @@ mod lookat_tests {
         bytes.extend(vec![0u8; 16]);
         let rd = RdramImage::new(&bytes);
         let mut rsp = Rsp::default();
-        rsp.matrix(&rd, 0, crate::hle::consts::G_MTX_LOAD);
+        rsp.matrix(&rd, 0, crate::hle::consts::G_MTX_LOAD).unwrap();
         rsp.lookat_axes[0] = [1.0, 0.0, 0.0]; // S = eye +X
         rsp.lookat_version += 1;
         rsp.modify_geometry_mode(
@@ -1559,7 +1608,8 @@ mod lookat_tests {
             crate::hle::consts::G_LIGHTING | crate::hle::consts::G_TEXTURE_GEN,
         );
         let mut scene = Scene::default();
-        rsp.set_vertex(&rd, 64, 1, 0, &Default::default(), &mut scene);
+        rsp.set_vertex(&rd, 64, 1, 0, &Default::default(), &mut scene)
+            .unwrap();
         rsp.finish(&mut scene);
         assert_eq!(scene.texgen_mode, vec![1]); // spherical
                                                 // World-fixed invariant: forward-transform of axis_obj recovers the eye-space axis [1,0,0].
@@ -1581,7 +1631,8 @@ mod lookat_tests {
         let bytes = vec![0u8; 16];
         let rd = RdramImage::new(&bytes);
         let mut scene = Scene::default();
-        rsp.set_vertex(&rd, 0, 1, 0, &Default::default(), &mut scene);
+        rsp.set_vertex(&rd, 0, 1, 0, &Default::default(), &mut scene)
+            .unwrap();
         assert_eq!(scene.texgen_mode, vec![0]); // gated on G_LIGHTING
     }
 
@@ -1590,7 +1641,7 @@ mod lookat_tests {
         let mut rsp = Rsp::default();
         let bytes = vec![0u8; 64];
         let rd = RdramImage::new(&bytes);
-        rsp.matrix(&rd, 0, crate::hle::consts::G_MTX_LOAD);
+        rsp.matrix(&rd, 0, crate::hle::consts::G_MTX_LOAD).unwrap();
         rsp.lookat_axes[0] = [1.0, 0.0, 0.0];
         rsp.lookat_version += 1;
         rsp.modify_geometry_mode(
@@ -1600,7 +1651,8 @@ mod lookat_tests {
                 | crate::hle::consts::G_TEXTURE_GEN_LINEAR,
         );
         let mut scene = Scene::default();
-        rsp.set_vertex(&rd, 0, 1, 0, &Default::default(), &mut scene);
+        rsp.set_vertex(&rd, 0, 1, 0, &Default::default(), &mut scene)
+            .unwrap();
         assert_eq!(scene.texgen_mode, vec![2]);
     }
 }

@@ -21,11 +21,30 @@ pub enum ConvertInput {
     K5,
 }
 
+/// The input requested by the command that initiated a failed memory operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MemoryAccess {
+    Command,
+    Continuation,
+    Vertex,
+    Matrix,
+    Viewport,
+    Light,
+    LookAt,
+    Texture,
+    Tlut,
+}
+
 /// The kind of a diagnostic. `Copy` (no per-diag allocation). `#[non_exhaustive]`: the walk's
 /// internal set may grow. The variable-length unwired-selector list is a `Copy` bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum DiagKind {
+    MemoryRead {
+        access: MemoryAccess,
+        error: crate::hardware::MemoryError,
+    },
     UnknownOpcode(u8),
     UnsupportedCommand {
         opcode: u8,
@@ -114,7 +133,8 @@ impl DiagKind {
     pub fn severity(&self) -> Severity {
         match self {
             DiagKind::UnsupportedCommand { opcode: 0xd6, .. } => Severity::Warn,
-            DiagKind::UnknownOpcode(_)
+            DiagKind::MemoryRead { .. }
+            | DiagKind::UnknownOpcode(_)
             | DiagKind::UnsupportedCommand { .. }
             | DiagKind::UnsupportedMicrocodeLoad { .. }
             | DiagKind::UnsupportedTextureFormat { .. }
@@ -149,6 +169,11 @@ impl DiagKind {
 impl std::fmt::Display for DiagKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DiagKind::MemoryRead { access, error } => write!(
+                f,
+                "{access:?} memory read failed at {:#018x}, length {}: {:?}",
+                error.address, error.length, error.kind
+            ),
             DiagKind::UnknownOpcode(op) => write!(f, "unknown opcode 0x{op:02X}"),
             DiagKind::UnsupportedCommand { opcode, w0, w1 } => {
                 write!(

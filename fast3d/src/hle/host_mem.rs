@@ -88,7 +88,7 @@ impl<'a> HostMemory<'a> {
     /// # Safety
     ///
     /// Every command and reachable input span read during the walk must remain allocated,
-    /// readable, initialized, correctly laid out, and stable for `'a`. Borrowed texture bytes must
+    /// readable, initialized, correctly laid out, and stable until this reader and its borrowed slices are dropped. Borrowed texture bytes must
     /// not be mutated concurrently. CIMG and ZIMG numeric identities need not be readable unless a
     /// command uses them as input.
     pub(crate) unsafe fn new(ram: HostRam<'a>) -> Self {

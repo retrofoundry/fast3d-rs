@@ -28,7 +28,8 @@ fn set_vertex_with_identity_mvp_preserves_position_and_color() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
     rsp.finish(&mut scene);
     assert_eq!(scene.raw_pos.len(), 1);
     // Full-screen default viewport maps x,y through unchanged; z -> vp_trans.z = 511/1024.
@@ -61,7 +62,7 @@ fn viewport_maps_scene_into_its_subregion() {
     buf.extend_from_slice(&vtx_bytes(0, 1, 0, 255, 255, 255, 255));
     let rdram = RdramImage::new(&buf);
     let mut rsp = Rsp::default();
-    rsp.set_viewport(&rdram, 0);
+    rsp.set_viewport(&rdram, 0).unwrap();
     let mut scene = Scene::default();
     rsp.set_vertex(
         &rdram,
@@ -70,7 +71,8 @@ fn viewport_maps_scene_into_its_subregion() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
     rsp.finish(&mut scene);
     let p0 = common::ref_pos(&scene, 0);
     assert!(
@@ -100,7 +102,8 @@ fn draw_tri_maps_cache_slots_to_global_indices() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
     assert_eq!(scene.indices, vec![0, 1, 2]);
 }
@@ -118,7 +121,8 @@ fn phase4_modify_vertex_rgba_patches_bytes_and_clears_lighting_and_fog() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
     scene.light_index[0] = 7;
     scene.light_count[0] = 3;
     scene.fog[0] = 1;
@@ -144,7 +148,8 @@ fn phase4_modify_vertex_st_uses_final_texel_space_unit_scale() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
     scene.texgen_mode[0] = 2;
     scene.lookat_index[0] = 9;
 
@@ -172,7 +177,8 @@ fn phase4_modify_vertex_screen_fields_accumulate_flags_and_values() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
 
     rsp.modify_vertex(0, 0x18, 0x0080_0040, &mut scene).unwrap();
     rsp.modify_vertex(0, 0x1C, 0x0000_8000, &mut scene).unwrap();
@@ -197,7 +203,8 @@ fn phase4_modify_vertex_after_draw_copies_row_without_retroactive_edit() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
     let original_cn = scene.cn[0];
 
@@ -228,7 +235,8 @@ fn culled_triangle_does_not_make_later_modify_clone_vertex() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
     rsp.modify_geometry_mode(u32::MAX, crate::hle::consts::G_CULL_BOTH);
 
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
@@ -289,7 +297,8 @@ fn phase4_modify_vertex_screen_override_renders_requested_pixel_and_depth() {
         0,
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
 
     let packed_xy = |x_px: i16, y_px: i16| {
         let x = x_px.wrapping_mul(4) as u16 as u32;
@@ -361,10 +370,11 @@ fn perspective_mvp_emits_clip_space_with_varying_w_and_depth_in_unit_range() {
 
     let mut rsp = Rsp::default();
     // params: PROJECTION|LOAD = 0b110 = 0x06 ; MODELVIEW|LOAD = 0b010 = 0x02.
-    rsp.matrix(&rdram, 0, 0x06);
-    rsp.matrix(&rdram, 64, 0x02);
+    rsp.matrix(&rdram, 0, 0x06).unwrap();
+    rsp.matrix(&rdram, 64, 0x02).unwrap();
     let mut scene = Scene::default();
-    rsp.set_vertex(&rdram, 128, 2, 0, &Rdp::default(), &mut scene);
+    rsp.set_vertex(&rdram, 128, 2, 0, &Rdp::default(), &mut scene)
+        .unwrap();
     rsp.finish(&mut scene);
 
     let p_far = common::ref_pos(&scene, 0); // origin -> eye z = -5
@@ -424,11 +434,13 @@ fn soa_raw_inputs_and_per_vertex_state_indices_track_mid_dl_matrices() {
 
     let mut rsp = Rsp::default();
     let mut scene = Scene::default();
-    rsp.matrix(&rdram, 0, 0x06); // PROJECTION|LOAD
-    rsp.matrix(&rdram, 64, 0x02); // MODELVIEW|LOAD modelA
-    rsp.set_vertex(&rdram, 192, 1, 0, &Rdp::default(), &mut scene); // vertex 0 under mvp A
-    rsp.matrix(&rdram, 128, 0x02); // MODELVIEW|LOAD modelB
-    rsp.set_vertex(&rdram, 192, 1, 0, &Rdp::default(), &mut scene); // vertex 1 under mvp B
+    rsp.matrix(&rdram, 0, 0x06).unwrap(); // PROJECTION|LOAD
+    rsp.matrix(&rdram, 64, 0x02).unwrap(); // MODELVIEW|LOAD modelA
+    rsp.set_vertex(&rdram, 192, 1, 0, &Rdp::default(), &mut scene)
+        .unwrap(); // vertex 0 under mvp A
+    rsp.matrix(&rdram, 128, 0x02).unwrap(); // MODELVIEW|LOAD modelB
+    rsp.set_vertex(&rdram, 192, 1, 0, &Rdp::default(), &mut scene)
+        .unwrap(); // vertex 1 under mvp B
     rsp.finish(&mut scene); // flush state tables onto the scene
 
     assert_eq!(scene.raw_pos.len(), 2);
@@ -451,7 +463,8 @@ fn modifyvtx_invalid_attribute_does_not_copy_used_vertex() {
     let mem = RdramImage::new(&bytes);
     let mut rsp = Rsp::default();
     let mut scene = Scene::default();
-    rsp.set_vertex(&mem, 0, 1, 7, &crate::hle::rdp::Rdp::default(), &mut scene);
+    rsp.set_vertex(&mem, 0, 1, 7, &crate::hle::rdp::Rdp::default(), &mut scene)
+        .unwrap();
     rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], Default::default(), &mut scene, None);
     let before = scene.clone();
     assert_eq!(
@@ -475,11 +488,11 @@ fn modifyvtx_reload_resets_modifications() {
     let mut rsp = Rsp::default();
     let mut scene = Scene::default();
     let rdp = crate::hle::rdp::Rdp::default();
-    rsp.set_vertex(&mem, 0, 1, 7, &rdp, &mut scene);
+    rsp.set_vertex(&mem, 0, 1, 7, &rdp, &mut scene).unwrap();
     rsp.modify_vertex(7, 0x18, 0x0080_0100, &mut scene).unwrap();
     rsp.modify_vertex(7, 0x1c, 0x0000_8000, &mut scene).unwrap();
     rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], Default::default(), &mut scene, None);
-    rsp.set_vertex(&mem, 0, 1, 7, &rdp, &mut scene);
+    rsp.set_vertex(&mem, 0, 1, 7, &rdp, &mut scene).unwrap();
     rsp.modify_vertex(7, 0x10, 0x1122_3344, &mut scene).unwrap();
     rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], Default::default(), &mut scene, None);
     assert_eq!(scene.indices, [0, 0, 0, 1, 1, 1]);

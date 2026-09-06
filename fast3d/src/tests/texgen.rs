@@ -131,19 +131,19 @@ fn captured_state_scene() -> Scene {
     let mut rdp = crate::hle::rdp::Rdp::default();
     let mut scene = Scene::default();
     rsp.modify_geometry_mode(!0, G_LIGHTING | G_TEXTURE_GEN);
-    rsp.set_lookat(&mem, 0, 80);
-    rsp.set_lookat(&mem, 1, 96);
+    rsp.set_lookat(&mem, 0, 80).unwrap();
+    rsp.set_lookat(&mem, 1, 96).unwrap();
     rsp.set_texture(0, 0, true, 0x0f80, 0x07c0);
-    rsp.set_vertex(&mem, 64, 1, 0, &rdp, &mut scene);
-    rsp.matrix(&mem, 0, G_MTX_LOAD);
-    rsp.set_vertex(&mem, 64, 1, 1, &rdp, &mut scene);
-    rsp.set_lookat(&mem, 0, 96);
+    rsp.set_vertex(&mem, 64, 1, 0, &rdp, &mut scene).unwrap();
+    rsp.matrix(&mem, 0, G_MTX_LOAD).unwrap();
+    rsp.set_vertex(&mem, 64, 1, 1, &rdp, &mut scene).unwrap();
+    rsp.set_lookat(&mem, 0, 96).unwrap();
     rsp.set_texture(0, 0, true, 0x0f80, 0x0f80);
     rdp.tiles[0].width = 64;
     rdp.tiles[0].height = 32;
     rdp.tiles[0].uls = 12;
     rdp.tiles[0].ult = 20;
-    rsp.set_vertex(&mem, 64, 1, 2, &rdp, &mut scene);
+    rsp.set_vertex(&mem, 64, 1, 2, &rdp, &mut scene).unwrap();
     rsp.finish(&mut scene);
     scene
 }

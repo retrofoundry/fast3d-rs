@@ -14,7 +14,9 @@ use crate::render::SceneRenderer;
 use crate::scene::Scene;
 
 // ── New vNext public API (spec §3.6): structured diagnostics ──
-pub use diag::{DiagKind, DiagSink, Diagnostic, DlSummary, LogSink, NopSink, Severity};
+pub use diag::{
+    DiagKind, DiagSink, Diagnostic, DlSummary, LogSink, MemoryAccess, NopSink, Severity,
+};
 // ── New vNext public API (spec §3.6): microcode selector ──
 pub use microcode::{detect_microcode, Microcode};
 // ── Vertex/matrix data layout (`Fixed` N64 / `Float` GBI_FLOATS), orthogonal to the microcode ──
@@ -27,7 +29,10 @@ pub use hooks::{HookFrame, RenderHook};
 // ── New vNext public API (spec §3.2/§3.3): Hardware boundary + memory readers + VI registers ──
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 pub use hardware::HostRam;
-pub use hardware::{Hardware, Rdram, RdramImage, ViRegisters};
+pub use hardware::{
+    Command, Hardware, Matrix, MemoryError, MemoryErrorKind, RawVertex, Rdram, RdramImage,
+    ViRegisters,
+};
 
 /// How internal framebuffers are cleared across frames (spec §4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -403,15 +408,59 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
     ) -> DlSummary {
-        let mem = hw.rdram();
+        self.process_dl_memory(hw.rdram(), entry, ucode, diags)
+    }
+
+    /// Consume native display-list memory before returning; retained scenes own their inputs.
+    ///
+    /// # Safety
+    /// Every command and reachable input span must be allocated, readable, initialized, in
+    /// [`HostRam`]'s native layout, and stable until return. Borrowed texture bytes must not be
+    /// mutated concurrently. The descriptor's witness is only a lifetime aid. Numeric CIMG/ZIMG
+    /// identities need not be readable unless used as inputs. The dispatch cap only bounds
+    /// liveness; it cannot validate a native pointer.
+    ///
+    /// ```compile_fail,E0133
+    /// use fast3d::{HostRam, Microcode, NopSink, Renderer};
+    /// fn consume(renderer: &mut Renderer, entry: u64) {
+    ///     renderer.process_dl_host(HostRam::new(&[]), entry, Microcode::F3dex2, &mut NopSink);
+    /// }
+    /// ```
+    #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+    pub unsafe fn process_dl_host(
+        &mut self,
+        ram: HostRam<'_>,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+    ) -> DlSummary {
+        let mem = unsafe { crate::hle::host_mem::HostMemory::new(ram) };
+        self.process_dl_memory(mem, entry, ucode, diags)
+    }
+
+    pub(crate) fn process_dl_memory(
+        &mut self,
+        mem: impl Rdram,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+    ) -> DlSummary {
         // Contract #1/#3 (spec §3.2): record the backend kind BEFORE the reader is moved into the
         // walk — `present` gates VI-origin selection on this. RdramImage ⇒ true, HostRam ⇒ false.
-        self.last_backend_was_image = mem.is_rdram_image();
+        let is_image = mem.is_rdram_image();
 
         let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format);
 
         for &d in &result.diags {
             diags.emit(d);
+        }
+
+        if result
+            .diags
+            .iter()
+            .any(|diag| matches!(diag.kind, DiagKind::MemoryRead { .. }))
+        {
+            return result.summary(false);
         }
 
         // Rasterize into the persistent store. A draw-nothing walk returns None and leaves
@@ -424,6 +473,7 @@ impl Renderer {
         );
         if let Some(addr) = scanout {
             self.last_scanout_addr = Some(addr);
+            self.last_backend_was_image = is_image;
         }
         let summary = result.summary(scanout.is_some());
 
@@ -572,10 +622,19 @@ impl Renderer {
     /// golden capture). The caller owns acquisition + present. No-op if nothing has been rendered
     /// yet (leaves `target` as-is).
     pub fn present_to(&mut self, hw: &impl Hardware, target: &wgpu::TextureView) {
+        self.present_to_vi(hw.vi(), target);
+    }
+
+    /// Scan out the last rendered framebuffer without consulting guest memory or VI registers.
+    pub fn present_last_to(&mut self, target: &wgpu::TextureView) {
+        self.present_to_vi(None, target);
+    }
+
+    fn present_to_vi(&mut self, vi: Option<ViRegisters>, target: &wgpu::TextureView) {
         // Always create an encoder + run the render hook, even when nothing has been scanned out yet
         // (a UI overlay should still draw — RN). Scanout is recorded only when a source FB exists;
         // with no hook and no scanout the submit is an empty no-op, so `target` is left as-is.
-        let src = self.scanout_source(hw.vi());
+        let src = self.scanout_source(vi);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -591,7 +650,16 @@ impl Renderer {
     /// VI snapshot via `hw.vi()` itself (N64 fidelity). Auto-reconfigures the surface from the
     /// stored config on Outdated/Lost and returns `SurfaceLost` so the caller retries next frame.
     pub fn present(&mut self, hw: &impl Hardware) -> Result<(), PresentError> {
-        let src = self.scanout_source(hw.vi());
+        self.present_vi(hw.vi())
+    }
+
+    /// Present the last rendered framebuffer without consulting guest memory or VI registers.
+    pub fn present_last(&mut self) -> Result<(), PresentError> {
+        self.present_vi(None)
+    }
+
+    fn present_vi(&mut self, vi: Option<ViRegisters>) -> Result<(), PresentError> {
+        let src = self.scanout_source(vi);
 
         // RO: acquire in a scope so the `&self.target` borrow (surface/config) ENDS before
         // `record_and_submit` needs `&mut self` (it borrows `self.hook`). `frame` is owned.

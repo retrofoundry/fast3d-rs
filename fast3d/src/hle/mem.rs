@@ -85,7 +85,7 @@ pub trait Rdram {
         }
     }
 
-    /// Decodes one vertex from the authentic big-endian Fixed layout.
+    /// Decodes one Fixed vertex using this backend's scalar readers.
     ///
     /// The default layout is `s16 pos[3]@0`, `u16 flag@6`, `s16 st[2]@8`, and
     /// `u8 rgba[4]@12`, with a 16-byte stride. Float requires a backend override.
@@ -97,22 +97,7 @@ pub trait Rdram {
                 MemoryErrorKind::UnsupportedFormat,
             ));
         }
-        let bytes = self.read_bytes(address, 16)?;
-        if bytes.len() != 16 {
-            return Err(memory_error(address, 16, MemoryErrorKind::Unavailable));
-        }
-        Ok(RawVertex {
-            pos: [
-                i16::from_be_bytes([bytes[0], bytes[1]]) as f32,
-                i16::from_be_bytes([bytes[2], bytes[3]]) as f32,
-                i16::from_be_bytes([bytes[4], bytes[5]]) as f32,
-            ],
-            st: [
-                i16::from_be_bytes([bytes[8], bytes[9]]),
-                i16::from_be_bytes([bytes[10], bytes[11]]),
-            ],
-            rgba: [bytes[12], bytes[13], bytes[14], bytes[15]],
-        })
+        read_fixed_vertex(self, address)
     }
 
     /// Allows VI addresses to be interpreted as physical offsets in this memory image.
@@ -121,6 +106,32 @@ pub trait Rdram {
     fn is_rdram_image(&self) -> bool {
         false
     }
+}
+
+fn read_fixed_vertex(
+    memory: &(impl Rdram + ?Sized),
+    address: u64,
+) -> Result<RawVertex, MemoryError> {
+    address
+        .checked_add(16)
+        .ok_or_else(|| memory_error(address, 16, MemoryErrorKind::AddressOverflow))?;
+    Ok(RawVertex {
+        pos: [
+            memory.read_i16(address)? as f32,
+            memory.read_i16(address + 2)? as f32,
+            memory.read_i16(address + 4)? as f32,
+        ],
+        st: [
+            memory.read_i16(address + 8)?,
+            memory.read_i16(address + 10)?,
+        ],
+        rgba: [
+            memory.read_u8(address + 12)?,
+            memory.read_u8(address + 13)?,
+            memory.read_u8(address + 14)?,
+            memory.read_u8(address + 15)?,
+        ],
+    })
 }
 
 /// A decoded vertex. This is not a guest-memory layout and must not be used for casting.
@@ -298,6 +309,18 @@ impl Rdram for RdramImage<'_> {
                 MemoryErrorKind::UnsupportedFormat,
             )),
         }
+    }
+
+    fn read_vertex(&self, address: u64, format: GbiDataFormat) -> Result<RawVertex, MemoryError> {
+        if format != GbiDataFormat::Fixed {
+            return Err(memory_error(
+                address,
+                24,
+                MemoryErrorKind::UnsupportedFormat,
+            ));
+        }
+        self.range(address, 16)?;
+        read_fixed_vertex(self, address)
     }
 
     fn is_rdram_image(&self) -> bool {

@@ -173,7 +173,8 @@ fn framebuffer_modify_xy_uses_pair_extent() {
         0,
         &Rdp::default(),
         &mut scene,
-    );
+    )
+    .unwrap();
     for (slot, packed) in [0x0640_04B0, 0x0640_05A0, 0x0780_05A0, 0x0780_04B0]
         .into_iter()
         .enumerate()

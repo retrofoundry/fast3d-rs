@@ -106,15 +106,15 @@ fn segment_store_then_resolve_masked_and_unmasked() {
     let mut rd = RdramImage::new(&bytes);
     rd.set_segment(3, 0x40);
     // UNMASKED (SETTIMG path): segments[3] + 0 = 0x40.
-    assert_eq!(rd.from_segmented(0x0300_0000), 0x40);
+    assert_eq!(rd.from_segmented(0x0300_0000).unwrap(), 0x40);
     // segments[7] = 0x05; probe with offset 3: unmasked = 0x08, masked = 0x08 (8-aligned).
     rd.set_segment(7, 0x05);
-    assert_eq!(rd.from_segmented(0x0700_0003), 0x08);
+    assert_eq!(rd.from_segmented(0x0700_0003).unwrap(), 0x08);
     // Plan specified 0x00 (arithmetic error: 0x08 & 0x00FFFFF8 = 0x08, not 0x00).
-    assert_eq!(rd.from_segmented_masked(0x0700_0003), 0x08);
+    assert_eq!(rd.from_segmented_masked(0x0700_0003).unwrap(), 0x08);
     // Segment 0 zero-init is an identity map (preserves the existing sample).
-    assert_eq!(rd.from_segmented(0x0000_0040), 0x40);
-    assert_eq!(rd.from_segmented_masked(0x0000_0040), 0x40);
+    assert_eq!(rd.from_segmented(0x0000_0040).unwrap(), 0x40);
+    assert_eq!(rd.from_segmented_masked(0x0000_0040).unwrap(), 0x40);
 }
 
 #[test]

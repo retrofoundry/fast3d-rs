@@ -201,3 +201,61 @@ fn image_rejects_overflow_and_unsupported_float_layouts() {
     assert_eq!(memory.resolve(0x0200_0002), Ok(1));
     assert_eq!(memory.resolve_masked(0x0200_000a), Ok(0x0000_0008));
 }
+
+struct LittleEndian<'a>(RdramImage<'a>);
+
+impl Rdram for LittleEndian<'_> {
+    fn set_segment(&mut self, segment: u32, value: u64) {
+        self.0.set_segment(segment, value);
+    }
+    fn resolve(&self, address: u64) -> Result<u64, MemoryError> {
+        self.0.resolve(address)
+    }
+    fn resolve_masked(&self, address: u64) -> Result<u64, MemoryError> {
+        self.0.resolve_masked(address)
+    }
+    fn read_command(&self, address: u64) -> Result<Command, MemoryError> {
+        self.0.read_command(address)
+    }
+    fn command_stride(&self) -> u64 {
+        8
+    }
+    fn in_bounds(&self, address: u64, length: u64) -> bool {
+        self.0.in_bounds(address, length)
+    }
+    fn read_u8(&self, address: u64) -> Result<u8, MemoryError> {
+        self.0.read_u8(address)
+    }
+    fn read_i8(&self, address: u64) -> Result<i8, MemoryError> {
+        self.0.read_i8(address)
+    }
+    fn read_i16(&self, address: u64) -> Result<i16, MemoryError> {
+        Ok(self.read_u16(address)? as i16)
+    }
+    fn read_u16(&self, address: u64) -> Result<u16, MemoryError> {
+        let bytes = self.read_bytes(address, 2)?;
+        Ok(u16::from_le_bytes([bytes[0], bytes[1]]))
+    }
+    fn read_bytes(&self, address: u64, length: usize) -> Result<Cow<'_, [u8]>, MemoryError> {
+        self.0.read_bytes(address, length)
+    }
+    fn read_matrix(&self, address: u64, _: DataFormat) -> Result<Matrix, MemoryError> {
+        Err(error(address, 64, MemoryErrorKind::UnsupportedFormat))
+    }
+}
+
+#[test]
+fn default_vertex_uses_the_backends_decoded_scalars() {
+    let bytes = [
+        0x34, 0x12, 0xfe, 0xff, 0, 1, 0, 0, 0x20, 0, 0xc0, 0xff, 10, 20, 30, 255,
+    ];
+    let memory = LittleEndian(RdramImage::new(&bytes));
+    assert_eq!(
+        memory.read_vertex(0, DataFormat::Fixed).unwrap(),
+        RawVertex {
+            pos: [4660., -2., 256.],
+            st: [32, -64],
+            rgba: [10, 20, 30, 255],
+        }
+    );
+}

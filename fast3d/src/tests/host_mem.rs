@@ -269,7 +269,7 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
         )
     };
     let dl_ptr = dl.as_ptr() as u64;
-    let host = unsafe { HostRam::new(frame) };
+    let host = unsafe { crate::hle::host_mem::HostMemory::new(HostRam::new(frame)) };
     let res = interpret(
         host,
         dl_ptr,
@@ -383,15 +383,18 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
 fn hostptr_segment_resolve_vs_passthrough() {
     use crate::hle::Rdram;
     let backing = [0u8; 16];
-    let mut host = unsafe { HostRam::new(&backing) };
+    let mut host = unsafe { crate::hle::host_mem::HostMemory::new(HostRam::new(&backing)) };
     // Unset segment -> passthrough.
-    assert_eq!(host.resolve(0x0512_3456), 0x0512_3456);
+    assert_eq!(host.resolve(0x0512_3456).unwrap(), 0x0512_3456);
     // Set segment 5 to a base; a 0x05xxxxxx address rebases to base + (a & 0x00FFFFFF).
     host.set_segment(5, 0x1_0000_0000);
-    assert_eq!(host.resolve(0x0512_3456), 0x1_0000_0000 + 0x0012_3456);
+    assert_eq!(
+        host.resolve(0x0512_3456).unwrap(),
+        0x1_0000_0000 + 0x0012_3456
+    );
     // resolve_masked must NOT mask a pointer (no &0x00FFFFF8).
     assert_eq!(
-        host.resolve_masked(0x0512_3457),
+        host.resolve_masked(0x0512_3457).unwrap(),
         0x1_0000_0000 + 0x0012_3457
     );
 }
