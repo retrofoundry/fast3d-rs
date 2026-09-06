@@ -160,6 +160,89 @@ fn capture_missing_span_is_error() {
 }
 
 #[test]
+fn recording_preserves_borrowed_bytes() {
+    let hardware = Image(vec![11, 22, 33, 44]);
+    let recording = RecordingHardware::new(&hardware);
+    let memory = recording.rdram();
+    let bytes = memory.read_bytes(1, 2).unwrap();
+    assert!(matches!(bytes, std::borrow::Cow::Borrowed(&[22, 33])));
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn replay_huge_missing_range_does_not_require_proportional_allocation() {
+    let task = Task {
+        entry: 0,
+        microcode: Microcode::F3dex2,
+        data_format: DataFormat::Fixed,
+        order: 0,
+        source: SourceLayout {
+            memory: MemoryLayout::HOST64_LE,
+            segments: [0; 16],
+        },
+        spans: vec![MemorySpan {
+            address: 0,
+            bytes: vec![0],
+        }],
+    };
+    let replay = ReplayHardware::new(&task, None).unwrap();
+    assert_eq!(
+        replay.rdram().read_bytes(0, usize::MAX),
+        Err(MemoryError {
+            address: 0,
+            length: u64::MAX,
+            kind: MemoryErrorKind::Unavailable,
+        })
+    );
+    assert_eq!(
+        replay.check(),
+        Err(CaptureError::MissingSpan {
+            address: 0,
+            length: u64::MAX,
+        })
+    );
+}
+
+#[test]
+fn replay_vertex_missing_fields_report_the_full_typed_span() {
+    for (memory, format, available, stride) in [
+        (MemoryLayout::IMAGE, DataFormat::Fixed, 15, 16),
+        (MemoryLayout::HOST64_LE, DataFormat::Float, 21, 24),
+    ] {
+        let task = Task {
+            entry: 0,
+            microcode: Microcode::F3dex2,
+            data_format: format,
+            order: 0,
+            source: SourceLayout {
+                memory,
+                segments: [0; 16],
+            },
+            spans: vec![MemorySpan {
+                address: 0,
+                bytes: vec![0; available],
+            }],
+        };
+        let replay = ReplayHardware::new(&task, None).unwrap();
+        assert_eq!(
+            replay.rdram().read_vertex(0, format),
+            Err(MemoryError {
+                address: 0,
+                length: stride,
+                kind: MemoryErrorKind::Unavailable,
+            })
+        );
+        assert_eq!(
+            replay.check(),
+            Err(CaptureError::MissingSpan {
+                address: 0,
+                length: stride,
+            })
+        );
+    }
+}
+
+#[test]
 fn capture_vertex_requires_the_complete_source_stride() {
     let hw = Image(vec![0; 15]);
     let recorder = RecordingHardware::new(&hw);

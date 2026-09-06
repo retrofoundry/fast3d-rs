@@ -228,7 +228,13 @@ impl ReadLog {
                     .is_some_and(|span_end| span_end >= address)
             })
             .map_or(address, |(&a, _)| a);
-        let keys: Vec<u64> = self.spans.range(start..=end).map(|(&a, _)| a).collect();
+        let key_count = self.spans.range(start..=end).count();
+        let mut keys = Vec::new();
+        if keys.try_reserve_exact(key_count).is_err() {
+            self.fail(invalid("snapshot allocation failed"));
+            return;
+        }
+        keys.extend(self.spans.range(start..=end).map(|(&a, _)| a));
         for &a in &keys {
             let old = &self.spans[&a];
             let Some(old_end) = u64::try_from(old.len())
@@ -262,7 +268,22 @@ impl ReadLog {
             self.fail(invalid("snapshot too large"));
             return;
         };
-        let mut merged = self.spans.remove(&start).unwrap_or_default();
+        let existing_len = self.spans.get(&start).map_or(0, Vec::len);
+        let Some(growth) = len.checked_sub(existing_len) else {
+            self.fail(invalid("snapshot length underflow"));
+            return;
+        };
+        let mut empty = Vec::new();
+        let reserve_failed = if let Some(existing) = self.spans.get_mut(&start) {
+            existing.try_reserve_exact(growth).is_err()
+        } else {
+            empty.try_reserve_exact(len).is_err()
+        };
+        if reserve_failed {
+            self.fail(invalid("snapshot allocation failed"));
+            return;
+        }
+        let mut merged = self.spans.remove(&start).unwrap_or(empty);
         merged.resize(len, 0);
         for a in keys.into_iter().filter(|&a| a != start) {
             let old = self.spans.remove(&a).unwrap();
@@ -492,7 +513,7 @@ impl<R: Rdram> DecodeMemory for RecordingRdram<'_, R> {
             ));
         }
         let bytes = match self.inner.read_bytes(address, length) {
-            Ok(bytes) => bytes.into_owned(),
+            Ok(bytes) => bytes,
             Err(error) => return self.source(Err(error)),
         };
         if bytes.len() != length {
@@ -514,7 +535,7 @@ impl<R: Rdram> DecodeMemory for RecordingRdram<'_, R> {
                 MemoryErrorKind::Unavailable,
             ));
         }
-        Ok(Cow::Owned(bytes))
+        Ok(bytes)
     }
 }
 
@@ -645,7 +666,7 @@ impl ReplayRdram<'_> {
         if length == 0 {
             return Ok(Some(Cow::Borrowed(&[])));
         }
-        address
+        let requested_end = address
             .checked_add(length)
             .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
         let i = self
@@ -656,20 +677,71 @@ impl ReplayRdram<'_> {
         let Some(i) = i else {
             return Ok(None);
         };
+
+        let mut cursor = address;
+        for span in &self.task.spans[i..] {
+            if span.address > cursor {
+                return Ok(None);
+            }
+            let span_len = u64::try_from(span.bytes.len())
+                .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+            let span_end = span
+                .address
+                .checked_add(span_len)
+                .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+            if span_end <= cursor {
+                continue;
+            }
+            cursor = span_end.min(requested_end);
+            if cursor == requested_end {
+                break;
+            }
+        }
+        if cursor != requested_end {
+            return Ok(None);
+        }
+
+        let first = &self.task.spans[i];
+        let first_offset = address
+            .checked_sub(first.address)
+            .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+        let first_len = u64::try_from(first.bytes.len())
+            .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+        let first_available = first_len
+            .checked_sub(first_offset)
+            .ok_or_else(|| memory_error(address, length, MemoryErrorKind::Unavailable))?;
+        if first_available >= length {
+            let offset = usize::try_from(first_offset)
+                .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+            let count = usize::try_from(length)
+                .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+            let end = offset
+                .checked_add(count)
+                .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+            let bytes = first
+                .bytes
+                .get(offset..end)
+                .ok_or_else(|| memory_error(address, length, MemoryErrorKind::Unavailable))?;
+            return Ok(Some(Cow::Borrowed(bytes)));
+        }
+
         let output_len = usize::try_from(length)
             .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
         let mut output = Vec::new();
-        let mut cursor = address;
+        output
+            .try_reserve_exact(output_len)
+            .map_err(|_| memory_error(address, length, MemoryErrorKind::Unavailable))?;
+        cursor = address;
         let mut remaining = length;
         for span in &self.task.spans[i..] {
-            let Some(offset) = cursor.checked_sub(span.address) else {
-                return Ok(None);
-            };
+            let offset = cursor
+                .checked_sub(span.address)
+                .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
             let span_len = u64::try_from(span.bytes.len())
                 .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
-            let Some(available) = span_len.checked_sub(offset) else {
-                return Ok(None);
-            };
+            let available = span_len
+                .checked_sub(offset)
+                .ok_or_else(|| memory_error(address, length, MemoryErrorKind::Unavailable))?;
             let count = remaining.min(available);
             let offset = usize::try_from(offset)
                 .map_err(|_| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
@@ -683,16 +755,8 @@ impl ReplayRdram<'_> {
                 ));
             };
             let Some(bytes) = span.bytes.get(offset..end) else {
-                return Ok(None);
+                return Err(memory_error(address, length, MemoryErrorKind::Unavailable));
             };
-            if output.is_empty() && count == remaining {
-                return Ok(Some(Cow::Borrowed(bytes)));
-            }
-            if output.is_empty() {
-                output
-                    .try_reserve_exact(output_len)
-                    .map_err(|_| memory_error(address, length, MemoryErrorKind::Unavailable))?;
-            }
             output.extend_from_slice(bytes);
             cursor = cursor
                 .checked_add(count)
@@ -702,7 +766,7 @@ impl ReplayRdram<'_> {
                 return Ok(Some(Cow::Owned(output)));
             }
         }
-        Ok(None)
+        Err(memory_error(address, length, MemoryErrorKind::Unavailable))
     }
 }
 
@@ -830,7 +894,20 @@ impl Rdram for ReplayRdram<'_> {
             DataFormat::Fixed => 6,
             DataFormat::Float => 12,
         };
-        if self.find(address, position_length)?.is_none() {
+        let rest_offset = match format {
+            DataFormat::Fixed => 8,
+            DataFormat::Float => 14,
+        };
+        let rest_address = address
+            .checked_add(rest_offset)
+            .ok_or_else(|| memory_error(address, stride, MemoryErrorKind::AddressOverflow))?;
+        let position = self
+            .find(address, position_length)
+            .map_err(|error| memory_error(address, stride, error.kind))?;
+        let remainder = self
+            .find(rest_address, 8)
+            .map_err(|error| memory_error(address, stride, error.kind))?;
+        if position.is_none() || remainder.is_none() {
             self.fail(CaptureError::MissingSpan {
                 address,
                 length: stride,
