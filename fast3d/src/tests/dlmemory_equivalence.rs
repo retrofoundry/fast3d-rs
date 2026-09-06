@@ -2,9 +2,9 @@
 //! incompatible ways, must produce the IDENTICAL `Scene` through both backends.
 //!
 //! - `RdramImage` backend: big-endian fixed-point data at RDRAM offsets, 8-byte command stride.
-//! - `HostRam` backend (`GbiDataFormat::Fixed`): native-endian `#[repr(C)]` structs at host
+//! - `HostMemory` backend (`GbiDataFormat::Fixed`): native-endian `#[repr(C)]` structs at host
 //!   pointers, 16-byte stride — the same authentic layout, little-endian. This also exercises the
-//!   fixed-point `HostRam::read_matrix`. (The float `HostRam` path is covered by `host_mem.rs`.)
+//!   fixed-point `HostMemory::read_matrix`. (The float `HostMemory` path is covered by `host_mem.rs`.)
 //!
 //! Both DLs open with a `gsSPSegment(1, base)` so both backends exercise segment-resolution
 //! arithmetic.  Every resolve_masked target resolves to an 8-byte-aligned address so
@@ -13,7 +13,7 @@
 use crate::hle::{interpret, interpret_rdram, HostRam};
 
 /// Encode a row-major float matrix to native-endian s15.16 split fixed-point (16 `i32` words:
-/// `[0..8]` integer halves, `[8..16]` fraction halves) — the inverse of `HostRam`'s fixed
+/// `[0..8]` integer halves, `[8..16]` fraction halves) — the inverse of `HostMemory`'s fixed
 /// `read_matrix`, i.e. a native-endian `guMtxF2L`.
 fn mtx_to_native_fixed(m: [[f32; 4]; 4]) -> [u8; 64] {
     let mut words = [0u32; 16];
@@ -484,7 +484,7 @@ fn build_host_dl() -> (Vec<[usize; 2]>, u64, Vec<u8>) {
     // DETERMINISTICALLY, and this actually exercises host-side segment resolution (the point of the
     // `gsSPSegment(1, seg1_base)` above).
     //
-    // Passing the raw `seg1_base + off` directly here was UNSOUND: `HostRam::resolve` keys the segment
+    // Passing the raw `seg1_base + off` directly here was UNSOUND: `HostMemory::resolve` keys the segment
     // index on bits 24-27 of the address, so whenever `seg1_base`'s segment nibble happened to equal 1
     // (segment 1 being the one we set), it wrongly re-resolved the direct pointer through segment 1 and
     // corrupted every data read — an address-dependent (~1/6 of heap placements) intermittent failure.

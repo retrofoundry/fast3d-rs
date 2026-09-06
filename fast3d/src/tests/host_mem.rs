@@ -1,4 +1,4 @@
-//! Synthetic in-process proof of the `HostRam` backend (native-endian host pointers).
+//! Synthetic in-process proof of the `HostMemory` backend (native-endian host pointers).
 //!
 //! We build a REAL F3DEX2 display list in the test process: a `Vec<[usize; 2]>` of `Gfx` words
 //! whose stride is 16 bytes (`command_stride()`), where each command is `[w0, w1]`. For address
@@ -6,9 +6,9 @@
 //! carries the packed bits. The referenced structs are `#[repr(C)]` with byte offsets that exactly
 //! match what `rsp.rs` reads (`set_vertex`/`set_light`/`set_viewport`/`read_matrix`). Host data is
 //! NATIVE-endian, so a `repr(C)` struct's fields land where `read_unaligned` expects them — the
-//! whole reason `HostRam` exists (no byteswap, unlike `RdramImage`).
+//! whole reason `HostMemory` exists (no byteswap, unlike `RdramImage`).
 //!
-//! Every backing `Vec`/struct is held in scope: it is the `'a` frame witness for `HostRam::new`.
+//! Backing allocations remain alive and stable until interpretation returns.
 //! The asserts are discriminating: a transposed matrix, a swapped vp scale/trans, or a wrong
 //! field offset (col vs dir) all make a specific assert fail.
 use crate::hle::HostRam;
@@ -17,7 +17,7 @@ use crate::hle::HostRam;
 // The Float layout (float matrices + 24-byte float vertices) is driven by the `DataFormat::Float`
 // arg passed to `interpret` below, not a backend default — the sm64 PC-port path.
 
-/// `GBI_FLOATS` colored vertex (24 B). Offsets MUST match the `HostRam` float `read_vertex`:
+/// `GBI_FLOATS` colored vertex (24 B). Offsets MUST match the `HostMemory` float `read_vertex`:
 /// ob[3] f32 @+0/+4/+8, flag@+12, s@+14, t@+16, r@+18 g@+19 b@+20 a@+21.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -66,7 +66,7 @@ fn cmd_addr(w0: u32, ptr: u64) -> [usize; 2] {
     [w0 as usize, ptr as usize]
 }
 
-/// Full native-DL walk through the default (`GBI_FLOATS`) `HostRam`: float matrices + float
+/// Full native-DL walk through the default (`GBI_FLOATS`) `HostMemory`: float matrices + float
 /// vertices, the sm64 PC-port path.
 #[test]
 fn hostptr_walks_native_dl_and_decodes_scene() {

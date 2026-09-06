@@ -325,9 +325,6 @@ pub fn interpret<M: Rdram>(
             rec.have_seen_cimg = true;
         }
 
-        // --- 2D inline rect decode + pair recording (Task 3). Multi-word commands a `Handler`
-        // cannot express (it cannot advance `pc`); decoded here from RAW locals, gated on the
-        // opcode. Each continuation read is bounds-checked (mirrors the loop-top guard). ---
         if op == crate::hle::consts::G_TEXRECT || op == crate::hle::consts::G_TEXRECTFLIP {
             let pc1 = walk_try!(Continuation, checked_span(pc, stride));
             let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
@@ -451,7 +448,6 @@ pub fn interpret<M: Rdram>(
 
             let mut next_pc = pc;
             for _ in 0..words {
-                // Propagate outside the inner loop so failure aborts the task.
                 next_pc = match checked_span(next_pc, stride) {
                     Ok(next) => next,
                     Err(error) => {

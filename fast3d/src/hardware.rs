@@ -26,11 +26,10 @@ pub struct ViRegisters {
 /// and `present` are generic methods (`&impl Hardware`), never `&dyn Hardware`.
 pub trait Hardware {
     /// The memory reader for the CURRENT walk. Called EXCLUSIVELY inside `process_dl`, on the
-    /// calling thread; fully consumed before returning. A fresh reader each call (zeroed segments).
+    /// calling thread; fully consumed before returning. Each walk owns its reader and segment table.
     fn rdram(&self) -> impl Rdram + '_;
 
-    /// Live VI registers. `None` = no live VI (web; and every `HostRam` consumer per the
-    /// host-pointer invariant), so `present` falls back to the last-rendered framebuffer.
+    /// Live VI registers. With `None`, presentation falls back to the last rendered framebuffer.
     fn vi(&self) -> Option<ViRegisters> {
         None
     }

@@ -141,7 +141,7 @@ fn image_decodes_complete_public_values() {
 }
 
 #[test]
-fn image_reads_report_the_complete_requested_span() {
+fn image_read_exact_or_error() {
     let bytes = [0u8; 16];
     let memory = RdramImage::new(&bytes);
 

@@ -40,7 +40,8 @@ fn bad_vertex_input_returns_error_without_partial_vertices() {
 #[test]
 fn image_operand_bounds_all_read_kinds() {
     use crate::{DiagKind, Diagnostic, MemoryAccess as A, MemoryError, MemoryErrorKind as K};
-    let cases: &[(&[(u32, u32)], A, u64, u64, u64, u32)] = &[
+    type OperandFailure = (&'static [(u32, u32)], A, u64, u64, u64, u32);
+    let cases: &[OperandFailure] = &[
         (&[], A::Command, 0, 0, 8, 1),
         (&[(0xe400_0000, 0)], A::Continuation, 0, 8, 8, 1),
         (
@@ -327,7 +328,7 @@ fn host_present_never_reads_guest() {
         [0xe300_0a01u64, 0x0030_0000],
         [0xff10_003f, 0x1234_5678_0000_1000],
         [0xed00_0000, 0x0010_0100],
-        [0xf700_0000, 0x1234_5678_f801_f801],
+        [0xfeed_beef_f700_0000, 0x1234_5678_f801_f801],
         [0xf60f_c0fc, 0],
         [0xdf00_0000, 0],
     ];
@@ -346,4 +347,225 @@ fn host_present_never_reads_guest() {
     let pixels = scanout(&mut renderer);
     assert!(pixels.as_chunks::<4>().0.contains(&[255, 0, 0, 255]));
     renderer.present_last().unwrap();
+}
+
+#[test]
+fn compound_reads_leave_prior_rsp_state_intact() {
+    use crate::hle::{
+        gbi::f3dex2::F3DEX2_CONSTS,
+        rdp::Rdp,
+        rsp::{Rsp, Scene},
+    };
+    let mut rsp = Rsp::new(F3DEX2_CONSTS, GbiDataFormat::Fixed);
+    let mut scene = Scene::default();
+    let rdp = Rdp::default();
+    let mut vertex = [0; 16];
+    vertex[..2].copy_from_slice(&7i16.to_be_bytes());
+    rsp.set_vertex(&RdramImage::new(&vertex), 0, 1, 0, &rdp, &mut scene)
+        .unwrap();
+    let before = scene.clone();
+    vertex[..2].copy_from_slice(&9i16.to_be_bytes());
+    assert!(rsp
+        .set_vertex(&RdramImage::new(&vertex), 0, 2, 0, &rdp, &mut scene)
+        .is_err());
+    assert_eq!(scene, before);
+
+    let before = (rsp.lights, rsp.ambient_col, rsp.light_version);
+    assert!(rsp.set_light(&RdramImage::new(&[255, 64]), 0, 0).is_err());
+    assert_eq!((rsp.lights, rsp.ambient_col, rsp.light_version), before);
+    rsp.set_num_lights_direct(1);
+    let before = (rsp.lights, rsp.ambient_col, rsp.light_version);
+    assert!(rsp.set_light(&RdramImage::new(&[255; 10]), 0, 0).is_err());
+    assert_eq!((rsp.lights, rsp.ambient_col, rsp.light_version), before);
+    let before = (rsp.lookat_axes, rsp.lookat_version);
+    assert!(rsp.set_lookat(&RdramImage::new(&[127; 10]), 0, 0).is_err());
+    assert_eq!((rsp.lookat_axes, rsp.lookat_version), before);
+
+    rsp.finish(&mut scene);
+    let before = scene.clone();
+    assert!(rsp.set_viewport(&RdramImage::new(&[0; 15]), 0).is_err());
+    assert!(rsp.matrix(&RdramImage::new(&[0; 63]), 0, 3).is_err());
+    assert!(rsp.force_matrix(&RdramImage::new(&[0; 63]), 0).is_err());
+    rsp.finish(&mut scene);
+    assert_eq!(scene, before);
+}
+
+#[test]
+fn failed_texture_and_palette_loads_preserve_previous_bytes() {
+    for load in [0xf300_0000, 0xf400_0000, 0xf000_0000] {
+        let word = if load == 0xf000_0000 {
+            0x0700_c000
+        } else {
+            0x0700_0000
+        };
+        let prefix = [(0xfd10_0000, 0x80), (load, word)];
+        let mut bytes = image(&[prefix[0], prefix[1], (0xdf00_0000, 0)]);
+        bytes.resize(0x80, 0);
+        bytes.extend([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0]);
+        let prior = interpret(
+            RdramImage::new(&bytes),
+            0,
+            GbiUcode::F3dex2,
+            GbiDataFormat::Fixed,
+        );
+        assert!(prior.diags.is_empty(), "{load:x}: {:?}", prior.diags);
+        let fault = image(&[(0xfd10_0000, 0x84), (load, word)]);
+        bytes[16..16 + fault.len()].copy_from_slice(&fault);
+        let failed = interpret(
+            RdramImage::new(&bytes),
+            0,
+            GbiUcode::F3dex2,
+            GbiDataFormat::Fixed,
+        );
+        assert_eq!(failed.summary(false).errors, 1);
+        assert_eq!(failed.rdp.tmem, prior.rdp.tmem);
+        assert_eq!(failed.rdp.tmem_bank, prior.rdp.tmem_bank);
+    }
+}
+
+struct AddressMemory {
+    base: u64,
+    commands: Vec<crate::Command>,
+    command_stride: u64,
+    vertex_stride: u64,
+}
+
+impl crate::Rdram for AddressMemory {
+    fn set_segment(&mut self, _: u32, _: u64) {}
+    fn resolve(&self, address: u64) -> Result<u64, crate::MemoryError> {
+        Ok(address)
+    }
+    fn resolve_masked(&self, address: u64) -> Result<u64, crate::MemoryError> {
+        Ok(address)
+    }
+    fn read_command(&self, address: u64) -> Result<crate::Command, crate::MemoryError> {
+        let index = address
+            .checked_sub(self.base)
+            .map(|offset| offset / self.command_stride)
+            .and_then(|index| usize::try_from(index).ok());
+        index
+            .and_then(|index| self.commands.get(index))
+            .copied()
+            .ok_or(crate::MemoryError {
+                address,
+                length: self.command_stride,
+                kind: crate::MemoryErrorKind::Unavailable,
+            })
+    }
+    fn command_stride(&self) -> u64 {
+        self.command_stride
+    }
+    fn in_bounds(&self, _: u64, _: u64) -> bool {
+        true
+    }
+    fn read_u8(&self, address: u64) -> Result<u8, crate::MemoryError> {
+        RdramImage::new(&[]).read_u8(address)
+    }
+    fn read_i8(&self, address: u64) -> Result<i8, crate::MemoryError> {
+        RdramImage::new(&[]).read_i8(address)
+    }
+    fn read_i16(&self, address: u64) -> Result<i16, crate::MemoryError> {
+        RdramImage::new(&[]).read_i16(address)
+    }
+    fn read_u16(&self, address: u64) -> Result<u16, crate::MemoryError> {
+        RdramImage::new(&[]).read_u16(address)
+    }
+    fn read_bytes(
+        &self,
+        address: u64,
+        length: usize,
+    ) -> Result<std::borrow::Cow<'_, [u8]>, crate::MemoryError> {
+        Err(crate::MemoryError {
+            address,
+            length: length as u64,
+            kind: crate::MemoryErrorKind::Unavailable,
+        })
+    }
+    fn read_matrix(
+        &self,
+        address: u64,
+        _: GbiDataFormat,
+    ) -> Result<crate::Matrix, crate::MemoryError> {
+        Err(crate::MemoryError {
+            address,
+            length: 64,
+            kind: crate::MemoryErrorKind::Unavailable,
+        })
+    }
+    fn vertex_stride(&self, _: GbiDataFormat) -> Result<u64, crate::MemoryError> {
+        Ok(self.vertex_stride)
+    }
+}
+
+fn address_memory(commands: &[(u32, u64)]) -> AddressMemory {
+    AddressMemory {
+        base: 0,
+        command_stride: 8,
+        vertex_stride: 16,
+        commands: commands
+            .iter()
+            .map(|&(w0, w1_addr)| crate::Command {
+                w0,
+                w1: w1_addr as u32,
+                w1_addr,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn walk_checks_pc_vertex_and_texture_arithmetic() {
+    use crate::{MemoryAccess as A, MemoryErrorKind as K};
+    let mut pc = address_memory(&[(0, 0)]);
+    pc.base = 8;
+    pc.command_stride = u64::MAX;
+    let mut vertices = address_memory(&[(0x0100_2004, 16)]);
+    vertices.vertex_stride = u64::MAX;
+    let tile = address_memory(&[(0xfd10_0000, u64::MAX - 4), (0xf401_0000, 0)]);
+    for (memory, access, at, address, length) in [
+        (pc, A::Command, 8, 8, u64::MAX),
+        (vertices, A::Vertex, 0, 16, u64::MAX),
+        (tile, A::Texture, 8, u64::MAX - 4, 8),
+    ] {
+        let entry = memory.base;
+        let result = interpret(memory, entry, GbiUcode::F3dex2, GbiDataFormat::Fixed);
+        assert_eq!(
+            result.diags,
+            [crate::Diagnostic {
+                at,
+                kind: crate::DiagKind::MemoryRead {
+                    access,
+                    error: crate::MemoryError {
+                        address,
+                        length,
+                        kind: K::AddressOverflow
+                    },
+                }
+            }]
+        );
+        assert!(result.scene.indices.is_empty());
+        assert!(result.scene.framebuffer_pairs.is_empty());
+    }
+}
+
+#[test]
+fn advisory_bounds_do_not_suppress_read_failures() {
+    let memory = address_memory(&[(0, 0)]);
+    assert!(crate::Rdram::in_bounds(&memory, 8, 8));
+    let result = interpret(memory, 0, GbiUcode::F3dex2, GbiDataFormat::Fixed);
+    assert_eq!(result.commands, 2);
+    assert_eq!(
+        result.diags,
+        [crate::Diagnostic {
+            at: 8,
+            kind: crate::DiagKind::MemoryRead {
+                access: crate::MemoryAccess::Command,
+                error: crate::MemoryError {
+                    address: 8,
+                    length: 8,
+                    kind: crate::MemoryErrorKind::Unavailable
+                },
+            }
+        }]
+    );
 }

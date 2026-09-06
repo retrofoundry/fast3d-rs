@@ -445,8 +445,6 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
     ) -> DlSummary {
-        // Contract #1/#3 (spec §3.2): record the backend kind BEFORE the reader is moved into the
-        // walk — `present` gates VI-origin selection on this. RdramImage ⇒ true, HostRam ⇒ false.
         let is_image = mem.is_rdram_image();
 
         let result = crate::hle::interpret(mem, entry, ucode.into(), self.data_format);

@@ -370,8 +370,6 @@ impl Rsp {
                 self.last_lookat_key = Some(key);
             }
         }
-        // Vertex stride + field layout are backend-decided (fixed-point vs GBI_FLOATS) — see
-        // `Rdram::read_vertex`. Decoding a float-GBI vertex as s16 misreads every position.
         let fog_index = if (self.geom & self.consts.g_fog_geom) != 0 {
             let factors = [rdp.fog_mul, rdp.fog_offset];
             let index = scene.fog_table.iter().position(|&entry| entry == factors);

@@ -45,7 +45,8 @@ fn memory_error(address: u64, length: u64, kind: MemoryErrorKind) -> MemoryError
 ///
 /// Reads return decoded values rather than guest-layout structs. Implementations must return an
 /// error unless the complete requested value is available. `in_bounds` is advisory: a successful
-/// query does not make a later read infallible.
+/// query does not make a later read infallible. The interpreter does not catch panics from a
+/// consumer implementation.
 pub trait Rdram {
     /// Describes the byte and address layout used when recording memory reads.
     #[cfg(feature = "capture")]
