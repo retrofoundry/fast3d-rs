@@ -32,12 +32,12 @@ resolved it; no toolchain installation or repository configuration change was ne
 | `cargo clippy --workspace --all-targets -- -D warnings` | Passed, default features. |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | Passed. |
 | `cargo test --workspace --all-features --no-fail-fast` | Exit 101: 428 passed, 113 failed for unavailable GPU, 5 ignored. Names below. |
-| `cargo build -p fast3d --target wasm32-unknown-unknown --features 'asm capture'` | Passed. |
+| `cargo build -p fast3d --target wasm32-unknown-unknown --features 'capture'` | Passed. |
 | `cargo test -p fast3d --features capture --lib hle::capture::tests` | 14 passed. |
 | `cargo test -p fast3d --features capture --examples` | 6 passed: 4 exporter tests and 2 comparison tests. |
 | Mario state and fog CPU tests | 6 passed; original command-derived states preserved. |
 | Wrapper identity matrix regression | Passed after adding the missing projection load; failed before it. |
-| `FAST3D_WRITE_FIXTURES=/tmp/fast3d-oracle cargo test -p fast3d --features 'asm capture' --lib write_rt64_ -- --ignored` | 2 passed; both captures written and decoded back. |
+| `FAST3D_WRITE_FIXTURES=/tmp/fast3d-oracle cargo test -p fast3d --features 'capture' --lib write_rt64_ -- --ignored` | 2 passed; both captures written and decoded back. |
 | Export both generated fixtures | Passed. Independent JSON/size check: each one F3D task, 8 MiB image, RGBA16 320x240 at `0x00100000`. |
 | Export `fast3d/tests/fixtures/host64-fill.f3dcap` | Correctly rejected with explicit HOST64/IMAGE error, exit 1. |
 | Compare hand-checked 3x2 RGBA8 inputs | Max 255, RGBA maxima `[9,10,255,11]`, 3 differing pixels, bounds `(0,0)..(2,1)`. |

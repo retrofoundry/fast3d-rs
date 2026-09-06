@@ -245,7 +245,7 @@ impl<'a> Rdram for RdramImage<'a> {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod mem_tests {
     use super::*;
 

@@ -1,15 +1,9 @@
-//! In-crate integration tests (relocated from `tests/` in P5.4a so they can reach the `pub(crate)`
-//! `hle`/`render`/`scene` internals demoted in P5.4b). The ENTIRE tree is asm-only and is gated once
-//! at the `lib.rs` root: `#[cfg(all(test, feature = "asm"))] mod tests;` (step 5). So no `mod` line
-//! below needs a `feature = "asm"` cfg. The 4 pure-asm suites stay external in `tests/`.
-
 #[allow(dead_code)]
 pub(crate) mod common;
 
 mod alpha_dither;
 #[cfg(feature = "capture")]
 mod alpha_dither_fixture;
-mod asm_tests;
 #[cfg(feature = "capture")]
 mod browser_fixtures;
 #[cfg(feature = "capture")]
@@ -26,6 +20,7 @@ mod filter;
 mod filter_fixtures;
 mod fog;
 mod framebuffer;
+mod gbi_roundtrip;
 mod goldens;
 mod hud_power_meter;
 mod interp_tests;
@@ -51,8 +46,9 @@ mod texrect;
 mod tile_sampling;
 
 // `HostRam`-dependent → 64-bit non-wasm only (preserves host_mem.rs:14 / dlmemory_equivalence.rs:13).
-// `feature = "asm"` already comes from the root tree gate; only the EXTRA conditions survive here.
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 mod dlmemory_equivalence;
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 mod host_mem;
+
+pub(crate) mod fixtures;

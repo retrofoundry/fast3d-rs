@@ -1,10 +1,3 @@
-//! `fast3d` — N64 HLE + wgpu renderer. The renderer is the default product. The
-//! assembler is available through the opt-in `asm` cargo feature. Its supported items are
-//! re-exported at `fast3d::asm::*`. The GBI vocabulary, command encoders and libultra `gu`
-//! math live in the `n64-gbi` leaf crate; depend on it directly rather than through fast3d.
-
-#[cfg(feature = "asm")]
-pub mod asm;
 #[cfg(feature = "debug-ui")]
 pub mod debug;
 #[cfg(feature = "capture")]
@@ -745,7 +738,7 @@ mod source_select_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod begin_frame_tests {
     use super::*;
 
@@ -771,13 +764,10 @@ mod begin_frame_tests {
 
     #[test]
     fn begin_frame_clears_retained_frame_scenes() {
-        let src = std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/scenes/flat-color.n64"),
-        )
-        .unwrap();
-        let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();
-        let hw = ImgHw { rdram: img.rdram };
+        let (rdram, entry_addr) = crate::tests::fixtures::fixture("flat-color--white1");
+        let hw = ImgHw {
+            rdram: rdram.to_vec(),
+        };
 
         let (device, queue, _dual) = crate::render::headless_device();
         let mut r = Renderer::with_device(
@@ -794,13 +784,13 @@ mod begin_frame_tests {
         r.begin_frame();
         r.process_dl(
             &hw,
-            img.entry_addr as u64,
+            entry_addr,
             Microcode::F3dex2,
             &mut crate::diag::NopSink,
         );
         r.process_dl(
             &hw,
-            img.entry_addr as u64,
+            entry_addr,
             Microcode::F3dex2,
             &mut crate::diag::NopSink,
         );
@@ -824,13 +814,10 @@ mod begin_frame_tests {
     /// frame to black on any frame carrying an empty DL; this test is what catches that.
     #[test]
     fn process_dl_draw_nothing_keeps_last_good_scanout_addr() {
-        let src = std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/scenes/flat-color.n64"),
-        )
-        .unwrap();
-        let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();
-        let good = ImgHw { rdram: img.rdram };
+        let (rdram, entry_addr) = crate::tests::fixtures::fixture("flat-color--white1");
+        let good = ImgHw {
+            rdram: rdram.to_vec(),
+        };
         let empty = ImgHw { rdram: Vec::new() }; // out-of-bounds entry → draw-nothing walk
 
         let (device, queue, _dual) = crate::render::headless_device();
@@ -848,7 +835,7 @@ mod begin_frame_tests {
         r.begin_frame();
         let good_summary = r.process_dl(
             &good,
-            img.entry_addr as u64,
+            entry_addr,
             Microcode::F3dex2,
             &mut crate::diag::NopSink,
         );
@@ -1273,12 +1260,7 @@ mod hook_lifecycle_tests {
     }
 }
 
-#[cfg(all(
-    test,
-    feature = "asm",
-    feature = "debug-ui",
-    not(target_arch = "wasm32")
-))]
+#[cfg(all(test, feature = "debug-ui", not(target_arch = "wasm32")))]
 mod debugger_present_tests {
     use super::*;
     use crate::render::headless_device;
@@ -1305,13 +1287,10 @@ mod debugger_present_tests {
 
     #[test]
     fn debugger_composites_over_scanout_without_erasing_the_game() {
-        let src = std::fs::read_to_string(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/scenes/flat-color.n64"),
-        )
-        .unwrap();
-        let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();
-        let hw = ImgHw { rdram: img.rdram };
+        let (rdram, entry_addr) = crate::tests::fixtures::fixture("flat-color--white1");
+        let hw = ImgHw {
+            rdram: rdram.to_vec(),
+        };
 
         let (device, queue, _dual) = headless_device();
         let mut r = Renderer::with_device(
@@ -1329,8 +1308,8 @@ mod debugger_present_tests {
         // TWO walks in ONE frame accumulate TWO scenes in `frame_scenes`. present_to must forward the
         // FULL list to the debugger (a `&frame_scenes[len-1..]` last-only wiring regression would leave
         // last_scene_count == 1). This is the end-to-end guard the direct-`draw` render_test cannot give.
-        r.process_dl(&hw, img.entry_addr as u64, Microcode::F3dex2, &mut NopSink);
-        r.process_dl(&hw, img.entry_addr as u64, Microcode::F3dex2, &mut NopSink);
+        r.process_dl(&hw, entry_addr, Microcode::F3dex2, &mut NopSink);
+        r.process_dl(&hw, entry_addr, Microcode::F3dex2, &mut NopSink);
 
         let target = r.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("dbg-present"),
@@ -1412,5 +1391,5 @@ mod debugger_present_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod tests;

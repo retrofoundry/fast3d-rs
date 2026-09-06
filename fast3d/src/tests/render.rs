@@ -1087,22 +1087,14 @@ fn ref_color(scene: &crate::hle::Scene, i: usize) -> [f32; 4] {
 #[test]
 fn compute_outputs_match_oracle_for_every_scene() {
     let (device, queue, _dual_source) = headless_device();
-    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
-    let white = vec![255u8; 32 * 32 * 4];
     let mut checked = 0;
-    for entry in std::fs::read_dir(&scenes_dir).expect("tests/scenes") {
-        let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) != Some("n64") {
-            continue;
-        }
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-        let src = std::fs::read_to_string(&path).unwrap();
-        let img = crate::asm::assemble_with_texture(&src, &white, 32, 32).unwrap();
-        let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    for &name in crate::tests::fixtures::SCENES {
+        let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
+        let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
         assert!(r.diags.is_empty(), "{name}: {:?}", r.diags);
         // Regression guard: chrome-icosphere must actually exercise texgen (else this golden test
         // could "pass" on a scene whose texgen silently broke into the normal st path).
-        if name == "chrome-icosphere.n64" {
+        if name == "chrome-icosphere" {
             assert!(
                 r.scene.texgen_mode.iter().any(|&m| m != 0),
                 "chrome-icosphere must exercise texgen (no texgen vertex seen)"
@@ -1563,49 +1555,14 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
     );
 }
 
-/// Cross-frame morph assertion: assembles `morphcube` at three times and verifies a GENUINE
-/// cube↔sphere morph — not the old "scaled cube" fake (where the sphere VtxSet was just the 8 cube
-/// corners shrunk to ±23, leaving the silhouette a cube at every weight).
-///
-/// morphcube is now a frequency-2 spherified cube (26 verts: 8 corners + 12 edge-mids + 6 face-
-/// centers). weight = (1 - cos(time)) / 2. Across the three sampled frames:
-///
-/// - t=0 → weight 0 → CUBE: vertices on the cube surface, radii ranging from 40 (face-centers, at
-///   distance S from origin) up to ~69 (corners at S√3 ≈ 40·1.732). This SPREAD of radii is what
-///   makes it a cube.
-/// - t=PI → weight 1 → SPHERE: every vertex normalized to radius ≈40 (corners pulled IN from 69,
-///   edge-mids from 56, face-centers unchanged). A near-constant radius == a real sphere.
-/// - t=PI/2 → weight 0.5 → midpoint (positions differ from both endpoints; the morph animates).
-///
-/// Radius derivation (S = 40, cube half-extent / sphere target radius):
-///   cube corner      (±40,±40,±40) → |p| = 40·√3 ≈ 69.28
-///   cube edge-mid    (±40,±40,  0) → |p| = 40·√2 ≈ 56.57
-///   cube face-center (  0,  0,±40) → |p| = 40
-///   sphere (any vert): p/|p|·40, rounded to int → |p| ≈ 40 (±~1 from integer rounding).
-///
-/// The full-morph radius assertion FAILS for the old scaled-cube target (its "sphere" corners sit at
-/// 23·√3 ≈ 39.8 BUT its face-region verts would also be ~23·… — i.e. it was still a cube of mixed
-/// radii) and passes only for a target where ALL verts share radius ≈40.
 #[test]
 fn morphcube_morphs_cube_to_sphere_across_frames() {
-    // A 1×1 white texture is needed because gsDPSetOtherMode_H / gsDPSetCombineLERP require
-    // a texture context even when the combiner uses SHADE only (no actual texture sampling).
-    let white1x1 = vec![255u8; 4];
-    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
-    let src = std::fs::read_to_string(scenes_dir.join("morphcube.n64"))
-        .expect("morphcube.n64 must exist");
-    let tex = Some((white1x1.as_slice(), 1u32, 1u32));
-
     let radius = |p: &[f32; 3]| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
     const S: f32 = 40.0; // cube half-extent / sphere target radius.
 
     // t=0: weight = (1-cos(0))/2 = 0.0 → pure cube.
-    let asm0 = crate::asm::assemble_at(&src, 0.0, tex).expect("morphcube assembles at t=0");
-    assert!(
-        crate::asm::analyze(&src).references_time,
-        "morphcube morph weight reads time — must be time-variant"
-    );
-    let r0 = crate::hle::interpret_rdram(&asm0.rdram, asm0.entry_addr);
+    let (asm0_rdram, asm0_entry) = crate::tests::fixtures::fixture("morphcube--t00000000");
+    let r0 = crate::hle::interpret_rdram(asm0_rdram, asm0_entry as u32);
     assert!(r0.diags.is_empty(), "t=0 interp diags: {:?}", r0.diags);
     assert!(!r0.scene.raw_pos.is_empty(), "t=0: no vertices");
 
@@ -1626,9 +1583,8 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     );
 
     // t=PI: weight = (1-cos(PI))/2 = 1.0 → FULL morph → sphere.
-    let asm_full = crate::asm::assemble_at(&src, std::f32::consts::PI, tex)
-        .expect("morphcube assembles at t=PI (full morph)");
-    let r_full = crate::hle::interpret_rdram(&asm_full.rdram, asm_full.entry_addr);
+    let (asm_full_rdram, asm_full_entry) = crate::tests::fixtures::fixture("morphcube--t40490fdb");
+    let r_full = crate::hle::interpret_rdram(asm_full_rdram, asm_full_entry as u32);
     assert!(
         r_full.diags.is_empty(),
         "t=PI interp diags: {:?}",
@@ -1653,10 +1609,8 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     }
 
     // t=PI/2: weight ≈ 0.5 → midpoint; positions must differ from BOTH endpoints (the morph animates).
-    let t_half = std::f32::consts::FRAC_PI_2;
-    let asm_half =
-        crate::asm::assemble_at(&src, t_half, tex).expect("morphcube assembles at t=PI/2");
-    let r_half = crate::hle::interpret_rdram(&asm_half.rdram, asm_half.entry_addr);
+    let (asm_half_rdram, asm_half_entry) = crate::tests::fixtures::fixture("morphcube--t3fc90fdb");
+    let r_half = crate::hle::interpret_rdram(asm_half_rdram, asm_half_entry as u32);
     assert!(
         r_half.diags.is_empty(),
         "t=PI/2 interp diags: {:?}",
@@ -1678,30 +1632,16 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     );
 }
 
-/// Cross-frame matrix-animation assertion: assembles `perspective-cube` at two different times and
-/// verifies that the MVP table differs (the update block rotates the model matrix each frame).
-/// This closes the gap where no test previously ticked an `update{}` block across two frames.
 #[test]
 fn perspective_cube_mvp_differs_between_frames() {
-    // Dummy 1×1 texture needed for gsDPSetOtherMode_H / gsDPSetCombineLERP.
-    let white1x1 = vec![255u8; 4];
-    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
-    let src = std::fs::read_to_string(scenes_dir.join("perspective-cube.n64"))
-        .expect("perspective-cube.n64 must exist");
-    let tex = Some((white1x1.as_slice(), 1u32, 1u32));
-
     // t=0: model = identity (guRotate at time=0 is no-op rotation by 0°).
-    let asm0 = crate::asm::assemble_at(&src, 0.0, tex).expect("perspective-cube assembles at t=0");
-    assert!(
-        crate::asm::analyze(&src).references_time,
-        "perspective-cube update block reads time — must be time-variant"
-    );
-    let r0 = crate::hle::interpret_rdram(&asm0.rdram, asm0.entry_addr);
+    let (asm0_rdram, asm0_entry) = crate::tests::fixtures::fixture("perspective-cube--t00000000");
+    let r0 = crate::hle::interpret_rdram(asm0_rdram, asm0_entry as u32);
     assert!(r0.diags.is_empty(), "t=0 interp diags: {:?}", r0.diags);
 
     // t=2.0s: model has rotated 2*45=90° about Y — the MVP will differ from the t=0 case.
-    let asm2 = crate::asm::assemble_at(&src, 2.0, tex).expect("perspective-cube assembles at t=2");
-    let r2 = crate::hle::interpret_rdram(&asm2.rdram, asm2.entry_addr);
+    let (asm2_rdram, asm2_entry) = crate::tests::fixtures::fixture("perspective-cube--t40000000");
+    let r2 = crate::hle::interpret_rdram(asm2_rdram, asm2_entry as u32);
     assert!(r2.diags.is_empty(), "t=2 interp diags: {:?}", r2.diags);
 
     // The MVP tables from the two frames must differ (rotation changed the model matrix).
@@ -1734,54 +1674,13 @@ fn perspective_cube_mvp_differs_between_frames() {
     );
 }
 
-/// Scene-driven DECAL pixel test — chrome-icosphere end-to-end through the combiner/rasterizer.
-///
-/// This is the first test that runs a REAL scene (chrome-icosphere.n64) end-to-end through:
-///   assemble → crate::hle::interpret → CombinerUniform::from_run → RspProcessPipeline → TexturedPipeline
-///   → readback → pixel assert.
-///
-/// The chrome-icosphere combiner is G_CC_DECALRGB: `(ZERO−ZERO)×ZERO + TEXEL0 = TEXEL0` — the
-/// fragment output is exactly the sampled env texture, with shade/lighting IGNORED for color.
-///
-/// To avoid a PNG-decode dependency, a solid-color 32×32 env texture is assembled: every texel is
-/// RGBA8 (200, 100, 50, 255). The RGBA16 N64 round-trip (5-bit per channel) maps these to
-/// approximately (206, 99, 49, 255) — all strongly non-black.
-///
-/// Regression guard: a combiner bug that zeroes the DECAL output (the "chrome-black-ball" class)
-/// makes the rendered pixel black (R ≈ 0). A bug that falls through to SHADE would produce the
-/// lighting colour (dominated by yellow lights, not matching a solid red-orange env). Either way
-/// the R > 100 + G < 150 + B < 100 assertions fail.
-///
-/// The center pixel of a 64×64 target is asserted:
-///   R > 100  (non-black: DECAL must have sampled the env, not zeroed it)
-///   G < 150  (not the lighting colour: a MODULATE-of-yellow-lit shade would be G ≈ R ≈ high,
-///             not tracking the orange env)
-///   B < 100  (the env's B channel is ~49 after RGBA16 round-trip)
 #[test]
 fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
     let (device, queue, _dual_source) = headless_device();
-
-    // Build a synthetic 32x32 env texture (solid orange-ish color that survives RGBA16 round-trip).
-    // RGBA16 encode/decode: r5 = 200>>3 = 25 -> (25<<3)|(25>>2) = 206
-    //                       g5 = 100>>3 = 12 -> (12<<3)|(12>>2) =  96+3 = 99
-    //                       b5 =  50>>3 =  6 -> ( 6<<3)|( 6>>2) =  48+1 = 49
-    // All three channels are clearly non-black, and clearly not white (255) — distinguishable from
-    // both a zero-output and an unsampled white placeholder texture.
-    const TEX_W: u32 = 32;
-    const TEX_H: u32 = 32;
-    let env_rgba8: Vec<u8> = (0..TEX_W * TEX_H)
-        .flat_map(|_| [200u8, 100, 50, 255])
-        .collect();
-
-    // Assemble the chrome-icosphere scene with the synthetic env texture.
-    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
-    let src = std::fs::read_to_string(scenes_dir.join("chrome-icosphere.n64"))
-        .expect("chrome-icosphere.n64 must exist");
-    let img = crate::asm::assemble_with_texture(&src, &env_rgba8, TEX_W, TEX_H)
-        .expect("chrome-icosphere.n64 must assemble");
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("chrome-icosphere--orange");
 
     // HLE interpret: the scene must produce a material with tex_enable=true.
-    let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert!(
         r.diags.is_empty(),
         "chrome-icosphere: unexpected HLE diags: {:?}",
@@ -1972,18 +1871,10 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
 #[test]
 fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
     let (device, queue, _dual_source) = headless_device();
-
-    // No texture needed for flat-color (combiner uses PRIMITIVE, not TEXEL0); pass a 1×1 white
-    // placeholder so gsDPLoadTextureBlock (if any) assembles without error.
-    let white1x1 = vec![255u8; 4];
-    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
-    let src = std::fs::read_to_string(scenes_dir.join("flat-color.n64"))
-        .expect("flat-color.n64 must exist");
-    let img = crate::asm::assemble_with_texture(&src, &white1x1, 1, 1)
-        .expect("flat-color.n64 must assemble");
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("flat-color--white1");
 
     // HLE interpret: the scene must produce a material.
-    let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert!(
         r.diags.is_empty(),
         "flat-color: unexpected HLE diags: {:?}",
@@ -2188,17 +2079,10 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
 #[test]
 fn cycle_type_1_two_cycle_combiner_pixel() {
     let (device, queue, _dual_source) = headless_device();
-
-    // Assemble the scene (no actual texture needed; the combine is textureless).
-    let white1x1 = vec![255u8; 4];
-    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
-    let src = std::fs::read_to_string(scenes_dir.join("two-cycle-combiner.n64"))
-        .expect("two-cycle-combiner.n64 must exist");
-    let img = crate::asm::assemble_with_texture(&src, &white1x1, 1, 1)
-        .expect("two-cycle-combiner.n64 must assemble");
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("two-cycle-combiner--white1");
 
     // HLE interpret: extract material (scene-driven — exercises the real cycle_type/combine-word path).
-    let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert!(
         r.diags.is_empty(),
         "two-cycle-combiner: unexpected HLE diags: {:?}",
@@ -2365,51 +2249,9 @@ fn cycle_type_1_two_cycle_combiner_pixel() {
 
 // ── A8a: single-run path smoke test ──────────────────────────────────────────────────────────────
 
-/// Same quad source and texture as in the goldens harness — duplicated here so render.rs can run
-/// a fast smoke test for the split-bind-group path without pulling goldens.rs into scope.
-const RGBA16_QUAD_SRC: &str = r#"
-Texture tex = { 4, 4, RGBA16 }
-Mtx proj = scale(0.0078125)
-Mtx model = identity()
-Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
-Vtx { -48, -48, 0, 0,    0,    0, 255,255,255,255 }
-Vtx {  48, -48, 0, 0, 1024,    0, 255,255,255,255 }
-Vtx {  48,  48, 0, 0, 1024, 1024, 255,255,255,255 }
-Vtx { -48,  48, 0, 0,    0, 1024, 255,255,255,255 }
-gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
-gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
-gsSPViewport(vp)
-gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
-gsDPSetOtherMode_H(G_CYC_1CYCLE)
-gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
-gsDPSetCombineLERP(TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE, TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE)
-gsDPSetPrimColor(0, 0, 255, 255, 255, 255)
-gsDPSetEnvColor(0, 0, 0, 255)
-gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, 4, 4)
-gsSPTexture(0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON)
-gsSPVertex(verts, 4, 0)
-gsSP1Triangle(0, 1, 2, 0)
-gsSP1Triangle(0, 2, 3, 0)
-gsSPEndDisplayList()
-"#;
-
-#[rustfmt::skip]
-const RGBA16_QUAD_TEX: &[u8] = &[
-    255,   0,   0, 255,   0, 255,   0, 255,   255,   0,   0, 255,   0, 255,   0, 255, // row 0
-    255,   0,   0, 255,   0, 255,   0, 255,   255,   0,   0, 255,   0, 255,   0, 255, // row 1
-      0,   0, 255, 255, 255, 255,   0, 255,     0,   0, 255, 255, 255, 255,   0, 255, // row 2
-      0,   0, 255, 255, 255, 255,   0, 255,     0,   0, 255, 255, 255, 255,   0, 255, // row 3
-];
-
-/// Full-pipeline render helper used by the A8a smoke test.
-/// Assembles, HLE-interprets, RSP-computes, then rasterises with split bind groups.
-fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u8> {
-    let pixel_count = tex_native.len() / 4;
-    let tex_side = (pixel_count as f64).sqrt() as u32;
-
-    let img = crate::asm::assemble_with_texture(src, tex_native, tex_side, tex_side)
-        .unwrap_or_else(|d| panic!("assembly failed: {d:?}"));
-    let interp = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+fn render_fixture_to_rgba8(name: &str, w: u32, h: u32) -> Vec<u8> {
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
+    let interp = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert!(interp.diags.is_empty(), "HLE diags: {:?}", interp.diags);
     let scene = &interp.scene;
 
@@ -2712,7 +2554,7 @@ fn render_source_to_rgba8(src: &str, tex_native: &[u8], w: u32, h: u32) -> Vec<u
 /// gates the A8a bind-group split and new draw() signature.
 #[test]
 fn single_run_path_renders_textured_center() {
-    let px = render_source_to_rgba8(RGBA16_QUAD_SRC, RGBA16_QUAD_TEX, 64, 64);
+    let px = render_fixture_to_rgba8("textured-quad--opaque-4x4", 64, 64);
     let c = ((32 * 64 + 32) * 4) as usize;
     assert!(
         px[c] > 16 || px[c + 1] > 16 || px[c + 2] > 32,

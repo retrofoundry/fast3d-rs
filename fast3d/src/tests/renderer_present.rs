@@ -27,12 +27,10 @@ fn cfg() -> RendererConfig {
 
 #[test]
 fn present_to_scans_out_the_last_rendered_framebuffer() {
-    let src = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes/flat-color.n64"),
-    )
-    .unwrap();
-    let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();
-    let hw = ImgHw { rdram: img.rdram };
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("flat-color--white1");
+    let hw = ImgHw {
+        rdram: rdram.to_vec(),
+    };
 
     let (device, queue, _dual) = crate::render::headless_device();
     let mut r = Renderer::with_device(
@@ -47,7 +45,7 @@ fn present_to_scans_out_the_last_rendered_framebuffer() {
     );
 
     r.begin_frame();
-    r.process_dl(&hw, img.entry_addr as u64, Microcode::F3dex2, &mut NopSink);
+    r.process_dl(&hw, entry_addr, Microcode::F3dex2, &mut NopSink);
 
     let target = r.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("present-to-target"),

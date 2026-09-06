@@ -1,11 +1,11 @@
 use crate::hle::{ColorImage, FramebufferPair, Scene, SceneOp, Scissor};
 use crate::render::{headless_device, SceneRenderer};
-use crate::tests::common::{pixel, pixels_from_render, render_to_pixels, scene_from_source};
+use crate::tests::common::{pixel, pixels_from_render, render_to_pixels, scene_from_fixture};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn quad_scene() -> Scene {
-    scene_from_source("framebuffer-extent.n64", &[255; 4], 1, 1)
+    scene_from_fixture("framebuffer-extent--white1")
 }
 
 fn pair(scene: &Scene, addr: u64, width: u32, height: u32) -> FramebufferPair {

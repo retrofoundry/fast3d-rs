@@ -1,15 +1,3 @@
-//! Independent test oracle: rederives a vertex's GPU-computed pos/uv from the Scene's raw
-//! inputs + state tables, matching the renderer compute kernel. Used by tests that previously
-//! read the now-deleted CPU `Vertex.position`/`uv`.
-//!
-//! Also the shared test harness for the `SceneRenderer` facade end-to-end equivalence tests.
-//! Cargo treats `tests/common/` as a NON-test submodule (not its own test binary), so any
-//! `tests/*.rs` can `mod common;` and reuse these helpers. Each `tests/*.rs` is its own crate,
-//! so we cannot import `render.rs`'s private helpers — the minimal harness is copied here.
-//!
-//! `goldens.rs` includes this module too (for `scene_from_source` + `render_to_pixels` on the 2D
-//! goldens) but uses only a subset of these helpers, so the unused-in-that-binary ones would warn.
-
 use crate::hle::Scene;
 use crate::render::{SceneRenderer, CLEAR_COLOR};
 
@@ -43,25 +31,9 @@ pub fn ref_uv(scene: &Scene, i: usize) -> [f32; 2] {
     [st[0] * s[0] / tw, st[1] * s[1] / th]
 }
 
-/// Read an assembled test scene from `tests/scenes/<name>` and interpret it to a `hle::Scene`,
-/// mirroring how `render.rs`'s scene tests build their scenes (`assemble_with_texture` →
-/// `interpret_rdram`).
-///
-/// `tex_rgba8` / `tex_w` / `tex_h` are the texture bytes uploaded into the assembled image (the
-/// same texture the HLE decodes into `material.texture`); for untextured scenes pass a 1×1 white
-/// placeholder.
-pub fn scene_from_source(
-    name: &str,
-    tex_rgba8: &[u8],
-    tex_w: u32,
-    tex_h: u32,
-) -> crate::hle::Scene {
-    let scenes_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes");
-    let src = std::fs::read_to_string(scenes_dir.join(name))
-        .unwrap_or_else(|e| panic!("{name} must exist: {e}"));
-    let img = crate::asm::assemble_with_texture(&src, tex_rgba8, tex_w, tex_h)
-        .unwrap_or_else(|_| panic!("{name} must assemble"));
-    let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+pub fn scene_from_fixture(name: &str) -> crate::hle::Scene {
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
+    let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert!(
         r.diags.is_empty(),
         "{name}: unexpected HLE diags: {:?}",
@@ -206,12 +178,6 @@ pub fn clear_color_rgb() -> [u8; 3] {
     ]
 }
 
-/// Assemble a minimal 2D FillRect DL: SetColorImage(RGBA,16b,64,addr) + scissor 0,0,64,64 +
-/// SetFillColor(fill5551) + FillRectangle(x0,y0,x1,y1), interpret it, return the paired Scene.
-///
-/// `gdp_set_scissor`/`gdp_fill_rectangle` take RAW 10.2 fixed-point fields (the HLE decoder
-/// right-shifts by 2 to recover pixels — see `hle::rdp::set_scissor_decodes_10p2_fields` /
-/// `hle::interp`'s `G_FILLRECT` decode), so every pixel coordinate here is pre-scaled by 4.
 pub fn dl_2d_fill_rect(
     addr: u64,
     fill5551: u32,

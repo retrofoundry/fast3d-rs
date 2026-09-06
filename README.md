@@ -39,13 +39,6 @@ Diagnostics stream through a `DiagSink` (`LogSink`, `NopSink`, or your own).
 
 ## Features
 
-- **`asm`** *(opt-in)* — assemble display lists from text: the authoring language used by
-  [n64-toys](https://github.com/dcvz/n64-toys) and fast3d's own test scenes. Not needed when you
-  feed real game DLs — the default build is the renderer alone.
-  The returned `Image` carries a source map; `Image::line_at` turns a `Diagnostic.at` into the
-  authoring line.
-  `fast3d::asm::analyze(source)` inspects a source without assembling it, reporting its texture
-  declarations and whether it reads `time`/`frame`.
 - **`debug-ui`** — an egui overlay showing per-frame scene and triangle counts.
 
 ## Layout

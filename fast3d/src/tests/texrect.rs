@@ -202,7 +202,7 @@ fn write_rt64_sm64_hud_eu_point_fixture() {
 
 #[test]
 fn texrect_nonzero_origin_matches_triangle_sampling() {
-    use super::common::{pixel, render_to_pixels, scene_from_source};
+    use super::common::{pixel, render_to_pixels, scene_from_fixture};
     use crate::render::{headless_device_forced_fallback, SceneRenderer};
     let mut bytes = hud_memory(true);
     for command in bytes[0x2000..].as_chunks_mut::<8>().0 {
@@ -225,7 +225,7 @@ fn texrect_nonzero_origin_matches_triangle_sampling() {
     let result = interpret(&bytes);
     let mut rsp = crate::hle::rsp::Rsp::default();
     rsp.set_texture(3, 0, true, 65535, 65535);
-    let mut triangle = scene_from_source("framebuffer-extent.n64", &[255; 4], 1, 1);
+    let mut triangle = scene_from_fixture("framebuffer-extent--white1");
     triangle.materials =
         vec![crate::hle::combiner::build_material(&result.rdp, &rsp, &mut Vec::new(), 0).unwrap()];
     triangle.raw_st.fill([11.0, 4.25]);

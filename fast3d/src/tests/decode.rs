@@ -1,6 +1,5 @@
 use crate::tests::common;
 
-use crate::asm::assemble_with_texture;
 use crate::hle::interpret_rdram;
 
 #[test]
@@ -66,31 +65,10 @@ fn g_tri2_emits_two_triangles_in_order() {
     assert_eq!(r.scene.indices, vec![0, 1, 2, 0, 2, 3]);
 }
 
-const SAMPLE: &str = "\
-// Walking-skeleton sample: one vertex-colored triangle (F3DEX2).
-Mtx proj = scale(0.015625)
-Mtx model = identity()
-Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
-Vtx { -48, -48, 0, 0, 0, 0, 255,   0,   0, 255 }
-Vtx {  48, -48, 0, 0, 0, 0,   0, 255,   0, 255 }
-Vtx {   0,  48, 0, 0, 0, 0,   0,   0, 255, 255 }
-gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
-gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
-gsSPViewport(vp)
-gsSPClearGeometryMode(G_LIGHTING, G_CULL_BACK)
-gsSPSetGeometryMode(G_SHADE, G_SHADING_SMOOTH)
-gsDPSetOtherMode_H(G_CYC_1CYCLE)
-gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
-gsDPSetCombineLERP(0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE, 0, 0, 0, SHADE)
-gsSPVertex(verts, 3, 0)
-gsSP1Triangle(0, 1, 2, 0)
-gsSPEndDisplayList()
-";
-
 #[test]
 fn sample_dl_decodes_to_one_colored_triangle() {
-    let img = assemble_with_texture(SAMPLE, &[255u8; 4], 1, 1).expect("assemble ok");
-    let res = interpret_rdram(&img.rdram, img.entry_addr);
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("colored-triangle--white1");
+    let res = interpret_rdram(rdram, entry_addr as u32);
     assert!(res.diags.is_empty(), "diags: {:?}", res.diags);
 
     // 3 vertices, one triangle (3 indices, in order).
@@ -140,8 +118,8 @@ fn sample_dl_decodes_to_one_colored_triangle() {
 #[test]
 fn tri_index_x2_convention_round_trips() {
     // gsSP1Triangle(0,1,2) must decode back to cache slots 0,1,2 (index*2 encode, /2 decode).
-    let img = assemble_with_texture(SAMPLE, &[255u8; 4], 1, 1).expect("assemble ok");
-    let res = interpret_rdram(&img.rdram, img.entry_addr);
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("colored-triangle--white1");
+    let res = interpret_rdram(rdram, entry_addr as u32);
     assert_eq!(res.scene.indices, vec![0, 1, 2]);
 }
 
@@ -150,7 +128,119 @@ fn geometry_mode_clear_then_set_is_asymmetric_masked() {
     // Clear(G_LIGHTING|G_CULL_BACK) then Set(G_SHADE|G_SHADING_SMOOTH), starting from the
     // initial G_CLIPPING (0x800000). Result preserves G_CLIPPING and adds the set bits:
     // 0x800000 (G_CLIPPING) | 0x4 (G_SHADE) | 0x200000 (G_SHADING_SMOOTH) = 0x00A0_0004.
-    let img = assemble_with_texture(SAMPLE, &[255u8; 4], 1, 1).expect("assemble ok");
-    let res = interpret_rdram(&img.rdram, img.entry_addr);
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("colored-triangle--white1");
+    let res = interpret_rdram(rdram, entry_addr as u32);
     assert_eq!(res.geometry_mode, 0x00A0_0004);
+}
+
+#[test]
+fn i8_texel_decodes_intensity_and_alpha() {
+    assert_eq!(
+        crate::hle::texdec::decode_i8(&[128], 1, 1),
+        vec![128, 128, 128, 128]
+    );
+}
+
+#[test]
+fn i4_pair_decodes_high_nibble_first() {
+    assert_eq!(
+        crate::hle::texdec::decode_i4(&[0xF0], 2, 1),
+        vec![255, 255, 255, 255, 0, 0, 0, 0]
+    );
+}
+
+#[test]
+fn ia16_texel_decodes_intensity_and_alpha() {
+    assert_eq!(
+        crate::hle::texdec::decode_ia16(&[255, 128], 1, 1),
+        vec![255, 255, 255, 128]
+    );
+}
+
+#[test]
+fn ia8_texel_decodes_intensity_and_alpha() {
+    assert_eq!(
+        crate::hle::texdec::decode_ia8(&[0x8C], 1, 1),
+        vec![136, 136, 136, 204]
+    );
+}
+
+#[test]
+fn ia4_pair_decodes_high_nibble_first() {
+    assert_eq!(
+        crate::hle::texdec::decode_ia4(&[0xF0], 2, 1),
+        vec![255, 255, 255, 255, 0, 0, 0, 0]
+    );
+}
+
+#[test]
+fn ci8_index_decodes_through_tlut() {
+    let tlut = [
+        0x00, 0x01, 0, 0, 0, 0, 0, 0, 0xF8, 0x01, 0, 0, 0, 0, 0, 0, 0x07, 0xC1, 0, 0, 0, 0, 0, 0,
+    ];
+    let out = crate::hle::texdec::decode_ci8(&[0, 1, 2], 3, 1, &tlut, 2);
+    assert_eq!(
+        &out[8..11],
+        &[0, 255, 0],
+        "index 2 must decode to green (RGBA16 5-bit expansion)"
+    );
+}
+
+#[test]
+fn missing_render_mode_diagnostic_has_command_address() {
+    let (rdram, entry_addr) =
+        crate::tests::fixtures::fixture("colored-triangle--missing-render-mode");
+    let result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
+    assert_eq!(result.diags.len(), 1, "{:?}", result.diags);
+    let diag = result
+        .diags
+        .iter()
+        .find(|diag| diag.kind == crate::diag::DiagKind::RenderModeNeverSet)
+        .expect("missing render mode diagnostic");
+    assert_eq!(diag.at, entry_addr + 7 * 8);
+}
+
+#[test]
+fn ci8_tlut_has_correct_count_and_content() {
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("ci8--three-color-tlut");
+
+    let palette_count: usize = 3;
+
+    let result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
+
+    let fatal_diags: Vec<_> = result
+        .diags
+        .iter()
+        .filter(|d| {
+            !d.kind
+                .to_string()
+                .contains("combiner selector not implemented")
+        })
+        .collect();
+    assert!(
+        fatal_diags.is_empty(),
+        "unexpected HLE diags: {:?}",
+        fatal_diags
+    );
+
+    let tlut = result.rdp.tmem_bank.palette();
+    assert!(
+        tlut.len() >= palette_count * 8,
+        "palette region must cover all {palette_count} stride-8 entries"
+    );
+
+    assert_eq!(tlut[0], 0x00, "entry 0 hi should be 0x00 (black)");
+    assert_eq!(tlut[1], 0x01, "entry 0 lo should be 0x01 (alpha=1)");
+
+    assert_eq!(tlut[8], 0xF8, "entry 1 hi should be 0xF8 (red)");
+    assert_eq!(tlut[9], 0x01, "entry 1 lo should be 0x01 (alpha=1)");
+
+    assert_eq!(tlut[16], 0x07, "entry 2 hi should be 0x07 (green)");
+    assert_eq!(tlut[17], 0xC1, "entry 2 lo should be 0xC1 (green+alpha)");
+
+    assert_eq!(
+        &tlut[palette_count * 8..palette_count * 8 + 8],
+        &[0u8; 8],
+        "slot after last loaded entry must be zero"
+    );
 }

@@ -248,7 +248,7 @@ mod wired_tests {
     }
 }
 
-#[cfg(all(test, feature = "asm"))]
+#[cfg(test)]
 mod fog_tests {
     use crate::hle::interp::interpret_rdram;
     use n64_gbi::encode::*;

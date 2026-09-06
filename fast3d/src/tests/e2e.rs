@@ -1,62 +1,10 @@
-//! End-to-end native integration test: crate::asm::assemble_with_texture -> crate::hle::interpret -> crate::render::CombinerUniform::from_run.
 use crate::tests::common;
-
-/// Textured-quad source — reads from the shared tests/scenes/ file (single source of truth).
-const SAMPLE_SOURCE_RUST: &str = include_str!("../../tests/scenes/textured-quad.n64");
-
-/// Build a non-symmetric 32x32 RGBA8 default texture.
-/// Top half: warm orange (200, 100, 50, 255); bottom half: cool blue (50, 100, 200, 255).
-/// The asymmetry (top != bottom) catches any stray V-flip in the render pipeline.
-fn default_rgba() -> Vec<u8> {
-    let mut data = Vec::with_capacity(32 * 32 * 4);
-    for row in 0..32usize {
-        for _col in 0..32usize {
-            if row < 16 {
-                data.extend_from_slice(&[200u8, 100, 50, 255]);
-            } else {
-                data.extend_from_slice(&[50u8, 100, 200, 255]);
-            }
-        }
-    }
-    data
-}
-
-/// Inline source exercising the gsDPSetBlendColor DSL macro (G_SETBLENDCOLOR=0xF9): assemble it
-/// through the gbi assembler, interpret with the HLE, and assert the blend-color RGBA reaches the
-/// emitted Material (via the RDP blend_color register). Without the assembler/encoder/interpreter
-/// wiring this round-trips to [0,0,0,0]; with it, the per-byte RGBA must survive intact.
-const BLEND_COLOR_SOURCE: &str = r#"
-Texture tex = { 32, 32, RGBA16 }
-Mtx proj = scale(0.0078125)
-Mtx model = identity()
-Vp { 640, 480, 511, 0, 640, 480, 511, 0 }
-Vtx { -48, -48, 0, 0,    0,    0, 255,255,255,255 }
-Vtx {  48, -48, 0, 0, 1024,    0, 255,255,255,255 }
-Vtx {  48,  48, 0, 0, 1024, 1024, 255,255,255,255 }
-Vtx { -48,  48, 0, 0,    0, 1024, 255,255,255,255 }
-gsSPMatrix(proj, G_MTX_PROJECTION | G_MTX_LOAD | G_MTX_NOPUSH)
-gsSPMatrix(model, G_MTX_MODELVIEW | G_MTX_LOAD | G_MTX_NOPUSH)
-gsSPViewport(vp)
-gsSPSetGeometryMode(G_SHADE | G_SHADING_SMOOTH)
-gsDPSetOtherMode_H(G_CYC_1CYCLE)
-gsDPSetRenderMode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
-gsDPSetCombineLERP(TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE, TEXEL0, 0, SHADE, 0, 0, 0, 0, SHADE)
-gsDPSetBlendColor(18, 52, 86, 120)
-gsDPLoadTextureBlock(tex, G_IM_FMT_RGBA, G_IM_SIZ_16b, 32, 32)
-gsSPTexture(0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON)
-gsSPVertex(verts, 4, 0)
-gsSP1Triangle(0, 1, 2, 0)
-gsSP1Triangle(0, 2, 3, 0)
-gsSPEndDisplayList()
-"#;
 
 #[test]
 fn e2e_blend_color_macro_reaches_material() {
-    let rgba = default_rgba();
-    let img = crate::asm::assemble_with_texture(BLEND_COLOR_SOURCE, &rgba, 32, 32)
-        .expect("assemble_with_texture must succeed with gsDPSetBlendColor present");
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("textured-quad--blend-color");
 
-    let res = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    let res = crate::hle::interpret_rdram(rdram, entry_addr as u32);
 
     let m = res
         .scene
@@ -74,11 +22,9 @@ fn e2e_blend_color_macro_reaches_material() {
 
 #[test]
 fn e2e_textured_quad_pipeline() {
-    let rgba = default_rgba();
-    let img = crate::asm::assemble_with_texture(SAMPLE_SOURCE_RUST, &rgba, 32, 32)
-        .expect("assemble_with_texture must succeed for the Milestone A sample");
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("textured-quad--orange-blue");
 
-    let res = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    let res = crate::hle::interpret_rdram(rdram, entry_addr as u32);
 
     // No unwired-selector diagnostics expected for MODULATE (all wired).
     assert!(
@@ -142,16 +88,11 @@ fn e2e_textured_quad_pipeline() {
     );
 }
 
-/// Segmented sub-DL source — reads from the shared tests/scenes/ file (single source of truth).
-const SEGMENTED_SUB_DL_SAMPLE: &str = include_str!("../../tests/scenes/segmented-sub-dl.n64");
-
 #[test]
 fn segmented_sub_dl_draws_two_culled_objects() {
     // 32x32 white RGBA8 texture — matches the shared segmented-sub-dl.n64's declared 32x32 dims.
-    let rgba = vec![255u8; 32 * 32 * 4];
-    let img = crate::asm::assemble_with_texture(SEGMENTED_SUB_DL_SAMPLE, &rgba, 32, 32)
-        .expect("assemble");
-    let r = crate::hle::interpret_rdram(&img.rdram, img.entry_addr);
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("segmented-sub-dl");
+    let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert!(r.diags.is_empty(), "unexpected diag: {:?}", r.diags);
     // The quad sub-DL runs twice (one push/pop per object): 8 vertices, 12 indices (all front-facing).
     assert_eq!(r.scene.raw_pos.len(), 8, "two objects x 4 verts");

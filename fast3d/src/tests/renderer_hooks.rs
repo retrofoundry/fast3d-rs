@@ -30,12 +30,13 @@ fn cfg() -> RendererConfig {
 }
 
 fn flat_color_hw() -> (ImgHw, u64) {
-    let src = std::fs::read_to_string(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scenes/flat-color.n64"),
+    let (rdram, entry_addr) = crate::tests::fixtures::fixture("flat-color--white1");
+    (
+        ImgHw {
+            rdram: rdram.to_vec(),
+        },
+        entry_addr,
     )
-    .unwrap();
-    let img = crate::asm::assemble_with_texture(&src, &[255u8; 4], 1, 1).unwrap();
-    (ImgHw { rdram: img.rdram }, img.entry_addr as u64)
 }
 
 fn rgba_target(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
