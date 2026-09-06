@@ -147,7 +147,7 @@ pub(crate) fn chrome_icosphere(f: &Fixture) -> Built {
     let mut commands = lit_setup(&mut b, f, true);
     commands.extend(load_texture(&mut b, f.texture, false, 32));
     commands.push(gsp_vertex(0, positions.len() as u8, vertices));
-    for pair in triangles.chunks_exact(2) {
+    for pair in triangles.as_chunks::<2>().0 {
         let [a, b, c] = pair[0];
         let [d, e, f] = pair[1];
         commands.push(gsp_2triangles(a, b, c, d, e, f));
@@ -262,7 +262,7 @@ pub(crate) fn lights(f: &Fixture) -> Built {
     let vertices = b.vertices(&vertices);
     let mut commands = lit_setup(&mut b, f, false);
     commands.push(gsp_vertex(0, count, vertices));
-    for pair in triangles.chunks_exact(2) {
+    for pair in triangles.as_chunks::<2>().0 {
         let [a, b, c] = pair[0];
         let [d, e, f] = pair[1];
         commands.push(gsp_2triangles(a, b, c, d, e, f));
