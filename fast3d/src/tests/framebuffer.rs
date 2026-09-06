@@ -31,7 +31,7 @@ fn scanout_pixels(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     renderer: &SceneRenderer,
-    addr: u64,
+    addr: impl Into<crate::render::workload::TargetId>,
     width: u32,
     height: u32,
 ) -> Vec<u8> {
@@ -98,7 +98,10 @@ fn framebuffer_640x480_triangles_align_with_texrect() {
             renderer.begin_frame();
             let addr =
                 renderer.render_into_store(&device, &queue, source, crate::ClearPolicy::PerFrame);
-            assert_eq!(addr, Some(0x0010_0000));
+            assert_eq!(
+                addr,
+                Some(crate::render::workload::TargetId::Guest(0x0010_0000))
+            );
             let pixels = scanout_pixels(&device, &queue, &renderer, addr.unwrap(), width, height);
             assert_coverage(&pixels, width, height, [80, 60, 160, 120]);
         }
@@ -213,7 +216,14 @@ fn framebuffer_pairless_logical_extent_is_unchanged() {
         let pixels = render_to_pixels(&device, &queue, &mut renderer, &scene, width, height);
         assert_coverage(&pixels, width, height, bounds);
         renderer.render_into_store(&device, &queue, &scene, crate::ClearPolicy::PerFrame);
-        let pixels = scanout_pixels(&device, &queue, &renderer, 0, width, height);
+        let pixels = scanout_pixels(
+            &device,
+            &queue,
+            &renderer,
+            crate::render::workload::TargetId::Legacy,
+            width,
+            height,
+        );
         assert_coverage(&pixels, width, height, bounds);
     }
 }

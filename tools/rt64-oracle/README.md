@@ -53,6 +53,19 @@ an unrelated size discrepancy. Geometry, normals, textures and other payloads
 are synthetic, as recorded in fixture provenance. These are isolated command
 scenes, not captured game frames.
 
+`workload-interleaving` exercises ordered opaque triangles, coplanar decals,
+fill rectangles, and a later transparent depth writer. Its writer is
+`write_rt64_workload_interleaving_fixture`; it also exports independently derived
+`.expected.rgba8` pixels and an `.overlap.rgba8` mask. The expected colors are
+literal primary colors under rectangular coverage rules in
+`fast3d/tests/common/workload_semantics.rs`. The overlap mask contains 12,288
+pixels, bounded by `[64,256) × [64,192)`. The decisive later-depth region is
+`[64,96) × [64,96)` minus `[72,88) × [72,88)`: all 768 pixels retain the earlier
+red decal. Both renderers match the independent RGB image exactly; use
+`--ignore-alpha --threshold 0 --max-diff-pixels 0`. Alpha remains an exact
+fast3d assertion. The checked-in IMAGE fixture also runs in the browser replay
+job under both clear policies.
+
 `sm64-hud-us-copy` and `sm64-hud-eu-point` reuse the regional
 `bin/segment2.c: dl_hud_img_begin` copy-mode state, including threshold alpha
 compare and blend alpha 255. The EU variant selects point filtering and NOOP;

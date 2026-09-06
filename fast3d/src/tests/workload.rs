@@ -111,3 +111,29 @@ fn normalization_distinguishes_unset_and_empty_legacy_scissor() {
         .iter()
         .all(|op| op.scissor == Scissor::default()));
 }
+
+#[test]
+fn normalization_keeps_zero_depth_image_address() {
+    let mut b = DlBuilder::new();
+    b.list(
+        "main",
+        &[
+            gdp_set_depth_image(0),
+            gdp_set_color_image(0, 2, 320, 0x1000),
+            gdp_set_scissor(0, 0, 0, 1280, 960),
+            gdp_set_cycle_type(3),
+            gdp_fill_rectangle(0, 0, 4, 4),
+            gdp_set_color_image(0, 2, 320, 0),
+            gdp_fill_rectangle(0, 0, 4, 4),
+            gsp_enddl(),
+        ],
+    );
+    let built = b.finish("main");
+    let result = crate::hle::interpret_rdram(&built.rdram, built.entry);
+    assert!(result.diags.is_empty(), "{:?}", result.diags);
+    let workload = Workload::new(&result.scene);
+    assert_eq!(workload.targets[0].depth_image, Some(0));
+    assert!(!workload.targets[0].depth_clear);
+    assert_eq!(workload.targets[1].depth_image, Some(0));
+    assert!(workload.targets[1].depth_clear);
+}

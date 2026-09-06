@@ -807,7 +807,6 @@ pub fn interpret<M: Rdram>(
         });
     }
     rsp.finish(&mut scene);
-    // The final color image — the pair-less renderer's internal-framebuffer key (spec §4).
     scene.color_image = rdp.color_image;
     InterpResult {
         scene,
@@ -1641,8 +1640,6 @@ mod rect_encoding_tests {
 
     #[test]
     fn interpret_stashes_final_color_image_on_scene() {
-        // A DL that only sets the color image (no draws) still stamps scene.color_image from the
-        // final RDP snapshot — the pair-less internal-FB key (spec §4).
         let mut b = Vec::new();
         push(&mut b, cimg(0x0010_0000)); // fmt=RGBA(0), siz=16b(2), width=320, addr=0x100000
         push(&mut b, enddl());

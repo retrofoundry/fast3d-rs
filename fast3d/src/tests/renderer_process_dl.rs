@@ -1,5 +1,6 @@
 //! P3.8: `Renderer::process_dl` walks a DL into the persistent store and returns a `DlSummary`.
 
+use crate::render::workload::TargetId;
 use crate::{
     ClearPolicy, Diagnostic, DlSummary, Hardware, Microcode, PresentTarget, Rdram, RdramImage,
     Renderer, RendererConfig,
@@ -84,6 +85,10 @@ fn process_dl_of_out_of_bounds_entry_reports_error_without_panic() {
 }
 
 fn store_pixels(r: &Renderer, addr: u64) -> Vec<u8> {
+    target_pixels(r, TargetId::Guest(addr))
+}
+
+fn target_pixels(r: &Renderer, target: TargetId) -> Vec<u8> {
     super::common::pixels_from_render(
         r.device(),
         r.queue(),
@@ -92,7 +97,7 @@ fn store_pixels(r: &Renderer, addr: u64) -> Vec<u8> {
         wgpu::TextureFormat::Rgba8Unorm,
         |view| {
             let mut encoder = r.device().create_command_encoder(&Default::default());
-            r.inner.scanout(&mut encoder, view, addr);
+            r.inner.scanout(&mut encoder, view, target);
             r.queue().submit(Some(encoder.finish()));
         },
     )
@@ -145,23 +150,23 @@ fn observed_render_matches_summary_scenes_and_every_framebuffer() {
         assert_eq!(observed.frame_scenes, ordinary.frame_scenes);
         assert_eq!(observed.last_scanout_addr, ordinary.last_scanout_addr);
         for scene in &ordinary.frame_scenes {
-            let addresses: Vec<_> = if scene.framebuffer_pairs.is_empty() {
-                vec![scene.color_image.addr]
-            } else {
-                scene
-                    .framebuffer_pairs
-                    .iter()
-                    .filter(|p| !p.is_depth_clear)
-                    .map(|p| p.color_image.addr)
-                    .collect()
-            };
-            for addr in addresses {
+            let targets = (!scene.draw_runs.is_empty())
+                .then_some(TargetId::Legacy)
+                .into_iter()
+                .chain(
+                    scene
+                        .framebuffer_pairs
+                        .iter()
+                        .filter(|p| !p.is_depth_clear)
+                        .map(|p| TargetId::Guest(p.color_image.addr)),
+                );
+            for addr in targets {
                 assert!(ordinary.inner.has_fb(addr));
                 assert!(observed.inner.has_fb(addr));
                 assert_eq!(
-                    store_pixels(&observed, addr),
-                    store_pixels(&ordinary, addr),
-                    "{name}: {addr:#x}"
+                    target_pixels(&observed, addr),
+                    target_pixels(&ordinary, addr),
+                    "{name}: {addr:?}"
                 );
             }
         }
@@ -233,7 +238,7 @@ fn cancelled_render_preserves_previous_dls_and_does_not_create_framebuffers() {
         assert!(!summary.renderable);
         assert_eq!(r.frame_scenes, scenes);
         assert!(!r.last_backend_was_image);
-        assert_eq!(r.last_scanout_addr, Some(0x200000));
+        assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(0x200000)));
         assert_eq!(store_pixels(&r, 0x100000), before[0]);
         assert_eq!(store_pixels(&r, 0x200000), before[1]);
         assert!(!r.inner.has_fb(0x300000));

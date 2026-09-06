@@ -1,5 +1,6 @@
-use super::{fill_hw, headless_renderer, store_pixels, ImgHw};
+use super::{fill_hw, headless_renderer, store_pixels, target_pixels, ImgHw};
 use crate::inspect::WalkTermination;
+use crate::render::workload::TargetId;
 use crate::{
     ClearPolicy, DataFormat, Diagnostic, DlSummary, Hardware, Microcode, NopSink, Rdram,
     RdramImage, Renderer,
@@ -128,7 +129,7 @@ fn zero_preserves_pixels_scenes_scanout_backend_format_and_frame_serial_without_
             }
         );
         assert_eq!(r.frame_scenes, scenes);
-        assert_eq!(r.last_scanout_addr, Some(A.into()));
+        assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
         assert!(!r.last_backend_was_image);
         assert_eq!(r.data_format, DataFormat::Float);
         assert_eq!(r.inner.frame_serial, serial);
@@ -309,16 +310,26 @@ fn compare_prefix(
     );
     for &addr in addresses {
         assert_eq!(
-            prefix.inner.has_fb(addr.into()),
-            expected.inner.has_fb(addr.into())
+            prefix.inner.has_fb(u64::from(addr)),
+            expected.inner.has_fb(u64::from(addr))
         );
-        if expected.inner.has_fb(addr.into()) {
+        if expected.inner.has_fb(u64::from(addr)) {
             assert_eq!(
                 store_pixels(&prefix, addr.into()),
                 store_pixels(&expected, addr.into()),
                 "target {addr:#x}"
             );
         }
+    }
+    assert_eq!(
+        prefix.inner.has_fb(TargetId::Legacy),
+        expected.inner.has_fb(TargetId::Legacy)
+    );
+    if expected.inner.has_fb(TargetId::Legacy) {
+        assert_eq!(
+            target_pixels(&prefix, TargetId::Legacy),
+            target_pixels(&expected, TargetId::Legacy)
+        );
     }
     prefix
 }
@@ -343,7 +354,7 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
     let full = two_target_fills();
     let before = hw([gdp_set_color_image(0, 2, 64, A), gsp_enddl()]);
     let r = compare_prefix(&full, &before, 0, 1, &[A, B]);
-    assert!(!r.inner.has_fb(A.into()));
+    assert!(!r.inner.has_fb(u64::from(A)));
     assert_eq!(r.last_scanout_addr, None);
     assert!(r.frame_scenes[0].framebuffer_pairs.is_empty());
     let middle = hw([
@@ -354,7 +365,7 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
         gsp_enddl(),
     ]);
     let r = compare_prefix(&full, &middle, 0, 4, &[A, B]);
-    assert_eq!(r.last_scanout_addr, Some(A.into()));
+    assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
     assert_eq!(pixel(&r, A, 16, 32), [255, 0, 0, 255]);
     assert_ne!(pixel(&r, A, 48, 32), [0, 255, 0, 255]);
     let switched = hw([
@@ -368,8 +379,8 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
         gsp_enddl(),
     ]);
     let r = compare_prefix(&full, &switched, 0, 7, &[A, B]);
-    assert_eq!(r.last_scanout_addr, Some(A.into()));
-    assert!(!r.inner.has_fb(B.into()));
+    assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
+    assert!(!r.inner.has_fb(u64::from(B)));
     assert_eq!(pixel(&r, A, 48, 32), [0, 255, 0, 255]);
 }
 
@@ -401,7 +412,7 @@ fn depth_only_prefix_matches_shorter_list_and_keeps_prior_color_scanout() {
     let before = store_pixels(&r, A.into());
     let s = r.process_dl_prefix(&full, 0, Microcode::F3dex2, &mut NopSink, 5);
     assert!(!s.renderable);
-    assert_eq!(r.last_scanout_addr, Some(A.into()));
+    assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
     assert_eq!(store_pixels(&r, A.into()), before);
     assert_eq!(r.frame_scenes.len(), 3);
 }
@@ -445,7 +456,7 @@ fn offscreen_then_sample_prefix_matches_independent_shorter_list() {
     ))
     .chain([gsp_enddl()]));
     let r = compare_prefix(&full, &short, 0, 10, &[A, B]);
-    assert_eq!(r.last_scanout_addr, Some(B.into()));
+    assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(B.into())));
     assert_eq!(pixel(&r, B, 32, 32), [255, 0, 0, 255]);
     assert!(r.frame_scenes[0].framebuffer_pairs[1].ops.iter().any(|op| matches!(op, crate::scene::SceneOp::TexRect { fb_source: Some(addr), .. } if *addr == A as u64)));
 }
@@ -473,7 +484,7 @@ fn backward_replay_clears_touched_targets_per_frame_and_retains_color_with_persi
         assert!(s.renderable);
         assert_eq!(r.inner.frame_serial, serial);
         assert_eq!(r.frame_scenes.len(), 1);
-        assert_eq!(r.last_scanout_addr, Some(A.into()));
+        assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
         assert_eq!(pixel(&r, A, 16, 32), [255, 0, 0, 255]);
         assert_eq!(store_pixels(&r, B.into()), b);
         match policy {
@@ -502,7 +513,7 @@ fn backward_replay_clears_touched_targets_per_frame_and_retains_color_with_persi
         let before = store_pixels(&r, A.into());
         let s = r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 1);
         assert!(!s.renderable);
-        assert_eq!(r.last_scanout_addr, Some(A.into()));
+        assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
         assert_eq!(store_pixels(&r, A.into()), before);
     }
 }
@@ -535,21 +546,23 @@ fn full_length_and_max_prefixes_equal_ordinary_rendering() {
             assert_eq!(r.frame_scenes, ordinary.frame_scenes);
             assert_eq!(r.last_scanout_addr, ordinary.last_scanout_addr);
             let scene = &ordinary.frame_scenes[0];
-            let addresses: Vec<_> = if scene.framebuffer_pairs.is_empty() {
-                vec![scene.color_image.addr]
-            } else {
-                scene
-                    .framebuffer_pairs
-                    .iter()
-                    .filter(|p| !p.is_depth_clear)
-                    .map(|p| p.color_image.addr)
-                    .collect()
-            };
-            for addr in addresses {
+            let targets = (!scene.draw_runs.is_empty())
+                .then_some(TargetId::Legacy)
+                .into_iter()
+                .chain(
+                    scene
+                        .framebuffer_pairs
+                        .iter()
+                        .filter(|p| !p.is_depth_clear)
+                        .map(|p| TargetId::Guest(p.color_image.addr)),
+                );
+            for addr in targets {
+                assert!(r.inner.has_fb(addr));
+                assert!(ordinary.inner.has_fb(addr));
                 assert_eq!(
-                    store_pixels(&r, addr),
-                    store_pixels(&ordinary, addr),
-                    "{name}: {count}: {addr:#x}"
+                    target_pixels(&r, addr),
+                    target_pixels(&ordinary, addr),
+                    "{name}: {count}: {addr:?}"
                 );
             }
         }
@@ -635,8 +648,12 @@ fn merged_triangle_prefixes_match_independently_authored_shorter_lists() {
         assert_eq!(entry, short_entry);
         let r = compare_prefix(&full, &short, entry, setup_count + 1, &[0, A]);
         assert_eq!(r.frame_scenes[0].indices.len(), 3);
-        let addr = if paired { A } else { 0 };
-        let half = store_pixels(&r, addr.into());
+        let target = if paired {
+            TargetId::Guest(A.into())
+        } else {
+            TargetId::Legacy
+        };
+        let half = target_pixels(&r, target);
         assert!(half.as_chunks::<4>().0.contains(&[255, 0, 0, 255]));
         let (short, _) = triangle_list(
             &[gsp_1triangle(0, 1, 2), gsp_1triangle(0, 2, 3), gsp_enddl()],
@@ -660,7 +677,7 @@ fn merged_triangle_prefixes_match_independently_authored_shorter_lists() {
         };
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].index_count, 6);
-        assert_ne!(store_pixels(&r, addr.into()), half);
+        assert_ne!(target_pixels(&r, target), half);
     }
 }
 
@@ -730,7 +747,7 @@ fn finalization_diagnostics_and_dropped_runs_describe_only_the_prefix() {
 }
 
 #[test]
-fn pre_cimg_flat_prefix_uses_its_own_final_cimg_address() {
+fn pre_cimg_flat_prefix_keeps_its_legacy_target_as_the_walk_grows() {
     let (full, entry) = triangle_list(
         &[
             gsp_2triangles(0, 1, 2, 0, 2, 3),
@@ -752,17 +769,34 @@ fn pre_cimg_flat_prefix_uses_its_own_final_cimg_address() {
     );
     let r = compare_prefix(&full, &short, entry, 7, &[0, A, B]);
     assert!(r.frame_scenes[0].framebuffer_pairs.is_empty());
-    assert_eq!(r.last_scanout_addr, Some(A.into()));
-    assert!(!r.inner.has_fb(B.into()));
+    assert_eq!(r.last_scanout_addr, Some(TargetId::Legacy));
     let mut ordinary = headless_renderer();
     ordinary.begin_frame();
     ordinary.process_dl(&full, entry, Microcode::F3dex2, &mut NopSink);
-    assert_eq!(ordinary.last_scanout_addr, Some(B.into()));
-    assert!(!ordinary.inner.has_fb(A.into()));
+    assert_eq!(ordinary.last_scanout_addr, Some(TargetId::Legacy));
+    for renderer in [&r, &ordinary] {
+        assert!(renderer.inner.has_fb(TargetId::Legacy));
+        for addr in [0, A, B] {
+            assert!(!renderer.inner.has_fb(u64::from(addr)));
+        }
+    }
     assert_eq!(
-        store_pixels(&r, A.into()),
-        store_pixels(&ordinary, B.into())
+        target_pixels(&r, TargetId::Legacy),
+        target_pixels(&ordinary, TargetId::Legacy)
     );
+    for count in [6, 8, 9, u32::MAX] {
+        let mut prefix = headless_renderer();
+        prefix.begin_frame();
+        prefix.process_dl_prefix(&full, entry, Microcode::F3dex2, &mut NopSink, count);
+        assert_eq!(prefix.last_scanout_addr, Some(TargetId::Legacy));
+        for addr in [0, A, B] {
+            assert!(!prefix.inner.has_fb(u64::from(addr)));
+        }
+        assert_eq!(
+            target_pixels(&prefix, TargetId::Legacy),
+            target_pixels(&ordinary, TargetId::Legacy)
+        );
+    }
 }
 
 #[test]
@@ -790,7 +824,7 @@ fn culled_draw_opens_a_clear_only_pair_without_triangle_emission() {
     let empty = compare_prefix(&full, &short, entry, 9, &[A]);
     assert!(empty.frame_scenes[0].indices.is_empty());
     assert_eq!(empty.frame_scenes[0].framebuffer_pairs.len(), 1);
-    assert_eq!(empty.last_scanout_addr, Some(A.into()));
+    assert_eq!(empty.last_scanout_addr, Some(TargetId::Guest(A.into())));
     let mut r = headless_renderer();
     r.process_dl(&fill_hw(A, 0xf801f801), 0, Microcode::F3dex2, &mut NopSink);
     let before = store_pixels(&r, A.into());
