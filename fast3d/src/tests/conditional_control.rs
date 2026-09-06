@@ -164,7 +164,7 @@ fn culldl_uses_inclusive_range() {
             "main",
             &[
                 gsp_vertex(0, 3, v),
-                (CULL.0 | first * 2, last * 2),
+                (CULL.0 | (first * 2), last * 2),
                 MARK,
                 END,
             ],
@@ -283,6 +283,7 @@ fn conditional_invalid_vertex_rejects_task() {
         CULL,
         (CULL.0 | 2, 0),
         (CULL.0, 2),
+        (CULL.0 | 2, 4),
         (CULL.0, 0xfffe),
         (BRANCH, 0),
         (BRANCH | 0xffe, 0),
@@ -312,6 +313,9 @@ fn conditional_invalid_vertex_rejects_task() {
 
 #[test]
 fn branchz_requires_half1_each_task() {
+    let mut previous = DlBuilder::new();
+    let entry = previous.list("main", &[(HALF, 0x1234_5678), END]);
+    assert!(walk(previous, &offsets(entry, &[0, 1])).diags.is_empty());
     let mut b = DlBuilder::new();
     let v = vertex(&mut b, &[[0, 0, 0]]);
     let entry = b.list("main", &[gsp_vertex(0, 1, v), (BRANCH, 0), MARK, END]);
@@ -368,6 +372,7 @@ fn half1_then_texrect_then_branch() {
     let entry = b.list(
         "main",
         &[
+            (0xff10_0003, 0x1000),
             gsp_vertex(0, 1, v),
             (HALF, target),
             (0xe401_0010, 0),
@@ -378,17 +383,15 @@ fn half1_then_texrect_then_branch() {
             END,
         ],
     );
-    let mut expected = offsets(entry, &[0, 1, 2, 3, 4, 5]);
+    let mut expected = offsets(entry, &[0, 1, 2, 3, 4, 5, 6]);
     expected.extend([target as u64, target as u64 + 8]);
     let r = walk(b, &expected);
-    assert_eq!(
-        r.diags,
-        vec![crate::Diagnostic {
-            at: entry as u64 + 16,
-            kind: crate::DiagKind::DrawBeforeCimg
-        }]
-    );
-    assert_eq!(r.commands, 6);
+    assert!(r.diags.is_empty(), "{:?}", r.diags);
+    assert_eq!(r.commands, 7);
+    assert!(matches!(
+        r.scene.framebuffer_pairs[0].ops.as_slice(),
+        [crate::hle::SceneOp::TexRect { .. }]
+    ));
 }
 
 #[test]
@@ -585,4 +588,125 @@ fn conditional_homogeneous_projection() {
                 .collect::<Vec<_>>()
         );
     }
+}
+
+#[cfg(feature = "capture")]
+#[test]
+fn conditional_capture_records_only_reached_commands_and_typed_inputs() {
+    use crate::capture::{RecordingHardware, ReplayHardware};
+    use crate::Hardware;
+
+    struct Image(Vec<u8>);
+    impl Hardware for Image {
+        fn rdram(&self) -> impl Rdram + '_ {
+            RdramImage::new(&self.0)
+        }
+    }
+
+    for (cull, taken) in [(true, true), (true, false), (false, true), (false, false)] {
+        let mut b = DlBuilder::new();
+        let projection = b.matrix(n64_gbi::gu::gu_scale(1.0, 1.0, 1.0));
+        let vp = b.viewport(Vp {
+            vscale: [640, 480, 511, 0],
+            vtrans: [640, 480, 511, 0],
+        });
+        let v = vertex(&mut b, &[[if cull && taken { 2 } else { 0 }, 0, 0]]);
+        let later_v = vertex(&mut b, &[[1, 1, 1]]);
+        let target = b.list("target", &[MARK, END]);
+        let control = if cull {
+            CULL
+        } else {
+            (BRANCH, if taken { 512 << 16 } else { 510 << 16 })
+        };
+        let entry = b.list(
+            "main",
+            &[
+                gsp_matrix(projection, true, true, false),
+                gsp_viewport(vp),
+                gsp_vertex(0, 1, v),
+                (HALF, target),
+                control,
+                gsp_vertex(1, 1, later_v),
+                END,
+            ],
+        );
+        let built = b.finish("main");
+        let hardware = Image(built.rdram);
+        let recording = RecordingHardware::new(&hardware);
+        let result = interpret(
+            recording.rdram(),
+            entry as u64,
+            GbiUcode::F3dex2,
+            GbiDataFormat::Fixed,
+        );
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
+        let task = recording
+            .finish(
+                entry as u64,
+                crate::Microcode::F3dex2,
+                crate::DataFormat::Fixed,
+                0,
+            )
+            .unwrap();
+        let mut expected = std::collections::BTreeSet::new();
+        for (address, length) in [(projection, 64), (vp, 16), (v, 6), (v + 8, 8), (entry, 40)] {
+            expected.extend(address as u64..(address + length) as u64);
+        }
+        if taken && !cull {
+            expected.extend(target as u64..target as u64 + 16);
+        }
+        if !taken {
+            expected.extend(entry as u64 + 40..entry as u64 + 56);
+            expected.extend(later_v as u64..later_v as u64 + 6);
+            expected.extend(later_v as u64 + 8..later_v as u64 + 16);
+        }
+        let recorded: std::collections::BTreeSet<_> = task
+            .spans
+            .iter()
+            .flat_map(|span| span.address..span.address + span.bytes.len() as u64)
+            .collect();
+        assert_eq!(recorded, expected, "cull={cull} taken={taken}");
+        drop(hardware);
+        let replay = ReplayHardware::new(&task, None).unwrap();
+        assert_eq!(
+            interpret(
+                replay.rdram(),
+                entry as u64,
+                GbiUcode::F3dex2,
+                GbiDataFormat::Fixed
+            ),
+            result
+        );
+        replay.check().unwrap();
+    }
+}
+
+#[test]
+fn branchz_preserves_load_matrix() {
+    let mut b = DlBuilder::new();
+    let old = b.matrix(n64_gbi::gu::gu_scale(1.0, 1.0, 0.5));
+    let new = b.matrix(n64_gbi::gu::gu_scale(1.0, 1.0, 4.0));
+    let vp = b.viewport(Vp {
+        vscale: [640, 480, 100, 0],
+        vtrans: [640, 480, 200, 0],
+    });
+    let v = vertex(&mut b, &[[0, 0, 1]]);
+    let target = b.list("target", &[MARK, END]);
+    let entry = b.list(
+        "main",
+        &[
+            gsp_matrix(old, true, true, false),
+            gsp_viewport(vp),
+            gsp_vertex(0, 1, v),
+            gsp_matrix(new, true, true, false),
+            (HALF, target),
+            (BRANCH, 255 << 16),
+            (0x0100_1002, 0xffff_fff0),
+            END,
+        ],
+    );
+    let mut expected = offsets(entry, &[0, 1, 2, 3, 4, 5]);
+    expected.extend([target as u64, target as u64 + 8]);
+    let r = walk(b, &expected);
+    assert!(r.diags.is_empty(), "{:?}", r.diags);
 }

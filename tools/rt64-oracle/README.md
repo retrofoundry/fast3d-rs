@@ -63,7 +63,7 @@ writers are `write_rt64_sm64_hud_us_copy_fixture` and
 both. Require maximum channel difference below 8 and zero pixels over 8;
 use `--threshold 7 --max-diff-pixels 0` for the strict gate below.
 
-The `write_rt64_f3dex2_` writers export five authored IMAGE fixtures with their
+The `write_rt64_f3dex2_` writers export seven authored IMAGE fixtures with their
 own F3DEX2 setup, identity modelview, fixed projection and cleared color/depth:
 
 | Fixture | Independent pixel expectation |
@@ -72,6 +72,8 @@ own F3DEX2 setup, identity modelview, fixed projection and cleared color/depth:
 | `f3dex2-modify-st` | The same bands, sampling a three-color texture. ST modifications replace the half-scaled load coordinates with unit-scale texel coordinates. |
 | `f3dex2-modify-xy` | Yellow squares at `[40,112) × [40,112)` and `[176,248) × [40,112)`, from drawing before and after replacing XY. |
 | `f3dex2-modify-z` | Red, blue, red bands at the same bounds/splits. Red starts in front of a blue rectangle, moves behind it at Z=0.75, then in front at Z=0.25. |
+| `f3dex2-branchz-below` | Green square at `[40,112) × [40,112)` and blue square at `[176,248) × [40,112)`. Slot 3 loads at raw screen Z=383.25; a segmented tail branch at threshold 511 returns to the original caller. |
+| `f3dex2-branchz-above` | Red square at the left bounds and blue square at the right bounds. Slot 3 loads at raw screen Z=638.75 and falls through at threshold 511. |
 | `f3dex2-quad-winding` | Two independent triangles encoded by `07000204/0006080A`. Rows at y=32,104,176 select no culling, back culling and front culling. Each triangle is 64×48; left red and right green have opposite winding. |
 
 `f3dex2_fixture_pixels` checks every pixel, including the black background, on
@@ -95,6 +97,11 @@ output byte-identical to its QUAD render and leaves that difference unchanged,
 so both renderers dispatch QUAD as TRI2 and the mask belongs to edge coverage on
 sloped edges. Read it as a diagnostic, not as agreement or as a QUAD defect.
 
+The two BRANCH_Z fixtures are oracle-gated; neither uses equality or MODIFYVTX.
+CULLDL, threshold equality (`<=`), and modified raw Z have SDK-derived command-read
+sequence assertions in `conditional_control.rs`. rt64 leaves CULLDL empty and
+uses `<` for BRANCH_Z, so those assertions are independent of the oracle.
+
 Run each fixture through both renderers, then compare. The rt64 command opens a
 window. Its PNG comes from RDRAM readback, before VI filtering or presentation
 scaling. Claude should run this part in the GPU session. The loop reports
@@ -114,7 +121,7 @@ The second loop applies their separate RGBA16 oracle quantization budget.
 for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point \
   tlut-ci4-rgba16-banks tlut-ci4-ia16-banks \
   f3dex2-modify-rgba f3dex2-modify-st f3dex2-modify-xy f3dex2-modify-z \
-  f3dex2-quad-winding; do
+  f3dex2-quad-winding f3dex2-branchz-below f3dex2-branchz-above; do
   devenv shell -- cargo run -p fast3d --features capture \
     --example export_capture_rdram -- \
     "/tmp/fast3d-oracle/$scene.f3dcap" "/tmp/fast3d-oracle/$scene" || break
@@ -132,7 +139,8 @@ for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point \
     320 240 --diff-mask "/tmp/fast3d-oracle/$scene-diff.png" || break
 done
 
-for scene in tlut-ci4-rgba16-banks tlut-ci4-ia16-banks; do
+for scene in tlut-ci4-rgba16-banks tlut-ci4-ia16-banks \
+  f3dex2-branchz-below f3dex2-branchz-above; do
   devenv shell -- cargo run -p fast3d --example compare_rgba8 -- \
     "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
     320 240 --threshold 7 --max-diff-pixels 0 \

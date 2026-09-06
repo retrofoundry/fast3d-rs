@@ -11,9 +11,19 @@ enum Case {
     Xy,
     Z,
     Quad,
+    BranchBelow,
+    BranchAbove,
 }
 
-const CASES: [Case; 5] = [Case::Rgba, Case::St, Case::Xy, Case::Z, Case::Quad];
+const CASES: [Case; 7] = [
+    Case::Rgba,
+    Case::St,
+    Case::Xy,
+    Case::Z,
+    Case::Quad,
+    Case::BranchBelow,
+    Case::BranchAbove,
+];
 const RED: [u8; 4] = [255, 0, 0, 255];
 const GREEN: [u8; 4] = [0, 255, 0, 255];
 const BLUE: [u8; 4] = [0, 0, 255, 255];
@@ -28,6 +38,8 @@ impl Case {
             Self::Xy => "f3dex2-modify-xy",
             Self::Z => "f3dex2-modify-z",
             Self::Quad => "f3dex2-quad-winding",
+            Self::BranchBelow => "f3dex2-branchz-below",
+            Self::BranchAbove => "f3dex2-branchz-above",
         }
     }
 }
@@ -106,6 +118,9 @@ fn setup(b: &mut DlBuilder) -> Vec<Command> {
 fn scene(case: Case) -> Built {
     let mut b = DlBuilder::new();
     let mut dl = setup(&mut b);
+    if matches!(case, Case::BranchBelow | Case::BranchAbove) {
+        return branch_scene(b, dl, case);
+    }
     if matches!(case, Case::Quad) {
         for (top, cull) in [(32, 0), (104, G_CULL_BACK), (176, G_CULL_FRONT)] {
             let vertices = b.vertices(&[
@@ -210,16 +225,61 @@ fn scene(case: Case) -> Built {
     b.finish("main")
 }
 
+fn branch_scene(mut b: DlBuilder, mut dl: Vec<Command>, case: Case) -> Built {
+    let red = rectangle(
+        &mut b,
+        40,
+        112,
+        if matches!(case, Case::BranchBelow) {
+            -32
+        } else {
+            32
+        },
+        RED,
+    );
+    let green = rectangle(&mut b, 40, 112, 0, GREEN);
+    let blue = rectangle(&mut b, 176, 248, 0, BLUE);
+    let target = b.list(
+        "target",
+        &[
+            gsp_vertex(0, 4, green),
+            gsp_2triangles(0, 1, 2, 0, 2, 3),
+            gsp_enddl(),
+        ],
+    );
+    let mut child = gsp_branch_less_z_raw(0x0700_0008, 3, 511 << 16).to_vec();
+    child.extend([gsp_2triangles(0, 1, 2, 0, 2, 3), gsp_enddl()]);
+    let child = b.list("child", &child);
+    dl.extend([
+        gsp_vertex(0, 4, red),
+        gsp_segment(7, target - 8),
+        gsp_displaylist(child),
+        gsp_vertex(0, 4, blue),
+        gsp_2triangles(0, 1, 2, 0, 2, 3),
+        gdp_pipe_sync(),
+        (0xe900_0000, 0),
+        gsp_enddl(),
+    ]);
+    b.list("main", &dl);
+    b.finish("main")
+}
+
 fn fixture(case: Case) -> Fixture {
     let built = scene(case);
     super::capture_fixture::make_image(built.rdram, built.entry, Microcode::F3dex2, 320, 240, Provenance {
-        decomp_revision: "libultra gbi.h; authored library-contract PR 4".into(),
-        source_symbols: "gsSPModifyVertex, gsSP2Triangles, gsSP1Quadrangle".into(),
+        decomp_revision: if matches!(case, Case::BranchBelow | Case::BranchAbove) {
+            "libultra gbi.h; authored library-contract PR 5"
+        } else { "libultra gbi.h; authored library-contract PR 4" }.into(),
+        source_symbols: if matches!(case, Case::BranchBelow | Case::BranchAbove) {
+            "gsSPBranchLessZraw, gsSPDisplayList, gsSPSegment, gsSP2Triangles"
+        } else { "gsSPModifyVertex, gsSP2Triangles, gsSP1Quadrangle" }.into(),
         command_vector: match case {
             Case::Rgba => "RGBA 02100000/00FF00FF then 02100000/0000FFFF, slots 0..3; red/green/blue strips",
             Case::St => "ST 02140000/01800040 then 02140000/03000040, slots 0..3; half texture scale at load, unit scale after modify; red/green/blue strips",
             Case::Xy => "XY 02180000/02C000A0 for slot 0; translate [40,112)x[40,112) to [176,248)x[40,112)",
             Case::Z => "Z 021C0000/0000C000 then 021C0000/00004000, slots 0..3; red foreground moves behind blue then in front; red/blue/red strips",
+            Case::BranchBelow => "E1000000/07000008; 0400F006/01FF0000: slot 3 raw screen Z=383.25 < 511, segmented tail branch in child; green left square, blue caller continuation",
+            Case::BranchAbove => "E1000000/07000008; 0400F006/01FF0000: slot 3 raw screen Z=638.75 > 511, child falls through; red left square, blue caller continuation",
             Case::Quad => "07000204/0006080A: independent triangles (0,1,2), (3,4,5), opposite winding; no cull, cull back, cull front",
         }.into(),
         synthetic_data: "IMAGE BE commands, fixed vertices/matrices, 320x240 RGBA16 color at 0x100000 and cleared depth at 0x200000; flat primary colors, point-sampled texture; no game capture".into(),
@@ -228,6 +288,19 @@ fn fixture(case: Case) -> Fixture {
 
 fn expected(case: Case, x: u32, y: u32) -> [u8; 4] {
     match case {
+        Case::BranchBelow | Case::BranchAbove if (40..112).contains(&y) => {
+            if (40..112).contains(&x) {
+                if matches!(case, Case::BranchBelow) {
+                    GREEN
+                } else {
+                    RED
+                }
+            } else if (176..248).contains(&x) {
+                BLUE
+            } else {
+                BLACK
+            }
+        }
         Case::Quad => {
             for (top, red, green) in [(32, true, true), (104, false, true), (176, true, false)] {
                 if (top..top + 48).contains(&y) {
@@ -339,4 +412,33 @@ fn write_rt64_f3dex2_modify_z_fixture() {
 #[ignore = "writes an RT64 oracle fixture to FAST3D_WRITE_FIXTURES"]
 fn write_rt64_f3dex2_quad_winding_fixture() {
     write(Case::Quad);
+}
+
+#[test]
+#[ignore = "writes an RT64 oracle fixture to FAST3D_WRITE_FIXTURES"]
+fn write_rt64_f3dex2_branchz_below_fixture() {
+    write(Case::BranchBelow);
+}
+
+#[test]
+#[ignore = "writes an RT64 oracle fixture to FAST3D_WRITE_FIXTURES"]
+fn write_rt64_f3dex2_branchz_above_fixture() {
+    write(Case::BranchAbove);
+}
+
+#[test]
+fn f3dex2_branchz_fixture_command_sequences() {
+    for (case, color, commands) in [(Case::BranchBelow, GREEN, 36), (Case::BranchAbove, RED, 35)] {
+        let built = scene(case);
+        let result = crate::hle::interpret_rdram(&built.rdram, built.entry);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
+        assert_eq!(result.commands, commands);
+        let colors: Vec<_> = result
+            .scene
+            .indices
+            .iter()
+            .map(|&index| result.scene.cn[index as usize].to_le_bytes())
+            .collect();
+        assert_eq!(colors, [vec![color; 6], vec![BLUE; 6]].concat());
+    }
 }
