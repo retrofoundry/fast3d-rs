@@ -45,6 +45,10 @@ pub enum DiagKind {
         count: u32,
         end: u32,
     },
+    InvalidModifyVertex {
+        index: u32,
+        attribute: u32,
+    },
     UnhandledMovemem(u8),
     UnhandledMoveword(u8),
     NonCanonicalBlend,
@@ -87,6 +91,7 @@ impl DiagKind {
             | DiagKind::TruncatedRect { .. }
             | DiagKind::DrawBeforeCimg
             | DiagKind::VtxOutOfRange { .. }
+            | DiagKind::InvalidModifyVertex { .. }
             | DiagKind::NoTextureLoaded
             | DiagKind::SecondTextureUndecodable
             | DiagKind::UnhandledMovemem(_)
@@ -149,6 +154,9 @@ impl std::fmt::Display for DiagKind {
             }
             DiagKind::VtxOutOfRange { count, end } => {
                 write!(f, "G_VTX out of range: count={count}, end={end}")
+            }
+            DiagKind::InvalidModifyVertex { index, attribute } => {
+                write!(f, "invalid MODIFYVTX slot or attribute: index={index}, attribute={attribute:#04x}")
             }
             DiagKind::UnhandledMovemem(idx) => write!(f, "unhandled MOVEMEM index 0x{idx:02X}"),
             DiagKind::UnhandledMoveword(ty) => write!(f, "unhandled G_MOVEWORD type 0x{ty:02X}"),

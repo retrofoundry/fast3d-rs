@@ -123,7 +123,7 @@ fn phase4_modify_vertex_rgba_patches_bytes_and_clears_lighting_and_fog() {
     scene.light_count[0] = 3;
     scene.fog[0] = 1;
 
-    rsp.modify_vertex(0, 0x10, 0x1122_3344, &mut scene);
+    rsp.modify_vertex(0, 0x10, 0x1122_3344, &mut scene).unwrap();
 
     assert_eq!(scene.cn[0], 0x4433_2211);
     assert_eq!(scene.light_index[0], 0);
@@ -148,7 +148,7 @@ fn phase4_modify_vertex_st_uses_final_texel_space_unit_scale() {
     scene.texgen_mode[0] = 2;
     scene.lookat_index[0] = 9;
 
-    rsp.modify_vertex(0, 0x14, 0xFFE0_0020, &mut scene);
+    rsp.modify_vertex(0, 0x14, 0xFFE0_0020, &mut scene).unwrap();
     rsp.finish(&mut scene);
 
     assert_eq!(scene.raw_st[0], [-1.0, 1.0]);
@@ -174,8 +174,8 @@ fn phase4_modify_vertex_screen_fields_accumulate_flags_and_values() {
         &mut scene,
     );
 
-    rsp.modify_vertex(0, 0x18, 0x0080_0040, &mut scene);
-    rsp.modify_vertex(0, 0x1C, 0x0000_8000, &mut scene);
+    rsp.modify_vertex(0, 0x18, 0x0080_0040, &mut scene).unwrap();
+    rsp.modify_vertex(0, 0x1C, 0x0000_8000, &mut scene).unwrap();
 
     assert_eq!(scene.modify_flags[0], 3);
     assert_eq!(scene.modify_screen[0], [32.0, 16.0, 0.5, 0.0]);
@@ -201,7 +201,7 @@ fn phase4_modify_vertex_after_draw_copies_row_without_retroactive_edit() {
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
     let original_cn = scene.cn[0];
 
-    rsp.modify_vertex(0, 0x10, 0xA1B2_C3D4, &mut scene);
+    rsp.modify_vertex(0, 0x10, 0xA1B2_C3D4, &mut scene).unwrap();
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
 
     assert_eq!(scene.indices, vec![0, 1, 2, 3, 1, 2]);
@@ -232,7 +232,7 @@ fn culled_triangle_does_not_make_later_modify_clone_vertex() {
     rsp.modify_geometry_mode(u32::MAX, crate::hle::consts::G_CULL_BOTH);
 
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
-    rsp.modify_vertex(0, 0x10, 0xA1B2_C3D4, &mut scene);
+    rsp.modify_vertex(0, 0x10, 0xA1B2_C3D4, &mut scene).unwrap();
 
     assert!(scene.indices.is_empty());
     assert!(scene.draw_runs.is_empty());
@@ -299,14 +299,18 @@ fn phase4_modify_vertex_screen_override_renders_requested_pixel_and_depth() {
         .into_iter()
         .enumerate()
     {
-        rsp.modify_vertex(slot as u32, 0x18, packed_xy(x, y), &mut scene);
-        rsp.modify_vertex(slot as u32, 0x1C, 0x0000_C000, &mut scene);
+        rsp.modify_vertex(slot as u32, 0x18, packed_xy(x, y), &mut scene)
+            .unwrap();
+        rsp.modify_vertex(slot as u32, 0x1C, 0x0000_C000, &mut scene)
+            .unwrap();
     }
     // Foreground triangle surrounds N64 screen pixel (160,120), which maps to target pixel (32,32).
     for (slot, [x, y]) in [[120, 80], [200, 80], [160, 160]].into_iter().enumerate() {
         let slot = (slot + 3) as u32;
-        rsp.modify_vertex(slot, 0x18, packed_xy(x, y), &mut scene);
-        rsp.modify_vertex(slot, 0x1C, 0x0000_8000, &mut scene);
+        rsp.modify_vertex(slot, 0x18, packed_xy(x, y), &mut scene)
+            .unwrap();
+        rsp.modify_vertex(slot, 0x1C, 0x0000_8000, &mut scene)
+            .unwrap();
     }
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
     rsp.draw_tri(3, 4, 5, 1, 0, [0; 4], &mut scene, None);

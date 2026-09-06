@@ -195,6 +195,14 @@ pub fn gsp_vertex(v0: u8, n: u8, addr: u32) -> (u32, u32) {
     (w0, addr)
 }
 
+/// F3DEX2 cache index and attribute offset; `val` contains the packed attribute.
+pub fn gsp_modifyvertex(vtx: u16, r#where: u8, val: u32) -> (u32, u32) {
+    let w0 = shiftl(G_MODIFYVTX as u32, 24, 8)
+        | shiftl(r#where as u32, 16, 8)
+        | shiftl(vtx as u32, 1, 15);
+    (w0, val)
+}
+
 pub fn gsp_spnoop() -> (u32, u32) {
     ((G_SPNOOP as u32) << 24, 0)
 }
@@ -264,6 +272,12 @@ pub fn gsp_2triangles(v0: u8, v1: u8, v2: u8, v3: u8, v4: u8, v5: u8) -> (u32, u
         | (((v4 as u32 * 2) & 0xFF) << 8)
         | ((v5 as u32 * 2) & 0xFF);
     (w0, w1)
+}
+
+/// F3DEX2 quadrangle: triangles (v0, v1, v2) and (v0, v2, v3).
+pub fn gsp_quad(v0: u8, v1: u8, v2: u8, v3: u8) -> (u32, u32) {
+    let (w0, w1) = gsp_2triangles(v0, v1, v2, v0, v2, v3);
+    ((w0 & 0x00ff_ffff) | ((G_QUAD as u32) << 24), w1)
 }
 
 /// gsSPMatrix(addr, proj, load, push). DMA2P: w0 |= ((64-1)/8)<<19 length field; stream

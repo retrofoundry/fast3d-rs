@@ -197,8 +197,12 @@ fn move_word<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
         G_MW_MATRIX | G_MW_CLIP | G_MW_PERSPNORM => {}
         G_MW_POINTS => {
             let offset = c.p0(8, 16);
-            cx.rsp
-                .modify_vertex(offset / 40, offset % 40, c.w1, cx.scene);
+            if let Err(kind) = cx
+                .rsp
+                .modify_vertex(offset / 40, offset % 40, c.w1, cx.scene)
+            {
+                cx.diags.push(Diagnostic { at: cx.pc, kind });
+            }
         }
         G_MW_NUMLIGHT => {
             let n = ((c.w1.wrapping_sub(0x8000_0000)) >> 5).wrapping_sub(1);

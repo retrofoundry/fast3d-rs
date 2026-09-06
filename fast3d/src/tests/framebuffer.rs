@@ -177,7 +177,8 @@ fn framebuffer_modify_xy_uses_pair_extent() {
         .into_iter()
         .enumerate()
     {
-        rsp.modify_vertex(slot as u32, 0x18, packed, &mut scene);
+        rsp.modify_vertex(slot as u32, 0x18, packed, &mut scene)
+            .unwrap();
     }
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
     rsp.draw_tri(0, 2, 3, 0, 0, [0; 4], &mut scene, None);
