@@ -11,6 +11,12 @@ pub enum CullKind {
     Cull,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrimitiveDepth {
+    pub z: u16,
+    pub dz: u16,
+}
+
 /// A contiguous run of `scene.indices` sharing one cull state, emitted as one `draw_indexed`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DrawRun {

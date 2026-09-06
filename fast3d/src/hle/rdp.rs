@@ -2,8 +2,8 @@ use crate::diag::{DiagKind, Diagnostic};
 use crate::hle::consts::rdp::{
     G_LOADBLOCK, G_LOADTILE, G_LOADTLUT, G_NOOP, G_RDPFULLSYNC, G_RDPHALF_1, G_RDPHALF_2,
     G_RDPLOADSYNC, G_RDPPIPESYNC, G_RDPSETOTHERMODE, G_RDPTILESYNC, G_SETBLENDCOLOR, G_SETCIMG,
-    G_SETCOMBINE, G_SETENVCOLOR, G_SETFILLCOLOR, G_SETFOGCOLOR, G_SETPRIMCOLOR, G_SETSCISSOR,
-    G_SETTILE, G_SETTILESIZE, G_SETZIMG,
+    G_SETCOMBINE, G_SETENVCOLOR, G_SETFILLCOLOR, G_SETFOGCOLOR, G_SETPRIMCOLOR, G_SETPRIMDEPTH,
+    G_SETSCISSOR, G_SETTILE, G_SETTILESIZE, G_SETZIMG,
 };
 use crate::hle::interp::{Cmd, Ctx, Handler};
 use crate::hle::mem::Rdram;
@@ -54,6 +54,7 @@ pub struct Rdp {
     pub fog_mul: i16,      // gSPFogPosition fm
     pub fog_offset: i16,   // gSPFogPosition fo
     pub prim: [u8; 4],
+    pub prim_depth: crate::scene::PrimitiveDepth,
     /// LOD fraction captured from G_SETPRIMCOLOR w0 low byte. On N64 hardware the
     /// primitive LOD fraction = lodFrac / 256.0. Feeds the combiner PRIM_LOD_FRAC selector. Default 0.0.
     pub prim_lod_frac: f32,
@@ -104,6 +105,7 @@ pub(crate) fn install_defaults<M: Rdram>(t: &mut [Handler<M>; 256]) {
     t[G_LOADTILE as usize] = load_tile::<M>;
     t[G_LOADTLUT as usize] = load_tlut::<M>;
     t[G_SETPRIMCOLOR as usize] = set_prim_color::<M>;
+    t[G_SETPRIMDEPTH as usize] = set_prim_depth::<M>;
     t[G_SETENVCOLOR as usize] = set_env_color::<M>;
     t[G_SETFOGCOLOR as usize] = set_fog_color::<M>;
     t[G_SETBLENDCOLOR as usize] = set_blend_color::<M>;
@@ -158,6 +160,13 @@ fn set_prim_color<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 fn set_env_color<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     cx.rdp.env = c.w1.to_be_bytes();
     cx.rsp.material_dirty = true;
+}
+
+fn set_prim_depth<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+    cx.rdp.prim_depth = crate::scene::PrimitiveDepth {
+        z: (c.w1 >> 16) as u16,
+        dz: c.w1 as u16,
+    };
 }
 
 fn set_fog_color<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {

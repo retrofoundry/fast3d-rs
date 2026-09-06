@@ -30,6 +30,7 @@ mod interp_tests;
 mod lookat_roundtrip;
 mod math_rdram;
 mod matrix_stack;
+mod prim_depth;
 mod render;
 mod renderer_hooks;
 mod renderer_present;
