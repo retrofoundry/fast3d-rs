@@ -81,9 +81,24 @@ Screen-change preservation across copies has a separate interpreter assertion:
 rt64's GPU modification records do not carry earlier screen overrides into a
 later copy, so that case is not an rt64 parity claim.
 
+`f3dex2-modify-rgba`, `f3dex2-modify-st`, `f3dex2-modify-xy` and `f3dex2-modify-z`
+match rt64 exactly and can be gated with `--threshold 0 --max-diff-pixels 0`.
+`f3dex2-quad-winding` cannot: its acceptance rests on the independent per-pixel
+and culling assertions in `fast3d/src/tests/f3dex2_fixtures.rs`.
+
+That fixture's rt64 comparison carries a known triangle-coverage difference,
+unrelated to QUAD: 192 pixels over a threshold of 8 within `(41,32)..(239,223)`,
+where rt64 covers one extra pixel per row per visible triangle along the 4:3
+hypotenuse, in all three culling bands. Replacing each `07000204/0006080A`
+command in the exported RDRAM with TRI2 (`06000204/0006080A`) produces rt64
+output byte-identical to its QUAD render and leaves that difference unchanged,
+so both renderers dispatch QUAD as TRI2 and the mask belongs to edge coverage on
+sloped edges. Read it as a diagnostic, not as agreement or as a QUAD defect.
+
 Run each fixture through both renderers, then compare. The rt64 command opens a
 window. Its PNG comes from RDRAM readback, before VI filtering or presentation
-scaling. Claude should run this part in the GPU session.
+scaling. Claude should run this part in the GPU session. The loop reports
+differences without enforcing a budget.
 
 The `write_rt64_tlut_` writers produce `tlut-ci4-rgba16-banks` and
 `tlut-ci4-ia16-banks`. Each loads independent CI4 palettes into TMEM words
