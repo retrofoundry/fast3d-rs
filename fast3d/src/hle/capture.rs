@@ -915,6 +915,7 @@ impl Rdram for ReplayRdram<'_> {
             return Err(memory_error(address, stride, MemoryErrorKind::Unavailable));
         }
         self.vertex(address, format)
+            .map_err(|error| memory_error(address, stride, error.kind))
     }
     fn is_rdram_image(&self) -> bool {
         self.layout().address_space == AddressSpace::Image
