@@ -140,3 +140,42 @@ fn roundtrip_set_scissor() {
     assert_eq!(pair.ops.len(), 1);
     assert!(matches!(pair.ops[0], crate::hle::SceneOp::FillRect { .. }));
 }
+
+#[test]
+fn tlut_count_and_destination_roundtrip() {
+    let mut bytes: Vec<_> = [
+        gdp_set_texture_image(0, 2, 1, 0x40),
+        gdp_set_tile(0, 2, 0, 0x1fe, 3, 0, 0, 0, 0, 0, 0, 0),
+        gdp_load_tlut(3, 2),
+        gsp_enddl(),
+    ]
+    .into_iter()
+    .flat_map(|(w0, w1)| [w0.to_be_bytes(), w1.to_be_bytes()].concat())
+    .collect();
+    bytes.resize(0x40, 0);
+    bytes.extend([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc]);
+    let result = crate::hle::interpret_rdram(&bytes, 0);
+    assert!(result.diags.is_empty(), "{:?}", result.diags);
+    assert_eq!(result.rdp.tiles[3].tmem_addr, 0x1fe);
+    assert_eq!(
+        &result.rdp.tmem_bank.palette()[0x7f0..],
+        &[
+            0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0x56, 0x78, 0x56, 0x78,
+            0x56, 0x78,
+        ]
+    );
+    let tile = crate::hle::rdp::TileDescriptor {
+        fmt: 3,
+        siz: 2,
+        width: 8,
+        height: 1,
+        ..Default::default()
+    };
+    assert_eq!(
+        result.rdp.tmem_bank.sample_tile(&tile, 0),
+        [
+            0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a,
+            0x9a, 0xbc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]
+    );
+}

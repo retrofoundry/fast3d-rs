@@ -189,22 +189,16 @@ impl Tmem {
         }
     }
 
-    /// Hardware-faithful LoadTLUT write (single-row).
-    ///
-    /// Writes `count` 16-bit big-endian palette entries from `entries_be` (packed, `count*2` bytes
-    /// as read from RDRAM) into the palette region. The N64 keeps the TLUT in TMEM's upper half at a
-    /// stride-8 cadence — one 16-bit entry per 64-bit word — so entry `i` lands at
-    /// `(dst_word << 3) + i*8`; the standard palette-0 load uses `dst_word == 0x100` ([`PALETTE_BASE`]).
-    /// The write is DIRECT — no per-row odd-line swap — and populates only the 2 payload bytes per
-    /// word, since `load_palette_entry` reads exactly `paddr`/`paddr+1`.
+    /// Load packed BE halfwords, repeating each across its destination word.
+    /// `dst_word` is a 64-bit TMEM word address; writes wrap at 4 KiB.
     pub fn write_tlut(&mut self, entries_be: &[u8], count: usize, dst_word: usize) {
         let base = (dst_word << 3) & MASK8;
         for i in 0..count {
-            let hi = entries_be.get(i * 2).copied().unwrap_or(0);
-            let lo = entries_be.get(i * 2 + 1).copied().unwrap_or(0);
+            let entry = &entries_be[i * 2..i * 2 + 2];
             let addr = (base + i * 8) & MASK8;
-            self.bytes[addr] = hi;
-            self.bytes[addr + 1] = lo;
+            for halfword in self.bytes[addr..addr + 8].chunks_exact_mut(2) {
+                halfword.copy_from_slice(entry);
+            }
         }
     }
 

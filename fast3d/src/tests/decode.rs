@@ -244,3 +244,47 @@ fn ci8_tlut_has_correct_count_and_content() {
         "slot after last loaded entry must be zero"
     );
 }
+
+#[test]
+fn tlut_truncated_source_rejects_task() {
+    use n64_gbi::encode::*;
+    let mut bytes: Vec<_> = [
+        gdp_set_tile(0, 2, 0, 0x100, 7, 0, 0, 0, 0, 0, 0, 0),
+        gdp_set_texture_image(0, 2, 1, 0x80),
+        gdp_load_tlut(7, 0),
+        gdp_set_color_image(0, 2, 320, 0x0010_0000),
+        gdp_fill_rectangle(0, 0, 16, 16),
+        gdp_set_texture_image(0, 2, 1, 0x82),
+        gdp_load_tlut(7, 3),
+        gdp_set_env_color(0xff00_00ff),
+        gdp_fill_rectangle(16, 0, 32, 16),
+        gsp_enddl(),
+    ]
+    .into_iter()
+    .flat_map(|(w0, w1)| [w0.to_be_bytes(), w1.to_be_bytes()].concat())
+    .collect();
+    bytes.resize(0x80, 0);
+    bytes.extend([0xab, 0xcd, 0xf8, 0x01, 0x07, 0xc1, 0x00, 0x3f, 0xff]);
+    let result = crate::hle::interpret_rdram(&bytes, 0);
+    assert_eq!(
+        result.diags,
+        [crate::Diagnostic {
+            at: 48,
+            kind: crate::DiagKind::DlPastRdram
+        }]
+    );
+    assert_eq!(result.commands, 7);
+    assert_eq!(result.dropped_runs, 1);
+    assert!(result.scene.framebuffer_pairs.is_empty());
+    assert!(result.scene.draw_runs.is_empty());
+    assert!(result.scene.indices.is_empty());
+    assert_eq!(result.rdp.env, [0; 4]);
+    assert_eq!(&result.rdp.tmem_bank.palette()[..8], [0xab, 0xcd].repeat(4));
+    assert!(result.rdp.tmem_bank.palette()[8..].iter().all(|&b| b == 0));
+
+    bytes.push(0xff);
+    let complete = crate::hle::interpret_rdram(&bytes, 0);
+    assert!(complete.diags.is_empty(), "{:?}", complete.diags);
+    assert_eq!(complete.rdp.env, [255, 0, 0, 255]);
+    assert_eq!(&complete.rdp.tmem_bank.palette()[24..32], &[0xff; 8]);
+}
