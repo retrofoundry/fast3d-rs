@@ -244,7 +244,10 @@ fn failed_task_submits_no_operations() {
         (8, 1, 0, 2, false)
     );
     assert_eq!(renderer.frame_scenes.len(), 1);
-    assert_eq!(renderer.last_scanout_addr, Some(0x1000));
+    assert_eq!(
+        renderer.last_scanout_addr,
+        Some(crate::render::workload::TargetId::Guest(0x1000))
+    );
     assert!(!renderer.inner.has_fb(0x2000));
     assert_eq!(scanout(&mut renderer), before);
 }

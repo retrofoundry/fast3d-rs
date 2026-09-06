@@ -98,7 +98,8 @@ pub fn pixels_from_render(
     format: wgpu::TextureFormat,
     render: impl FnOnce(&wgpu::TextureView),
 ) -> Vec<u8> {
-    let bytes_per_row = w * 4;
+    let row_bytes = w * 4;
+    let bytes_per_row = row_bytes.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("facade-target"),
         size: wgpu::Extent3d {
@@ -157,7 +158,10 @@ pub fn pixels_from_render(
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     rx.recv().unwrap().unwrap();
     let data = slice.get_mapped_range();
-    let out = data.to_vec();
+    let mut out = Vec::with_capacity((row_bytes * h) as usize);
+    for row in data.chunks(bytes_per_row as usize) {
+        out.extend_from_slice(&row[..row_bytes as usize]);
+    }
     drop(data);
     readback.unmap();
     out

@@ -10,7 +10,7 @@ pub mod microcode;
 pub(crate) mod render;
 pub(crate) mod scene;
 
-use crate::render::SceneRenderer;
+use crate::render::{workload::TargetId, SceneRenderer};
 use crate::scene::Scene;
 
 // ── New vNext public API (spec §3.6): structured diagnostics ──
@@ -179,7 +179,7 @@ pub struct Renderer {
     target: PresentTarget,
     inner: SceneRenderer,
     pub(crate) frame_scenes: Vec<Scene>,
-    pub(crate) last_scanout_addr: Option<u64>,
+    pub(crate) last_scanout_addr: Option<TargetId>,
     pub(crate) last_backend_was_image: bool,
     pub(crate) surface_format: wgpu::TextureFormat,
     /// Guest DL vertex/matrix layout, selected via `set_data_format`. Survives `reconfigure`.
@@ -561,18 +561,19 @@ pub(crate) fn fb_address(origin: u32) -> u64 {
 pub(crate) fn select_scanout_source(
     vi: Option<ViRegisters>,
     last_backend_was_image: bool,
-    last_scanout_addr: Option<u64>,
+    last_scanout_addr: Option<TargetId>,
     fb_present: impl Fn(u64) -> bool,
-) -> Option<u64> {
+) -> Option<TargetId> {
     vi.filter(|_| last_backend_was_image)
         .map(|v| fb_address(v.origin))
         .filter(|addr| fb_present(*addr))
+        .map(TargetId::Guest)
         .or(last_scanout_addr)
 }
 
 impl Renderer {
     #[allow(dead_code)] // RJ bridge: consumed by `present_to`/`present` (P3.9b/P3.9c).
-    fn scanout_source(&self, vi: Option<ViRegisters>) -> Option<u64> {
+    fn scanout_source(&self, vi: Option<ViRegisters>) -> Option<TargetId> {
         select_scanout_source(
             vi,
             self.last_backend_was_image,
@@ -743,7 +744,7 @@ mod present_headless_tests {
 
 #[cfg(test)]
 mod source_select_tests {
-    use super::{fb_address, select_scanout_source};
+    use super::{fb_address, select_scanout_source, TargetId};
     use crate::hardware::ViRegisters;
 
     fn vi(origin: u32) -> ViRegisters {
@@ -756,32 +757,58 @@ mod source_select_tests {
     #[test]
     fn rdram_image_with_vi_in_store_picks_vi_origin() {
         let origin = 0x0020_0000u32;
-        let got = select_scanout_source(Some(vi(origin)), true, Some(0x10_0000), |a| {
-            a == fb_address(origin)
-        });
-        assert_eq!(got, Some(fb_address(origin)));
+        let got = select_scanout_source(
+            Some(vi(origin)),
+            true,
+            Some(TargetId::Guest(0x10_0000)),
+            |a| a == fb_address(origin),
+        );
+        assert_eq!(got, Some(TargetId::Guest(fb_address(origin))));
     }
 
     #[test]
     fn rdram_image_with_vi_not_in_store_falls_back() {
-        let got = select_scanout_source(Some(vi(0x0090_0000)), true, Some(0x10_0000), |_| false);
+        let got = select_scanout_source(
+            Some(vi(0x0090_0000)),
+            true,
+            Some(TargetId::Guest(0x10_0000)),
+            |_| false,
+        );
         assert_eq!(
             got,
-            Some(0x10_0000),
+            Some(TargetId::Guest(0x10_0000)),
             "VI origin absent from store → last_scanout_addr"
         );
     }
 
     #[test]
     fn host_ram_ignores_vi_and_uses_last_scanout() {
-        let got = select_scanout_source(Some(vi(0x0020_0000)), false, Some(0x10_0000), |_| true);
-        assert_eq!(got, Some(0x10_0000));
+        let got = select_scanout_source(
+            Some(vi(0x0020_0000)),
+            false,
+            Some(TargetId::Guest(0x10_0000)),
+            |_| true,
+        );
+        assert_eq!(got, Some(TargetId::Guest(0x10_0000)));
+    }
+
+    #[test]
+    fn legacy_scanout_is_distinct_from_vi_zero() {
+        assert_eq!(
+            select_scanout_source(Some(vi(0)), true, Some(TargetId::Legacy), |_| false),
+            Some(TargetId::Legacy)
+        );
+        assert_eq!(
+            select_scanout_source(Some(vi(0)), true, Some(TargetId::Legacy), |address| address
+                == 0),
+            Some(TargetId::Guest(0))
+        );
     }
 
     #[test]
     fn no_vi_uses_last_scanout() {
-        let got = select_scanout_source(None, true, Some(0x10_0000), |_| true);
-        assert_eq!(got, Some(0x10_0000));
+        let got = select_scanout_source(None, true, Some(TargetId::Guest(0x10_0000)), |_| true);
+        assert_eq!(got, Some(TargetId::Guest(0x10_0000)));
     }
 
     #[test]
