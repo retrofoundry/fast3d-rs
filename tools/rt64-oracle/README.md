@@ -63,6 +63,24 @@ writers are `write_rt64_sm64_hud_us_copy_fixture` and
 both. Require maximum channel difference below 8 and zero pixels over 8;
 use `--threshold 7 --max-diff-pixels 0` for the strict gate below.
 
+The `write_rt64_f3dex2_` writers export five authored IMAGE fixtures with their
+own F3DEX2 setup, identity modelview, fixed projection and cleared color/depth:
+
+| Fixture | Independent pixel expectation |
+| --- | --- |
+| `f3dex2-modify-rgba` | Red, green and blue vertical bands inside `[40,248) × [40,112)`, split at x=104 and x=176. Draw, replace RGBA on all four slots, draw again. |
+| `f3dex2-modify-st` | The same bands, sampling a three-color texture. ST modifications replace the half-scaled load coordinates with unit-scale texel coordinates. |
+| `f3dex2-modify-xy` | Yellow squares at `[40,112) × [40,112)` and `[176,248) × [40,112)`, from drawing before and after replacing XY. |
+| `f3dex2-modify-z` | Red, blue, red bands at the same bounds/splits. Red starts in front of a blue rectangle, moves behind it at Z=0.75, then in front at Z=0.25. |
+| `f3dex2-quad-winding` | Two independent triangles encoded by `07000204/0006080A`. Rows at y=32,104,176 select no culling, back culling and front culling. Each triangle is 64×48; left red and right green have opposite winding. |
+
+`f3dex2_fixture_pixels` checks every pixel, including the black background, on
+forced fallback. The diagonal coverage rule uses pixel centers; no pixel center
+lies on a diagonal. These expectations pin the new images without `.bin` files.
+Screen-change preservation across copies has a separate interpreter assertion:
+rt64's GPU modification records do not carry earlier screen overrides into a
+later copy, so that case is not an rt64 parity claim.
+
 Run each fixture through both renderers, then compare. The rt64 command opens a
 window. Its PNG comes from RDRAM readback, before VI filtering or presentation
 scaling. Claude should run this part in the GPU session.
@@ -79,7 +97,9 @@ The second loop applies their separate RGBA16 oracle quantization budget.
 
 ```sh
 for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point \
-  tlut-ci4-rgba16-banks tlut-ci4-ia16-banks; do
+  tlut-ci4-rgba16-banks tlut-ci4-ia16-banks \
+  f3dex2-modify-rgba f3dex2-modify-st f3dex2-modify-xy f3dex2-modify-z \
+  f3dex2-quad-winding; do
   devenv shell -- cargo run -p fast3d --features capture \
     --example export_capture_rdram -- \
     "/tmp/fast3d-oracle/$scene.f3dcap" "/tmp/fast3d-oracle/$scene" || break

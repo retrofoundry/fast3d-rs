@@ -442,3 +442,46 @@ fn soa_raw_inputs_and_per_vertex_state_indices_track_mid_dl_matrices() {
     assert!((crate::hle::math::mul_row_vec4([1.0, 2.0, 3.0, 1.0], ma)[0] - 22.0).abs() < 1e-3);
     assert!((crate::hle::math::mul_row_vec4([1.0, 2.0, 3.0, 1.0], mb)[0] - (-18.0)).abs() < 1e-3);
 }
+
+#[test]
+fn modifyvtx_invalid_attribute_does_not_copy_used_vertex() {
+    let bytes = vtx_bytes(1, 2, 3, 10, 20, 30, 40);
+    let mem = RdramImage::new(&bytes);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    rsp.set_vertex(&mem, 0, 1, 7, &crate::hle::rdp::Rdp::default(), &mut scene);
+    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], &mut scene, None);
+    let before = scene.clone();
+    assert_eq!(
+        rsp.modify_vertex(7, 0x11, 0xffff_ffff, &mut scene),
+        Err(crate::DiagKind::InvalidModifyVertex {
+            index: 7,
+            attribute: 0x11
+        })
+    );
+    assert_eq!(scene, before);
+    rsp.modify_vertex(7, 0x10, 0x1122_3344, &mut scene).unwrap();
+    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], &mut scene, None);
+    assert_eq!(scene.cn, [0x281e_140a, 0x4433_2211]);
+    assert_eq!(scene.indices, [0, 0, 0, 1, 1, 1]);
+}
+
+#[test]
+fn modifyvtx_reload_resets_modifications() {
+    let bytes = vtx_bytes(1, 2, 3, 10, 20, 30, 40);
+    let mem = RdramImage::new(&bytes);
+    let mut rsp = Rsp::default();
+    let mut scene = Scene::default();
+    let rdp = crate::hle::rdp::Rdp::default();
+    rsp.set_vertex(&mem, 0, 1, 7, &rdp, &mut scene);
+    rsp.modify_vertex(7, 0x18, 0x0080_0100, &mut scene).unwrap();
+    rsp.modify_vertex(7, 0x1c, 0x0000_8000, &mut scene).unwrap();
+    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], &mut scene, None);
+    rsp.set_vertex(&mem, 0, 1, 7, &rdp, &mut scene);
+    rsp.modify_vertex(7, 0x10, 0x1122_3344, &mut scene).unwrap();
+    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], &mut scene, None);
+    assert_eq!(scene.indices, [0, 0, 0, 1, 1, 1]);
+    assert_eq!(scene.modify_flags, [3, 0]);
+    assert_eq!(scene.modify_screen, [[32.0, 64.0, 0.5, 0.0], [0.0; 4]]);
+    assert_eq!(scene.cn, [0x281e_140a, 0x4433_2211]);
+}
