@@ -1552,6 +1552,8 @@ pub struct RspProcessParams {
 }
 const _: () = assert!(std::mem::size_of::<RspProcessParams>() == 16);
 
+pub(crate) mod workload;
+
 const PAIRLESS_LOGICAL_EXTENT: (u32, u32) = (320, 240);
 
 fn pair_render_extent(pair: &crate::hle::FramebufferPair) -> (u32, u32) {
@@ -2497,6 +2499,7 @@ impl SceneRenderer {
         scene: &crate::hle::Scene,
         clear_policy: crate::ClearPolicy,
     ) -> Option<u64> {
+        let _workload = workload::Workload::new(scene);
         // Draw-nothing guard (RC/B3): mirrors render()'s empty-scene predicate at render/mod.rs:1853.
         // Returns None BEFORE creating any FB (unlike render()'s clear-only branch, which clears the
         // target) — so the store + last_scanout stay untouched.
@@ -2702,6 +2705,7 @@ impl SceneRenderer {
         scene: &crate::hle::Scene,
         target: &wgpu::TextureView,
     ) {
+        let _workload = workload::Workload::new(scene);
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 

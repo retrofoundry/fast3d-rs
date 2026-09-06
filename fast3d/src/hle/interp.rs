@@ -180,6 +180,7 @@ pub fn interpret<M: Rdram>(
     let mut return_stack: Vec<u64> = Vec::new();
     let mut dispatched: u64 = 0;
     let mut rec = crate::hle::rsp::PairRec::default();
+    let mut scissor_set = false;
 
     macro_rules! walk_try {
         ($access:ident, $result:expr) => {
@@ -415,6 +416,15 @@ pub fn interpret<M: Rdram>(
                     prim_depth: rdp.prim_depth,
                     fb_source,
                 });
+            scene.draw_origins.push(crate::scene::DrawOrigin {
+                pc,
+                scissor: rdp.scissor,
+                indices: 0..0,
+                rectangle: Some((
+                    rec.cur_pair,
+                    scene.framebuffer_pairs[rec.cur_pair].ops.len() - 1,
+                )),
+            });
             pc = next_pc;
             continue;
         }
@@ -494,10 +504,21 @@ pub fn interpret<M: Rdram>(
                     convert: rdp.convert,
                     key: rdp.key,
                 });
+            scene.draw_origins.push(crate::scene::DrawOrigin {
+                pc,
+                scissor: rdp.scissor,
+                indices: 0..0,
+                rectangle: Some((
+                    rec.cur_pair,
+                    scene.framebuffer_pairs[rec.cur_pair].ops.len() - 1,
+                )),
+            });
             pc = next_pc;
             continue;
         }
 
+        scissor_set |= op == crate::hle::consts::G_SETSCISSOR;
+        let index_start = scene.indices.len() as u32;
         let mut cx = Ctx {
             rsp: &mut rsp,
             rdp: &mut rdp,
@@ -511,6 +532,23 @@ pub fn interpret<M: Rdram>(
             unknown_seen: &mut unknown_seen,
         };
         gbi.table[op as usize](&c, &mut cx);
+        let index_end = scene.indices.len() as u32;
+        if index_end > index_start {
+            scene.draw_origins.push(crate::scene::DrawOrigin {
+                pc,
+                scissor: if !scissor_set && !rec.have_seen_cimg {
+                    crate::scene::Scissor {
+                        lrx: 320,
+                        lry: 240,
+                        ..Default::default()
+                    }
+                } else {
+                    rdp.scissor
+                },
+                indices: index_start..index_end,
+                rectangle: None,
+            });
+        }
         if diags.last().is_some_and(|d| {
             matches!(
                 d.kind,

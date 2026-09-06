@@ -549,6 +549,14 @@ fn finish_readback(
 /// The comparison tolerates a max per-channel absolute difference of `TOL` to absorb
 /// platform-specific rounding in GPU rasterisation.
 fn compare_or_write(name: &str, actual: &[u8], w: u32, h: u32) {
+    if let Ok(dir) = std::env::var("FAST3D_GOLDEN_OUTPUT") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join(format!("{name}.bin")),
+            actual,
+        )
+        .unwrap();
+    }
     let path = format!("{}/goldens/{name}.bin", env!("CARGO_MANIFEST_DIR"));
     if std::env::var("UPDATE_GOLDENS").is_ok() {
         std::fs::write(&path, actual)

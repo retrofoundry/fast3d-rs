@@ -532,7 +532,7 @@ fn build_host_dl() -> (Vec<[usize; 2]>, u64, Vec<u8>) {
 #[test]
 fn rdram_image_and_host_ptr_produce_identical_scene() {
     let (rdram, entry_off) = encode_rdram_image();
-    let res_img = interpret_rdram(&rdram, entry_off);
+    let mut res_img = interpret_rdram(&rdram, entry_off);
     assert!(
         res_img.diags.is_empty(),
         "RDRAM side unexpected diags: {:?}",
@@ -547,7 +547,7 @@ fn rdram_image_and_host_ptr_produce_identical_scene() {
         )
     };
     let host = unsafe { crate::hle::host_mem::HostMemory::new(HostRam::new(frame_bytes)) };
-    let res_host = interpret(
+    let mut res_host = interpret(
         host,
         entry_ptr,
         crate::hle::GbiUcode::F3dex2,
@@ -581,6 +581,12 @@ fn rdram_image_and_host_ptr_produce_identical_scene() {
         "mvp_table[1] must match across backends"
     );
 
+    for origin in &mut res_img.scene.draw_origins {
+        origin.pc = 0;
+    }
+    for origin in &mut res_host.scene.draw_origins {
+        origin.pc = 0;
+    }
     assert_eq!(
         res_img.scene, res_host.scene,
         "Scene must be identical across RdramImage and HostRam backends"
