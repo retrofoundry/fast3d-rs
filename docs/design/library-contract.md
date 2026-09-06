@@ -1,22 +1,27 @@
 # Library contract and F3DEX2 completion
 
-Design for roadmap item 2, written 2026-09-06. This is a proposal for Claude to
-challenge before implementation. No renderer changes, builds, or tests belong to
-this round. The document check is `git diff --check`.
+Design for roadmap item 2, revised after Claude's challenge of `ed42e50` on
+2026-09-06. Scope and delivery order are settled here; the consumer rollout and
+evidence decisions in section 6 remain with David. No renderer changes, builds,
+or tests belong to this round. The document check is `git diff --check`.
 
-Build the safe memory boundary and correct TLUT vocabulary first. Then finish the
-listed F3DEX2 operations and put all draws through one ordered workload. Store
-depth by address alongside color. Defer general framebuffer emulation and the
-next microcode implementation until a second game supplies a reproducer.
+Correct TLUT vocabulary, diagnostics and the listed F3DEX2 controls first. Take
+the memory API break when David selects the consumer update, with both companions
+ready. Then put draws through one ordered workload and store depth by address.
+Decode the remaining RDP registers and reject draws that require unwired inputs.
+Shader support waits for a game that uses them; optimization waits for measured
+workloads. General framebuffer emulation and the next microcode remain deferred.
 
 ## 1. Evidence and scope
 
-The inspected fast3d revision is `a36682ccf9a71a43eee388ad600a61aeece7bf4c`
-(`contract-local`). References below use these read-only checkouts:
+The inspected fast3d code revision is `a36682ccf9a71a43eee388ad600a61aeece7bf4c`;
+`ed42e50` added this document on `contract-local`. References below use these
+read-only checkouts:
 
 | Prefix | Root | Inspected revision |
 |---|---|---|
 | `helix:` | `/Users/ci/hub/repos/helix/` | `7c6a9bb25c92ed7b1ef3f78f226c3aa1116a9412` |
+| `helix-capture:` | `/Users/ci/hub/wt/helix-capture/` | `81e9a70` (`helix-capture`, helix PR #33) |
 | `toys:` | `/Users/ci/hub/repos/n64.toys/` | `d082774588e150c4217fe2c7b3964438f2d8ca3b` |
 | `sm64:` | `/Users/ci/hub/repos/sm64/` | `4a9dcf0d0a82a637b19b401f969639c9f4e0c83a` |
 | `rt64:` | `/Users/ci/hub/wt/rt64-reference/` | `43373749dac9bbc1b653e6a02aed40a9e1783bed` |
@@ -39,7 +44,7 @@ provenance from commit `696a67d`, not files to edit
 
 Thus item 7's assembler migration and item 13's compiled source programs are work
 in n64.toys. This crate owes it correct encoders, a stable BE memory contract,
-structured diagnostics, and rendering that reuses unchanged texture content.
+structured diagnostics, and the item 13 measurements before texture-reuse work.
 Do not restore an assembler or add `.n64` fixtures here. Literal libultra vectors
 belong in `n64-gbi/tests/conformance.rs`; interpreter round trips complement them
 (`n64-gbi/tests/conformance.rs:1`, `fast3d/src/tests/gbi_roundtrip.rs:3`).
@@ -56,16 +61,23 @@ rule remains binding (`docs/design/sm64-fidelity.md:516`).
 | Consumer | Observed dependence | Consequence for this design |
 |---|---|---|
 | helix native ports | `HelixHardware` constructs `HostRam::new(&[])`; the guest is blocked during consumption (`helix:src/render.rs:9`). Each task calls `begin_frame`, `process_dl`, then releases the guest before `present` (`helix:src/render.rs:214`, `helix:src/render.rs:260`). | Copy all guest inputs before consumption returns. No guest pointer reads during presentation or delayed uploads. Preserve task ordering and the native word layout. |
+| helix capture branch | Selects tasks with `FAST3D_CAPTURE_DIR` / `FAST3D_CAPTURE_FRAMES`, calls `CaptureFrame::process_dl` during `consume_dl`, then presents/writes the fixture after releasing the guest (`helix-capture:src/render.rs:266`, `helix-capture:src/render.rs:284`, `helix-capture:src/render.rs:328`, `helix-capture:src/render.rs:378`). | Migrate both the ordinary and recording calls in the PR 1 companion. Recording must finish all guest reads before `consume_dl` returns. |
 | helix scanout | Uses `ClearPolicy::Persist`, no VI, and last-rendered scanout (`helix:src/render.rs:198`, `helix:src/render.rs:14`). `HLXViSwapBuffer` only records a pointer (`helix:src/ultra/vi.rs:381`). | GPU attachments are renderer-owned; color/depth addresses are identities, not permission to read or write CPU memory. Do not introduce RAM write-back into this path. |
 | helix vocabulary and diagnostics | Microcode IDs are 0=F3DEX2, 1=F3D; data format is separate (`helix:src/render.rs:92`, `helix:src/render.rs:109`, `helix:include/helix/runtime.h:26`). Its sink deduplicates `Display` strings (`helix:src/render.rs:24`). | Preserve these IDs. New diagnostics reach its sink; stable enum values, rather than strings, should become its dedup key. |
-| oxideports sm64 | US defaults to `f3d_old`; build options include F3DEX/F3DEX2, while the host declaration chooses only F3D_OLD versus F3DEX2 (`sm64:Makefile:42`, `sm64:Makefile:80`, `sm64:src/game/game_init.c:261`). | F3DEX is a real build vocabulary but is not correctly declared to helix by this switch. Do not count that option as a supported consumer or silently map it to F3DEX2. |
+| oxideports sm64 | US defaults to `f3d_old`; build options include F3DEX/F3DEX2, while the host declaration chooses only F3D_OLD versus F3DEX2 (`sm64:Makefile:48`, `sm64:Makefile:80`, `sm64:src/game/game_init.c:261`). | F3DEX is a real build vocabulary but is not correctly declared to helix by this switch. Do not count that option as a supported consumer or silently map it to F3DEX2. |
 | sm64 images | One Z allocation and three color buffers; `init_z_buffer` fills Z through CIMG=ZIMG, then `select_framebuffer` switches CIMG (`sm64:src/buffers/zbuffer.c:6`, `sm64:src/game/game_init.c:138`, `sm64:src/game/game_init.c:155`, `sm64:src/game/game_init.c:639`). | Correct explicit clears and depth shared across color switches belong now. Cross-frame depth dependence still needs a capture. |
 | n64.toys wasm | Owns assembled bytes in `WebHardware`; uses F3DEX2, default Fixed format, no VI and `PerFrame`; assembles at each render call (`toys:crates/web/src/lib.rs:153`, `toys:crates/web/src/lib.rs:176`, `toys:crates/web/src/lib.rs:218`, `toys:crates/web/src/lib.rs:241`). | Keep the safe `Hardware` frame loop. Reject invalid images through diagnostics; avoid reparsing in this crate. |
 | n64.toys saved content | Persists source text, sends the current source/time/texture snapshot to rendering, and maps command addresses to source lines in UI diagnostics (`toys:server/src/db/schema.ts:120`, `toys:web-app/src/lib/playground.svelte.ts:340`, `toys:crates/web/src/lib.rs:66`). | Correct generated bytes by recompiling source in n64.toys. Preserve the initiating command PC for diagnostics. A survey of saved sources is needed before promising no source migration. |
 
-n64.toys now owns `n64-toys-asm` and pins both fast3d and `n64-gbi` to `35c0ccf`
-without the removed `asm` feature (`toys:crates/web/Cargo.toml:10`,
-`toys:Cargo.toml:6`). Its relocated compiler emits BE words and prepends an
+n64.toys now owns `n64-toys-asm` and pins both fast3d and `n64-gbi` to `35c0ccf`.
+`default-features = false` is on fast3d's dependency, not on `n64-gbi`'s
+(`toys:Cargo.toml:6`, `toys:Cargo.toml:7`); neither requests the removed `asm`
+feature. `WebHardware` still returns `RdramImage`
+(`toys:crates/web/src/lib.rs:161`). An unchecked out-of-range image read that
+panics today is a wasm panic surfaced by `console_error_panic_hook`, not a hang
+(`toys:crates/web/src/lib.rs:144`, `fast3d/src/hle/mem.rs:138`). This supports P2's
+structured failure contract without making PR 1 a dependency of TLUT or control
+work. Its relocated compiler emits BE words and prepends an
 old-layout TLUT without a destination tile setup for CI textures
 (`toys:crates/asm/src/asm.rs:315`, `toys:crates/asm/src/asm.rs:1506`). The checked-in
 CI source uses high-level texture loading, and the compatibility corpus freezes
@@ -76,9 +88,33 @@ RDRAM and source-map hashes (`toys:crates/asm/tests/scenes/ci4-canary.n64:24`,
 requires reviewed corpus changes even if rendered pixels stay the same. These
 sources are examples and compatibility cases, not a survey of production toys.
 
-The supplied helix consumes directly, without the capture hook described by the
-old design (`helix:src/render.rs:214`, `docs/design/sm64-fidelity.md:573`). Confirm
-its capture/integration branch with David.
+Helix main consumes directly; the hook is in `helix-capture` at `81e9a70`.
+David identifies helix PR #33 as unmerged and waiting on the fast3d revision
+bump. The checked-out hook's selection and recording sites are
+`helix-capture:src/render.rs:266` and `helix-capture:src/render.rs:305`; the
+challenge's `:169` / `:267` point to validation/configuration, not consumption.
+Both branches are design inputs. Branch identification is settled; deployment
+pins and the API-break date still need David's choice.
+
+An `rg` survey at the sm64 revision above, covering `src`, `actors`, `levels`
+and `bin`, finds no calls to `gSPModifyVertex`, `gSPCullDisplayList`,
+`gSPBranchLessZ`, `gDPSetPrimDepth` / `G_ZS_PRIM`, `gDPSetConvert`, `gDPSetKeyR/GB`
+or `gSPLoadUcode`, including their `gs` forms. The only name hit is the
+LOAD_UCODE comment at `sm64:src/game/game_init.c:248`. sm64 explicitly selects
+`G_ZS_PIXEL` (`sm64:src/game/game_init.c:141`). No committed game establishes a
+need for primitive-depth, convert or key shader wiring.
+
+n64.toys is the only current consumer for exercising these additions through
+authored source, rather than a game trace. Refine "can exercise them today": at
+`d082774` its `Stmt` inventory has no MODIFYVTX, CULLDL, BRANCH_Z, primitive-depth,
+convert/key or LOAD_UCODE macros (`toys:crates/asm/src/parser.rs:370`); unmatched
+statements diagnose at `toys:crates/asm/src/parser.rs:2492`. Numeric othermode and
+combiner operands can already select the unwired modes/inputs
+(`toys:crates/asm/src/parser.rs:2235`, `toys:crates/asm/src/parser.rs:677`). New
+command syntax belongs in its compiler companion, using this crate's encoders.
+Keep the named control work for authored use and explicit diagnostics; PRs 9–10
+stop at register snapshots and draw rejection. No saved-source survey has been
+performed.
 
 ### Item 7: TLUT
 
@@ -133,8 +169,9 @@ The RDP table lacks SETPRIMDEPTH, SETCONVERT and SETKEYR/GB
 key values, and key/K selectors are rejected or shader placeholders
 (`fast3d/src/hle/combiner.rs:365`, `fast3d/src/hle/combiner.rs:54`,
 `fast3d/src/render/combiner_prelude.wgsl:119`). Existing selector tests deliberately
-expect KEY_CENTER to be unwired (`fast3d/src/hle/combiner.rs:871`). Adding setters
-alone cannot close this part of item 8.
+expect KEY_CENTER to be unwired (`fast3d/src/hle/combiner.rs:871`). Setters plus
+named errors for draws that consume these inputs close the reduced scope here;
+they do not establish rendering support for this part of item 8.
 
 ### Item 9: public memory and diagnostics
 
@@ -180,6 +217,48 @@ to stderr and decode as RGBA16, including a print inside texel decoding
 (`fast3d/src/hle/texdec.rs:61`, `fast3d/src/hle/tmem.rs:410`). This bypasses the
 consumer sink and can manufacture plausible pixels. Severity/formatting tests
 cover only the current variants (`fast3d/src/diag.rs:190`).
+
+#### RGBA16 fallback inventory and playground impact
+
+The encoded domain is `fmt=0..7`, `siz=0..3` (4/8/16/32 bits), from
+`fast3d/src/hle/rdp.rs:178`. These are the exact fallback combinations in that
+domain; the internal decoders also reject any out-of-domain values after PR 3.
+
+| Format | `(fmt, siz)` falling back in both decoders | Additional fallback in `texdec.rs` only |
+|---|---|---|
+| RGBA | `(0,0)`, `(0,1)` | `(0,3)` |
+| YUV | `(1,0)`, `(1,1)`, `(1,2)`, `(1,3)` | None |
+| CI | `(2,2)`, `(2,3)` | None |
+| IA | `(3,3)` | None |
+| I | `(4,2)`, `(4,3)` | None |
+| Reserved 5 | `(5,0)`, `(5,1)`, `(5,2)`, `(5,3)` | None |
+| Reserved 6 | `(6,0)`, `(6,1)`, `(6,2)`, `(6,3)` | None |
+| Reserved 7 | `(7,0)`, `(7,1)`, `(7,2)`, `(7,3)` | None |
+
+That is 24 combinations in `fast3d/src/hle/texdec.rs:52` and 23 in
+`fast3d/src/hle/tmem.rs:340`. The comment at `fast3d/src/hle/tmem.rs:410` is stale:
+RGBA32 has a real arm at `fast3d/src/hle/tmem.rs:351`. The material path gates
+`sample_tile` to its nine supported pairs, so the 23 unsupported pairs reach the
+linear fallback in normal rendering, not the per-texel fallback
+(`fast3d/src/hle/combiner.rs:561`, `:588`). RGBA32 reaches
+the linear fallback when a multi-row LoadBlock has non-word-aligned rows and
+fails that predicate. Preserve its supported TMEM route; diagnose this unsupported
+load/layout case rather than disabling RGBA32 wholesale in PR 3.
+
+n64.toys can emit every pair in the table from authored `gsDPSetTile`, using
+mnemonics for formats 0..4 and numeric values for 5..7; sizes can also be numeric
+(`toys:crates/asm/src/parser.rs:629`, `:641`, `:1381`,
+`toys:crates/asm/src/asm.rs:1736`). Its high-level `Texture` declarations allow
+only RGBA16, I4/I8, IA4/IA8/IA16 and CI4/CI8, all supported
+(`toys:crates/asm/src/asm.rs:137`). A low-level render tile can reinterpret those
+bytes using any table entry, even without a matching high-level texture format.
+Those 23 unsupported pairs and the RGBA32 layout case are the playground-impact
+list for David. Capability to emit them is not evidence that saved toys use them.
+The inspected sm64 source has no YUV/32-bit texture-size tokens; its ordinary
+RGBA16 setup is supported (for example `sm64:src/game/print.c:371`). Helix supplies
+no authoring restriction, but the inspected game gives no reproducer for this
+fallback. Recommend named errors now and a n64.toys saved-source survey before
+its production pin moves.
 
 ### Items 10 and 11: workload, depth, framebuffer ownership
 
@@ -265,13 +344,13 @@ Each position has a one-line reason and can be challenged independently.
 - P5 — Correct TLUT words without old-layout autodetection; reason: valid and legacy words overlap, so guessing makes legal N64 commands ambiguous.
 - P6 — Implement MODIFYVTX, QUAD, CULLDL and BRANCH_Z, and diagnose the named stubs; reason: known unsupported behavior must be distinguishable from unknown opcodes.
 - P7 — Use libultra CULLDL and inclusive BRANCH_Z comparison; reason: rt64 leaves the former empty and its strict comparison contradicts the SDK contract.
-- P8 — Implement primitive depth and key/K combiner inputs as draw state; reason: accepting setters while using final-scene state or zero selectors would hide wrong output.
+- P8 — Decode and snapshot primitive-depth, convert and key registers; reject draws using unwired inputs; reason: no committed game needs shader wiring, and zero placeholders would hide wrong output.
 - P9 — Normalize paired and pairless input into one ordered workload now; reason: separate paths already disagree about clearing and decal order.
 - P10 — Persist depth by address now, including between tasks and frames under `Persist`; reason: CIMG switches must not destroy a still-selected ZIMG.
 - P11 — Ship only bounded framebuffer alias handling now; reason: sm64 evidence supports independent targets and explicit clears, not general RAM/GPU coherence.
 - P12 — F3DEX is the next family, with implementation gated on the next committed game; reason: it reuses F3D state and the F3DEX2 operations completed here without introducing a sprite engine.
 - P13 — Remove synthetic hashes from production detection and wait for a ROM-task consumer; reason: a port's declared family is not a microcode fingerprint.
-- P14 — Separate immutable texture content from draw state, then reuse uploads; reason: palette/content changes must invalidate pixels while color animation must not decode them again.
+- P14 — Measure item 13 separately, then consider shared texture content and upload reuse; reason: optimization needs a consumer baseline and must preserve every pixel.
 - P15 — Preserve native-resolution semantics and the existing pairless logical extent; reason: upscaling, widescreen and extended GBI remain separate roadmap decisions.
 
 ## 3. Target contracts
@@ -333,8 +412,15 @@ permission to interpret VI addresses as physical image offsets, not permission
 to dereference memory during presentation. `Hardware` gains no write method.
 
 For native ports, remove the public `Rdram` implementation from `HostRam`.
-Keep it an opaque descriptor for the native layout and initial segment table;
-raw read methods and its interpreter adapter become crate-private. Add:
+Keep a descriptor whose public surface is safe `HostRam::new(frame: &'a [u8])`
+and `segments: [u64; 16]`, initially zero. Construction only stores metadata;
+it no longer carries the read-safety obligation. Document the fixed native
+layout: native-endian 16-byte commands with full-width address words, unaligned
+access, native packed Fixed matrices and Fixed/Float vertex strides. DataFormat
+remains a renderer/task choice, not another microcode or arbitrary layout knob.
+Under `capture`, expose `capture_layout() -> SourceLayout` containing
+`MemoryLayout::host_native()` and the initial segment table. No public pointer
+read or resolve method remains; the interpreter adapter is crate-private. Add:
 
 ```text
 unsafe Renderer::process_dl_host(
@@ -360,6 +446,74 @@ equivalent unsafe `CaptureFrame::process_dl_host` and no-VI capture presentation
 convenience, so recording never exposes a raw reader through safe `Hardware`.
 Replay remains a safe fallible reader over owned spans, including on wasm.
 
+The consumer changes are small at each call, although the library break is large.
+Today `HelixHardware` is a unit struct, and each `rdram()` already constructs a
+fresh descriptor (`helix:src/render.rs:16`, `helix-capture:src/render.rs:16`). There
+is no retained reader or segment state to migrate between tasks. These are
+proposed call-site excerpts; surrounding error handling stays in helix.
+
+Main before (`helix:src/render.rs:214`, `:225`):
+
+```rust
+self.renderer.set_data_format(data_format());
+self.renderer.begin_frame();
+let _ = self.renderer.process_dl(&HelixHardware, data_ptr as u64, microcode(), &mut DedupLogSink);
+// In present(), after the guest is released:
+self.renderer.present(&HelixHardware)
+```
+
+Main after, also used by the capture branch's unselected-task path:
+
+```rust
+self.renderer.set_data_format(data_format());
+self.renderer.begin_frame();
+let ram = fast3d::HostRam::new(&[]);
+// SAFETY: the guest remains blocked until consume_dl returns; reachable inputs stay valid.
+let _ = unsafe {
+    self.renderer.process_dl_host(ram, data_ptr as u64, microcode(), &mut DedupLogSink)
+};
+// In present(), after the guest is released:
+self.renderer.present_last()
+```
+
+Capture before (`helix-capture:src/render.rs:305`, `:330`), after
+`CaptureFrame::begin` has begun the selected frame:
+
+```rust
+let result = capture.process_dl(
+    &mut self.renderer, &HelixHardware, data_ptr as u64,
+    microcode(), data_format(), &mut DedupLogSink,
+);
+// In present(), after the guest is released:
+capture.present(&mut self.renderer, &HelixHardware)
+```
+
+Capture after:
+
+```rust
+let ram = fast3d::HostRam::new(&[]);
+// SAFETY: recording and interpretation finish while the submitting guest is blocked.
+let result = unsafe {
+    capture.process_dl_host(
+        &mut self.renderer, ram, data_ptr as u64,
+        microcode(), data_format(), &mut DedupLogSink,
+    )
+};
+// In present(), after the guest is released:
+capture.present_last(&mut self.renderer)
+```
+
+`CaptureFrame::process_dl_host` returns `Result<DlSummary, CaptureError>`, sets
+the task's DataFormat, and records through the private host adapter during that
+same call. On return its task owns all read spans, layout and initial segments;
+`self.capture_frame = Some(capture)` retains only owned recording state. The
+loop still runs `consume_dl`, `done.send(())`, `present` in that order
+(`helix-capture:src/render.rs:378`). Presentation and fixture serialization may
+run after release because neither reads guest memory. Capture errors follow the
+existing logged-result path; they do not extend the blocked interval into file
+I/O. All these types stay in fast3d. `n64-gbi` remains dependency-free, as its
+empty dependency table establishes (`n64-gbi/Cargo.toml:12`).
+
 This is a deliberate source break for host consumers. Requiring registered
 regions would be sound but would require an allocation inventory helix does not
 supply (`helix:src/render.rs:16`). Do not impose that inventory speculatively.
@@ -384,8 +538,10 @@ Use the libultra count-minus-one field in bits 14..23 and tile in bits 24..26:
 four entries on tile 7 are `(0xF0000000, 0x0700C000)`. The destination is
 `tiles[tile].tmem_addr * 8`, with 4 KiB TMEM wrapping. Source entries are packed
 16-bit BE values, advancing two bytes each; repeat each value in all four
-halfwords of its destination word. These follow `sm64:include/PR/gbi.h:3456`,
-`sm64:include/PR/gbi.h:4257`, `rt64:src/hle/rt64_rdp.cpp:368` and
+halfwords of its destination word. rt64's `loadWord<..., TLUT=true>` samples
+only the first two source bytes (`rt64:src/hle/rt64_rdp.cpp:370`): the `0x1` mask
+repeats them across its eight destination bytes (`:393`). These follow
+`sm64:include/PR/gbi.h:3456`, `sm64:include/PR/gbi.h:4257` and
 `rt64:src/hle/rt64_rdp.cpp:549`.
 
 Change `gdp_load_tlut(tile, count_minus_one)` to that contract, document the
@@ -412,7 +568,7 @@ saved toys is unknown.
 | MODIFYVTX `0x02` | Decode index bits 1..15 and attribute bits 16..23; reuse RGBA/ST/XY/Z logic and copy-on-use (`rt64:src/gbi/rt64_gbi_f3dex.cpp:19`, `rt64:src/hle/rt64_rsp.cpp:737`). | Track loaded cache slots explicitly; invalid indices/attributes diagnose. Preserve earlier modifications in copies, as the current fast3d implementation already does (`fast3d/src/hle/rsp.rs:405`). |
 | QUAD `0x07` | Execute the two encoded triangles exactly like TRI2 (`rt64:src/gbi/rt64_gbi_f3dex2.cpp:147`). | Do not decode it using F3D's four-corner layout. |
 | CULLDL `0x03` | Decode doubled first/last indices, inclusive. AND the loaded vertices' clip codes; a common outside plane acts as ENDDL (`sm64:include/PR/gbi.h:2233`). | rt64's handler is empty (`rt64:src/gbi/rt64_gbi_f3dex.cpp:41`); use the SDK semantics and independent control-flow assertions. |
-| BRANCH_Z `0x04` | RDPHALF_1 latches the full address operand; compare the chosen vertex's screen Z with unsigned 16.16 threshold and branch without pushing (`sm64:include/PR/gbi.h:2433`, `rt64:src/hle/rt64_rsp.cpp:837`). | Use `<=` per the SDK's raw macro contract (`sm64:include/PR/gbi.h:2427`), rather than rt64's `<`. No forced-branch enhancement. |
+| BRANCH_Z `0x04` | RDPHALF_1 latches the full address operand; compare the chosen vertex's screen Z with unsigned 16.16 threshold and branch without pushing (`sm64:include/PR/gbi.h:2433`, `rt64:src/hle/rt64_rsp.cpp:837`). | P7 stands: both SDK comments say less than or equal (`sm64:include/PR/gbi.h:2380`, `:2426`, with the raw wording at `:2427`). rt64 computes screen Z at `rt64:src/hle/rt64_rsp.cpp:842` and uses `<` at `:844`. Use `<=`; no forced-branch enhancement. |
 | SPNOOP `0xE0` | Harmless no-op (`rt64:src/gbi/rt64_gbi_f3dex2.cpp:183`). | No extended-GBI hook or diagnostic for an ordinary no-op. |
 | LINE3D `0x08` | Recognized unsupported draw; Error and one dropped draw (`rt64:src/gbi/rt64_gbi_f3dex2.cpp:156`). | No line rasterizer in this milestone. |
 | DMA_IO `0xD6` | Recognized stub, Warn; do not dereference or write operands (`rt64:src/gbi/rt64_gbi_f3dex2.cpp:119`). | Does not emulate DMEM transfers. |
@@ -445,33 +601,37 @@ value. Invalid/non-finite transforms diagnose instead of choosing a branch.
 The threshold-equality and modified-Z cases need SDK-derived assertions where
 rt64's result disagrees.
 
-SETPRIMDEPTH captures raw `z: u16`, `dz: u16` on every triangle and TexRect draw.
-When othermode selects primitive Z, use `(z & 0x7fff)/32767` for depth and
-`dz/65535` for decal tolerance, matching `rt64:src/hle/rt64_rdp.cpp:961` and
-`rt64:src/shaders/RasterPS.hlsl:97`. Apply the source consistently to regular,
-dual-source and decal paths; pixel Z remains unchanged when the mode is off.
-Do not bake draw-time primitive Z into cached vertices. Retain the existing
-decal epsilon floor for this PR; replacing the full exponent/coverage model is
-separate from selecting the right source (`fast3d/src/render/decal.wgsl:30`).
+SETPRIMDEPTH stores raw `z: u16`, `dz: u16` and snapshots them on every triangle
+and TexRect draw. A draw selecting `G_ZS_PRIM` emits
+`DiagKind::UnsupportedPrimitiveDepthSource` at its command PC and is dropped.
+It must not render with pixel Z or zero depth. Setting unused primitive-depth
+registers is harmless: it leaves `DlSummary` counts and renderability unchanged.
+Pixel-Z draws retain their current rendering. Shader wiring, normalization and
+decal tolerance under primitive Z wait for a committed game reproducer; rt64's
+implementation alone is insufficient scope evidence.
 
 SETCONVERT stores six signed nine-bit coefficients; SETKEYR/GB store centers,
-scales and widths without losing the untouched channels. Packing comes from
-`sm64:include/PR/gbi.h:4470` and `rt64:src/gbi/rt64_gbi_rdp.cpp:144`. Enable only
-the matching KEY_CENTER, KEY_SCALE, K4 and K5 combiner selectors, using center
-and scale divided by 255 and coefficient divided by 255. Capture values at draw
-time for both cycles and rectangles, following
-`rt64:src/hle/rt64_state.cpp:200`, `rt64:src/shared/rt64_color_combiner.h:482` and
-`rt64:src/shaders/RasterPS.hlsl:182`.
+scales and widths without losing the untouched channels. Convert packing comes
+from `sm64:include/PR/gbi.h:4470`; key packing is decoded at
+`rt64:src/gbi/rt64_gbi_rdp.cpp:154` and `:161`. Snapshot
+all registers per draw, including rectangles; a later setter cannot mutate an
+earlier snapshot. Reject draws selecting KEY_CENTER or KEY_SCALE in an active
+cycle with `UnsupportedKeyInput { selector }`, and K4 or K5 with
+`UnsupportedConvertInput { selector }`. These named `DiagKind` variants and
+`UnsupportedPrimitiveDepthSource` have Error severity, increment the existing
+error/dropped-run accounting, and prevent the affected draw from reaching any
+shader path. No `DlSummary` fields change. Inactive-cycle selectors do not
+reject otherwise supported draws; unused setters add no warnings, errors or
+dropped runs. Shader slots remain unwired and cannot be accepted as zeros.
 
 One explicit reference disagreement: rt64 extracts unsigned nine-bit patterns
 and passes them through to the shader (`rt64:src/gbi/rt64_gbi_rdp.cpp:144`,
 `rt64:src/hle/rt64_rdp.cpp:1003`). Use signed values per Nintendo's documented
-range -256..255; test negative K4/K5 with independent arithmetic instead of
-blessing rt64 disagreement
+range -256..255; test literal negative register decoding independently of rt64
 ([Nintendo gDPSetConvert](https://ultra64.ca/files/documentation/online-manuals/man-v5-1/n64man/gdp/gDPSetConvert.htm)).
-This is not YUV texture decoding or full chroma-keying. Store K0..K3 and widths,
-but diagnose attempted YUV conversion/key-enable draws that require those
-unimplemented operations. rt64 itself ignores key widths
+YUV conversion and full chroma-keying also remain unsupported. Preserve K0..K3
+and widths; reject attempted conversion/key-enable draws with named
+`UnsupportedTextureConversion` / `UnsupportedChromaKey` Errors. rt64 ignores key widths
 (`rt64:src/hle/rt64_rdp.cpp:1013`). Setting unused registers alone is harmless.
 
 ### One workload and persistent depth
@@ -486,6 +646,13 @@ continue in stream order without losing the earlier operations. Snapshot
 scissor for legacy draws too. Rectangles retain their explicit CIMG requirement
 (`fast3d/src/hle/interp.rs:210`, `fast3d/src/hle/interp.rs:304`). Do not expose `Scene`
 or the operation enum as a public serialization contract.
+
+Land workload normalization with the existing execution paths still available
+and pixel-identical, then replace those paths in a second bisectable commit
+within PR 6. `render/mod.rs` is nearly 4000 lines; the pairless path renders
+n64.toys (`fast3d/src/render/mod.rs:1422`, `toys:crates/web/src/lib.rs:241`). Require
+every existing golden to remain pixel-identical except PR 6's two named semantic
+classes, whose masks and independent expectations are specified in section 4.
 
 One executor handles store rendering and internal test rendering. It segments
 only where attachment use demands it: depth-writing draws, sampled-depth decal
@@ -532,8 +699,11 @@ with A/Z then B/Z then A/Z draws, two tasks without `begin_frame`, two frames
 under both policies, two independent Z addresses, partial clears and a
 decal-first case. Close the live sm64 claim only with a recorded frame/sequence
 whose output changes when depth is incorrectly reset between its dependent
-operations. If no such sm64 frame exists, record that result and keep the
-cross-frame need unclaimed; do not substitute a synthetic test for game evidence.
+operations. An authored fixture closes authored semantics only. Until the live
+experiment is run, the sm64 gate is open. A completed experiment finding no
+dependency closes PR 8's live gate as `closed-by-absence` for the recorded
+scenes/boundaries, with cross-frame need unclaimed. Missing captures, failed
+replay or incomplete scene coverage are still open, not absence evidence.
 
 Add a versioned sequence container around existing frame fixtures, beginning at
 renderer reset and replaying all tasks/frames through one renderer. Keep v1
@@ -542,6 +712,65 @@ rule to admit a frame that needs warm-up. Extend its contamination check to
 initialize depth to distinct near/far values, as well as color. Sequences record
 their warm-up explicitly and compare after the same initialization, rather than
 requiring `PerFrame` and `Persist` to match when persistence is their subject.
+
+#### Live sm64 depth experiment for Claude
+
+Use helix `81e9a70` / PR #33 with the matching fast3d capture pin, then the PR 1
+companion for the final acceptance run. Build the oxideports sm64 revision in
+section 1 against that helix worktree, using its devenv. Record game/build flags,
+Fixed/Float choice, input route, adapter/backend, extent, revisions and capture
+seed. Use a fresh output directory; the hook refuses to overwrite files
+(`helix-capture:src/render.rs:193`). The current hook selects zero-based
+`consume_dl` serials, one task per renderer frame; these are not VI frame numbers
+(`helix-capture:src/render.rs:284`). At the fast3d code revision cited here,
+`CaptureFrame::begin` records renderer serials starting at one, so selection 120
+writes `frame-000121.f3dcap` (`fast3d/src/hle/capture/replay.rs:17`). Preserve that
+mapping and the dither seed during replay; do not renumber a cropped sequence.
+
+1. Capture a continuous startup-to-gameplay run, selecting every serial 0..3599.
+   From the built sm64 worktree, the hook can be invoked as follows (the executable
+   path is the US target in `sm64:devenv.nix:108`):
+
+   ```sh
+   FAST3D_CAPTURE_DIR=/Users/ci/hub/scratch/fast3d/depth-live-01 \
+   FAST3D_CAPTURE_FRAMES="$(seq -s, 0 3599)" \
+   FAST3D_CAPTURE_REVISION=4a9dcf0d0a82a637b19b401f969639c9f4e0c83a \
+   FAST3D_CAPTURE_SYMBOLS='game_init.c:init_z_buffer,select_framebuffer; castle route' \
+     devenv shell -- ./build-cmake/sm64-us
+   ```
+
+   Include boot/title, file selection, courtyard with Mario's shadow, entry into
+   the castle, then a painting/level transition. Annotate the actual serials at
+   each scene; no fixed serial is presumed to reach a particular room. If 3600
+   tasks do not cover the route, repeat with a larger contiguous selection in a
+   fresh directory. Retain all warm-up tasks. Inspect 120 consecutive tasks of
+   courtyard gameplay, 120 indoors, and 30 before/after each transition, as well
+   as every CIMG switch and Z fill in the full sequence. This spans the three
+   color allocations sharing Z (`sm64:src/game/game_init.c:639`).
+2. In PR 8's sequence replay harness, run the exact same recorded tasks from
+   reset under the PR 7 depth store with `Persist`. Render lossless offscreen
+   color PNGs/RGBA bytes at each selected presentation and retain diagnostic and
+   CIMG/ZIMG/fill/scissor command logs. The sequence harness and diagnostic reset
+   switches are PR 8 work, not commands available at this design revision.
+3. Replay three controlled variants: discard only depth at each CIMG switch,
+   at each task boundary, and at each frame boundary. Keep color, explicit fills,
+   order, seed and presentation identical. Compare each variant to the persistent
+   run, not to a different live playthrough. The current hook makes task and
+   frame boundaries coincide; report that limitation instead of claiming two
+   independent live proofs. Authored multi-task fixtures cover the distinction.
+4. Diff exact color bytes and depth probes before/after candidate dependent
+   operations. Report hashes, changed-pixel counts/bounds, masks, and the
+   writer/read command PCs with the shared Z address. A depth-storage difference
+   without a color difference does not establish a visible sm64 dependency.
+   Minimize any visible difference to the necessary reset-to-output prefix and
+   have the PNG/mask reviewed under the golden rule. HOST64 replay is semantic
+   evidence; use rt64 only for separately authored/exportable IMAGE equivalents.
+5. If all controlled variants have zero visible delta, retain their zero-diff
+   results and show from the command logs that each candidate prior depth write
+   is cleared or unused before observation. Mark the live gate `closed-by-absence`
+   for this route and these boundaries. If coverage or replay is incomplete,
+   record precisely what is missing and leave it open. Do not require a positive
+   sm64 dependency forever; do not claim universal absence from this bounded run.
 
 ### Framebuffer manager: bounded now, general later
 
@@ -592,6 +821,9 @@ game/build needing it, with a declared family and at least one captured task.
 The sm64 build option alone is insufficient because its host declaration is
 currently ambiguous, as noted above. Choosing the second game remains David's
 decision, not a guess that Zelda or a sprite title is next.
+`Microcode` gets no new variant until D1. Helix's FFI table remains
+0=F3DEX2, 1=F3D throughout this delivery (`helix:src/render.rs:92`,
+`helix:include/helix/runtime.h:26`); P13's detection cleanup does not change it.
 
 Keep explicit family selection for ports and web. Remove the invented hashes
 from production; `detect_microcode(u64)` returns `None` until a real table is
@@ -604,9 +836,19 @@ layout, or copy rt64's database without adopting and verifying its hash recipe.
 LOAD_UCODE becomes functional only in that follow-up, including reset semantics
 and capture serialization of family changes.
 
-For CPU work, split draw values from immutable decoded texture images and
-sampling descriptors. Intern images by content within a renderer, using a
-bounded hash table with exact-byte comparison on collisions. Decode identity
+Item 13 is a separate evidence-gated set, outside the initial delivery. Before
+either PR 11 or PR 12 starts, record decode count, GPU upload count and CPU ms
+for one captured sm64 frame (with any warm-up retained) and one n64.toys animated
+source scene with fixed textures and sampled times. Separate assembler time
+from fast3d interpretation/preparation/upload time; a Rust scene is not a
+substitute for the playground workload. Record cold and steady-state results,
+revision/build, adapter/backend, resolution and timing method. No numbers have
+been measured in this design round. Baseline instrumentation may start the set;
+optimization may not start without those numbers and an identified cost.
+
+If measurement justifies PR 11, split draw values from immutable decoded texture
+images and sampling descriptors. Intern images by content within a renderer,
+using a bounded hash table with exact-byte comparison on collisions. Decode identity
 includes TMEM content, palette content/format, tile fmt/siz/base/line and the
 sampling footprint; prim/env, fog, primitive depth and combiner constants do
 not belong in that identity. Whole-TMEM snapshots are an acceptable first key
@@ -623,9 +865,10 @@ draw state and evicts old entries
 (`rt64:src/hle/rt64_state.cpp:644`, `rt64:src/hle/rt64_state.cpp:1588`); its global
 texture manager is not required here.
 
-Then reuse growable upload buffers for source/state tables, indices, uniforms,
-rectangle vertices and compute outputs per extent. Allocate disjoint regions
-for every task still referenced by queued commands; never overwrite a buffer
+If the same baseline justifies PR 12, reuse growable upload buffers for
+source/state tables, indices, uniforms, rectangle vertices and compute outputs
+per extent. Allocate disjoint regions for every task still referenced by queued
+commands; never overwrite a buffer
 range while a prior draw needs it. Reuse CPU scratch after submission where
 ownership allows it. Validate allocation/upload/decode counts on fixed workloads
 and report timings; do not promise an unmeasured frame-rate gain. Compiling source
@@ -639,6 +882,11 @@ Claude's GPU capacity. Each semantic test must fail on the preceding revision
 and pass with the fix. All tests named below are proposed unless section 1
 identifies them as existing. `hle/`, `render/` and `tests/` below mean
 `fast3d/src/hle/`, `fast3d/src/render/` and `fast3d/src/tests/`.
+
+Delivery order is PR 2, 3, 4, 5, then PR 1 with its consumer companions, then
+PRs 6, 7, 8, then the reduced PRs 9 and 10. The numbering below is kept from the
+first draft so review comments stay addressable; the order is in "Dependencies
+and verification gate".
 
 ### PR 1 — External memory API and sound host entry. M, 6–8 days
 
@@ -661,12 +909,15 @@ Acceptance: an external crate can implement every signature without naming HLE;
 all safe supplied backends report exact spans, no memory-failed task reaches GPU
 submission, and helix releases the guest at the same boundary. No invalid-pointer
 test deliberately executes UB. Golden impact: none for valid input; malformed
-fixtures assert errors, not new images. This ships first because it gives web
-authors bounded failure and makes subsequent load fixes safe to consume.
+fixtures assert errors, not new images. Land after PR 5, when David takes the
+memory API break, with the helix main/capture and n64.toys companions ready.
+PRs 2–5 use the existing memory API.
 
 ### PR 2 — Libultra TLUT encoder and destination. S–M, 3–4 days
 
-Depends on PR 1. Files: `n64-gbi/src/encode.rs`, `n64-gbi/tests/conformance.rs`,
+Ships first; independent of PR 1. `tlut_truncated_source_rejects_task` is written
+against today's `in_bounds` and re-expressed as a `MemoryRead` diagnostic in PR 1.
+Files: `n64-gbi/src/encode.rs`, `n64-gbi/tests/conformance.rs`,
 `hle/{rdp,tmem}.rs`, `tests/{scene_builders,decode,gbi_roundtrip}.rs`, CI palette
 fixtures and new IMAGE oracle writers. Coordinate the relocated n64.toys
 compiler's encoder pin and palette SetTile migration in a companion PR. Its
@@ -689,7 +940,8 @@ rule. Do not preserve the old encoding to keep a fixture green.
 
 ### PR 3 — Structured unsupported behavior and opcode inventory. S, 2–3 days
 
-Depends on PR 1. Files: `fast3d/src/diag.rs`, `hle/{tmem,texdec,combiner}.rs`,
+Independent of PR 1; the memory-read diagnostic variants land with PR 1.
+Files: `fast3d/src/diag.rs`, `hle/{tmem,texdec,combiner}.rs`,
 `hle/{interp,rsp_f3dex2}.rs`, `n64-gbi/src/{consts,encode}.rs`, conformance and
 `tests/gbi_roundtrip.rs`. Include SPNOOP, LINE3D, DMA_IO, SPECIAL and the aborting
 LOAD_UCODE stub; move synthetic detection records under tests in
@@ -760,11 +1012,27 @@ Tests: `paired_pairless_clear_policy_equivalence`,
 `logical_extent_survives_canvas_resize`. Exercise both clear policies at matching
 logical/output extents, then preserve existing pairless resize behavior.
 
-Acceptance: one executor for both paths; alternating draws see only earlier
+Acceptance: two bisectable commits. First normalize the workload while keeping
+the existing execution paths and every existing golden pixel-identical. Then
+replace those paths with one executor; alternating draws see only earlier
 depth, scissor and color writes. Keep the existing shadow and rectangle oracles;
-add a paired IMAGE interleaving scene with an independent overlap mask. Golden
-impact: `OrderedWorkload` / `PairlessClearPolicy` only; ordinary single-run and
-sm64 opaque-then-decal goldens stay unchanged. No general framebuffer copies yet.
+add a paired IMAGE interleaving scene with an independent overlap mask.
+
+Golden impact in the second commit is limited to two classes:
+
+- `OrderedWorkload`: pixels affected by the old decal bucketing, lost per-draw
+  scissor, or discarded legacy draws before CIMG. Derive expected coverage and
+  draw order from the command stream; bound the mask to the affected draws and
+  their overlaps or scissor differences.
+- `PairlessClearPolicy`: pixels whose prior contents were erased by an implicit
+  pairless clear under `Persist`, or a repeated clear within a `PerFrame` frame.
+  Use a known prior color/depth pattern and explicit draw coverage to derive
+  which pixels should survive.
+
+Name each affected existing golden before updating it, with the hashes, exact
+mask and independent expectations required below. Every other golden, including
+ordinary single-run and sm64 opaque-then-decal fixtures, stays pixel-identical.
+No general framebuffer copies yet.
 
 ### PR 7 — Persistent Z images and real depth fills. M, 5–8 days
 
@@ -803,45 +1071,61 @@ Tests: `capture_sequence_replays_from_reset`,
 Acceptance: a recorded sequence retains depth through the facade, while standalone
 fixtures prove initialization of color and depth. Existing shortcut pixels stay
 stable and unsupported aliases report the originating PC without assertions.
-For a live sm64 capture, provide the reset-induced difference mask, dependent
-commands and a reviewed PNG; keep this live gate open if no such capture can be
-obtained. For exportable sequences, run identical task order through rt64; HOST64
-recordings remain replay/semantic evidence, not rt64 inputs. Golden impact:
+Run section 3's live sm64 experiment. Close the live gate with either the
+reset-induced difference mask, dependent commands and a reviewed PNG, or the
+complete zero-diff results and command evidence for `closed-by-absence` on the
+recorded route. Missing captures, failed replay or incomplete coverage leave it
+open; authored acceptance alone does not close it. For exportable sequences,
+run identical task order through rt64; HOST64 recordings remain replay/semantic
+evidence, not rt64 inputs. Golden impact:
 `BoundedFramebufferAlias` only for formerly incorrect aliases; sequence images
 are new, provenance-labelled evidence.
 
-### PR 9 — Primitive depth source. S–M, 3–4 days
+### PR 9 — Primitive depth registers. S, 1–2 days
 
-Depends on PR 7. Files: `hle/{rdp,blender,rsp}.rs`, `fast3d/src/scene.rs`,
-`render/mod.rs`, all regular/dual/decal shader entries and shared prelude,
-`n64-gbi` constants/encoder/conformance, new `tests/prim_depth.rs`.
+Depends on PR 3. Files: `hle/{rdp,rsp}.rs`, `fast3d/src/scene.rs`, `fast3d/src/diag.rs`,
+`n64-gbi` constants/encoder/conformance, new `tests/prim_depth.rs`. No shader
+changes.
 
-Tests: `primdepth_words_and_roundtrip`, `primdepth_mask_and_dz_units`,
-`primdepth_changes_between_draws`, `primdepth_triangle_texrect_agree`,
-`primdepth_disabled_uses_pixel_z`, `primdepth_decal_uses_dz`.
-Acceptance: independent depth probes and an IMAGE oracle with overlapping
-triangles/rectangles under both sources; forced fallback and dual-source agree
-on coverage/depth. Golden impact: `PrimitiveDepthSource`; lists without that mode
-must be byte-identical.
+Tests: `primdepth_words_and_roundtrip`, `primdepth_snapshot_per_draw`,
+`primdepth_setter_alone_is_silent`, `primdepth_source_draw_is_rejected`
+(triangle and TexRect, both cycle types, `UnsupportedPrimitiveDepthSource` at
+the draw's PC, `errors` and `dropped_runs` incremented, no pixels written),
+`pixel_z_draws_unchanged`.
 
-### PR 10 — Convert/key registers and combiner inputs. S–M, 3–5 days
+Acceptance: registers decode and snapshot per draw; a draw under `G_ZS_PRIM` is
+rejected with the named error and nothing else changes. Golden impact: none;
+existing supported fixtures use `G_ZS_PIXEL`. Shader wiring, normalization and
+decal tolerance under primitive Z are deferred to a game that issues it (section 3).
 
-Depends on PRs 3 and 6. Files: `hle/{rdp,combiner,rsp}.rs`,
-`render/{mod,combiner_prelude.wgsl}`, `n64-gbi` constants/encoders/conformance,
-selector support tables and new `tests/convert_key.rs`.
+### PR 10 — Convert/key registers. S, 1–2 days
 
-Tests: `convert_signed_nine_bit_literals`, `convert_k2_crosses_word_boundary`,
+Depends on PR 3. Files: `hle/{rdp,combiner,rsp}.rs`, `fast3d/src/diag.rs`,
+`n64-gbi` constants/encoders/conformance, the selector support table and new
+`tests/convert_key.rs`. No shader changes.
+
+Tests: `convert_key_words_and_roundtrip`, `convert_signed_nine_bit_literals`,
+`convert_k2_crosses_word_boundary`, `convert_key_setters_alone_are_silent`,
 `keyr_keygb_preserve_other_channels`, `key_width_is_retained`,
-`key_and_k_selectors_active_cycles`, `convert_key_snapshot_per_draw`,
-`yuv_and_chroma_key_mode_remain_diagnosed`. Test -256, -1, 0, 255 coefficients,
-both cycles, rectangles, and appending a setter after the last draw.
+`convert_key_snapshot_per_draw`, `key_selector_active_cycle_is_rejected`,
+`k_selector_active_cycle_is_rejected`, `inactive_cycle_selector_does_not_reject`,
+`yuv_and_chroma_key_mode_are_rejected`. Test -256, -1, 0, 255 coefficients,
+both cycles, rectangles, and a setter appended after the last draw.
 
-Acceptance: positive K and key-center/scale IMAGE fixtures match rt64; negative
-coefficient arithmetic has an explicit SDK oracle and documented rt64 delta.
-No newly accepted unrelated selectors. Golden impact: `ConvertKeyInputs` only
-for newly wired slots; update the literal support matrix, not all selectors.
+Acceptance: registers decode with signed values per the SDK and snapshot per
+draw; draws selecting KEY_CENTER, KEY_SCALE, K4 or K5 in an active cycle, or
+enabling YUV conversion or chroma keying, are rejected with the named errors and
+the support matrix says so. Golden impact: none; no fixture selects these
+inputs. Combiner wiring waits for a game that uses them (section 3).
 
-### PR 11 — Shared texture content and cache identity. M, 4–6 days
+### Item 13, evidence-gated: measure first
+
+PRs 11 and 12 are outside the initial delivery. They start only after a baseline
+PR (S, 1–2 days) records decode count, GPU upload count and CPU time for one
+captured sm64 frame and one n64.toys animated scene as section 3 specifies, and
+the numbers name a cost worth removing. Neither PR may change a pixel.
+
+#### PR 11 — Shared texture content and cache identity. M, 4–6 days
 
 Depends on PRs 2, 6 and 10; use the final draw-state layout. Files:
 `hle/{tmem,combiner,rsp}.rs`, `fast3d/src/scene.rs`, `render/mod.rs`, new
@@ -856,17 +1140,19 @@ Tests: `prim_env_animation_decodes_once`, `material_reorder_reuses_images`,
 
 Acceptance: one decode per unchanged snapshot/descriptor and one GPU upload per
 unique live image after warm-up, independent of material order. Check bounded
-cache accounting and report CPU timings for one captured sm64 workload and an
-animated Rust-authored color scene. If a whole-TMEM key causes extra misses,
-report them; do not claim palette-subrange precision. Golden impact: none;
+cache accounting and compare decode/upload counts and CPU timings against the
+same captured sm64 and animated n64.toys baseline workloads. Rust-authored color
+scenes may isolate costs but do not replace that comparison. If a whole-TMEM key
+causes extra misses, report them; do not claim palette-subrange precision. Golden impact: none;
 all old and new image hashes must stay identical. No new rt64 comparison is
 needed beyond unchanged replay of the semantic corpus.
 
-### PR 12 — Reusable scene uploads. S–M, 3–5 days
+#### PR 12 — Reusable scene uploads. S–M, 3–5 days
 
 Depends on PRs 6 and 11. Files: `render/{mod,workload}.rs`, new
 `render/upload.rs`, tests for multi-task and mixed-extent scenes, benchmark
-driver using recorded/Rust-authored inputs.
+driver using the recorded sm64 and n64.toys baseline inputs, with Rust-authored
+cases for isolated allocation checks.
 
 Tests: `upload_buffers_reused_after_warmup`, `upload_growth_keeps_prior_task`,
 `multiple_extents_have_distinct_output_ranges`,
@@ -874,9 +1160,10 @@ Tests: `upload_buffers_reused_after_warmup`, `upload_growth_keeps_prior_task`,
 `reconfigure_releases_cached_device_resources`.
 
 Acceptance: no new buffers at steady workload capacity, identical images and
-diagnostics, measured allocation/upload counts and CPU time with adapter/build
-metadata. Default WebGPU limits remain sufficient. Golden impact: none. Do not
-include the n64.toys compiled-program implementation in this PR.
+diagnostics, measured allocation/upload counts and CPU time against the same
+baseline workloads, with adapter/build metadata. Default WebGPU limits remain
+sufficient. Golden impact: none. Do not include the n64.toys compiled-program
+implementation in this PR.
 
 ### Deferred PRs, activated by a committed second game
 
@@ -906,13 +1193,18 @@ or golden changes belong to the documentation portion.
 
 ### Dependencies and verification gate
 
-PR 1 → PR 2 is the first consumer delivery: safe reads plus a correct `n64-gbi`
-pin let n64.toys update its relocated compiler. PR 3 follows the memory types;
-PRs 4–5 complete control. PRs 6–8 fix the workload and establish the depth
-acceptance boundary. PR 9 requires real stored depth; PR 10 requires ordered
-draw snapshots. Optimize only after these contracts settle: PRs 11–12. D1–D6
-are outside the initial delivery. The initial sequence is roughly 44–65 working
-days, not the roadmap's original single M-sized F3DEX2 estimate.
+Order: PR 2 (TLUT), PR 3 (stubs, inventory, format errors), PR 4 (MODIFYVTX,
+QUAD), PR 5 (CULLDL, BRANCH_Z). In the first two working weeks, land PR 2 then
+PR 3 (5–7 days), then PR 4 (2–3 days); PR 5 follows (4–6 days). All four take
+11–16 days. A correct `n64-gbi` pin lets n64.toys update its relocated compiler;
+the F3DEX2 controls become authorable when its companion adds their syntax.
+These PRs preserve the memory API; PR 2 still changes TLUT input semantics.
+PR 1 follows when David takes the memory break, with the helix and n64.toys
+companions ready to land together (6–8 days). PRs 6, 7 and 8 then fix the workload
+and establish the depth acceptance boundary (14–21 days), followed by reduced
+PRs 9 and 10 (2–4 days). Each depends technically on PR 3; the delivery order
+keeps them after PR 8. The initial delivery is 33–49 working days. The
+item 13 baseline and PRs 11–12, and D1–D6, are outside it.
 
 Claude verifies every implementation PR independently on the GPU matrix and in
 the actual browser job, including forced fallback and dual-source where
@@ -943,37 +1235,42 @@ decoder is acceptance. Performance/refactor PRs permit no pixel delta.
 | HostRam no longer implements Rdram | helix's adapter stops compiling | Move the unsafe obligation to `consume_dl`, use no-VI presentation, migrate capture in the same consumer update; keep native Fixed/Float and high-pointer tests. |
 | Deferred guest reads | helix resumes before presentation | Retained scenes own bytes; poison/drop source after consume in safe recorded tests, and verify presentation never requests a reader. |
 | TLUT input meaning changes without a Rust type change | n64.toys compiler or external encoder caller emits a different count | Explicit migration note, update every in-tree call, pin encoder and compiler together, survey low-level saved source before rollout. |
-| Stricter unsupported-format errors | Playground content formerly rendered RGBA16 fallback | Show structured diagnostics; never hide it with empty pixels or silently rewrite source. Confirm affected saved content with David. |
-| Depth now survives | helix could expose previously masked missing clears | Partial-clear and contamination tests; captured dependent operations and reviewed masks before pinning live output. |
+| Stricter unsupported-format errors (PR 3) | Playground source can emit the 23 unsupported pairs and the RGBA32 LoadBlock layout case listed in section 1 | Report at the draw PC through the existing diagnostic API; preserve supported RGBA32 paths. Survey saved source before moving the production pin. No dependency on PR 1. |
+| Unwired RDP inputs are rejected (PRs 9–10) | Numeric playground modes/selectors can request primitive Z or key/K inputs; no committed game establishes shader use | Snapshot registers, keep unused setters silent, and drop consuming draws with the named Errors. Test active/inactive cycles, triangle/TexRect PCs and unchanged `DlSummary` shape; shader support remains deferred. |
+| Depth now survives | helix could expose previously masked missing clears | Partial-clear and contamination tests; run the live experiment before pinning output. Close with reviewed difference evidence or bounded `closed-by-absence`; incomplete capture/replay stays open. |
 | Pairless policy/order correction | n64.toys multi-pass or animated source may change pixels | Preserve 320x240 logical coordinates and `PerFrame`; compare ordered scissor/decal fixtures and saved-source renders in its repo. |
 | Alias guards replace wrong sampling | Offscreen toys may receive new errors | Keep exact-base shortcut, report unsupported offsets/feedback precisely; defer broader support with a named reproducer. |
-| Cache identities omit palette/LOD/format | Both consumers show stale textures | Mutation, descriptor, collision and task-reorder tests; zero-delta performance gate. |
-| Buffer reuse overwrites queued work | Multiple tasks or extents use last task's values | Disjoint live ranges and many-task browser fixture, with allocation counters separate from pixel checks. |
-| F3DEX added as an enum variant | Consumers with exhaustive Microcode matches need a new arm | Keep existing FFI IDs; add a new explicit ID, capture tag and declaration test in the chosen consumer. |
+| Cache identities omit palette/LOD/format (evidence-gated PR 11) | Both consumers could show stale textures | Measured consumer baseline first, then mutation, descriptor, collision and task-reorder tests; zero pixel delta. |
+| Buffer reuse overwrites queued work (evidence-gated PR 12) | Multiple tasks or extents could use last task's values | Measured consumer baseline first, then disjoint live ranges and a many-task browser fixture, with allocation counters separate from pixel checks. |
+| F3DEX added as an enum variant (deferred D1) | Consumers with exhaustive Microcode matches will need a new arm | No new variant or FFI ID in the initial delivery. D1 keeps existing IDs and adds an explicit ID, capture tag and declaration test in the chosen consumer. |
 | Write-back assumed at present | Future ROM consumer reads stale bytes or blocks wasm | Separate opt-in completion/patch API and DP-event evidence; freeze it only with that consumer. |
 
 ## 6. Needs David
 
-1. Identify the helix capture/integration branch. The supplied snapshot has the
-   direct consume site cited in section 1, whereas the previous design describes
-   a capture hook. Confirm consumer deployment pins before rolling out either
-   API migration; the relocated n64.toys compiler is present in the inspected
-   revision, but its production deployment was not inspected.
-2. Supply or authorize capture of an sm64 frame/sequence with a demonstrated
-   depth dependency across color switches, tasks or frames. Record which reset
-   destroys the result. If no prior-frame dependency exists, keep that part of
-   live acceptance explicitly unclaimed.
-3. Confirm the next committed game/build. F3DEX is the selected next family; a
+1. When to take the memory API break (PR 1). It is a source break for helix and
+   for any external `Rdram` implementor, and nothing in PRs 2–5 needs it.
+   Recommendation: land PRs 2–5 first, then PR 1 together with the helix and
+   n64.toys companion PRs so both consumers move in one step.
+2. Playground impact of removing the RGBA16 fallback (PR 3). The 23 unsupported
+   `(fmt, siz)` pairs and the RGBA32 non-word-aligned LoadBlock case in section 1
+   become named errors instead of plausible pixels. Recommendation: accept, and
+   survey saved n64.toys sources for low-level `gsDPSetTile` operands before
+   moving its production pin.
+3. Supply or authorize the sm64 capture experiment in section 3 to determine
+   whether depth affects output across color switches, tasks or frames.
+   If no dependency is found, the live gate closes by absence for that route;
+   it does not stay open indefinitely.
+4. Confirm the next committed game/build. F3DEX is the selected next family; a
    game requiring F3DZEX2 or S2DEX changes that position before implementation.
    The possible usefulness of sm64's optional F3DEX build is an inference, not
    a commitment from the consumer.
-4. Establish whether saved n64.toys sources use raw TLUT words or low-level
+5. Establish whether saved n64.toys sources use raw TLUT words or low-level
    palette macros, and how compiler versions are rolled out. Only source storage
    code was inspected; no production database or saved user content was read.
-5. Confirm whether any intended ROM consumer needs CPU framebuffer/depth reads,
+6. Confirm whether any intended ROM consumer needs CPU framebuffer/depth reads,
    writes, and DP completion synchronization. Default here is no RAM write-back;
    no inspected consumer establishes a need for it.
-6. Decide release naming and publication. README requests `fast3d = "1.0"`, the
+7. Decide release naming and publication. README requests `fast3d = "1.0"`, the
    workspace says `1.0.0`, and the roadmap reports the registry's legacy 2023
    `0.5.0` (`README.md:13`, `Cargo.toml:7`, `docs/ROADMAP.md:94`). This is a reported
    registry mismatch, not a registry release audit. Proposed interim action:
@@ -981,15 +1278,48 @@ decoder is acceptance. Performance/refactor PRs permit no pixel delta.
    these intentional API breaks and companion consumers are reviewed. A publish
    PR must also make the path-only `n64-gbi` dependency publishable
    (`Cargo.toml:17`). No publication is authorized by this design.
-7. Confirm any intent to change the inherited accuracy/presentation decisions.
+8. Confirm any intent to change the inherited accuracy/presentation decisions.
    This design retains native-resolution SDK/rt64 semantics and existing
    approximations, with the specific divergences above. Helix currently computes
    widescreen aspect itself (`helix:src/render.rs:55`); upscaling ownership and
    extended GBI remain open roadmap decisions (`docs/ROADMAP.md:97`). No second
    aspect policy or extension protocol is introduced here.
 
-## Settled decisions
+## Settled decisions (challenge, 2026-09-06)
 
-No challenge round has occurred for this design. Record accepted positions,
-overrides and their evidence here after Claude's review; do not silently edit
-away reference disagreements or turn an unverified consumer need into a fact.
+Claude challenged `ed42e50` against the code, the consumers and rt64. Positions
+P1–P7, P9, P11–P13 and P15 are accepted; P10 is refined below. Two overrides,
+three refinements:
+
+**P8 overridden.** Primitive depth, convert and key become stored draw state
+with named rejections, not shader inputs. sm64 issues none of these commands
+(section 1); rt64 parity alone is not scope evidence. PRs 9 and 10 shrink to S.
+
+**P14 overridden.** Item 13 leaves the initial delivery. A baseline measurement
+on a captured sm64 frame and an n64.toys animated scene precedes any
+optimization, and optimization PRs permit no pixel delta.
+
+**Ordering refined.** PRs 2–5 land before PR 1. Nothing in TLUT or the F3DEX2
+controls needs the fallible trait; the API break is taken when David schedules
+the consumer update, with both companions ready.
+
+**P10 refined.** Depth persistence by address ships with authored acceptance.
+The live sm64 gate closes after the experiment in section 3, either by a
+reviewed reset-induced difference or by absence for the recorded route. It
+remains open until that evidence exists; no positive dependency is required.
+
+**PR 6 refined.** The workload normalization lands with the existing execution
+paths still present and pixel-identical, then replaces them in a second
+bisectable commit. Every existing golden stays pixel-identical except the two
+named classes.
+
+**Reference disagreements recorded.** BRANCH_Z follows the SDK's less-or-equal
+(`sm64:include/PR/gbi.h:2380`, `:2426`) over rt64's strict comparison
+(`rt64:src/hle/rt64_rsp.cpp:844`); CULLDL follows the SDK where rt64's handler is
+empty; convert coefficients are signed per the SDK where rt64 extracts them
+unsigned. Each carries an independent assertion in its PR instead of an oracle
+claim.
+
+**Facts settled.** The helix capture hook is branch `helix-capture` (`81e9a70`,
+helix PR #33). `Microcode` gains no variant before D1, so helix's FFI table is
+unchanged by this delivery. `n64-gbi` stays dependency-free.
