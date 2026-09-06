@@ -1088,7 +1088,7 @@ fn ref_color(scene: &crate::hle::Scene, i: usize) -> [f32; 4] {
 fn compute_outputs_match_oracle_for_every_scene() {
     let (device, queue, _dual_source) = headless_device();
     let mut checked = 0;
-    for &name in crate::tests::fixtures::SCENES {
+    for name in crate::tests::fixtures::scenes() {
         let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
         let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
         assert!(r.diags.is_empty(), "{name}: {:?}", r.diags);
@@ -1561,7 +1561,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     const S: f32 = 40.0; // cube half-extent / sphere target radius.
 
     // t=0: weight = (1-cos(0))/2 = 0.0 → pure cube.
-    let (asm0_rdram, asm0_entry) = crate::tests::fixtures::fixture("morphcube--t00000000");
+    let (asm0_rdram, asm0_entry) = crate::tests::fixtures::fixture("morphcube--time-zero");
     let r0 = crate::hle::interpret_rdram(asm0_rdram, asm0_entry as u32);
     assert!(r0.diags.is_empty(), "t=0 interp diags: {:?}", r0.diags);
     assert!(!r0.scene.raw_pos.is_empty(), "t=0: no vertices");
@@ -1583,7 +1583,7 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     );
 
     // t=PI: weight = (1-cos(PI))/2 = 1.0 → FULL morph → sphere.
-    let (asm_full_rdram, asm_full_entry) = crate::tests::fixtures::fixture("morphcube--t40490fdb");
+    let (asm_full_rdram, asm_full_entry) = crate::tests::fixtures::fixture("morphcube--time-pi");
     let r_full = crate::hle::interpret_rdram(asm_full_rdram, asm_full_entry as u32);
     assert!(
         r_full.diags.is_empty(),
@@ -1609,7 +1609,8 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
     }
 
     // t=PI/2: weight ≈ 0.5 → midpoint; positions must differ from BOTH endpoints (the morph animates).
-    let (asm_half_rdram, asm_half_entry) = crate::tests::fixtures::fixture("morphcube--t3fc90fdb");
+    let (asm_half_rdram, asm_half_entry) =
+        crate::tests::fixtures::fixture("morphcube--time-half-pi");
     let r_half = crate::hle::interpret_rdram(asm_half_rdram, asm_half_entry as u32);
     assert!(
         r_half.diags.is_empty(),
@@ -1635,12 +1636,12 @@ fn morphcube_morphs_cube_to_sphere_across_frames() {
 #[test]
 fn perspective_cube_mvp_differs_between_frames() {
     // t=0: model = identity (guRotate at time=0 is no-op rotation by 0°).
-    let (asm0_rdram, asm0_entry) = crate::tests::fixtures::fixture("perspective-cube--t00000000");
+    let (asm0_rdram, asm0_entry) = crate::tests::fixtures::fixture("perspective-cube--time-zero");
     let r0 = crate::hle::interpret_rdram(asm0_rdram, asm0_entry as u32);
     assert!(r0.diags.is_empty(), "t=0 interp diags: {:?}", r0.diags);
 
     // t=2.0s: model has rotated 2*45=90° about Y — the MVP will differ from the t=0 case.
-    let (asm2_rdram, asm2_entry) = crate::tests::fixtures::fixture("perspective-cube--t40000000");
+    let (asm2_rdram, asm2_entry) = crate::tests::fixtures::fixture("perspective-cube--time-two");
     let r2 = crate::hle::interpret_rdram(asm2_rdram, asm2_entry as u32);
     assert!(r2.diags.is_empty(), "t=2 interp diags: {:?}", r2.diags);
 

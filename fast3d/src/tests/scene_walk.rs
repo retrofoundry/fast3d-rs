@@ -3,7 +3,7 @@ use crate::tests::common;
 #[test]
 fn every_curated_scene_interprets_and_renders_clean() {
     let mut checked = 0;
-    for &name in crate::tests::fixtures::SCENES {
+    for name in crate::tests::fixtures::scenes() {
         let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
         let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
         assert!(r.diags.is_empty(), "{name}: interp diags: {:?}", r.diags);

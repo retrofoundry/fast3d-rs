@@ -51,4 +51,7 @@ mod dlmemory_equivalence;
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 mod host_mem;
 
+mod dl_builder;
+pub(crate) mod fixture_oracle;
 pub(crate) mod fixtures;
+mod scene_builders;
