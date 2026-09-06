@@ -18,6 +18,10 @@ pub mod rdp {
     pub const G_MDSFT_COMBKEY: u32 = 8;
     pub const G_CK_NONE: u32 = 0;
     pub const G_CK_KEY: u32 = 1 << G_MDSFT_COMBKEY;
+    pub const G_CCMUX_CENTER: u32 = 6;
+    pub const G_CCMUX_SCALE: u32 = 6;
+    pub const G_CCMUX_K4: u32 = 7;
+    pub const G_CCMUX_K5: u32 = 15;
     pub const G_SETTILE: u8 = 0xF5;
     pub const G_LOADBLOCK: u8 = 0xF3;
     pub const G_LOADTILE: u8 = 0xF4;

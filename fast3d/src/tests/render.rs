@@ -361,6 +361,8 @@ fn combiner_uniform_packs_raw_words() {
     let selectors = crate::hle::combiner::decode_combine(0xFC12_7E24, 0xFFFF_F9FC);
 
     let mat = Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: vec![128u8; 4],
         tex_w: 1,
@@ -2672,6 +2674,8 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
     let white_tex = vec![255u8, 255, 255, 255]; // 1×1 white placeholder (tex_enable=false)
 
     let mat0 = crate::hle::Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: white_tex.clone(),
         tex_w: 1,
@@ -2698,6 +2702,8 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
         detail_tex: None,
     };
     let mat1 = crate::hle::Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: white_tex,
         tex_w: 1,
@@ -2852,6 +2858,8 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
     let blue_tex = vec![0u8, 0, 255, 255]; // 1×1 BLUE
 
     let mat0 = crate::hle::Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: red_tex,
         tex_w: 1,
@@ -2878,6 +2886,8 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
         detail_tex: None,
     };
     let mat1 = crate::hle::Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: blue_tex,
         tex_w: 1,
@@ -3015,6 +3025,8 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
     let selectors = crate::hle::combiner::decode_combine(0x0000_0000, 0x0000_00C3);
     let white = vec![255u8, 255, 255, 255];
     let mat_green = crate::hle::Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: white.clone(),
         tex_w: 1,
@@ -3041,6 +3053,8 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
         detail_tex: None,
     };
     let mat_red = crate::hle::Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: white,
         tex_w: 1,
@@ -3384,6 +3398,8 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
     let selectors = crate::hle::combiner::decode_combine(0x0000_0000, 0x0000_00C3);
     let white = vec![255u8, 255, 255, 255];
     let mat_base = crate::hle::Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: white.clone(),
         tex_w: 1,
@@ -3410,6 +3426,8 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
         detail_tex: None,
     };
     let mat_decal = crate::hle::Material {
+        convert: Default::default(),
+        key: Default::default(),
         sampling: Default::default(),
         texture: white,
         tex_w: 1,

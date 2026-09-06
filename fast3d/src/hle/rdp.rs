@@ -56,6 +56,8 @@ pub struct Rdp {
     pub combine_l: u32,                // = w0
     pub combine_h: u32,                // = w1
     pub other_mode_h: u32,             // authoritative; cycle type at (h>>20)&3
+    // Zero encodes G_TC_CONV, but an unwritten TEXTCONV field keeps legacy lists renderable.
+    pub texture_conversion_set: bool,
     pub other_mode_l: u32, // RDP othermode low word: blender mux + z-mode + render flags
     pub fog_color: [u8; 4], // G_SETFOGCOLOR RGBA8
     pub fog_mul: i16,      // gSPFogPosition fm
@@ -149,6 +151,7 @@ fn rdp_half<M: Rdram>(_c: &Cmd, cx: &mut Ctx<M>) {
 fn rdp_set_other_mode<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     // G_RDPSETOTHERMODE: w0 low 24 bits → other_mode_h field; w1 → other_mode_l.
     cx.rdp.other_mode_h = c.w0 & 0x00FF_FFFF;
+    cx.rdp.texture_conversion_set = true;
     cx.rdp.other_mode_l = c.w1;
     cx.rsp.material_dirty = true;
 }

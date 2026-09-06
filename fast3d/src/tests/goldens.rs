@@ -1218,7 +1218,12 @@ fn fill_rect_scene(
                 addr: 0x0010_0000,
             },
             depth_image: None,
-            ops: vec![crate::hle::SceneOp::FillRect { rect, color_raw }],
+            ops: vec![crate::hle::SceneOp::FillRect {
+                rect,
+                color_raw,
+                convert: Default::default(),
+                key: Default::default(),
+            }],
             active_scissor: crate::hle::Scissor {
                 ulx: 0,
                 uly: 0,
@@ -1245,6 +1250,8 @@ fn tex1x1_material(rgba: [u8; 4]) -> crate::hle::Material {
         filter_mode: 0,
         prim: [0, 0, 0, 0],
         env: [0, 0, 0, 0],
+        convert: Default::default(),
+        key: Default::default(),
         tex_enable: true,
         wrap_s: 2,
         wrap_t: 2,
@@ -1664,6 +1671,8 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
         filter_mode: 0,
         prim: [0, 0, 0, 0],
         env: [0, 0, 0, 0],
+        convert: Default::default(),
+        key: Default::default(),
         tex_enable: true,
         wrap_s: 0,
         wrap_t: 0,
@@ -1699,6 +1708,8 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
             depth_image: None,
             ops: vec![
                 SceneOp::FillRect {
+                    convert: Default::default(),
+                    key: Default::default(),
                     rect: Rect {
                         ulx: 0,
                         uly: 0,
@@ -1791,6 +1802,8 @@ fn build_decal_scene() -> crate::hle::Scene {
         filter_mode: 0,
         prim,
         env: [0, 0, 0, 255],
+        convert: Default::default(),
+        key: Default::default(),
         blend_color: [0, 0, 0, 255],
         tex_enable: false,
         wrap_s: 2,
@@ -1978,6 +1991,8 @@ fn golden_paired_decal_respects_op_order() {
     let mut paired = build_decal_scene();
     // Op stream: a leading green full-FB FILLRECT, then the opaque base run, then the decal run.
     let mut ops: Vec<crate::hle::SceneOp> = vec![crate::hle::SceneOp::FillRect {
+        convert: Default::default(),
+        key: Default::default(),
         rect: crate::hle::Rect {
             ulx: 0,
             uly: 0,

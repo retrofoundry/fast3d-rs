@@ -37,6 +37,30 @@ renderer.present(&hw)?;
 
 Diagnostics stream through a `DiagSink` (`LogSink`, `NopSink`, or your own).
 
+## Convert and key registers
+
+`G_SETCONVERT` stores six signed nine-bit coefficients (-256..255).
+`G_SETKEYR` and `G_SETKEYGB` retain each channel's centre, scale and 12-bit width.
+Draws snapshot these registers, including rectangles. Unused setters are silent.
+
+These combiner inputs are recognised but remain unwired:
+
+| Input | Colour slot / encoding | Active-draw diagnostic |
+| --- | --- | --- |
+| `KEY_CENTER` | B / 6 | `UnsupportedKeyInput { selector: KeyInput::Center }` |
+| `KEY_SCALE` | C / 6 | `UnsupportedKeyInput { selector: KeyInput::Scale }` |
+| K4 | B / 7 | `UnsupportedConvertInput { selector: ConvertInput::K4 }` |
+| K5 | C / 15 | `UnsupportedConvertInput { selector: ConvertInput::K5 }` |
+
+One-cycle mode checks cycle 1; two-cycle mode checks both cycles. Copy and fill
+modes bypass the combiner. Inactive selectors do not reject a draw.
+
+Writing TEXTCONV to a value other than `G_TC_FILT` rejects subsequent draws with
+`UnsupportedTextureConversion`; enabling `G_CK_KEY` rejects them with
+`UnsupportedChromaKey`. The unwritten TEXTCONV default retains the library's
+existing rendering behaviour. All these diagnostics have Error severity and
+drop the draw before shader preparation. Selector enums live in `fast3d::diag`.
+
 ## Features
 
 - **`debug-ui`** — an egui overlay showing per-frame scene and triangle counts.

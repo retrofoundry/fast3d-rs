@@ -147,18 +147,31 @@ fn combiner_support_matrix_all_slots() {
                     let rejected = (cycle_type == 1 || cycle == 1)
                         && (!supported || (cycle_type == 0 && texel1));
                     let expected = if rejected {
-                        1 << (slot + if cycle == 0 { 8 } else { 0 })
+                        let kind = match (slot, encoding) {
+                            (1, 6) => DiagKind::UnsupportedKeyInput {
+                                selector: crate::diag::KeyInput::Center,
+                            },
+                            (2, 6) => DiagKind::UnsupportedKeyInput {
+                                selector: crate::diag::KeyInput::Scale,
+                            },
+                            (1, 7) => DiagKind::UnsupportedConvertInput {
+                                selector: crate::diag::ConvertInput::K4,
+                            },
+                            (2, 15) => DiagKind::UnsupportedConvertInput {
+                                selector: crate::diag::ConvertInput::K5,
+                            },
+                            _ => DiagKind::UnwiredSelector {
+                                slots: 1 << (slot + if cycle == 0 { 8 } else { 0 }),
+                            },
+                        };
+                        vec![Diagnostic { at: 0x1234, kind }]
                     } else {
-                        0
+                        Vec::new()
                     };
                     for rect in [false, true] {
                         let (mat, diags) = material(&rdp, rect);
-                        let actual = diags.iter().fold(0, |mask, d| match d.kind {
-                            DiagKind::UnwiredSelector { slots } => mask | slots,
-                            _ => mask,
-                        });
-                        if actual != expected || mat.is_some() == rejected {
-                            failures.push(format!("type {cycle_type} cycle {cycle} {}={encoding} rect={rect}: mask {actual:#06x}, expected {expected:#06x}, material={}", SLOTS[slot], mat.is_some()));
+                        if diags != expected || mat.is_some() == rejected {
+                            failures.push(format!("type {cycle_type} cycle {cycle} {}={encoding} rect={rect}: {diags:?}, expected {expected:?}, material={}", SLOTS[slot], mat.is_some()));
                         }
                     }
                 }
@@ -177,7 +190,7 @@ fn combiner_rejects_unwired_cycle0() {
     let mut cycles = [FLAT; 2];
     cycles[0][0] = 7;
     cycles[0][2] = 7;
-    cycles[1][1] = 6;
+    cycles[1][0] = 7;
     for loaded in [false, true] {
         let mut rdp = state(cycles, 1);
         if !loaded {
@@ -189,12 +202,12 @@ fn combiner_rejects_unwired_cycle0() {
             diags,
             vec![Diagnostic {
                 at: 0x1234,
-                kind: DiagKind::UnwiredSelector { slots: 0x0502 }
+                kind: DiagKind::UnwiredSelector { slots: 0x0501 }
             }],
             "both active cycles must contribute diagnostic slots before TMEM checks"
         );
         let display = diags[0].kind.to_string();
-        for name in ["cycle 0 CA", "cycle 0 CC", "cycle 1 CB"] {
+        for name in ["cycle 0 CA", "cycle 0 CC", "cycle 1 CA"] {
             assert!(
                 display.contains(name),
                 "diagnostic must name {name}: {display}"

@@ -10,6 +10,7 @@ mod browser_fixtures;
 #[path = "../../../tools/rt64-oracle/fixture.rs"]
 mod capture_fixture;
 mod conditional_control;
+mod convert_key;
 mod culling;
 mod decode;
 mod dl_plumbing;
@@ -62,5 +63,3 @@ mod host_mem;
 mod dl_builder;
 pub(crate) mod fixtures;
 mod scene_builders;
-
-mod convert_key;
