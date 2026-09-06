@@ -195,6 +195,7 @@ fn alpha_dither_copy_uses_texel_alpha_and_framebuffer_extent() {
                 material_index: 0,
                 render_mode_index: 0,
                 fog_color: [0; 4],
+                prim_depth: Default::default(),
                 fb_source: None,
             }],
             ..Default::default()

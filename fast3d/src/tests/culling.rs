@@ -77,6 +77,7 @@ fn cull_back_marks_cull_run_no_swap() {
         s.draw_runs,
         vec![DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::Cull,
@@ -94,6 +95,7 @@ fn cull_front_marks_cull_run_and_swaps() {
         s.draw_runs,
         vec![DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::Cull,
@@ -118,6 +120,7 @@ fn no_cull_bits_records_none_run() {
         s.draw_runs,
         vec![DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::None,

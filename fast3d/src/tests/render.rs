@@ -280,6 +280,7 @@ fn render_and_read_center_channel(
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -588,6 +589,7 @@ fn renders_red_triangle_center_and_clear_corner() {
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -799,6 +801,7 @@ fn depth_test_hides_the_farther_triangle() {
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -1420,6 +1423,7 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
     let indices: [u32; 6] = [0, 1, 2, 3, 4, 5];
     let runs = [crate::hle::DrawRun {
         fog_color: [0; 4],
+        prim_depth: Default::default(),
         material_index: 0,
         render_mode_index: 0,
         cull: crate::hle::CullKind::Cull,
@@ -2773,6 +2777,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
     scene.draw_runs = vec![
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -2781,6 +2786,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
         },
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 1,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -2945,6 +2951,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
     scene.draw_runs = vec![
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -2953,6 +2960,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
         },
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 1,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -3106,6 +3114,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
     scene.draw_runs = vec![
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -3114,6 +3123,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
         },
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 1,
             render_mode_index: 1,
             cull: crate::hle::CullKind::None,
@@ -3478,6 +3488,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
     scene.draw_runs = vec![
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -3486,6 +3497,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
         },
         crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 1,
             render_mode_index: 1,
             cull: crate::hle::CullKind::None,
@@ -3727,6 +3739,7 @@ fn render_two_texture_center(
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,
@@ -4173,6 +4186,7 @@ fn render_lod_center(
     let mock_scene = crate::hle::Scene {
         draw_runs: vec![crate::hle::DrawRun {
             fog_color: [0; 4],
+            prim_depth: Default::default(),
             material_index: 0,
             render_mode_index: 0,
             cull: crate::hle::CullKind::None,

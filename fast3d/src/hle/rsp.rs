@@ -538,7 +538,7 @@ impl Rsp {
     ///
     /// Either way the three indices are pushed onto the shared `scene.indices` buffer in draw order,
     /// and coalescing only extends the LAST run/op when it is a `Tris` with a matching
-    /// `(cull, material_index, render_mode_index, fog_color)` key.
+    /// `(cull, material_index, render_mode_index, fog_color, prim_depth)` key.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_tri(
         &mut self,
@@ -548,6 +548,7 @@ impl Rsp {
         material_index: u32,
         render_mode_index: u32,
         fog_color: [u8; 4],
+        prim_depth: crate::scene::PrimitiveDepth,
         scene: &mut Scene,
         pair_target: Option<usize>,
     ) {
@@ -575,6 +576,7 @@ impl Rsp {
                 && run.material_index == material_index
                 && run.render_mode_index == render_mode_index
                 && run.fog_color == fog_color
+                && run.prim_depth == prim_depth
         };
         let index_start = scene.indices.len() as u32;
         match pair_target {
@@ -584,6 +586,7 @@ impl Rsp {
                     material_index,
                     render_mode_index,
                     fog_color,
+                    prim_depth,
                     cull: kind,
                     index_count: 3,
                     index_start,
@@ -595,6 +598,7 @@ impl Rsp {
                     material_index,
                     render_mode_index,
                     fog_color,
+                    prim_depth,
                     cull: kind,
                     index_count: 3,
                     index_start,
@@ -775,6 +779,7 @@ pub fn snapshot_run(
     scene: &mut Scene,
     pc: u64,
 ) -> Option<(u32, u32)> {
+    validate_depth_source(rdp, diags, pc)?;
     // --- Material ---
     let material_index = if rsp.material_dirty {
         // Rebuild: build_material borrows rdp + rsp immutably; ? early-exits (None) on failure.
@@ -899,6 +904,7 @@ pub(crate) fn snapshot_rect_run(
     scene: &mut Scene,
     pc: u64,
 ) -> Option<(u32, u32)> {
+    validate_depth_source(rdp, diags, pc)?;
     let m = crate::hle::combiner::build_rect_material(rdp, rsp, tile, diags, pc)?;
     let material_index = match scene.materials.last() {
         Some(last) if *last == m => (scene.materials.len() - 1) as u32,
@@ -916,6 +922,21 @@ pub(crate) fn snapshot_rect_run(
         }
     };
     Some((material_index, render_mode_index))
+}
+
+fn validate_depth_source(
+    rdp: &crate::hle::rdp::Rdp,
+    diags: &mut Vec<crate::diag::Diagnostic>,
+    pc: u64,
+) -> Option<()> {
+    if rdp.other_mode_l & crate::hle::consts::G_ZS_PRIM != 0 {
+        diags.push(crate::diag::Diagnostic {
+            at: pc,
+            kind: crate::diag::DiagKind::UnsupportedPrimitiveDepthSource,
+        });
+        return None;
+    }
+    Some(())
 }
 
 /// Record a triangle through the pair recorder. When a CIMG has been seen the tri is routed into the
@@ -944,6 +965,7 @@ pub(crate) fn record_tri(
             material_index,
             render_mode_index,
             rdp.fog_color,
+            rdp.prim_depth,
             scene,
             Some(rec.cur_pair),
         );
@@ -955,6 +977,7 @@ pub(crate) fn record_tri(
             material_index,
             render_mode_index,
             rdp.fog_color,
+            rdp.prim_depth,
             scene,
             None,
         );
@@ -1177,12 +1200,13 @@ mod draw_runs_tests {
     #[test]
     fn cull_off_records_none_run_in_order() {
         let (mut rsp, mut scene) = rsp_three();
-        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
         assert_eq!(scene.indices, vec![0, 1, 2]);
         assert_eq!(
             scene.draw_runs,
             vec![DrawRun {
                 fog_color: [0; 4],
+                prim_depth: Default::default(),
                 material_index: 0,
                 render_mode_index: 0,
                 cull: CullKind::None,
@@ -1196,12 +1220,13 @@ mod draw_runs_tests {
     fn cull_front_swaps_a_c_and_marks_cull() {
         let (mut rsp, mut scene) = rsp_three();
         rsp.modify_geometry_mode(!0, G_CULL_FRONT);
-        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
         assert_eq!(scene.indices, vec![2, 1, 0]);
         assert_eq!(
             scene.draw_runs,
             vec![DrawRun {
                 fog_color: [0; 4],
+                prim_depth: Default::default(),
                 material_index: 0,
                 render_mode_index: 0,
                 cull: CullKind::Cull,
@@ -1214,15 +1239,16 @@ mod draw_runs_tests {
     #[test]
     fn runs_coalesce_and_split_on_cull_change() {
         let (mut rsp, mut scene) = rsp_three();
-        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
         rsp.modify_geometry_mode(!0, G_CULL_BACK);
-        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
-        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
         assert_eq!(
             scene.draw_runs,
             vec![
                 DrawRun {
                     fog_color: [0; 4],
+                    prim_depth: Default::default(),
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::None,
@@ -1231,6 +1257,7 @@ mod draw_runs_tests {
                 },
                 DrawRun {
                     fog_color: [0; 4],
+                    prim_depth: Default::default(),
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::Cull,
@@ -1244,11 +1271,12 @@ mod draw_runs_tests {
     #[test]
     fn drawrun_carries_material_and_render_mode_index() {
         let (mut rsp, mut scene) = rsp_three();
-        rsp.draw_tri(0, 1, 2, 5, 7, [0; 4], &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 5, 7, [0; 4], Default::default(), &mut scene, None);
         assert_eq!(
             scene.draw_runs,
             vec![DrawRun {
                 fog_color: [0; 4],
+                prim_depth: Default::default(),
                 material_index: 5,
                 render_mode_index: 7,
                 cull: CullKind::None,
@@ -1261,8 +1289,8 @@ mod draw_runs_tests {
     #[test]
     fn run_splits_on_material_index_change() {
         let (mut rsp, mut scene) = rsp_three();
-        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
-        rsp.draw_tri(0, 1, 2, 1, 0, [0; 4], &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
+        rsp.draw_tri(0, 1, 2, 1, 0, [0; 4], Default::default(), &mut scene, None);
         assert_eq!(scene.draw_runs.len(), 2);
     }
 
@@ -1279,11 +1307,41 @@ mod draw_runs_tests {
                 crate::hle::consts::G_LIGHTING | crate::hle::consts::G_TEXTURE_GEN,
             );
             rsp.set_vertex(&rd, 0, 3, 0, &Default::default(), &mut scene);
-            rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, pair_target);
+            rsp.draw_tri(
+                0,
+                1,
+                2,
+                0,
+                0,
+                [0; 4],
+                Default::default(),
+                &mut scene,
+                pair_target,
+            );
             rsp.modify_geometry_mode(!crate::hle::consts::G_TEXTURE_GEN, 0);
             rsp.set_vertex(&rd, 0, 3, 3, &Default::default(), &mut scene);
-            rsp.draw_tri(3, 4, 5, 0, 0, [0; 4], &mut scene, pair_target);
-            rsp.draw_tri(0, 4, 2, 0, 0, [0; 4], &mut scene, pair_target);
+            rsp.draw_tri(
+                3,
+                4,
+                5,
+                0,
+                0,
+                [0; 4],
+                Default::default(),
+                &mut scene,
+                pair_target,
+            );
+            rsp.draw_tri(
+                0,
+                4,
+                2,
+                0,
+                0,
+                [0; 4],
+                Default::default(),
+                &mut scene,
+                pair_target,
+            );
 
             let runs: Vec<_> = match pair_target {
                 None => scene.draw_runs.iter().collect(),

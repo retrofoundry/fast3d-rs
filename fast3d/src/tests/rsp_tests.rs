@@ -101,7 +101,7 @@ fn draw_tri_maps_cache_slots_to_global_indices() {
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
     );
-    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
     assert_eq!(scene.indices, vec![0, 1, 2]);
 }
 
@@ -198,11 +198,11 @@ fn phase4_modify_vertex_after_draw_copies_row_without_retroactive_edit() {
         &crate::hle::rdp::Rdp::default(),
         &mut scene,
     );
-    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
     let original_cn = scene.cn[0];
 
     rsp.modify_vertex(0, 0x10, 0xA1B2_C3D4, &mut scene).unwrap();
-    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
 
     assert_eq!(scene.indices, vec![0, 1, 2, 3, 1, 2]);
     assert_eq!(scene.cn[0], original_cn);
@@ -231,7 +231,7 @@ fn culled_triangle_does_not_make_later_modify_clone_vertex() {
     );
     rsp.modify_geometry_mode(u32::MAX, crate::hle::consts::G_CULL_BOTH);
 
-    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
     rsp.modify_vertex(0, 0x10, 0xA1B2_C3D4, &mut scene).unwrap();
 
     assert!(scene.indices.is_empty());
@@ -312,8 +312,8 @@ fn phase4_modify_vertex_screen_override_renders_requested_pixel_and_depth() {
         rsp.modify_vertex(slot, 0x1C, 0x0000_8000, &mut scene)
             .unwrap();
     }
-    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], &mut scene, None);
-    rsp.draw_tri(3, 4, 5, 1, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
+    rsp.draw_tri(3, 4, 5, 1, 0, [0; 4], Default::default(), &mut scene, None);
     rsp.finish(&mut scene);
 
     assert_eq!(scene.modify_flags, vec![3; 6]);
@@ -450,7 +450,7 @@ fn modifyvtx_invalid_attribute_does_not_copy_used_vertex() {
     let mut rsp = Rsp::default();
     let mut scene = Scene::default();
     rsp.set_vertex(&mem, 0, 1, 7, &crate::hle::rdp::Rdp::default(), &mut scene);
-    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], Default::default(), &mut scene, None);
     let before = scene.clone();
     assert_eq!(
         rsp.modify_vertex(7, 0x11, 0xffff_ffff, &mut scene),
@@ -461,7 +461,7 @@ fn modifyvtx_invalid_attribute_does_not_copy_used_vertex() {
     );
     assert_eq!(scene, before);
     rsp.modify_vertex(7, 0x10, 0x1122_3344, &mut scene).unwrap();
-    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], Default::default(), &mut scene, None);
     assert_eq!(scene.cn, [0x281e_140a, 0x4433_2211]);
     assert_eq!(scene.indices, [0, 0, 0, 1, 1, 1]);
 }
@@ -476,10 +476,10 @@ fn modifyvtx_reload_resets_modifications() {
     rsp.set_vertex(&mem, 0, 1, 7, &rdp, &mut scene);
     rsp.modify_vertex(7, 0x18, 0x0080_0100, &mut scene).unwrap();
     rsp.modify_vertex(7, 0x1c, 0x0000_8000, &mut scene).unwrap();
-    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], Default::default(), &mut scene, None);
     rsp.set_vertex(&mem, 0, 1, 7, &rdp, &mut scene);
     rsp.modify_vertex(7, 0x10, 0x1122_3344, &mut scene).unwrap();
-    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], &mut scene, None);
+    rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], Default::default(), &mut scene, None);
     assert_eq!(scene.indices, [0, 0, 0, 1, 1, 1]);
     assert_eq!(scene.modify_flags, [3, 0]);
     assert_eq!(scene.modify_screen, [[32.0, 64.0, 0.5, 0.0], [0.0; 4]]);
