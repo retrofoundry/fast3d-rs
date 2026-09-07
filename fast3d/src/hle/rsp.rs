@@ -963,6 +963,7 @@ pub(crate) fn ensure_pair_open(
         let depth_image = rdp.depth_image;
         let is_depth_clear = depth_image == Some(rdp.color_image.addr);
         scene.framebuffer_pairs.push(FramebufferPair {
+            color_image_epoch: rdp.color_image_epoch,
             color_image: rdp.color_image,
             depth_image,
             ops: Vec::new(),

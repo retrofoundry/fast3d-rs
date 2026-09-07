@@ -40,6 +40,7 @@ pub struct TileDescriptor {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Rdp {
+    pub(crate) color_image_epoch: u64,
     pub(crate) framebuffer_targets: crate::render::framebuffers::targets::TargetDescriptors,
     pub texture_loaded: bool,
     pub tmem_bank: crate::hle::tmem::Tmem,
@@ -406,6 +407,7 @@ fn set_color_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     };
     cx.rdp.color_image_set = true;
     if cx.rdp.color_image != new {
+        cx.rdp.color_image_epoch = cx.rdp.color_image_epoch.wrapping_add(1);
         cx.rdp.color_image = new;
         cx.rdp.color_changed = true;
     }

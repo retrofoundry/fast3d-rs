@@ -15,10 +15,11 @@ use std::collections::BTreeMap;
 mod state_tests;
 
 pub struct CaptureFrame {
-    fixture: Fixture,
+    pub(super) fixture: Fixture,
     error: Option<CaptureError>,
     initial_rdp: crate::hle::rdp::Rdp,
     expected_generation: std::rc::Rc<()>,
+    pub(super) sequence: bool,
 }
 
 impl CaptureFrame {
@@ -56,7 +57,9 @@ impl CaptureFrame {
                 tasks: Vec::new(),
                 provenance,
             },
-            error: None,
+            error: (renderer.inner.depth_reset_policy != crate::DepthResetPolicy::Never)
+                .then(|| invalid("diagnostic depth resets cannot be recorded in a fixture")),
+            sequence: false,
         }
     }
 
@@ -218,11 +221,20 @@ impl CaptureFrame {
         }
         self.fixture.frame.vi = vi;
         self.fixture.validate()?;
+        if self.sequence {
+            return Ok(self.fixture);
+        }
         let mut live = self.initial_rdp;
         let mut replay = crate::hle::rdp::Rdp::default();
         for task in &self.fixture.tasks {
-            let actual = task.interpret(live.clone())?;
-            let expected = task.interpret(replay.clone())?;
+            let mut actual = task.interpret(live.clone())?;
+            let mut expected = task.interpret(replay.clone())?;
+            // Epochs affect only diagnostic depth-reset controls, which recording excludes.
+            for scene in [&mut actual.scene, &mut expected.scene] {
+                for pair in &mut scene.framebuffer_pairs {
+                    pair.color_image_epoch = 0;
+                }
+            }
             let inputs = |scene| {
                 crate::render::inputs::RenderInputs::new(
                     scene,
@@ -258,14 +270,32 @@ pub struct ReplayOutput {
     pub summaries: Vec<DlSummary>,
     pub diagnostics: Vec<Vec<Diagnostic>>,
     pub adapter_info: Option<wgpu::AdapterInfo>,
+    pub commands: Vec<super::TaskCommand>,
 }
 
 impl Fixture {
     /// Replays from default RDP registers and empty TMEM, preserving state between recorded tasks.
-    /// Rejects dependence on prior color attachments; each clear-policy probe also starts from
+    /// Rejects dependence on prior color or depth attachments; each clear-policy probe starts from
     /// default registers while retaining its deliberately primed framebuffer contents.
     pub async fn replay(&self, device: wgpu::Device, queue: wgpu::Queue) -> Result<ReplayOutput> {
         self.validate()?;
+        self.check_device(&device)?;
+        let scopes = [
+            wgpu::ErrorFilter::OutOfMemory,
+            wgpu::ErrorFilter::Internal,
+            wgpu::ErrorFilter::Validation,
+        ]
+        .map(|filter| device.push_error_scope(filter));
+        let result = self.replay_checked(device, queue).await;
+        for scope in scopes.into_iter().rev() {
+            if let Some(error) = scope.pop().await {
+                return Err(CaptureError::Gpu(error.to_string()));
+            }
+        }
+        result
+    }
+
+    pub(super) fn check_device(&self, device: &wgpu::Device) -> Result<()> {
         let dual_source = device
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
@@ -285,23 +315,20 @@ impl Fixture {
                 "capture output exceeds device limits".into(),
             ));
         }
-        let scopes = [
-            wgpu::ErrorFilter::OutOfMemory,
-            wgpu::ErrorFilter::Internal,
-            wgpu::ErrorFilter::Validation,
-        ]
-        .map(|filter| device.push_error_scope(filter));
-        let result = self.replay_checked(device, queue).await;
-        for scope in scopes.into_iter().rev() {
-            if let Some(error) = scope.pop().await {
-                return Err(CaptureError::Gpu(error.to_string()));
-            }
-        }
-        result
+        Ok(())
     }
 
     pub async fn replay_headless(&self) -> Result<ReplayOutput> {
         self.validate()?;
+        let (device, queue, adapter_info) = self.headless_device().await?;
+        let mut output = self.replay(device, queue).await?;
+        output.adapter_info = Some(adapter_info);
+        Ok(output)
+    }
+
+    pub(super) async fn headless_device(
+        &self,
+    ) -> Result<(wgpu::Device, wgpu::Queue, wgpu::AdapterInfo)> {
         let instance = wgpu::Instance::default();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -326,9 +353,7 @@ impl Fixture {
             })
             .await
             .map_err(|error| CaptureError::Gpu(error.to_string()))?;
-        let mut output = self.replay(device, queue).await?;
-        output.adapter_info = Some(adapter_info);
-        Ok(output)
+        Ok((device, queue, adapter_info))
     }
 
     async fn replay_checked(
@@ -346,39 +371,69 @@ impl Fixture {
             return Err(invalid("frame does not render a framebuffer"));
         }
         let mut targets = BTreeMap::new();
+        let mut depths = BTreeMap::new();
         for scene in &renderer.frame_scenes {
-            for pair in scene
-                .framebuffer_pairs
-                .iter()
-                .filter(|pair| !pair.is_depth_clear)
-            {
-                let width = u32::from(pair.color_image.width).max(1);
-                let height = if pair.size_extent.1 == 0 {
-                    240
-                } else {
-                    pair.size_extent.1
-                };
-                targets
-                    .entry(pair.color_image.addr)
-                    .or_insert((width, height));
+            for target in crate::render::workload::Workload::new(scene).targets {
+                let (width, height) = target.logical_extent;
+                if let crate::render::workload::TargetId::Guest(address) = target.id {
+                    if !target.depth_clear {
+                        targets
+                            .entry(address)
+                            .and_modify(|extent: &mut (u32, u32, u8, u8)| {
+                                if (extent.0, extent.2, extent.3)
+                                    == (width, target.color_image.fmt, target.color_image.siz)
+                                {
+                                    extent.1 = extent.1.max(height);
+                                }
+                            })
+                            .or_insert((
+                                width,
+                                height,
+                                target.color_image.fmt,
+                                target.color_image.siz,
+                            ));
+                    }
+                }
+                if let Some(address) = target.depth_image {
+                    depths
+                        .entry(address)
+                        .and_modify(|extent: &mut (u32, u32, u8, u8)| {
+                            if extent.0 == width {
+                                extent.1 = extent.1.max(height);
+                            }
+                        })
+                        .or_insert((width, height, 0, 2));
+                }
             }
         }
         drop(renderer);
         for policy in [ClearPolicy::PerFrame, ClearPolicy::Persist] {
-            let mut renderer = self.renderer(device.clone(), queue.clone(), policy);
-            // Fresh renderers clear both policies identically; seed prior contents before comparing.
             for color in [0xF801_F801, 0x07C1_07C1] {
-                prime_framebuffers(&mut renderer, &targets, color)?;
-                let candidate = self.render_frame(&mut renderer).await?;
-                if candidate.rgba8 != output.rgba8 {
-                    return Err(CaptureError::ClearPolicyMismatch);
+                for depth in [0x0000_0000, 0xFFFC_FFFC] {
+                    let mut renderer = self.renderer(device.clone(), queue.clone(), policy);
+                    prime_framebuffers(&mut renderer, &targets, color, false)?;
+                    prime_framebuffers(&mut renderer, &depths, depth, true)?;
+                    renderer.inner.prime_legacy_attachments(
+                        &device,
+                        &queue,
+                        if color == 0xF801_F801 {
+                            wgpu::Color::RED
+                        } else {
+                            wgpu::Color::GREEN
+                        },
+                        if depth == 0 { 0.0 } else { 1.0 },
+                    );
+                    let candidate = self.render_frame(&mut renderer).await?;
+                    if candidate.rgba8 != output.rgba8 {
+                        return Err(CaptureError::ClearPolicyMismatch);
+                    }
                 }
             }
         }
         Ok(output)
     }
 
-    fn renderer(
+    pub(super) fn renderer(
         &self,
         device: wgpu::Device,
         queue: wgpu::Queue,
@@ -405,11 +460,19 @@ impl Fixture {
 
     async fn render_frame(&self, renderer: &mut Renderer) -> Result<ReplayOutput> {
         renderer.reset_rdp_state();
+        self.render_sequence_frame(renderer).await
+    }
+
+    pub(super) async fn render_sequence_frame(
+        &self,
+        renderer: &mut Renderer,
+    ) -> Result<ReplayOutput> {
         renderer.begin_frame();
         renderer.inner.frame_serial = self.frame.serial;
         renderer.inner.dither_seed = self.frame.dither_seed;
         let mut summaries = Vec::with_capacity(self.tasks.len());
         let mut diagnostics = Vec::with_capacity(self.tasks.len());
+        let mut commands = Vec::new();
         for task in &self.tasks {
             let hardware = ReplayHardware::new(task, self.frame.vi)?;
             let mut task_diagnostics = Vec::new();
@@ -417,6 +480,12 @@ impl Fixture {
             let summary =
                 renderer.process_dl(&hardware, task.entry, task.microcode, &mut task_diagnostics);
             hardware.check()?;
+            commands.extend(hardware.commands.into_inner().into_iter().map(|command| {
+                super::TaskCommand {
+                    task: task.order,
+                    command,
+                }
+            }));
             summaries.push(summary);
             diagnostics.push(task_diagnostics);
         }
@@ -446,11 +515,12 @@ impl Fixture {
             summaries,
             diagnostics,
             adapter_info: None,
+            commands,
         })
     }
 }
 
-fn effective_config(renderer: &Renderer) -> RendererConfig {
+pub(super) fn effective_config(renderer: &Renderer) -> RendererConfig {
     RendererConfig {
         format: Some(renderer.surface_format),
         ..renderer.config
@@ -477,22 +547,29 @@ impl Hardware for PresentationHardware {
 
 fn prime_framebuffers(
     renderer: &mut Renderer,
-    targets: &BTreeMap<u64, (u32, u32)>,
+    targets: &BTreeMap<u64, (u32, u32, u8, u8)>,
     color: u32,
+    depth: bool,
 ) -> Result<()> {
     renderer.reset_rdp_state();
     renderer.begin_frame();
     renderer.set_data_format(DataFormat::Fixed);
-    for (&address, &(width, height)) in targets {
+    for (&address, &(width, height, fmt, siz)) in targets {
         if width > 1023 || height > 1023 {
             return Err(invalid(
                 "framebuffer exceeds the fill-rectangle initialization range",
             ));
         }
-        let commands = [
+        let mut commands = vec![
             [0xBA00_1402, 0x0030_0000],
             [0xED00_0000, u64::from(((width * 4) << 12) | (height * 4))],
-            [0xFF10_0000 | u64::from(width - 1), address],
+            [
+                0xFF00_0000
+                    | (u64::from(fmt) << 21)
+                    | (u64::from(siz) << 19)
+                    | u64::from(width - 1),
+                address,
+            ],
             [0xF700_0000, u64::from(color)],
             [
                 0xF600_0000 | u64::from((((width - 1) * 4) << 12) | ((height - 1) * 4)),
@@ -500,6 +577,9 @@ fn prime_framebuffers(
             ],
             [0xB800_0000, 0],
         ];
+        if depth {
+            commands.insert(0, [0xFE00_0000, address]);
+        }
         let task = Task {
             entry: 0,
             microcode: Microcode::F3d,
@@ -522,7 +602,7 @@ fn prime_framebuffers(
         let mut diagnostics = Vec::new();
         let summary = renderer.process_dl(&hardware, 0, Microcode::F3d, &mut diagnostics);
         hardware.check()?;
-        if !summary.renderable || summary.errors != 0 {
+        if (!depth && !summary.renderable) || summary.errors != 0 {
             return Err(invalid("framebuffer initialization did not render"));
         }
     }
@@ -587,3 +667,7 @@ async fn read_rgba8(renderer: &Renderer, texture: &wgpu::Texture) -> Result<Vec<
     }
     Ok(rgba8)
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "sequence_tests.rs"]
+mod sequence_tests;

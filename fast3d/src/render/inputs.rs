@@ -77,6 +77,7 @@ impl<'a> RspInputs<'a> {
 
 #[derive(Debug, PartialEq)]
 pub(super) struct TargetInputs {
+    pub color_image_epoch: u64,
     pub valid: bool,
     pub id: TargetId,
     pub color_image: crate::scene::ColorImage,
@@ -200,6 +201,7 @@ impl<'a> RenderInputs<'a> {
                         }
                     }
                     let mut inputs = TargetInputs {
+                        color_image_epoch: target.color_image_epoch,
                         valid,
                         id: target.id,
                         color_image: target.color_image,

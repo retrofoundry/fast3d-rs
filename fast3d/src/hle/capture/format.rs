@@ -413,3 +413,110 @@ impl<'a> Reader<'a> {
         String::from_utf8(self.take(n)?.to_vec()).map_err(|_| invalid("provenance is not UTF-8"))
     }
 }
+
+/// A complete reset-to-output prefix. Frames retain their version-one payload and original serial.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sequence {
+    pub frames: Vec<Fixture>,
+    pub warmup_frames: u32,
+    pub presentations: Vec<u64>,
+}
+
+impl Sequence {
+    pub fn validate(&self) -> Result<()> {
+        let first = self
+            .frames
+            .first()
+            .ok_or_else(|| invalid("sequence contains no frames"))?;
+        if self.warmup_frames as usize >= self.frames.len() || self.presentations.is_empty() {
+            return Err(invalid("sequence requires a presentation after warm-up"));
+        }
+        if first.frame.config.clear_policy != ClearPolicy::Persist {
+            return Err(invalid("sequence requires Persist clear policy"));
+        }
+        for (index, fixture) in self.frames.iter().enumerate() {
+            fixture.validate()?;
+            let frame = &fixture.frame;
+            if frame.serial != index as u64 + 1 {
+                return Err(invalid(
+                    "sequence must retain every frame from reset, starting at serial one",
+                ));
+            }
+            if frame.config != first.frame.config
+                || frame.dither_seed != first.frame.dither_seed
+                || frame.width != first.frame.width
+                || frame.height != first.frame.height
+                || frame.dual_source_blending != first.frame.dual_source_blending
+            {
+                return Err(invalid("sequence configuration, extent or seed changed"));
+            }
+        }
+        let mut previous = u64::from(self.warmup_frames);
+        for &serial in &self.presentations {
+            if serial <= previous || serial > self.frames.len() as u64 {
+                return Err(invalid(
+                    "presentation serials must be ordered, unique and after warm-up",
+                ));
+            }
+            previous = serial;
+        }
+        Ok(())
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        self.validate()?;
+        let mut w = Writer(Vec::new());
+        w.0.extend_from_slice(MAGIC);
+        w.u32(2);
+        w.u32(LITTLE_ENDIAN);
+        w.u64(0);
+        w.count(self.frames.len())?;
+        w.u32(self.warmup_frames);
+        w.count(self.presentations.len())?;
+        w.u32(0);
+        for &serial in &self.presentations {
+            w.u64(serial);
+        }
+        for frame in &self.frames {
+            let bytes = frame.to_bytes()?;
+            w.u64(bytes.len() as u64);
+            w.0.extend(bytes);
+        }
+        let length = w.0.len() as u64;
+        w.0[16..24].copy_from_slice(&length.to_le_bytes());
+        Ok(w.0)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let mut r = Reader(bytes);
+        if r.take(8)? != MAGIC || r.u32()? != 2 || r.u32()? != LITTLE_ENDIAN {
+            return Err(invalid("sequence magic, version or container byte order"));
+        }
+        if r.u64()? != bytes.len() as u64 {
+            return Err(invalid("sequence container length"));
+        }
+        let count = r.u32()?;
+        let warmup_frames = r.u32()?;
+        let selected = r.u32()?;
+        r.zero()?;
+        let mut presentations = Vec::new();
+        for _ in 0..selected {
+            presentations.push(r.u64()?);
+        }
+        let mut frames = Vec::new();
+        for _ in 0..count {
+            let length = r.u64()?;
+            frames.push(Fixture::from_bytes(r.take_u64(length)?)?);
+        }
+        if !r.0.is_empty() {
+            return Err(invalid("sequence trailing bytes"));
+        }
+        let sequence = Self {
+            frames,
+            warmup_frames,
+            presentations,
+        };
+        sequence.validate()?;
+        Ok(sequence)
+    }
+}

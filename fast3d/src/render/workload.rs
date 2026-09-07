@@ -17,6 +17,7 @@ pub(crate) struct Operation {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TargetWorkload {
+    pub color_image_epoch: u64,
     pub id: TargetId,
     pub color_image: ColorImage,
     pub depth_image: Option<u64>,
@@ -54,6 +55,7 @@ impl Workload {
                         target.operations.push(operation);
                     }
                     _ => targets.push(TargetWorkload {
+                        color_image_epoch: 0,
                         id: TargetId::Legacy,
                         color_image: ColorImage::default(),
                         depth_image: operation.depth_image,
@@ -89,6 +91,7 @@ impl Workload {
                 }
             }
             let mut target = TargetWorkload {
+                color_image_epoch: pair.color_image_epoch,
                 id: TargetId::Guest(pair.color_image.addr),
                 color_image: pair.color_image,
                 depth_image: pair.depth_image,
@@ -331,6 +334,13 @@ impl SceneRenderer {
                 .process_scene(device, &mut encoder, inputs.rsp.as_ref(), &inputs.targets);
         let mut last_target = None;
         for target in &inputs.targets {
+            #[cfg(feature = "capture")]
+            if self.depth_reset_policy == crate::DepthResetPolicy::ColorImageSwitch
+                && self.depth_color_epoch != Some(target.color_image_epoch)
+            {
+                self.discard_depth();
+                self.depth_color_epoch = Some(target.color_image_epoch);
+            }
             if !target.valid {
                 self.dropped_runs += target.operations.len() as u32;
                 continue;

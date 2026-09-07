@@ -8,8 +8,10 @@ use std::collections::BTreeMap;
 mod format;
 mod replay;
 pub use crate::scene::ColorImage;
-pub use format::{Fixture, Frame, Provenance};
+pub use format::{Fixture, Frame, Provenance, Sequence};
 pub use replay::{CaptureFrame, ReplayOutput};
+mod sequence;
+pub use sequence::{CaptureSequence, FrameLog, Presentation, SequenceOutput};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureError {
@@ -645,6 +647,7 @@ pub struct ReplayHardware<'a> {
     task: &'a Task,
     vi: Option<ViRegisters>,
     error: RefCell<Option<CaptureError>>,
+    commands: RefCell<Vec<CommandRead>>,
 }
 
 impl<'a> ReplayHardware<'a> {
@@ -654,6 +657,7 @@ impl<'a> ReplayHardware<'a> {
             task,
             vi,
             error: RefCell::new(None),
+            commands: RefCell::default(),
         })
     }
     pub fn check(&self) -> Result<()> {
@@ -666,6 +670,7 @@ impl Hardware for ReplayHardware<'_> {
             task: self.task,
             segments: self.task.source.segments,
             error: &self.error,
+            commands: &self.commands,
         }
     }
     fn vi(&self) -> Option<ViRegisters> {
@@ -677,6 +682,7 @@ pub struct ReplayRdram<'a> {
     task: &'a Task,
     segments: [u64; 16],
     error: &'a RefCell<Option<CaptureError>>,
+    commands: &'a RefCell<Vec<CommandRead>>,
 }
 
 impl ReplayRdram<'_> {
@@ -859,7 +865,15 @@ impl Rdram for ReplayRdram<'_> {
         }
     }
     fn read_command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
-        self.command(address)
+        let command = self.command(address)?;
+        if matches!(command.w0 >> 24, 0xff | 0xfe | 0xf6 | 0xf7 | 0xed) {
+            self.commands.borrow_mut().push(CommandRead {
+                pc: address,
+                w0: command.w0,
+                w1: command.w1_addr,
+            });
+        }
+        Ok(command)
     }
     fn command_stride(&self) -> u64 {
         u64::from(self.layout().command_stride)
@@ -952,3 +966,17 @@ impl Rdram for ReplayRdram<'_> {
 
 #[cfg(test)]
 mod tests;
+
+/// A fetched CIMG, ZIMG, fill rectangle, fill color or scissor command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandRead {
+    pub pc: u64,
+    pub w0: u32,
+    pub w1: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskCommand {
+    pub task: u32,
+    pub command: CommandRead,
+}

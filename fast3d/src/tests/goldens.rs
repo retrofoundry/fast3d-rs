@@ -799,6 +799,7 @@ fn fill_rect_scene(
 ) -> crate::hle::Scene {
     crate::hle::Scene {
         framebuffer_pairs: vec![crate::hle::FramebufferPair {
+            color_image_epoch: 0,
             color_image: crate::hle::ColorImage {
                 fmt: 0,
                 siz: 2, // G_IM_SIZ_16b
@@ -934,6 +935,7 @@ fn golden_2d_rect_geometry_exact() {
     let scene = crate::hle::Scene {
         materials: vec![tex1x1_material(texel)],
         framebuffer_pairs: vec![crate::hle::FramebufferPair {
+            color_image_epoch: 0,
             color_image: crate::hle::ColorImage {
                 fmt: 0,
                 siz: 2,
@@ -1287,6 +1289,7 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
         materials: vec![material],
         render_modes: vec![rm],
         framebuffer_pairs: vec![FramebufferPair {
+            color_image_epoch: 0,
             color_image: ColorImage {
                 fmt: 0,
                 siz: 2,
@@ -1492,6 +1495,7 @@ fn golden_paired_decal_matches_pair_less() {
         .map(crate::hle::SceneOp::Tris)
         .collect();
     paired.framebuffer_pairs = vec![crate::hle::FramebufferPair {
+        color_image_epoch: 0,
         color_image: crate::hle::ColorImage {
             fmt: 0,
             siz: 2, // G_IM_SIZ_16b
@@ -1561,6 +1565,7 @@ fn golden_paired_decal_respects_op_order() {
     }];
     ops.extend(paired.draw_runs.drain(..).map(crate::hle::SceneOp::Tris));
     paired.framebuffer_pairs = vec![crate::hle::FramebufferPair {
+        color_image_epoch: 0,
         color_image: crate::hle::ColorImage {
             fmt: 0,
             siz: 2, // G_IM_SIZ_16b

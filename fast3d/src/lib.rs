@@ -47,6 +47,17 @@ pub enum ClearPolicy {
     Persist,
 }
 
+/// Controlled depth-only discard for recorded workload experiments.
+#[cfg(feature = "capture")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DepthResetPolicy {
+    #[default]
+    Never,
+    ColorImageSwitch,
+    TaskBoundary,
+    FrameBoundary,
+}
+
 /// Renderer configuration. All fields are `Copy`; the `Renderer` stores it by value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RendererConfig {
@@ -600,6 +611,10 @@ impl Renderer {
         submission: Submission,
     ) -> DlSummary {
         self.mark_mutation();
+        #[cfg(feature = "capture")]
+        if self.inner.depth_reset_policy == DepthResetPolicy::TaskBoundary {
+            self.inner.discard_depth();
+        }
         let is_image = mem.is_rdram_image();
         let mut rdp = if submission == Submission::RasterizePrefix {
             Default::default()
@@ -690,6 +705,12 @@ impl Renderer {
         self.mark_mutation();
         self.inner.begin_frame();
         self.frame_scenes.clear();
+    }
+
+    #[cfg(feature = "capture")]
+    pub fn set_depth_reset_policy(&mut self, policy: DepthResetPolicy) {
+        self.mark_mutation();
+        self.inner.depth_reset_policy = policy;
     }
 }
 

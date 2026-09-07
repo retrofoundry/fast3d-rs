@@ -1873,6 +1873,10 @@ pub struct SceneRenderer {
     depth_pipeline: DepthPipeline,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     pub(crate) dropped_runs: u32,
+    #[cfg(feature = "capture")]
+    pub(crate) depth_reset_policy: crate::DepthResetPolicy,
+    #[cfg(feature = "capture")]
+    depth_color_epoch: Option<u64>,
     /// Descriptor array for bind groups that sample plain images (fill, scanout, FB alias).
     image_sampling: wgpu::Buffer,
 }
@@ -2044,6 +2048,10 @@ impl SceneRenderer {
             depth_pipeline: DepthPipeline::new(device),
             diagnostics: Vec::new(),
             dropped_runs: 0,
+            #[cfg(feature = "capture")]
+            depth_reset_policy: Default::default(),
+            #[cfg(feature = "capture")]
+            depth_color_epoch: None,
             frame_serial: 0,
             dither_seed: 0,
             image_sampling,
@@ -2315,6 +2323,10 @@ impl SceneRenderer {
     }
 
     pub(crate) fn reset(&mut self) {
+        #[cfg(feature = "capture")]
+        {
+            self.depth_color_epoch = None;
+        }
         self.target_descriptors = Default::default();
         self.framebuffers.clear();
         self.depthbuffers.clear();
@@ -2328,8 +2340,18 @@ impl SceneRenderer {
     /// Explicit frame boundary (D2): reset the per-frame first-touch-clear set. Does NOT drop the
     /// textures (cross-frame persistence). `Renderer::begin_frame` delegates here.
     pub fn begin_frame(&mut self) {
+        #[cfg(feature = "capture")]
+        if self.depth_reset_policy == crate::DepthResetPolicy::FrameBoundary {
+            self.discard_depth();
+        }
         self.frame_serial = self.frame_serial.wrapping_add(1);
         self.first_touch.clear();
+        self.depth_first_touch.clear();
+    }
+
+    #[cfg(feature = "capture")]
+    pub(crate) fn discard_depth(&mut self) {
+        self.depthbuffers.clear();
         self.depth_first_touch.clear();
     }
 }
