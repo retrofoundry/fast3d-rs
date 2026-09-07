@@ -180,6 +180,9 @@ fn pick_surface_format(
 pub struct Renderer {
     target: PresentTarget,
     inner: SceneRenderer,
+    rdp: crate::hle::rdp::Rdp,
+    #[cfg(feature = "capture")]
+    capture_generation: std::rc::Rc<()>,
     pub(crate) frame_scenes: Vec<Scene>,
     pub(crate) last_scanout_addr: Option<TargetId>,
     pub(crate) last_backend_was_image: bool,
@@ -223,6 +226,12 @@ impl inspect::WalkObserver for PrefixObserver {
 }
 
 impl Renderer {
+    fn mark_mutation(&mut self) {
+        // A capture holds the old allocation alive: identity cannot wrap or match another renderer.
+        #[cfg(feature = "capture")]
+        std::rc::Rc::make_mut(&mut self.capture_generation);
+    }
+
     /// SECONDARY constructor: adopt a device/queue the consumer already created (wafel; headless
     /// tests). Synchronous. Capability probing (`DUAL_SOURCE_BLENDING`) is internal — no
     /// `dual_source` in the public surface (spec §3.1).
@@ -250,6 +259,9 @@ impl Renderer {
         Self {
             target,
             inner,
+            rdp: Default::default(),
+            #[cfg(feature = "capture")]
+            capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
             last_scanout_addr: None,
             last_backend_was_image: false,
@@ -327,6 +339,9 @@ impl Renderer {
                 config: surface_config,
             },
             inner,
+            rdp: Default::default(),
+            #[cfg(feature = "capture")]
+            capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
             last_scanout_addr: None,
             last_backend_was_image: false,
@@ -354,12 +369,14 @@ impl Renderer {
     /// Select how subsequent `process_dl` calls read guest vertices and matrices (default
     /// `Fixed`). A per-consumer property — set once after construction, not per display list.
     pub fn set_data_format(&mut self, data_format: DataFormat) {
+        self.mark_mutation();
         self.data_format = data_format;
     }
 
     /// Window/drawable resized: reconfigure the owned surface only. Internal framebuffers are
     /// game-sized and NOT touched here (spec §3.1). No-op for `Headless`.
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.mark_mutation();
         let (w, h) = (width.max(1), height.max(1));
         if let PresentTarget::Surface { surface, config } = &mut self.target {
             config.width = w;
@@ -373,6 +390,7 @@ impl Renderer {
     /// Re-applies `present_mode` (and an explicit `format` override) to a `Surface`. A `None` format
     /// keeps the currently picked format (no adapter retained to re-run `pick_surface_format`).
     pub fn reconfigure(&mut self, config: RendererConfig) {
+        self.mark_mutation();
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely()); // #[must_use]; no-op on web
         warn_unsupported(&config);
 
@@ -423,7 +441,13 @@ impl Renderer {
 
     /// RCP: walk the display list at `entry` and rasterize every framebuffer it produces into the
     /// persistent, address-keyed store. Accumulates across calls within a frame. Touches no surface.
-    /// INFALLIBLE — DL-content problems stream into `diags`; device-loss/OOM are asynchronous.
+    /// Guest RDP registers, TMEM and the established color image survive subsequent tasks,
+    /// `begin_frame`, resize and reconfiguration. RSP and scene recording state start fresh per
+    /// task. Triangles use Legacy only until a color image is established, including address zero.
+    /// Call `reset_rdp_state` before an independent scene, or `reset` to also discard pixels.
+    /// Rejected, memory-faulted and observer-cancelled tasks discard their register changes;
+    /// the runaway guard retains the executed prefix. ClearPolicy governs pixels independently.
+    /// DL-content problems stream into `diags`; device-loss/OOM are asynchronous.
     pub fn process_dl(
         &mut self,
         hw: &impl Hardware,
@@ -466,7 +490,7 @@ impl Renderer {
     /// continuation words belong to their parent dispatch. Report `Cap` when the count stops
     /// execution; root end or a terminating fault on the last dispatch takes precedence. The
     /// ordinary runaway guard still applies; there is no implicit 4,096-command limit.
-    /// `command_count == u32::MAX` behaves as [`Self::process_dl`].
+    /// `command_count == u32::MAX` walks the whole list subject to that guard.
     ///
     /// Zero executes nothing, emits no diagnostics, changes no renderer state, and returns zero
     /// counts, `Cap`, and `renderable = false`. Otherwise, counts and diagnostics describe the
@@ -480,15 +504,16 @@ impl Renderer {
     /// draw can open a framebuffer pair before rejecting its triangles: no emission does not
     /// mean no framebuffer effect.
     ///
-    /// The prefix renders under current renderer state. For both legacy and guest color targets,
+    /// Every nonzero prefix starts with default RDP registers and empty TMEM, as `inspect::walk`
+    /// does, and leaves the live task registers unchanged. This includes `u32::MAX`.
+    /// Framebuffer contents and the dither sequence still belong to the renderer. For both
+    /// legacy and guest color targets,
     /// subsequent tasks in a frame load existing contents, and [`ClearPolicy::Persist`] also
     /// loads across frames. [`ClearPolicy::PerFrame`] clears each touched target on its first
     /// touch after [`Self::begin_frame`]. Replaying a shorter prefix without a clear retains
-    /// earlier pixels outside its draws. This also applies to ordinary rendering: callers
-    /// reusing flat targets previously received a clear on every task. An inspector that begins
-    /// a frame per prefix under `PerFrame` is unaffected. Depth remains transient.
-    /// `begin_frame` also advances the dither serial, so repeated captures of a dithered list
-    /// are not bit-identical.
+    /// earlier pixels outside its draws. Depth remains transient. `begin_frame` advances the
+    /// dither serial. Call [`Self::reset`] before each independent inspector prefix to discard
+    /// previous targets and restart that sequence, giving repeatable pixels under either policy.
     pub fn process_dl_prefix(
         &mut self,
         hw: &impl Hardware,
@@ -502,9 +527,6 @@ impl Renderer {
                 termination: inspect::WalkTermination::Cap,
                 ..DlSummary::default()
             };
-        }
-        if command_count == u32::MAX {
-            return self.process_dl(hw, entry, ucode, diags);
         }
         self.process_dl_inner(
             hw,
@@ -520,7 +542,8 @@ impl Renderer {
 
     /// Observe the walk that produces this DL's rendered scene, without the CPU `walk` cap.
     /// Returning `Break(())` before root end or a fault cancels the DL: its scene is neither
-    /// rasterized nor retained, and earlier DLs remain intact. Counts include cancelled work;
+    /// rasterized nor retained, its RDP changes are discarded, and earlier DLs remain intact.
+    /// Counts include cancelled work;
     /// `termination` is `ObserverStopped` and `renderable` is false on cancellation.
     /// To bound collection without cancelling rendering, stop storing steps and return `Continue(())`.
     pub fn process_dl_observed(
@@ -572,9 +595,21 @@ impl Renderer {
         observer: Option<&mut dyn inspect::WalkObserver>,
         submission: Submission,
     ) -> DlSummary {
+        self.mark_mutation();
         let is_image = mem.is_rdram_image();
-        let mut result =
-            crate::hle::interpret(mem, entry, ucode.into(), self.data_format, observer);
+        let rdp = if submission == Submission::RasterizePrefix {
+            Default::default()
+        } else {
+            self.rdp.clone()
+        };
+        let mut result = crate::hle::interp::interpret_with_state(
+            mem,
+            entry,
+            ucode.into(),
+            self.data_format,
+            rdp,
+            observer,
+        );
         if submission == Submission::RasterizePrefix
             && result.termination == inspect::WalkTermination::ObserverStopped
         {
@@ -592,6 +627,10 @@ impl Renderer {
                 .any(|diag| matches!(diag.kind, DiagKind::MemoryRead { .. }))
         {
             return result.summary(false);
+        }
+
+        if submission == Submission::DiscardOnStop && result.commits_rdp() {
+            self.rdp = result.rdp.clone();
         }
 
         // Rasterize into the persistent store. A draw-nothing walk returns None and leaves
@@ -614,9 +653,31 @@ impl Renderer {
         summary
     }
 
+    /// Reset guest RDP registers, TMEM and the established color-image/scissor flags.
+    /// Framebuffer contents, retained scenes, scanout and the dither sequence are preserved.
+    /// Use this before submitting an independently authored display list.
+    pub fn reset_rdp_state(&mut self) {
+        self.mark_mutation();
+        self.rdp = Default::default();
+    }
+
+    /// Start an independent rendering session: reset RDP state, drop framebuffer contents and
+    /// retained scenes, forget scanout, and restart the dither serial and seed at zero.
+    /// Configuration, data format, device and hooks are preserved. For repeatable inspector
+    /// images, call this before each prefix, then use the same sequence of `begin_frame` calls.
+    pub fn reset(&mut self) {
+        self.reset_rdp_state();
+        self.inner.reset();
+        self.frame_scenes.clear();
+        self.last_scanout_addr = None;
+        self.last_backend_was_image = false;
+    }
+
     /// Explicit frame boundary. Resets per-frame accumulation: the inner store's first-touch clear
-    /// set (ClearPolicy::PerFrame) and the retained `frame_scenes`.
+    /// set (ClearPolicy::PerFrame) and the retained `frame_scenes`. Preserves guest RDP state
+    /// and TMEM; advances the dither serial.
     pub fn begin_frame(&mut self) {
+        self.mark_mutation();
         self.inner.begin_frame();
         self.frame_scenes.clear();
     }
@@ -638,6 +699,7 @@ impl Renderer {
     /// Install a render hook, firing its `init` SYNCHRONOUSLY (the device already exists). Replacing
     /// an existing hook fires the old hook's `deinit` FIRST, then the new hook's `init`.
     pub fn set_render_hook(&mut self, mut hook: Box<dyn RenderHook>) {
+        self.mark_mutation();
         if let Some(mut old) = self.hook.take() {
             old.deinit();
         }
@@ -647,6 +709,7 @@ impl Renderer {
 
     /// Remove the render hook (if any), firing its `deinit` before returning it to the caller.
     pub fn take_render_hook(&mut self) -> Option<Box<dyn RenderHook>> {
+        self.mark_mutation();
         let mut hook = self.hook.take()?;
         hook.deinit();
         Some(hook)
@@ -662,6 +725,7 @@ impl Renderer {
     /// never renders and `present_to` stays byte-identical (headless goldens unaffected).
     #[cfg(feature = "debug-ui")]
     pub fn set_debugger_enabled(&mut self, enabled: bool) {
+        self.mark_mutation();
         self.debugger.enabled = enabled;
     }
 
@@ -675,6 +739,7 @@ impl Renderer {
     /// withhold it from the game). No-op returning `false` while the debugger is disabled.
     #[cfg(feature = "debug-ui")]
     pub fn debugger_input(&mut self, input: &crate::debug::DebugInput) -> bool {
+        self.mark_mutation();
         self.debugger.input(input)
     }
 }
@@ -763,6 +828,7 @@ impl Renderer {
     }
 
     fn present_to_vi(&mut self, vi: Option<ViRegisters>, target: &wgpu::TextureView) {
+        self.mark_mutation();
         // Always create an encoder + run the render hook, even when nothing has been scanned out yet
         // (a UI overlay should still draw — RN). Scanout is recorded only when a source FB exists;
         // with no hook and no scanout the submit is an empty no-op, so `target` is left as-is.
@@ -791,6 +857,7 @@ impl Renderer {
     }
 
     fn present_vi(&mut self, vi: Option<ViRegisters>) -> Result<(), PresentError> {
+        self.mark_mutation();
         let src = self.scanout_source(vi);
 
         // RO: acquire in a scope so the `&self.target` borrow (surface/config) ENDS before

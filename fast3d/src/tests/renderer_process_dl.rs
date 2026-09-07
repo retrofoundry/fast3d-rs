@@ -283,3 +283,6 @@ fn observed_renderer_has_no_cpu_inspection_cap() {
 
 #[path = "renderer_dl_prefix.rs"]
 mod prefix;
+
+#[path = "rdp_state.rs"]
+mod rdp_state;

@@ -13,8 +13,27 @@ pixels. These async operations work on native and wasm32; wasm readback awaits t
 callback. The device must match the recorded dual-source-blending feature. Missing memory
 latches an error and rejects the output, including missing TexRect continuation commands.
 
-A version-one fixture must be self-contained. Replay compares `PerFrame` and `Persist` output
-after initializing the used color targets with two contrasting colors through display lists.
+A version-one fixture starts with default RDP registers, empty TMEM and no established color
+image. Replay preserves register state between its tasks. Each replay and clear-policy probe
+restarts the registers, so framebuffer initialization commands cannot affect the fixture's RDP
+starting state. The fixture format does not store a prior register or TMEM snapshot.
+
+`CaptureFrame::begin` preserves live RDP state. At completion, capture walks its owned task
+snapshots from both the live starting registers and the version-one defaults. It rejects a
+difference in prepared render inputs, diagnostics or summaries as dependence on prior RDP
+state. GPU submission consumes those same prepared inputs, including target effects, uniforms,
+textures and RSP buffers. Inspection-only metadata does not participate. Tasks that hit the
+renderer’s no-work return still carry each walk’s registers forward separately, so a later
+active use of inherited state is checked. The check does not reset the running guest.
+
+Reset before `CaptureFrame::begin` when recording an independent scene. Renderer mutations
+outside the capture wrapper, including either reset, frame boundaries, reconfiguration and
+unrecorded submissions, invalidate the capture. Recording and completion report an error while
+live rendering continues. Returning registers or configuration to their earlier values does
+not make the capture valid again.
+
+A version-one fixture must also be self-contained in framebuffer contents. Replay compares
+`PerFrame` and `Persist` output after initializing the used color targets with two contrasting colors through display lists.
 This catches missing clears that two fresh renderers would conceal. A mismatch rejects the
 fixture. This is a test of the current renderer's color-persistence behavior; it does not add
 persistent depth or reconstruct GPU contents from RAM. The initialization check rejects paired
@@ -22,8 +41,9 @@ framebuffers wider or taller than 1023 pixels, the primer's fixed-coordinate ran
 
 Alpha dither uses the recorded frame serial and seed on replay. `CaptureFrame::begin` calls
 `Renderer::begin_frame` and records its count, starting at one; its legacy serial argument is
-ignored. The counter survives renderer reconfiguration. The shader uses the serial's low
-32 bits, XORed with the dither seed, and the framebuffer pixel index.
+ignored. The counter survives renderer reconfiguration; `Renderer::reset` restarts it and
+the dither seed at zero. The shader uses the serial's low 32 bits, XORed with the dither seed,
+and the framebuffer pixel index.
 
 ## Capture from Helix
 

@@ -35,6 +35,12 @@ renderer.present(&hw)?;
   orthogonal `DataFormat` axis: `Fixed` (authentic N64, the default) or `Float` (`GBI_FLOATS`, as
   PC ports like sm64/wafel emit) — select it once with `Renderer::set_data_format`.
 
+Ordinary display lists share RDP registers and TMEM across tasks and `begin_frame`.
+An established color image, including address zero, remains the target until replaced or
+reset. Before an independently authored scene, call `reset_rdp_state` to reset registers
+while preserving pixels, or `reset` to also discard framebuffers, retained scenes and scanout
+and restart the dither sequence. `ClearPolicy` still controls color contents across frames.
+
 Diagnostics stream through a `DiagSink` (`LogSink`, `NopSink`, or your own).
 
 ## Memory readers and native ports
@@ -148,6 +154,11 @@ assert_eq!(summary.termination, WalkTermination::End);
 Use `Renderer::process_dl_observed` to attach the same observer to the walk that renders, returning `DlSummary` with its termination reason.
 It has no inspection cap; cancellation skips rasterizing and retaining that DL while preserving earlier DLs, so memory-bounded collectors should stop storing steps and keep returning `Continue(())`.
 Use `inspect::walk` for tools and tests without a GPU device, and `process_dl_observed` to correlate emissions with the rendered scene.
+
+`inspect::walk` and `Renderer::process_dl_prefix` start each walk with default RDP registers
+and empty TMEM. Prefix rendering leaves live task registers unchanged, including for
+`u32::MAX`. It preserves the renderer's framebuffer contents and dither sequence; call
+`Renderer::reset` before each independent inspector prefix for repeatable pixels.
 
 ## Features
 

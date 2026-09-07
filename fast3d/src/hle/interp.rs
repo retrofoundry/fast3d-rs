@@ -187,6 +187,13 @@ fn framebuffer_target(scene: &Scene, pair_index: usize) -> FramebufferTarget {
 }
 
 impl InterpResult {
+    pub(crate) fn commits_rdp(&self) -> bool {
+        matches!(
+            self.termination,
+            WalkTermination::End | WalkTermination::Cap | WalkTermination::Runaway
+        )
+    }
+
     pub(crate) fn summary(&self, renderable: bool) -> crate::diag::DlSummary {
         let (mut warns, mut errors) = (0, 0);
         for d in &self.diags {
@@ -239,12 +246,27 @@ pub fn interpret<M: Rdram>(
     entry: u64,
     ucode: crate::hle::gbi::GbiUcode,
     data_format: crate::hle::mem::GbiDataFormat,
+    observer: Option<&mut dyn crate::inspect::WalkObserver>,
+) -> InterpResult {
+    interpret_with_state(mem, entry, ucode, data_format, Default::default(), observer)
+}
+
+pub(crate) fn interpret_with_state<M: Rdram>(
+    mem: M,
+    entry: u64,
+    ucode: crate::hle::gbi::GbiUcode,
+    data_format: crate::hle::mem::GbiDataFormat,
+    mut rdp: crate::hle::rdp::Rdp,
     mut observer: Option<&mut dyn crate::inspect::WalkObserver>,
 ) -> InterpResult {
     let mut mem = mem;
     let gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
     let mut rsp = crate::hle::rsp::Rsp::new(gbi.consts, gbi.data_format);
-    let mut rdp = crate::hle::rdp::Rdp::default();
+    rdp.color_changed = false;
+    rdp.depth_changed = false;
+    // Fog factors are RSP task state despite their storage beside the RDP fog color.
+    rdp.fog_mul = 0;
+    rdp.fog_offset = 0;
     let mut scene = Scene::default();
     let mut diags = Vec::new();
     let mut dropped_runs: u32 = 0;
@@ -256,7 +278,6 @@ pub fn interpret<M: Rdram>(
     let mut return_stack: Vec<u64> = Vec::new();
     let mut dispatched: u64 = 0;
     let mut rec = crate::hle::rsp::PairRec::default();
-    let mut scissor_set = false;
 
     let mut termination = WalkTermination::End;
     let mut final_diagnostics_start = 0;
@@ -446,12 +467,6 @@ pub fn interpret<M: Rdram>(
                 break 'dispatch;
             }
 
-            // First G_SETCIMG → the scene becomes "paired" (subsequent draws record into ordered
-            // FramebufferPairs). The CIMG itself still dispatches below to update RDP state.
-            if op == crate::hle::consts::G_SETCIMG {
-                rec.have_seen_cimg = true;
-            }
-
             if op == crate::hle::consts::G_TEXRECT || op == crate::hle::consts::G_TEXRECTFLIP {
                 let pc1 = walk_try!(Continuation, checked_span(pc, stride));
                 let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
@@ -490,7 +505,7 @@ pub fn interpret<M: Rdram>(
                 let copy_mode = ((rdp.other_mode_h >> 20) & 3) == crate::hle::consts::G_CYC_COPY;
                 let rect = crate::hle::TexRectBounds { ulx, uly, lrx, lry };
 
-                if !rec.have_seen_cimg {
+                if !rdp.color_image_set {
                     // A 2D op needs a framebuffer target; one before the first CIMG is malformed → drop.
                     dropped_runs += 1;
                     diags.push(Diagnostic {
@@ -608,7 +623,7 @@ pub fn interpret<M: Rdram>(
                     next_pc = walk_try!(Command, checked_span(next_pc, stride));
                 }
 
-                if !rec.have_seen_cimg {
+                if !rdp.color_image_set {
                     dropped_runs += 1;
                     diags.push(Diagnostic {
                         at: pc,
@@ -656,7 +671,6 @@ pub fn interpret<M: Rdram>(
                 break 'dispatch;
             }
 
-            scissor_set |= op == crate::hle::consts::G_SETSCISSOR;
             let index_start = scene.indices.len() as u32;
             let mut cx = Ctx {
                 rsp: &mut rsp,
@@ -675,7 +689,7 @@ pub fn interpret<M: Rdram>(
             if index_end > index_start {
                 scene.draw_origins.push(crate::scene::DrawOrigin {
                     pc,
-                    scissor: if !scissor_set && !rec.have_seen_cimg {
+                    scissor: if !rdp.scissor_set && !rdp.color_image_set {
                         crate::scene::Scissor {
                             lrx: 320,
                             lry: 240,
@@ -716,7 +730,7 @@ pub fn interpret<M: Rdram>(
             let geometry_names =
                 crate::inspect::geometry_flags(ucode.into(), rsp.geometry_mode(), &mut names);
             let emission = if scene.indices.len() > observed.index_start {
-                let (run_index, op_index, run) = if rec.have_seen_cimg {
+                let (run_index, op_index, run) = if rdp.color_image_set {
                     let ops = &scene.framebuffer_pairs[rec.cur_pair].ops;
                     let Some(crate::hle::rsp::SceneOp::Tris(run)) = ops.last() else {
                         unreachable!("emitted triangle must have a recorded run");
@@ -731,8 +745,8 @@ pub fn interpret<M: Rdram>(
                     op_index,
                     material_index: run.material_index,
                     render_mode_index: run.render_mode_index,
-                    target: rec
-                        .have_seen_cimg
+                    target: rdp
+                        .color_image_set
                         .then(|| framebuffer_target(&scene, rec.cur_pair)),
                     index_start: observed.index_start as u32,
                     indices: &scene.indices[observed.index_start..],

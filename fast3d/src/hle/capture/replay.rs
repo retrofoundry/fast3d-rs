@@ -10,14 +10,23 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "state_tests.rs"]
+mod state_tests;
+
 pub struct CaptureFrame {
     fixture: Fixture,
     error: Option<CaptureError>,
+    initial_rdp: crate::hle::rdp::Rdp,
+    expected_generation: std::rc::Rc<()>,
 }
 
 impl CaptureFrame {
     /// Begins a renderer frame. The legacy `serial` argument is ignored; the recorded serial
-    /// counts the renderer's `begin_frame` calls, starting at one.
+    /// counts the renderer's `begin_frame` calls, starting at one after construction or reset.
+    /// Leaves live RDP state intact. Finishing rejects render inputs or diagnostics that depend
+    /// on prior RDP state, which version-one fixtures cannot store. Renderer mutations outside
+    /// this wrapper (including resets) invalidate the capture; live rendering still proceeds.
     pub fn begin(
         renderer: &mut Renderer,
         _serial: u64,
@@ -29,6 +38,8 @@ impl CaptureFrame {
         let serial = renderer.inner.frame_serial;
         let (width, height) = target_extent(renderer);
         Self {
+            initial_rdp: renderer.rdp.clone(),
+            expected_generation: renderer.capture_generation.clone(),
             fixture: Fixture {
                 frame: Frame {
                     serial,
@@ -66,6 +77,7 @@ impl CaptureFrame {
         }
         let recording = RecordingHardware::new(hardware);
         let summary = renderer.process_dl(&recording, entry, microcode, diagnostics);
+        self.expected_generation = renderer.capture_generation.clone();
         let task = u32::try_from(self.fixture.tasks.len())
             .map_err(|_| invalid("too many tasks in one frame"))
             .and_then(|order| recording.finish(entry, microcode, data_format, order));
@@ -116,6 +128,7 @@ impl CaptureFrame {
             log: &log,
         };
         let summary = renderer.process_dl_memory(recording, entry, microcode, diagnostics);
+        self.expected_generation = renderer.capture_generation.clone();
         let task = u32::try_from(self.fixture.tasks.len())
             .map_err(|_| invalid("too many tasks in one frame"))
             .and_then(|order| {
@@ -190,7 +203,8 @@ impl CaptureFrame {
 
     fn check_renderer(&mut self, renderer: &Renderer) {
         let frame = &self.fixture.frame;
-        if effective_config(renderer) != frame.config
+        if !std::rc::Rc::ptr_eq(&self.expected_generation, &renderer.capture_generation)
+            || effective_config(renderer) != frame.config
             || target_extent(renderer) != (frame.width, frame.height)
         {
             self.error
@@ -204,6 +218,34 @@ impl CaptureFrame {
         }
         self.fixture.frame.vi = vi;
         self.fixture.validate()?;
+        let mut live = self.initial_rdp;
+        let mut replay = crate::hle::rdp::Rdp::default();
+        for task in &self.fixture.tasks {
+            let actual = task.interpret(live.clone())?;
+            let expected = task.interpret(replay.clone())?;
+            let inputs = |scene| {
+                crate::render::inputs::RenderInputs::new(
+                    scene,
+                    (self.fixture.frame.width, self.fixture.frame.height),
+                    [
+                        self.fixture.frame.serial as u32,
+                        self.fixture.frame.dither_seed,
+                    ],
+                )
+            };
+            if inputs(&actual.scene) != inputs(&expected.scene)
+                || actual.diags != expected.diags
+                || actual.summary(false) != expected.summary(false)
+            {
+                return Err(invalid(
+                    "frame depends on prior RDP state not stored in version-one captures",
+                ));
+            }
+            if actual.commits_rdp() {
+                live = actual.rdp;
+                replay = expected.rdp;
+            }
+        }
         Ok(self.fixture)
     }
 }
@@ -219,7 +261,9 @@ pub struct ReplayOutput {
 }
 
 impl Fixture {
-    /// Replays through the public renderer and rejects dependence on prior color attachments.
+    /// Replays from default RDP registers and empty TMEM, preserving state between recorded tasks.
+    /// Rejects dependence on prior color attachments; each clear-policy probe also starts from
+    /// default registers while retaining its deliberately primed framebuffer contents.
     pub async fn replay(&self, device: wgpu::Device, queue: wgpu::Queue) -> Result<ReplayOutput> {
         self.validate()?;
         let dual_source = device
@@ -360,6 +404,7 @@ impl Fixture {
     }
 
     async fn render_frame(&self, renderer: &mut Renderer) -> Result<ReplayOutput> {
+        renderer.reset_rdp_state();
         renderer.begin_frame();
         renderer.inner.frame_serial = self.frame.serial;
         renderer.inner.dither_seed = self.frame.dither_seed;
@@ -435,6 +480,7 @@ fn prime_framebuffers(
     targets: &BTreeMap<u64, (u32, u32)>,
     color: u32,
 ) -> Result<()> {
+    renderer.reset_rdp_state();
     renderer.begin_frame();
     renderer.set_data_format(DataFormat::Fixed);
     for (&address, &(width, height)) in targets {

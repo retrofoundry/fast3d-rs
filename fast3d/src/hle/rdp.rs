@@ -82,6 +82,7 @@ pub struct Rdp {
     // --- 2D / framebuffer state (set by G_SETCIMG / G_SETZIMG / G_SETSCISSOR / G_SETFILLCOLOR) ---
     /// Current color framebuffer target (decoded from G_SETCIMG; width = raw_field+1).
     pub color_image: crate::hle::rsp::ColorImage,
+    pub color_image_set: bool,
     /// True when `color_image` was updated since last pair-recording flush.
     pub color_changed: bool,
     /// Current depth buffer address (unmasked resolve of G_SETZIMG w1).
@@ -90,6 +91,7 @@ pub struct Rdp {
     pub depth_changed: bool,
     /// Current scissor rectangle in pixels (decoded from G_SETSCISSOR 10.2 fields).
     pub scissor: crate::hle::rsp::Scissor,
+    pub scissor_set: bool,
     /// Raw G_SETFILLCOLOR word (stored verbatim; interpreted by fill-rect recording).
     pub fill_color_raw: u32,
 }
@@ -369,6 +371,7 @@ fn set_color_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
         width,
         addr,
     };
+    cx.rdp.color_image_set = true;
     if cx.rdp.color_image != new {
         cx.rdp.color_image = new;
         cx.rdp.color_changed = true;
@@ -384,6 +387,7 @@ fn set_depth_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn set_scissor<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+    cx.rdp.scissor_set = true;
     cx.rdp.scissor = crate::hle::rsp::Scissor {
         ulx: (c.p0(12, 12) as i32) >> 2,
         uly: (c.p0(0, 12) as i32) >> 2,
