@@ -516,6 +516,77 @@ pub(crate) fn interpret_with_state<M: Rdram>(
                     break 'dispatch;
                 }
 
+                let tile_desc = &rdp.tiles[usize::from(tile)];
+                let layout = crate::render::framebuffers::ImageLayout {
+                    width: u32::from(rdp.tex_image.2) + 1,
+                    fmt: rdp.tex_image.0,
+                    siz: rdp.tex_image.1,
+                };
+                let (uses_texture, uses_second_texture) =
+                    crate::hle::combiner::physical_texture_uses(
+                        &crate::hle::combiner::decode_combine(rdp.combine_l, rdp.combine_h),
+                        (rdp.other_mode_h >> 20) & 3,
+                    );
+                let load_free = !rdp.tmem_bank.tile_has_load(tile_desc);
+                let source = if uses_texture && load_free {
+                    rdp.framebuffer_targets.source(
+                        rdp.tex_image.3,
+                        rdp.color_image.addr,
+                        layout,
+                        u32::from(tile_desc.height.max(1)),
+                    )
+                } else {
+                    Ok(None)
+                };
+                let fb_source = match source {
+                    Ok(Some(source)) if uses_second_texture => {
+                        diags.push(Diagnostic {
+                            at: pc,
+                            kind: DiagKind::UnsupportedFramebufferAccess {
+                                address: source.address,
+                                reason: crate::FramebufferAccess::TextureMode,
+                            },
+                        });
+                        dropped_runs += 1;
+                        pc = next_pc;
+                        break 'dispatch;
+                    }
+                    Ok(Some(source))
+                        if (tile_desc.fmt, tile_desc.siz) != (layout.fmt, layout.siz)
+                            || Some(u64::from(tile_desc.line) * 8) != layout.row_bytes()
+                            || u32::from(tile_desc.width) > layout.width =>
+                    {
+                        diags.push(Diagnostic {
+                            at: pc,
+                            kind: DiagKind::UnsupportedFramebufferAccess {
+                                address: source.address,
+                                reason: crate::diag::FramebufferAccess::Reinterpretation,
+                            },
+                        });
+                        dropped_runs += 1;
+                        pc = next_pc;
+                        break 'dispatch;
+                    }
+                    Ok(None) if copy_mode && load_free => {
+                        diags.push(Diagnostic {
+                            at: pc,
+                            kind: DiagKind::UnsupportedFramebufferAccess {
+                                address: rdp.tex_image.3,
+                                reason: crate::diag::FramebufferAccess::MissingSource,
+                            },
+                        });
+                        dropped_runs += 1;
+                        pc = next_pc;
+                        break 'dispatch;
+                    }
+                    Ok(source) => source.map(|source| source.address),
+                    Err(kind) => {
+                        diags.push(Diagnostic { at: pc, kind });
+                        dropped_runs += 1;
+                        pc = next_pc;
+                        break 'dispatch;
+                    }
+                };
                 let Some((material_index, render_mode_index)) = crate::hle::rsp::snapshot_rect_run(
                     &rsp, &rdp, tile, &mut diags, &mut scene, pc,
                 ) else {
@@ -526,25 +597,7 @@ pub(crate) fn interpret_with_state<M: Rdram>(
                 crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
                 crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
 
-                // fb_source: the latest PRIOR pair whose framebuffer byte-range contains the texture
-                // image address (a framebuffer-as-texture read-back). The current pair is excluded
-                // (it is not yet recorded as a finished framebuffer).
-                let tex_addr = rdp.tex_image.3;
                 let cur = rec.cur_pair;
-                let fb_source = scene.framebuffer_pairs[..cur]
-                    .iter()
-                    .rev()
-                    .filter(|p| !p.is_depth_clear)
-                    .find(|p| {
-                        let start = p.color_image.addr;
-                        let length = (p.color_image.width as u64)
-                            * (p.size_extent.1 as u64)
-                            * crate::hle::rsp::bpp(p.color_image.siz);
-                        start
-                            .checked_add(length)
-                            .is_some_and(|end| (start..end).contains(&tex_addr))
-                    })
-                    .map(|p| p.color_image.addr);
 
                 scene.framebuffer_pairs[cur]
                     .ops

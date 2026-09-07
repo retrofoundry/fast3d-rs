@@ -25,6 +25,7 @@ mod filter;
 mod filter_fixtures;
 mod fog;
 mod framebuffer;
+mod framebuffer_aliases;
 mod gbi_roundtrip;
 mod goldens;
 mod hud_power_meter;

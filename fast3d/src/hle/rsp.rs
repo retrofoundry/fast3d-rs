@@ -923,11 +923,6 @@ pub(crate) struct PairRec {
     pub last_scissor: Scissor,
 }
 
-/// Bytes per pixel for an RDP image size code (G_IM_SIZ_*): 4b→0, 8b→1, 16b→2, 32b→4.
-pub(crate) fn bpp(siz: u8) -> u64 {
-    (1u64 << siz) >> 1
-}
-
 /// Open a new `FramebufferPair` lazily on the first draw after a color/depth `changed` delta
 /// (spec §1.1). Snapshots the color/depth image, scissor (→ `active_scissor`), framebuffer extent,
 /// and the depth-clear flag, then clears the `changed` flags. No empty-pair reuse: only a draw
@@ -937,6 +932,33 @@ pub(crate) fn ensure_pair_open(
     rdp: &mut crate::hle::rdp::Rdp,
     rec: &mut PairRec,
 ) {
+    let height = if rdp.scissor.lry > 0 {
+        rdp.scissor.lry as u32
+    } else {
+        240
+    };
+    let layout = crate::render::framebuffers::ImageLayout {
+        width: u32::from(rdp.color_image.width),
+        fmt: rdp.color_image.fmt,
+        siz: rdp.color_image.siz,
+    };
+    if rdp.depth_image != Some(rdp.color_image.addr) {
+        let _ = rdp
+            .framebuffer_targets
+            .record(rdp.color_image.addr, layout, height, false);
+    }
+    if let Some(address) = rdp.depth_image {
+        let _ = rdp.framebuffer_targets.record(
+            address,
+            crate::render::framebuffers::ImageLayout {
+                fmt: 0,
+                siz: 2,
+                ..layout
+            },
+            height,
+            true,
+        );
+    }
     if !rec.paired || rdp.color_changed || rdp.depth_changed {
         let depth_image = rdp.depth_image;
         let is_depth_clear = depth_image == Some(rdp.color_image.addr);
@@ -1067,6 +1089,18 @@ pub(crate) fn record_tri(
             Some(rec.cur_pair),
         );
     } else {
+        if let Some(address) = rdp.depth_image {
+            let _ = rdp.framebuffer_targets.record(
+                address,
+                crate::render::framebuffers::ImageLayout {
+                    width: 320,
+                    fmt: 0,
+                    siz: 2,
+                },
+                240,
+                true,
+            );
+        }
         rsp.draw_tri(
             a,
             b,

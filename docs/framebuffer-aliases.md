@@ -1,0 +1,30 @@
+# Bounded framebuffer texture aliases
+
+A load-free TexRect can sample a previously rendered colour image at its exact base
+address. This is a fast3d convenience. It does not implement libultra framebuffer
+LoadTile or LoadBlock semantics and must not be exported as an rt64 agreement test.
+
+The render tile must have no TMEM load provenance. Its format and texel size must
+match the source, and its byte row stride must match both SETTIMG and the stored
+colour image. The requested extent must fit the source. Prepared draws identify
+the source generation, layout and extent; submission validates the stored view.
+Successfully loaded TMEM remains independent of subsequent SETTIMG commands.
+
+Same-target feedback, interior addresses, overlapping views, reinterpretation,
+missing sources, depth textures and second-texture inputs are rejected with a
+structured diagnostic. Known GPU colour and depth ranges are checked before
+LoadTile, LoadBlock or LoadTLUT reads guest memory. Unsupported loads mark the
+affected TMEM bytes unavailable, including masked taps, so later dependent draws
+cannot sample stale RAM or older TMEM contents. A successful replacement load can
+restore those bytes. Unrelated draws still execute. An actual guest-memory read
+failure rejects the task.
+
+Diagnostics retain the command PC, including across tasks; preparation errors reach
+the caller's DiagSink before DlSummary is calculated. Format or stride changes end
+the stored generation. Height growth preserves existing rows.
+
+General range ownership, offset copies, triangle framebuffer textures, same-target
+snapshots, bit reinterpretation, CPU/GPU coherence and GPU write-back remain
+unsupported. The existing offscreen-then-sample golden is a compatibility test for
+the convenience only. Real-load oracle fixtures require a separate implementation
+and evidence; none is claimed here.

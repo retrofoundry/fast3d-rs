@@ -36,6 +36,22 @@ pub enum MemoryAccess {
     Tlut,
 }
 
+/// Unsupported GPU framebuffer texture access; no guest-memory fallback is performed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FramebufferAccess {
+    SameTarget,
+    InteriorOffset,
+    Overlap,
+    Reinterpretation,
+    MissingSource,
+    Extent,
+    DepthTexture,
+    TextureLoad,
+    TriangleTexture,
+    TextureMode,
+}
+
 /// The kind of a diagnostic. `Copy` (no per-diag allocation). `#[non_exhaustive]`: the walk's
 /// internal set may grow. The variable-length unwired-selector list is a `Copy` bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +60,14 @@ pub enum DiagKind {
     MemoryRead {
         access: MemoryAccess,
         error: crate::hardware::MemoryError,
+    },
+    UnsupportedFramebufferAccess {
+        address: u64,
+        reason: FramebufferAccess,
+    },
+    FramebufferRangeOverflow {
+        address: u64,
+        length: u64,
     },
     UnknownOpcode(u8),
     UnsupportedCommand {
@@ -147,6 +171,8 @@ impl DiagKind {
         match self {
             DiagKind::UnsupportedCommand { opcode: 0xd6, .. } => Severity::Warn,
             DiagKind::MemoryRead { .. }
+            | DiagKind::UnsupportedFramebufferAccess { .. }
+            | DiagKind::FramebufferRangeOverflow { .. }
             | DiagKind::UnknownOpcode(_)
             | DiagKind::UnsupportedCommand { .. }
             | DiagKind::UnsupportedMicrocodeLoad { .. }
@@ -186,6 +212,8 @@ impl DiagKind {
 impl std::fmt::Display for DiagKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DiagKind::UnsupportedFramebufferAccess { address, reason } => write!(f, "unsupported framebuffer access at {address:#x}: {reason:?}"),
+            DiagKind::FramebufferRangeOverflow { address, length } => write!(f, "framebuffer range overflows at {address:#x}, length {length}"),
             DiagKind::MemoryRead { access, error } => write!(
                 f,
                 "{access:?} memory read failed at {:#018x}, length {}: {:?}",

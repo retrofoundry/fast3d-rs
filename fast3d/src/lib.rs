@@ -16,7 +16,8 @@ use crate::scene::Scene;
 
 // ── New vNext public API (spec §3.6): structured diagnostics ──
 pub use diag::{
-    DiagKind, DiagSink, Diagnostic, DlSummary, LogSink, MemoryAccess, NopSink, Severity,
+    DiagKind, DiagSink, Diagnostic, DlSummary, FramebufferAccess, LogSink, MemoryAccess, NopSink,
+    Severity,
 };
 // ── New vNext public API (spec §3.6): microcode selector ──
 pub use microcode::{detect_microcode, Microcode};
@@ -600,11 +601,12 @@ impl Renderer {
     ) -> DlSummary {
         self.mark_mutation();
         let is_image = mem.is_rdram_image();
-        let rdp = if submission == Submission::RasterizePrefix {
+        let mut rdp = if submission == Submission::RasterizePrefix {
             Default::default()
         } else {
             self.rdp.clone()
         };
+        rdp.framebuffer_targets = self.inner.target_descriptors.clone();
         let mut result = crate::hle::interp::interpret_with_state(
             mem,
             entry,
@@ -652,6 +654,7 @@ impl Renderer {
             self.last_scanout_addr = Some(addr);
             self.last_backend_was_image = is_image;
         }
+        result.dropped_runs += self.inner.dropped_runs;
         let summary = result.summary(scanout.is_some());
 
         // Retained for the frame (P4 debugger reads all of them; cleared at begin_frame).

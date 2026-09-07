@@ -301,12 +301,17 @@ impl SceneRenderer {
         clear_policy: ClearPolicy,
     ) -> Option<TargetId> {
         self.diagnostics.clear();
-        let inputs = RenderInputs::new(
+        self.dropped_runs = 0;
+        let inputs = RenderInputs::with_targets(
             scene,
             (self.fb_w, self.fb_h),
             [self.frame_serial as u32, self.dither_seed],
+            &self.target_descriptors,
         )?;
-        self.render_inputs(device, queue, &inputs, clear_policy)
+        let result = self.render_inputs(device, queue, &inputs, clear_policy);
+        self.diagnostics.extend_from_slice(&inputs.diagnostics);
+        self.dropped_runs += inputs.dropped_runs;
+        result
     }
 
     fn render_inputs(
@@ -326,6 +331,10 @@ impl SceneRenderer {
                 .process_scene(device, &mut encoder, inputs.rsp.as_ref(), &inputs.targets);
         let mut last_target = None;
         for target in &inputs.targets {
+            if !target.valid {
+                self.dropped_runs += target.operations.len() as u32;
+                continue;
+            }
             let (w, h) = target.output_extent;
             if target.id == TargetId::Legacy && target.output_extent != target.logical_extent {
                 if let Some(address) = target.depth_image {
@@ -339,6 +348,28 @@ impl SceneRenderer {
                     });
                     continue;
                 }
+            }
+            if let TargetId::Guest(address) = target.id {
+                let layout = ImageLayout {
+                    width: w,
+                    fmt: target.color_image.fmt,
+                    siz: target.color_image.siz,
+                };
+                if !target.depth_clear {
+                    let _ = self.target_descriptors.record(address, layout, h, false);
+                }
+            }
+            if let Some(address) = target.depth_image {
+                let _ = self.target_descriptors.record(
+                    address,
+                    ImageLayout {
+                        width: w,
+                        fmt: 0,
+                        siz: 2,
+                    },
+                    h,
+                    true,
+                );
             }
             let any_depth = target.any_depth;
             let depth_id = target
@@ -398,7 +429,7 @@ impl SceneRenderer {
                         );
                     } else {
                         self.diagnostics.push(crate::Diagnostic {
-                            at: target.pc,
+                            at: operation.pc,
                             kind: crate::DiagKind::UnsupportedDepthAlias {
                                 address: target.color_image.addr,
                             },
@@ -419,6 +450,38 @@ impl SceneRenderer {
                 height,
                 clear_policy,
             );
+            let source_valid: Vec<_> = target
+                .operations
+                .iter()
+                .map(|operation| {
+                    let DrawInputs::Rectangle {
+                        fb_source: Some(source),
+                        ..
+                    } = operation.draw
+                    else {
+                        return true;
+                    };
+                    let valid = self.target_descriptors.get(source.address, false) == Some(source)
+                        && self
+                            .framebuffers
+                            .get(&TargetId::Guest(source.address))
+                            .is_some_and(|stored| {
+                                stored.layout == source.layout && stored.height == source.height
+                            })
+                        && target.id != TargetId::Guest(source.address);
+                    if !valid {
+                        self.diagnostics.push(crate::Diagnostic {
+                            at: operation.pc,
+                            kind: crate::DiagKind::UnsupportedFramebufferAccess {
+                                address: source.address,
+                                reason: crate::FramebufferAccess::MissingSource,
+                            },
+                        });
+                        self.dropped_runs += 1;
+                    }
+                    valid
+                })
+                .collect();
             let depth = depth_id.map(|id| &self.depthbuffers[&id]);
             let mut color_load = wgpu::LoadOp::Load;
             last_target = Some(target.id);
@@ -490,12 +553,16 @@ impl SceneRenderer {
                 }
                 for (slot, operation) in target.operations.iter().enumerate().take(end).skip(start)
                 {
+                    if !source_valid[slot] {
+                        continue;
+                    }
                     let (x, y, width, height) = operation.scissor;
                     if width == 0 || height == 0 {
                         continue;
                     }
                     pass.set_scissor_rect(x, y, width, height);
                     match &operation.draw {
+                        DrawInputs::Rejected => {}
                         DrawInputs::DepthFill { .. } => {
                             unreachable!("depth fills have no color attachment")
                         }
@@ -542,7 +609,6 @@ impl SceneRenderer {
                             self.draw_rect_op(
                                 &mut pass,
                                 device,
-                                target,
                                 &operation.draw,
                                 &material_bgs,
                                 upload.rectangles.as_ref(),

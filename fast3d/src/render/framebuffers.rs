@@ -1,9 +1,11 @@
+pub(crate) mod targets;
+
 use super::{workload::TargetId, SceneRenderer, CLEAR_COLOR, DEPTH_FORMAT};
 use crate::{ClearPolicy, DiagKind, Diagnostic};
 use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ImageLayout {
+pub(crate) struct ImageLayout {
     pub width: u32,
     pub fmt: u8,
     pub siz: u8,
