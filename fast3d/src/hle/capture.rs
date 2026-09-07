@@ -151,18 +151,25 @@ pub struct Task {
 }
 
 impl Task {
-    /// Walks the captured memory without a GPU and returns the final colour target.
-    /// Missing memory or interpreter diagnostics reject the result.
-    pub fn final_color_image(&self) -> Result<ColorImage> {
+    fn interpret(&self, rdp: super::rdp::Rdp) -> Result<super::interp::InterpResult> {
         let hardware = ReplayHardware::new(self, None)?;
-        let result = super::interp::interpret(
+        let result = super::interp::interpret_with_state(
             hardware.rdram(),
             self.entry,
             self.microcode.into(),
             self.data_format,
+            rdp,
             None,
         );
         hardware.check()?;
+        Ok(result)
+    }
+
+    /// Walks this task from default RDP state without a GPU and returns the final colour target.
+    /// Use [`Fixture::final_color_image`] when tasks inherit state from each other.
+    /// Missing memory or interpreter diagnostics reject the result.
+    pub fn final_color_image(&self) -> Result<ColorImage> {
+        let result = self.interpret(Default::default())?;
         if let Some(diagnostic) = result.diags.first() {
             return Err(CaptureError::Invalid(format!(
                 "task {}: {diagnostic}",
@@ -193,6 +200,26 @@ impl Task {
                 .ok_or_else(|| invalid("span address overflow"))?;
         }
         Ok(())
+    }
+}
+
+impl Fixture {
+    /// Walks all tasks from default RDP state, carrying registers and TMEM between tasks.
+    /// Missing memory or interpreter diagnostics reject the result.
+    pub fn final_color_image(&self) -> Result<ColorImage> {
+        self.validate()?;
+        let mut rdp = super::rdp::Rdp::default();
+        for task in &self.tasks {
+            let result = task.interpret(rdp)?;
+            if let Some(diagnostic) = result.diags.first() {
+                return Err(CaptureError::Invalid(format!(
+                    "task {}: {diagnostic}",
+                    task.order
+                )));
+            }
+            rdp = result.rdp;
+        }
+        Ok(rdp.color_image)
     }
 }
 

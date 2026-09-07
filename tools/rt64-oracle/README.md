@@ -175,16 +175,16 @@ Use `--ignore-alpha` to compare RGB only, including dither-background matching, 
 
 The exporter accepts only IMAGE layout: big-endian data and eight-byte commands.
 It preserves physical addresses in an 8 MiB image, zeroes uncaptured gaps, walks
-each task through the existing CPU interpreter, and writes the final colour
-image plus ordered task entries, microcodes and initial segment tables to JSON.
+the tasks through the CPU interpreter with shared RDP state, and writes the final
+colour image plus ordered task entries, microcodes and initial segment tables to JSON.
 Interpreter diagnostics, missing reads, out-of-range spans and conflicting bytes
 between task snapshots are errors. HOST64 Helix captures cannot be fed to rt64.
 The two renderers receive the same exported command bytes; there is no pointer
 translation or reconstruction of a host capture.
 
-A single image cannot represent changing task snapshots. Tasks must initialize
-their own state and colour attachments; RAM feedback and dependence on earlier
-GPU contents are outside this comparison. The final target must be RGBA16 or
+A single image cannot represent changing task snapshots. The fixture must
+initialize its starting state and colour attachments; later tasks can inherit RDP
+state. RAM feedback and dependence on earlier GPU contents are outside this comparison. The final target must be RGBA16 or
 RGBA32, have an eight-byte aligned address, fit RDRAM and match the output width.
 A recorded fast3d VI must select that target. The harness currently supports the
 macOS static build, widths 1..1022 and heights 4..512 divisible by four; RGBA16

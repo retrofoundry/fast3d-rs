@@ -10,14 +10,21 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "state_tests.rs"]
+mod state_tests;
+
 pub struct CaptureFrame {
     fixture: Fixture,
     error: Option<CaptureError>,
+    initial_rdp: crate::hle::rdp::Rdp,
 }
 
 impl CaptureFrame {
     /// Begins a renderer frame. The legacy `serial` argument is ignored; the recorded serial
-    /// counts the renderer's `begin_frame` calls, starting at one.
+    /// counts the renderer's `begin_frame` calls, starting at one after construction or reset.
+    /// Leaves live RDP state intact. Finishing rejects tasks whose recorded scenes or diagnostics
+    /// depend on prior RDP state, which version-one fixtures cannot store.
     pub fn begin(
         renderer: &mut Renderer,
         _serial: u64,
@@ -29,6 +36,7 @@ impl CaptureFrame {
         let serial = renderer.inner.frame_serial;
         let (width, height) = target_extent(renderer);
         Self {
+            initial_rdp: renderer.rdp.clone(),
             fixture: Fixture {
                 frame: Frame {
                     serial,
@@ -204,6 +212,24 @@ impl CaptureFrame {
         }
         self.fixture.frame.vi = vi;
         self.fixture.validate()?;
+        let mut live = self.initial_rdp;
+        let mut replay = crate::hle::rdp::Rdp::default();
+        for task in &self.fixture.tasks {
+            let actual = task.interpret(live.clone())?;
+            let expected = task.interpret(replay.clone())?;
+            if actual.scene != expected.scene
+                || actual.diags != expected.diags
+                || actual.summary(false) != expected.summary(false)
+            {
+                return Err(invalid(
+                    "frame depends on prior RDP state not stored in version-one captures",
+                ));
+            }
+            if actual.commits_rdp() {
+                live = actual.rdp;
+                replay = expected.rdp;
+            }
+        }
         Ok(self.fixture)
     }
 }
@@ -219,7 +245,9 @@ pub struct ReplayOutput {
 }
 
 impl Fixture {
-    /// Replays through the public renderer and rejects dependence on prior color attachments.
+    /// Replays from default RDP registers and empty TMEM, preserving state between recorded tasks.
+    /// Rejects dependence on prior color attachments; each clear-policy probe also starts from
+    /// default registers while retaining its deliberately primed framebuffer contents.
     pub async fn replay(&self, device: wgpu::Device, queue: wgpu::Queue) -> Result<ReplayOutput> {
         self.validate()?;
         let dual_source = device
@@ -360,6 +388,7 @@ impl Fixture {
     }
 
     async fn render_frame(&self, renderer: &mut Renderer) -> Result<ReplayOutput> {
+        renderer.reset_rdp_state();
         renderer.begin_frame();
         renderer.inner.frame_serial = self.frame.serial;
         renderer.inner.dither_seed = self.frame.dither_seed;
@@ -435,6 +464,7 @@ fn prime_framebuffers(
     targets: &BTreeMap<u64, (u32, u32)>,
     color: u32,
 ) -> Result<()> {
+    renderer.reset_rdp_state();
     renderer.begin_frame();
     renderer.set_data_format(DataFormat::Fixed);
     for (&address, &(width, height)) in targets {

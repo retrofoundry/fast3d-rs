@@ -18,7 +18,6 @@ mod native {
         let mut rdram = vec![0; RDRAM_BYTES];
         let mut occupied = vec![false; RDRAM_BYTES];
         let mut tasks = String::new();
-        let mut final_color = None;
         for task in &fixture.tasks {
             if task.entry % 8 != 0 || task.entry >= RDRAM_BYTES as u64 {
                 return Err(format!(
@@ -51,7 +50,6 @@ mod native {
                     rdram[address] = byte;
                 }
             }
-            final_color = Some(task.final_color_image()?);
             if !tasks.is_empty() {
                 tasks.push_str(",\n");
             }
@@ -65,7 +63,7 @@ mod native {
                 task.entry, microcode, task.source.segments
             )?;
         }
-        let color = final_color.ok_or("fixture contains no tasks")?;
+        let color = fixture.final_color_image()?;
         if color.fmt != 0 || !matches!(color.siz, 2 | 3) || color.width == 0 {
             return Err("final colour image must be explicitly set to RGBA16 or RGBA32".into());
         }
@@ -185,6 +183,24 @@ mod native {
             assert!(export(&f).is_ok());
             f.tasks[1].spans[0].bytes[5] = 0x20;
             assert!(export(&f).unwrap_err().to_string().contains("conflicting"));
+        }
+
+        #[test]
+        fn export_inherits_color_image_between_tasks() {
+            let mut fixture = fixture();
+            let mut second = fixture.tasks[0].clone();
+            second.order = 1;
+            second.entry = 0x200;
+            second.spans = vec![MemorySpan {
+                address: 0x200,
+                bytes: [0xf6000000u32, 0, 0xb8000000, 0]
+                    .into_iter()
+                    .flat_map(u32::to_be_bytes)
+                    .collect(),
+            }];
+            fixture.tasks.push(second);
+            let (_, metadata) = export(&fixture).unwrap();
+            assert!(metadata.contains("\"address\": 1048576"));
         }
 
         #[test]

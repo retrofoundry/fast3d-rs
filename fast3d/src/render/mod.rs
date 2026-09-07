@@ -2304,6 +2304,13 @@ impl SceneRenderer {
         self.blit_to(encoder, target, &fb.present_bg);
     }
 
+    pub(crate) fn reset(&mut self) {
+        self.framebuffers.clear();
+        self.first_touch.clear();
+        self.frame_serial = 0;
+        self.dither_seed = 0;
+    }
+
     /// Explicit frame boundary (D2): reset the per-frame first-touch-clear set. Does NOT drop the
     /// textures (cross-frame persistence). `Renderer::begin_frame` delegates here.
     pub fn begin_frame(&mut self) {

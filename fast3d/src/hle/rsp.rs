@@ -912,13 +912,8 @@ pub fn snapshot_run(
     Some((material_index, render_mode_index))
 }
 
-/// Walk-state for the 2D framebuffer-pair recorder (spec §1.1). Lives as a local in `interpret`
-/// and is threaded through `Ctx` so both the inline rect slot and `draw_tri` (via `record_tri`)
-/// share it. Pair-less scenes (no G_SETCIMG) leave this all-default → no pairs, flat `draw_runs`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct PairRec {
-    /// Set once the first G_SETCIMG is observed; gates the paired vs flat draw routing.
-    pub have_seen_cimg: bool,
     /// True once at least one `FramebufferPair` has been opened.
     pub paired: bool,
     /// Index of the currently-open pair in `scene.framebuffer_pairs`.
@@ -1019,10 +1014,6 @@ fn validate_depth_source(
     Some(())
 }
 
-/// Record a triangle through the pair recorder. When a CIMG has been seen the tri is routed into the
-/// current `FramebufferPair`'s ordered op-stream (opening a pair / emitting a `SetScissor` as needed);
-/// otherwise it falls through to the flat `draw_runs` path SILENTLY — a pure-3D DL never emits a CIMG,
-/// so this keeps pair-less scenes byte-identical (NO "pre-CIMG" diagnostic for triangles).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn record_tri(
     rsp: &mut Rsp,
@@ -1035,7 +1026,7 @@ pub(crate) fn record_tri(
     material_index: u32,
     render_mode_index: u32,
 ) {
-    if rec.have_seen_cimg {
+    if rdp.color_image_set {
         ensure_pair_open(scene, rdp, rec);
         record_scissor_if_changed(scene, rdp, rec);
         rsp.draw_tri(

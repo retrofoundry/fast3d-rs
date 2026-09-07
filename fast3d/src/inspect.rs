@@ -206,7 +206,8 @@ pub struct WalkSummary {
     pub termination: WalkTermination,
 }
 
-/// Walk on the CPU without a renderer or GPU device, stopping after at most 4,096 dispatches.
+/// Walk from default RSP/RDP state and empty TMEM without a renderer or GPU device,
+/// stopping after at most 4,096 dispatches. Each call is independent.
 pub fn walk<M: Rdram>(
     mem: M,
     entry: u64,
