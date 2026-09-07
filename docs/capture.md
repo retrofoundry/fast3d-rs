@@ -82,17 +82,17 @@ Cargo runs tests from the crate directory, so use an absolute output path:
 
 ```sh
 FAST3D_WRITE_FIXTURES="$PWD/fast3d/tests/fixtures" \
-  cargo test -p fast3d --features "asm capture" --lib \
+  cargo test -p fast3d --features capture --lib \
   write_browser_sm64_fixtures -- --ignored
-cargo test -p fast3d --features "asm capture" --lib browser_fixture_bytes_match_builders
-cargo test -p fast3d --features "asm capture" --lib sm64_corpus_roundtrips_without_diagnostics
+cargo test -p fast3d --features capture --lib browser_fixture_bytes_match_builders
+cargo test -p fast3d --features capture --lib sm64_corpus_roundtrips_without_diagnostics
 ```
 
 The GPU gate round-trips every sm64 fixture through the public headless facade and compares
 its output with explicit-device replay on the same adapter:
 
 ```sh
-cargo test -p fast3d --features "asm capture" --lib sm64_corpus_public_facade -- --nocapture
+cargo test -p fast3d --features capture --lib sm64_corpus_public_facade -- --nocapture
 ```
 
 CI runs Chrome on `macos-14`, using Metal WebGPU, with the runner image's own Google Chrome
