@@ -322,6 +322,63 @@ mod workload_semantics;
 use workload_semantics::expected as interleaving_expected;
 
 #[test]
+fn interleaving_workload_keeps_draw_boundaries() {
+    use crate::render::workload::Workload;
+    use crate::scene::SceneOp;
+
+    for paired in [false, true] {
+        let scene = interpret(&interleaving_scene(paired));
+        let workload = Workload::new(&scene);
+        let counts: Vec<_> = workload
+            .targets
+            .iter()
+            .map(|target| target.operations.len())
+            .collect();
+        eprintln!(
+            "interleaving paired={paired}: workload_ops={} per_target={counts:?}",
+            counts.iter().sum::<usize>()
+        );
+        assert_eq!(counts, if paired { vec![1, 9] } else { vec![9] });
+        let draws: Vec<_> = workload
+            .targets
+            .last()
+            .unwrap()
+            .operations
+            .iter()
+            .map(|op| match &op.draw {
+                SceneOp::Tris(run) => {
+                    assert_eq!(run.index_count, 6);
+                    if scene.render_modes[run.render_mode_index as usize].z_mode
+                        == crate::hle::ZMode::Decal
+                    {
+                        "decal"
+                    } else {
+                        "triangles"
+                    }
+                }
+                SceneOp::FillRect { .. } => "fill",
+                _ => panic!("unexpected operation: {op:?}"),
+            })
+            .collect();
+        let rect = if paired { "fill" } else { "triangles" };
+        assert_eq!(
+            draws,
+            [
+                rect,
+                "triangles",
+                "decal",
+                rect,
+                "triangles",
+                "decal",
+                rect,
+                "triangles",
+                "decal"
+            ]
+        );
+    }
+}
+
+#[test]
 fn opaque_decal_rect_order_is_preserved() {
     let (device, queue) = headless_device_forced_fallback();
     for policy in POLICIES {

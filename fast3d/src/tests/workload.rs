@@ -1,7 +1,239 @@
 use crate::render::workload::{TargetId, Workload};
-use crate::scene::Scissor;
+use crate::scene::{FramebufferPair, SceneOp, Scissor};
 use crate::tests::dl_builder::DlBuilder;
 use n64_gbi::{consts::*, encode::*};
+
+#[test]
+fn high_poly_submits_one_triangle_operation() {
+    for paired in [false, true] {
+        let mut scene = super::common::scene_from_fixture("high-poly");
+        let origins = scene.draw_origins.clone();
+        let run = scene.draw_runs[0];
+        assert_eq!(scene.indices.len(), 181 * 3);
+        assert_eq!(origins.len(), 91);
+        if paired {
+            scene.framebuffer_pairs.push(FramebufferPair {
+                ops: scene.draw_runs.drain(..).map(SceneOp::Tris).collect(),
+                active_scissor: origins[0].scissor,
+                ..Default::default()
+            });
+        }
+        let workload = Workload::new(&scene);
+        assert_eq!(workload.targets.len(), 1);
+        let operations = &workload.targets[0].operations;
+        eprintln!(
+            "high-poly paired={paired}: triangles=181 workload_ops={}",
+            operations.len()
+        );
+        assert_eq!(
+            operations.len(),
+            1,
+            "unchanged triangle state must stay batched"
+        );
+        assert_eq!(operations[0].draw, SceneOp::Tris(run));
+        assert_eq!(operations[0].pc, Some(origins[0].pc));
+        assert_eq!(scene.draw_origins, origins);
+    }
+}
+
+#[test]
+fn adjacent_runs_coalesce_only_with_identical_state_and_contiguous_indices() {
+    let original = super::common::scene_from_fixture("high-poly");
+    let first = crate::scene::DrawRun {
+        index_count: 3,
+        ..original.draw_runs[0]
+    };
+    let second = crate::scene::DrawRun {
+        index_start: 3,
+        ..first
+    };
+    let mut variants = vec![second; 7];
+    variants[0].material_index += 1;
+    variants[1].render_mode_index += 1;
+    variants[2].fog_color[0] ^= 255;
+    variants[3].prim_depth.z += 1;
+    variants[4].prim_depth.dz += 1;
+    variants[5].cull = if first.cull == crate::scene::CullKind::None {
+        crate::scene::CullKind::Cull
+    } else {
+        crate::scene::CullKind::None
+    };
+    variants[6].index_start += 3;
+    for next in std::iter::once(second).chain(variants) {
+        let mut scene = original.clone();
+        scene.draw_runs = vec![first, next];
+        let workload = Workload::new(&scene);
+        let operations = &workload.targets[0].operations;
+        if next == second {
+            assert_eq!(operations.len(), 1);
+            assert_eq!(
+                operations[0].draw,
+                SceneOp::Tris(crate::scene::DrawRun {
+                    index_count: 6,
+                    ..first
+                })
+            );
+        } else {
+            assert_eq!(operations.len(), 2, "state/range change: {next:?}");
+            assert_eq!(operations[0].draw, SceneOp::Tris(first));
+            assert_eq!(operations[1].draw, SceneOp::Tris(next));
+        }
+    }
+}
+
+#[test]
+fn batching_preserves_unknown_origin_boundaries() {
+    let mut scene = super::common::scene_from_fixture("high-poly");
+    let first = scene.draw_origins[0].clone();
+    let third = scene.draw_origins[2].clone();
+    scene.draw_origins = vec![first.clone(), third.clone()];
+    scene.draw_runs[0].index_count = third.indices.end;
+    let workload = Workload::new(&scene);
+    let operations = &workload.targets[0].operations;
+    assert_eq!(operations.len(), 3);
+    assert_eq!(
+        operations.iter().map(|op| op.pc).collect::<Vec<_>>(),
+        [Some(first.pc), None, Some(third.pc)]
+    );
+    scene.draw_origins.clear();
+    let workload = Workload::new(&scene);
+    assert_eq!(workload.targets[0].operations.len(), 1);
+    assert_eq!(workload.targets[0].operations[0].pc, None);
+}
+
+#[test]
+fn rectangles_and_scissor_commands_split_identical_triangle_state() {
+    let original = super::common::scene_from_fixture("high-poly");
+    let run = crate::scene::DrawRun {
+        index_count: 3,
+        ..original.draw_runs[0]
+    };
+    let next = crate::scene::DrawRun {
+        index_start: 3,
+        ..run
+    };
+    let scissor = original.draw_origins[0].scissor;
+    let changed_scissor = Scissor { ulx: 8, ..scissor };
+    for boundary in [
+        vec![SceneOp::FillRect {
+            rect: Default::default(),
+            color_raw: 0,
+            convert: [0; 6],
+            key: Default::default(),
+        }],
+        vec![SceneOp::TexRect {
+            rect: Default::default(),
+            tile: 0,
+            uls: 0,
+            ult: 0,
+            dsdx: 0,
+            dtdy: 0,
+            flip: false,
+            copy_mode: false,
+            material_index: run.material_index,
+            render_mode_index: run.render_mode_index,
+            fog_color: run.fog_color,
+            prim_depth: run.prim_depth,
+            fb_source: None,
+        }],
+        vec![SceneOp::SetScissor(changed_scissor)],
+        vec![
+            SceneOp::SetScissor(changed_scissor),
+            SceneOp::SetScissor(scissor),
+        ],
+    ] {
+        let mut scene = original.clone();
+        scene.draw_runs.clear();
+        let mut ops = vec![SceneOp::Tris(run)];
+        ops.extend(boundary.clone());
+        ops.push(SceneOp::Tris(next));
+        scene.framebuffer_pairs.push(FramebufferPair {
+            ops,
+            active_scissor: scissor,
+            ..Default::default()
+        });
+        let workload = Workload::new(&scene);
+        let operations = &workload.targets[0].operations;
+        let is_scissor = matches!(boundary[0], SceneOp::SetScissor(_));
+        assert_eq!(operations.len(), if is_scissor { 2 } else { 3 });
+        assert_eq!(operations[0].draw, SceneOp::Tris(run));
+        assert_eq!(operations.last().unwrap().draw, SceneOp::Tris(next));
+        if !is_scissor {
+            assert_eq!(operations[1].draw, boundary[0]);
+        }
+        assert_eq!(
+            operations.last().unwrap().scissor,
+            if boundary == [SceneOp::SetScissor(changed_scissor)] {
+                changed_scissor
+            } else {
+                scissor
+            }
+        );
+    }
+}
+
+#[test]
+fn returning_to_a_target_keeps_separate_workloads() {
+    let mut scene = super::common::scene_from_fixture("high-poly");
+    let run = scene.draw_runs.remove(0);
+    for (index, address) in [0x1000, 0x2000, 0x1000].into_iter().enumerate() {
+        scene.framebuffer_pairs.push(FramebufferPair {
+            color_image: crate::scene::ColorImage {
+                addr: address,
+                ..Default::default()
+            },
+            active_scissor: scene.draw_origins[0].scissor,
+            ops: vec![SceneOp::Tris(crate::scene::DrawRun {
+                index_start: index as u32 * 3,
+                index_count: 3,
+                ..run
+            })],
+            ..Default::default()
+        });
+    }
+    let workload = Workload::new(&scene);
+    assert_eq!(
+        workload
+            .targets
+            .iter()
+            .map(|target| target.id)
+            .collect::<Vec<_>>(),
+        [
+            TargetId::Guest(0x1000),
+            TargetId::Guest(0x2000),
+            TargetId::Guest(0x1000)
+        ]
+    );
+    assert!(workload
+        .targets
+        .iter()
+        .all(|target| target.operations.len() == 1));
+}
+
+#[test]
+fn batching_does_not_reattribute_interpreter_diagnostics() {
+    let original = super::common::scene_from_fixture("high-poly");
+    let first_pc = original.draw_origins[0].pc;
+    let diagnostic_pc = original.draw_origins[1].pc;
+    let (bytes, entry) = super::fixtures::fixture("high-poly");
+    let mut bytes = bytes.to_vec();
+    // Replace the second TRI2 with an invalid vertex load, which leaves draw state intact.
+    let (w0, w1) = (0x0100_1000u32, 0u32);
+    let command = &mut bytes[diagnostic_pc as usize..diagnostic_pc as usize + 8];
+    command[..4].copy_from_slice(&w0.to_be_bytes());
+    command[4..].copy_from_slice(&w1.to_be_bytes());
+    let result = crate::hle::interpret_rdram(&bytes, entry as u32);
+    let workload = Workload::new(&result.scene);
+    assert_eq!(workload.targets[0].operations.len(), 1);
+    assert_eq!(workload.targets[0].operations[0].pc, Some(first_pc));
+    assert_eq!(
+        result.diags,
+        [crate::Diagnostic {
+            at: diagnostic_pc,
+            kind: crate::DiagKind::VtxOutOfRange { count: 1, end: 0 },
+        }]
+    );
+}
 
 #[test]
 fn normalization_retains_legacy_scissors_zero_address_and_command_pcs() {

@@ -10,6 +10,7 @@ pub(crate) enum TargetId {
 pub(crate) struct Operation {
     pub draw: SceneOp,
     pub scissor: Scissor,
+    /// First command in this operation; individual command spans remain in `Scene::draw_origins`.
     pub pc: Option<u64>,
 }
 
@@ -44,7 +45,7 @@ impl Workload {
         if !scene.draw_runs.is_empty() {
             let mut operations = Vec::new();
             for run in &scene.draw_runs {
-                push_triangles(&mut operations, &triangles, run, None);
+                push_triangles(&mut operations, 0, &triangles, run, None);
             }
             targets.push(TargetWorkload {
                 id: TargetId::Legacy,
@@ -58,11 +59,15 @@ impl Workload {
         for (pair_index, pair) in scene.framebuffer_pairs.iter().enumerate() {
             let mut scissor = pair.active_scissor;
             let mut operations = Vec::new();
+            let mut batch_start = 0;
             for (op_index, draw) in pair.ops.iter().enumerate() {
                 match draw {
-                    SceneOp::SetScissor(value) => scissor = *value,
+                    SceneOp::SetScissor(value) => {
+                        scissor = *value;
+                        batch_start = operations.len();
+                    }
                     SceneOp::Tris(run) => {
-                        push_triangles(&mut operations, &triangles, run, Some(scissor))
+                        push_triangles(&mut operations, batch_start, &triangles, run, Some(scissor))
                     }
                     _ => {
                         let origin = rectangles.get(&(pair_index, op_index));
@@ -97,10 +102,41 @@ fn legacy_scissor() -> Scissor {
 
 fn push_triangles(
     operations: &mut Vec<Operation>,
+    batch_start: usize,
     origins: &[&DrawOrigin],
     run: &DrawRun,
     scissor: Option<Scissor>,
 ) {
+    let mut push = |start, end, scissor, pc: Option<u64>| {
+        let draw = DrawRun {
+            index_start: start,
+            index_count: end - start,
+            ..*run
+        };
+        match operations[batch_start..].last_mut() {
+            Some(Operation {
+                draw: SceneOp::Tris(previous),
+                scissor: previous_scissor,
+                pc: previous_pc,
+            }) if previous.index_start + previous.index_count == start
+                && *previous_scissor == scissor
+                && previous_pc.is_some() == pc.is_some()
+                && *previous
+                    == (DrawRun {
+                        index_start: previous.index_start,
+                        index_count: previous.index_count,
+                        ..draw
+                    }) =>
+            {
+                previous.index_count += draw.index_count;
+            }
+            _ => operations.push(Operation {
+                draw: SceneOp::Tris(draw),
+                scissor,
+                pc,
+            }),
+        }
+    };
     let end = run.index_start + run.index_count;
     let mut start = run.index_start;
     let first = origins.partition_point(|origin| origin.indices.end <= start);
@@ -109,39 +145,25 @@ fn push_triangles(
         .take_while(|origin| origin.indices.start < end)
     {
         if start < origin.indices.start {
-            operations.push(Operation {
-                draw: SceneOp::Tris(DrawRun {
-                    index_start: start,
-                    index_count: origin.indices.start - start,
-                    ..*run
-                }),
-                scissor: scissor.unwrap_or_else(legacy_scissor),
-                pc: None,
-            });
+            push(
+                start,
+                origin.indices.start,
+                scissor.unwrap_or_else(legacy_scissor),
+                None,
+            );
             start = origin.indices.start;
         }
         let next = origin.indices.end.min(end);
-        operations.push(Operation {
-            draw: SceneOp::Tris(DrawRun {
-                index_start: start,
-                index_count: next - start,
-                ..*run
-            }),
-            scissor: scissor.unwrap_or(origin.scissor),
-            pc: Some(origin.pc),
-        });
+        push(
+            start,
+            next,
+            scissor.unwrap_or(origin.scissor),
+            Some(origin.pc),
+        );
         start = next;
     }
     if start < end {
-        operations.push(Operation {
-            draw: SceneOp::Tris(DrawRun {
-                index_start: start,
-                index_count: end - start,
-                ..*run
-            }),
-            scissor: scissor.unwrap_or_else(legacy_scissor),
-            pc: None,
-        });
+        push(start, end, scissor.unwrap_or_else(legacy_scissor), None);
     }
 }
 
