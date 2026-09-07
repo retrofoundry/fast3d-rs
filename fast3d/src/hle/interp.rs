@@ -117,6 +117,12 @@ pub(crate) fn unknown<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     });
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FramebufferState {
+    pub targets: crate::render::framebuffers::targets::TargetDescriptors,
+    pub color_image_epoch: u64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InterpResult {
     pub scene: Scene,
@@ -124,6 +130,7 @@ pub struct InterpResult {
     pub geometry_mode: u32,
     /// Final RDP state after the walk — exposes TLUT, tiles, combine, etc. for testing.
     pub rdp: crate::hle::rdp::Rdp,
+    pub(crate) framebuffers: FramebufferState,
     /// Total command dispatches (the `dispatched` counter).
     pub commands: u32,
     /// Draw runs discarded during the walk.
@@ -256,7 +263,27 @@ pub(crate) fn interpret_with_state<M: Rdram>(
     entry: u64,
     ucode: crate::hle::gbi::GbiUcode,
     data_format: crate::hle::mem::GbiDataFormat,
+    rdp: crate::hle::rdp::Rdp,
+    observer: Option<&mut dyn crate::inspect::WalkObserver>,
+) -> InterpResult {
+    interpret_with_framebuffers(
+        mem,
+        entry,
+        ucode,
+        data_format,
+        rdp,
+        Default::default(),
+        observer,
+    )
+}
+
+pub(crate) fn interpret_with_framebuffers<M: Rdram>(
+    mem: M,
+    entry: u64,
+    ucode: crate::hle::gbi::GbiUcode,
+    data_format: crate::hle::mem::GbiDataFormat,
     mut rdp: crate::hle::rdp::Rdp,
+    framebuffers: FramebufferState,
     mut observer: Option<&mut dyn crate::inspect::WalkObserver>,
 ) -> InterpResult {
     let mut mem = mem;
@@ -277,7 +304,10 @@ pub(crate) fn interpret_with_state<M: Rdram>(
     let mut pc: u64 = entry;
     let mut return_stack: Vec<u64> = Vec::new();
     let mut dispatched: u64 = 0;
-    let mut rec = crate::hle::rsp::PairRec::default();
+    let mut rec = crate::hle::rsp::PairRec {
+        framebuffers,
+        ..Default::default()
+    };
 
     let mut termination = WalkTermination::End;
     let mut final_diagnostics_start = 0;
@@ -529,7 +559,7 @@ pub(crate) fn interpret_with_state<M: Rdram>(
                     );
                 let load_free = !rdp.tmem_bank.tile_has_load(tile_desc);
                 let source = if uses_texture && load_free {
-                    rdp.framebuffer_targets.source(
+                    rec.framebuffers.targets.source(
                         rdp.tex_image.3,
                         rdp.color_image.addr,
                         layout,
@@ -553,7 +583,6 @@ pub(crate) fn interpret_with_state<M: Rdram>(
                     }
                     Ok(Some(source))
                         if (tile_desc.fmt, tile_desc.siz) != (layout.fmt, layout.siz)
-                            || Some(u64::from(tile_desc.line) * 8) != layout.row_bytes()
                             || u32::from(tile_desc.width) > layout.width =>
                     {
                         diags.push(Diagnostic {
@@ -561,18 +590,6 @@ pub(crate) fn interpret_with_state<M: Rdram>(
                             kind: DiagKind::UnsupportedFramebufferAccess {
                                 address: source.address,
                                 reason: crate::diag::FramebufferAccess::Reinterpretation,
-                            },
-                        });
-                        dropped_runs += 1;
-                        pc = next_pc;
-                        break 'dispatch;
-                    }
-                    Ok(None) if copy_mode && load_free => {
-                        diags.push(Diagnostic {
-                            at: pc,
-                            kind: DiagKind::UnsupportedFramebufferAccess {
-                                address: rdp.tex_image.3,
-                                reason: crate::diag::FramebufferAccess::MissingSource,
                             },
                         });
                         dropped_runs += 1;
@@ -856,6 +873,7 @@ pub(crate) fn interpret_with_state<M: Rdram>(
             diags,
             geometry_mode: rsp.geometry_mode(),
             rdp,
+            framebuffers: rec.framebuffers,
             commands: dispatched as u32,
             dropped_runs,
             termination,
@@ -885,6 +903,7 @@ pub(crate) fn interpret_with_state<M: Rdram>(
         diags,
         geometry_mode,
         rdp,
+        framebuffers: rec.framebuffers,
         commands: dispatched as u32,
         dropped_runs,
         termination,

@@ -154,13 +154,22 @@ pub struct Task {
 
 impl Task {
     fn interpret(&self, rdp: super::rdp::Rdp) -> Result<super::interp::InterpResult> {
+        self.interpret_with_framebuffers(rdp, Default::default())
+    }
+
+    fn interpret_with_framebuffers(
+        &self,
+        rdp: super::rdp::Rdp,
+        framebuffers: super::interp::FramebufferState,
+    ) -> Result<super::interp::InterpResult> {
         let hardware = ReplayHardware::new(self, None)?;
-        let result = super::interp::interpret_with_state(
+        let result = super::interp::interpret_with_framebuffers(
             hardware.rdram(),
             self.entry,
             self.microcode.into(),
             self.data_format,
             rdp,
+            framebuffers,
             None,
         );
         hardware.check()?;
@@ -211,14 +220,24 @@ impl Fixture {
     pub fn final_color_image(&self) -> Result<ColorImage> {
         self.validate()?;
         let mut rdp = super::rdp::Rdp::default();
+        let mut framebuffers = super::interp::FramebufferState::default();
         for task in &self.tasks {
-            let result = task.interpret(rdp)?;
+            let result = task.interpret_with_framebuffers(rdp, framebuffers.clone())?;
             if let Some(diagnostic) = result.diags.first() {
                 return Err(CaptureError::Invalid(format!(
                     "task {}: {diagnostic}",
                     task.order
                 )));
             }
+            if let Some(inputs) = crate::render::inputs::RenderInputs::with_targets(
+                &result.scene,
+                (self.frame.width, self.frame.height),
+                [self.frame.serial as u32, self.frame.dither_seed],
+                &framebuffers.targets,
+            ) {
+                inputs.update_target_descriptors(&mut framebuffers.targets);
+            }
+            framebuffers.color_image_epoch = result.framebuffers.color_image_epoch;
             rdp = result.rdp;
         }
         Ok(rdp.color_image)

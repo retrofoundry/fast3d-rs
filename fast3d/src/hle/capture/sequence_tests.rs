@@ -119,6 +119,118 @@ fn center(output: &ReplayOutput) -> &[u8] {
     &output.rgba8[(120 * 320 + 160) * 4..(120 * 320 + 160) * 4 + 4]
 }
 
+fn switch_second_frame_color(sequence: &mut Sequence) {
+    let task = &mut sequence.frames[1].tasks[0];
+    let (w0, w1) = gdp_set_color_image(0, 2, 320, 0x300000);
+    task.spans[0].bytes.splice(
+        task.entry as usize..task.entry as usize,
+        w0.to_be_bytes().into_iter().chain(w1.to_be_bytes()),
+    );
+}
+
+#[test]
+fn sequence_cimg_depth_control_mutations() {
+    let (device, queue) = crate::render::headless_device_forced_fallback();
+    let original = depth_sequence();
+    let mut switched = original.clone();
+    switch_second_frame_color(&mut switched);
+    let mut no_depth_write = original.clone();
+    for task in no_depth_write
+        .frames
+        .iter_mut()
+        .flat_map(|frame| &mut frame.tasks)
+    {
+        for command in task.spans[0].bytes[task.entry as usize..]
+            .as_chunks_mut::<8>()
+            .0
+        {
+            if u32::from_be_bytes(command[..4].try_into().unwrap()) == gdp_set_render_mode(0, 0).0 {
+                let mode = u32::from_be_bytes(command[4..].try_into().unwrap());
+                command[4..].copy_from_slice(&(mode & !Z_UPD).to_be_bytes());
+            }
+        }
+    }
+    let black = [0, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let mut observed = Vec::new();
+    for (name, sequence, policy, expected) in [
+        (
+            "original",
+            &original,
+            DepthResetPolicy::Never,
+            [black, black],
+        ),
+        (
+            "original",
+            &original,
+            DepthResetPolicy::ColorImageSwitch,
+            [blue, black],
+        ),
+        ("switch", &switched, DepthResetPolicy::Never, [black, black]),
+        (
+            "switch",
+            &switched,
+            DepthResetPolicy::ColorImageSwitch,
+            [blue, blue],
+        ),
+        (
+            "no Z_UPD",
+            &no_depth_write,
+            DepthResetPolicy::Never,
+            [black, black],
+        ),
+        (
+            "no Z_UPD",
+            &no_depth_write,
+            DepthResetPolicy::ColorImageSwitch,
+            [blue, blue],
+        ),
+    ] {
+        let output =
+            pollster::block_on(sequence.replay(device.clone(), queue.clone(), policy)).unwrap();
+        let centers: Vec<_> = output
+            .presentations
+            .iter()
+            .map(|p| center(&p.output).to_vec())
+            .collect();
+        eprintln!("{name}, {policy:?}: {centers:?}");
+        observed.push((name, policy, centers, expected));
+        assert!(output
+            .frames
+            .iter()
+            .flat_map(|frame| frame.diagnostics.iter().flatten())
+            .next()
+            .is_none());
+        for presentation in &output.presentations {
+            assert_eq!(&presentation.output.rgba8[..4], black);
+        }
+    }
+    for (name, policy, centers, expected) in observed {
+        assert_eq!(centers, expected, "{name}, {policy:?}");
+    }
+}
+
+#[test]
+fn sequence_identical_cimg_keeps_epoch_across_frames() {
+    for switch in [false, true] {
+        let mut sequence = depth_sequence();
+        if switch {
+            switch_second_frame_color(&mut sequence);
+        }
+        let mut rdp = Default::default();
+        let mut framebuffers = Default::default();
+        let mut epochs = Vec::new();
+        for task in sequence.frames.iter().flat_map(|frame| &frame.tasks) {
+            let result = task.interpret_with_framebuffers(rdp, framebuffers).unwrap();
+            assert!(result.diags.is_empty(), "{:?}", result.diags);
+            epochs.push(result.scene.framebuffer_pairs[0].color_image_epoch);
+            rdp = result.rdp;
+            framebuffers = result.framebuffers;
+        }
+        assert_eq!(epochs, if switch { [1, 2, 4] } else { [1, 2, 2] });
+    }
+}
+
 #[test]
 fn single_frame_rejects_prior_depth_dependency() {
     let fixture = depth_sequence().frames.remove(1);
@@ -183,7 +295,8 @@ fn capture_sequence_replays_from_reset() {
 
 #[test]
 fn sequence_depth_controls_distinguish_task_and_frame_boundaries() {
-    let sequence = depth_sequence();
+    let mut sequence = depth_sequence();
+    switch_second_frame_color(&mut sequence);
     let (device, queue) = crate::render::headless_device_forced_fallback();
     for (policy, expected) in [
         (DepthResetPolicy::Never, [[0, 0, 0, 255], [0, 0, 0, 255]]),

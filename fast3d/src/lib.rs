@@ -193,6 +193,7 @@ pub struct Renderer {
     target: PresentTarget,
     inner: SceneRenderer,
     rdp: crate::hle::rdp::Rdp,
+    color_image_epoch: u64,
     #[cfg(feature = "capture")]
     capture_generation: std::rc::Rc<()>,
     pub(crate) frame_scenes: Vec<Scene>,
@@ -272,6 +273,7 @@ impl Renderer {
             target,
             inner,
             rdp: Default::default(),
+            color_image_epoch: 0,
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
@@ -352,6 +354,7 @@ impl Renderer {
             },
             inner,
             rdp: Default::default(),
+            color_image_epoch: 0,
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
@@ -519,7 +522,8 @@ impl Renderer {
     /// draw can open a framebuffer pair before rejecting its triangles: no emission does not
     /// mean no framebuffer effect.
     ///
-    /// Every nonzero prefix starts with default RDP registers and empty TMEM, as `inspect::walk`
+    /// Every nonzero prefix starts with default RDP registers, empty TMEM and no prior target
+    /// descriptors, as `inspect::walk`
     /// does, and leaves the live task registers unchanged. This includes `u32::MAX`.
     /// Framebuffer contents and the dither sequence still belong to the renderer. For both
     /// legacy and guest color targets,
@@ -601,6 +605,13 @@ impl Renderer {
         self.process_dl_memory_observed(mem, entry, ucode, diags, None, Submission::DiscardOnStop)
     }
 
+    fn interpreter_framebuffers(&self) -> crate::hle::interp::FramebufferState {
+        crate::hle::interp::FramebufferState {
+            targets: self.inner.target_descriptors.clone(),
+            color_image_epoch: self.color_image_epoch,
+        }
+    }
+
     fn process_dl_memory_observed(
         &mut self,
         mem: impl Rdram,
@@ -616,18 +627,23 @@ impl Renderer {
             self.inner.discard_depth();
         }
         let is_image = mem.is_rdram_image();
-        let mut rdp = if submission == Submission::RasterizePrefix {
+        let rdp = if submission == Submission::RasterizePrefix {
             Default::default()
         } else {
             self.rdp.clone()
         };
-        rdp.framebuffer_targets = self.inner.target_descriptors.clone();
-        let mut result = crate::hle::interp::interpret_with_state(
+        let framebuffers = if submission == Submission::RasterizePrefix {
+            Default::default()
+        } else {
+            self.interpreter_framebuffers()
+        };
+        let mut result = crate::hle::interp::interpret_with_framebuffers(
             mem,
             entry,
             ucode.into(),
             self.data_format,
             rdp,
+            framebuffers,
             observer,
         );
         if submission == Submission::RasterizePrefix
@@ -651,6 +667,7 @@ impl Renderer {
 
         if submission == Submission::DiscardOnStop && result.commits_rdp() {
             self.rdp = result.rdp.clone();
+            self.color_image_epoch = result.framebuffers.color_image_epoch;
         }
 
         // Rasterize into the persistent store. A draw-nothing walk returns None and leaves
@@ -692,6 +709,7 @@ impl Renderer {
     /// images, call this before each prefix, then use the same sequence of `begin_frame` calls.
     pub fn reset(&mut self) {
         self.reset_rdp_state();
+        self.color_image_epoch = 0;
         self.inner.reset();
         self.frame_scenes.clear();
         self.last_scanout_addr = None;

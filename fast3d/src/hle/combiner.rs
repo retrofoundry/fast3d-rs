@@ -758,26 +758,6 @@ fn build_material_inner(
             return None;
         }
     }
-    if !rect
-        && !rdp.tmem_bank.tile_has_load(&rdp.tiles[base])
-        && (uses_physical0 || uses_physical1)
-        && rdp
-            .framebuffer_targets
-            .overlap(rdp.tex_image.3, 1)
-            .ok()
-            .flatten()
-            .is_some()
-    {
-        diags.push(crate::Diagnostic {
-            at: pc,
-            kind: crate::DiagKind::UnsupportedFramebufferAccess {
-                address: rdp.tex_image.3,
-                reason: crate::FramebufferAccess::TriangleTexture,
-            },
-        });
-        return None;
-    }
-
     if !rdp.texture_loaded && cycle_type < 2 {
         if !rect && rdp.combine_l == 0 && rdp.combine_h == 0 {
             return None;

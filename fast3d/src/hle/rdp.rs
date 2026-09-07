@@ -40,8 +40,6 @@ pub struct TileDescriptor {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Rdp {
-    pub(crate) color_image_epoch: u64,
-    pub(crate) framebuffer_targets: crate::render::framebuffers::targets::TargetDescriptors,
     pub texture_loaded: bool,
     pub tmem_bank: crate::hle::tmem::Tmem,
     pub load_via_tile: bool, // Last load kind, exposed by the inspector.
@@ -258,13 +256,13 @@ fn set_tile_size<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn framebuffer_load<M: Rdram>(cx: &mut Ctx<M>, address: u64, length: usize) -> Option<Diagnostic> {
-    let kind = match cx.rdp.framebuffer_targets.overlap(address, length as u64) {
+    let kind = match cx.rec.framebuffers.targets.overlap(address, length as u64) {
         Ok(None) => return None,
         Ok(Some(_)) => DiagKind::UnsupportedFramebufferAccess {
             address,
             reason: crate::diag::FramebufferAccess::TextureLoad,
         },
-        Err(_) => return None,
+        Err(kind) => kind,
     };
     let diagnostic = Diagnostic { at: cx.pc, kind };
     cx.diags.push(diagnostic);
@@ -286,7 +284,7 @@ fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
         let tile = &cx.rdp.tiles[tile_idx];
         let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
         cx.rdp.tmem_bank.reject_load(diagnostic, |tmem| {
-            tmem.write_block(&vec![0; bytes], dst, line, dxt, words as usize, siz)
+            tmem.write_block(&[], dst, line, dxt, words as usize, siz)
         });
         return;
     }
@@ -334,7 +332,7 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
         let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
         cx.rdp.tmem_bank.reject_load(diagnostic, |tmem| {
             tmem.write_tile(
-                &vec![0; src_len],
+                &[],
                 dst,
                 line,
                 row_count as usize,
@@ -382,9 +380,9 @@ fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let packed_bytes = count * 2;
     if let Some(diagnostic) = framebuffer_load(cx, addr, packed_bytes) {
         let dst = usize::from(cx.rdp.tiles[c.p1(24, 3) as usize].tmem_addr);
-        cx.rdp.tmem_bank.reject_load(diagnostic, |tmem| {
-            tmem.write_tlut(&vec![0; packed_bytes], count, dst)
-        });
+        cx.rdp
+            .tmem_bank
+            .reject_load(diagnostic, |tmem| tmem.write_tlut(&[0; 2048], count, dst));
         return;
     }
     let packed = memory_try!(cx, Tlut, read_bytes_exact(cx.mem, addr, packed_bytes));
@@ -407,7 +405,8 @@ fn set_color_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     };
     cx.rdp.color_image_set = true;
     if cx.rdp.color_image != new {
-        cx.rdp.color_image_epoch = cx.rdp.color_image_epoch.wrapping_add(1);
+        cx.rec.framebuffers.color_image_epoch =
+            cx.rec.framebuffers.color_image_epoch.wrapping_add(1);
         cx.rdp.color_image = new;
         cx.rdp.color_changed = true;
     }

@@ -18,6 +18,7 @@ pub struct CaptureFrame {
     pub(super) fixture: Fixture,
     error: Option<CaptureError>,
     initial_rdp: crate::hle::rdp::Rdp,
+    initial_framebuffers: crate::hle::interp::FramebufferState,
     expected_generation: std::rc::Rc<()>,
     pub(super) sequence: bool,
 }
@@ -40,6 +41,7 @@ impl CaptureFrame {
         let (width, height) = target_extent(renderer);
         Self {
             initial_rdp: renderer.rdp.clone(),
+            initial_framebuffers: renderer.interpreter_framebuffers(),
             expected_generation: renderer.capture_generation.clone(),
             fixture: Fixture {
                 frame: Frame {
@@ -225,35 +227,50 @@ impl CaptureFrame {
             return Ok(self.fixture);
         }
         let mut live = self.initial_rdp;
+        let mut live_framebuffers = self.initial_framebuffers;
+        let mut replay_framebuffers = crate::hle::interp::FramebufferState::default();
         let mut replay = crate::hle::rdp::Rdp::default();
         for task in &self.fixture.tasks {
-            let mut actual = task.interpret(live.clone())?;
-            let mut expected = task.interpret(replay.clone())?;
+            let mut actual =
+                task.interpret_with_framebuffers(live.clone(), live_framebuffers.clone())?;
+            let mut expected =
+                task.interpret_with_framebuffers(replay.clone(), replay_framebuffers.clone())?;
             // Epochs affect only diagnostic depth-reset controls, which recording excludes.
             for scene in [&mut actual.scene, &mut expected.scene] {
                 for pair in &mut scene.framebuffer_pairs {
                     pair.color_image_epoch = 0;
                 }
             }
-            let inputs = |scene| {
-                crate::render::inputs::RenderInputs::new(
+            let inputs = |scene, targets| {
+                crate::render::inputs::RenderInputs::with_targets(
                     scene,
                     (self.fixture.frame.width, self.fixture.frame.height),
                     [
                         self.fixture.frame.serial as u32,
                         self.fixture.frame.dither_seed,
                     ],
+                    targets,
                 )
             };
-            if inputs(&actual.scene) != inputs(&expected.scene)
+            let actual_inputs = inputs(&actual.scene, &live_framebuffers.targets);
+            let expected_inputs = inputs(&expected.scene, &replay_framebuffers.targets);
+            if actual_inputs != expected_inputs
                 || actual.diags != expected.diags
                 || actual.summary(false) != expected.summary(false)
             {
                 return Err(invalid(
-                    "frame depends on prior RDP state not stored in version-one captures",
+                    "frame depends on prior RDP state or framebuffer history not stored in version-one captures",
                 ));
             }
             if actual.commits_rdp() {
+                if let Some(inputs) = actual_inputs {
+                    inputs.update_target_descriptors(&mut live_framebuffers.targets);
+                }
+                if let Some(inputs) = expected_inputs {
+                    inputs.update_target_descriptors(&mut replay_framebuffers.targets);
+                }
+                live_framebuffers.color_image_epoch = actual.framebuffers.color_image_epoch;
+                replay_framebuffers.color_image_epoch = expected.framebuffers.color_image_epoch;
                 live = actual.rdp;
                 replay = expected.rdp;
             }

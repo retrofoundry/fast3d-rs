@@ -82,7 +82,7 @@ fn vtx<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 
 fn tri1<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     if let Some((material_index, render_mode_index)) =
-        crate::hle::rsp::snapshot_run(cx.rsp, cx.rdp, cx.diags, cx.scene, cx.pc)
+        crate::hle::rsp::snapshot_run(cx.rsp, cx.rec, cx.rdp, cx.diags, cx.scene, cx.pc)
     {
         crate::hle::rsp::record_tri(
             cx.rsp,
@@ -102,7 +102,7 @@ fn tri1<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 
 fn quad<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     if let Some((material_index, render_mode_index)) =
-        crate::hle::rsp::snapshot_run(cx.rsp, cx.rdp, cx.diags, cx.scene, cx.pc)
+        crate::hle::rsp::snapshot_run(cx.rsp, cx.rec, cx.rdp, cx.diags, cx.scene, cx.pc)
     {
         let v0 = c.p1(24, 8) / 10;
         let v1 = c.p1(16, 8) / 10;

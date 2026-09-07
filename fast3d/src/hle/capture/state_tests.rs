@@ -41,6 +41,246 @@ fn fixture() -> Fixture {
 }
 
 #[test]
+fn capture_admission_checks_prior_framebuffer_history_without_changing_rdp() {
+    let mut fixture = fixture();
+    let address = 0x10000;
+    let mut load = task(
+        &[
+            gdp_set_texture_image(0, 2, 4, address),
+            gdp_set_tile(0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            gdp_load_block(0, 0, 0, 3, 0),
+            gsp_enddl(),
+        ],
+        0,
+    );
+    load.spans.push(MemorySpan {
+        address: address.into(),
+        bytes: vec![0xff; 8],
+    });
+    fixture.tasks = vec![load];
+    for known in [false, true] {
+        let mut initial_framebuffers = crate::hle::interp::FramebufferState::default();
+        if known {
+            initial_framebuffers
+                .targets
+                .record(
+                    address.into(),
+                    crate::render::framebuffers::ImageLayout {
+                        width: 4,
+                        fmt: 0,
+                        siz: 2,
+                    },
+                    1,
+                    false,
+                )
+                .unwrap();
+        }
+        let capture = CaptureFrame {
+            fixture: fixture.clone(),
+            error: None,
+            initial_rdp: Default::default(),
+            initial_framebuffers,
+            expected_generation: std::rc::Rc::new(()),
+            sequence: false,
+        };
+        let result = capture.finish(None);
+        if known {
+            assert!(
+                matches!(result, Err(CaptureError::Invalid(message)) if message.contains("framebuffer history"))
+            );
+        } else {
+            assert!(result.is_ok(), "{result:?}");
+        }
+    }
+}
+
+#[test]
+fn capture_admission_checks_prior_framebuffer_extent_during_preparation() {
+    let mut fixture = fixture();
+    let address = 0x10000;
+    let fill = task(
+        &[
+            gdp_set_color_image(0, 2, 64, address),
+            gdp_set_scissor(0, 0, 0, 256, 256),
+            gdp_set_cycle_type(3),
+            gdp_set_fill_color(0xf801f801),
+            gdp_fill_rectangle(0, 0, 252, 252),
+            gsp_enddl(),
+        ],
+        0,
+    );
+    let mut copy = vec![
+        gdp_set_color_image(0, 2, 64, 0x12000),
+        gdp_set_cycle_type(2),
+        gdp_set_texture_image(0, 2, 64, address),
+        gdp_set_tile(0, 2, 16, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+        gdp_set_tile_size(0, 0, 0, 252, 252),
+    ];
+    copy.extend(gsp_texture_rectangle(
+        0, 0, 256, 256, 0, 0, 0, 1024, 1024, false,
+    ));
+    copy.push(gsp_enddl());
+    fixture.tasks = vec![fill, task(&copy, 1)];
+    for height in [64, 128] {
+        let mut initial_framebuffers = crate::hle::interp::FramebufferState::default();
+        initial_framebuffers
+            .targets
+            .record(
+                address.into(),
+                crate::render::framebuffers::ImageLayout {
+                    width: 64,
+                    fmt: 0,
+                    siz: 2,
+                },
+                height,
+                false,
+            )
+            .unwrap();
+        let fill = fixture.tasks[0]
+            .interpret_with_framebuffers(Default::default(), initial_framebuffers.clone())
+            .unwrap();
+        assert!(fill.diags.is_empty(), "{:?}", fill.diags);
+        let copy = fixture.tasks[1]
+            .interpret_with_framebuffers(fill.rdp, fill.framebuffers)
+            .unwrap();
+        assert!(copy.diags.is_empty(), "{:?}", copy.diags);
+        assert!(copy.scene.framebuffer_pairs[0]
+            .ops
+            .iter()
+            .any(|op| matches!(
+                op,
+                crate::scene::SceneOp::TexRect {
+                    fb_source: Some(0x10000),
+                    ..
+                }
+            )));
+        let capture = CaptureFrame {
+            fixture: fixture.clone(),
+            error: None,
+            initial_rdp: Default::default(),
+            initial_framebuffers,
+            expected_generation: std::rc::Rc::new(()),
+            sequence: false,
+        };
+        let result = capture.finish(None);
+        if height == 128 {
+            assert!(
+                matches!(result, Err(CaptureError::Invalid(message)) if message.contains("framebuffer history"))
+            );
+        } else {
+            assert!(result.is_ok(), "{result:?}");
+        }
+    }
+}
+
+#[test]
+fn capture_admission_does_not_record_skipped_legacy_depth_targets() {
+    use n64_gbi::consts::*;
+
+    let mut fixture = fixture();
+    fixture.frame.width = 64;
+    fixture.frame.height = 48;
+    let depth = 0x10000;
+    let color = CcPass {
+        a: ZERO_C,
+        b: ZERO_C,
+        c: ZERO_C,
+        d: 4,
+    };
+    let alpha = CcPass {
+        a: ZERO_A,
+        b: ZERO_A,
+        c: ZERO_A,
+        d: 4,
+    };
+    let mut legacy = task(
+        &[
+            gdp_set_depth_image(depth),
+            gsp_set_geometrymode(G_SHADE | G_SHADING_SMOOTH | G_ZBUFFER),
+            gdp_set_combine_lerp(color, alpha, color, alpha),
+            gdp_set_render_mode(G_RM_OPA_SURF | Z_CMP | Z_UPD, G_RM_OPA_SURF2),
+            gsp_vertex(0, 3, 0x1000),
+            gsp_1triangle(0, 1, 2),
+            gsp_enddl(),
+        ],
+        0,
+    );
+    legacy.spans.push(MemorySpan {
+        address: 0x1000,
+        bytes: [(-1, -1), (1, -1), (0, 1)]
+            .into_iter()
+            .flat_map(|(x, y)| {
+                VtxColored {
+                    x,
+                    y,
+                    z: 0,
+                    flag: 0,
+                    s: 0,
+                    t: 0,
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                }
+                .to_bytes()
+            })
+            .collect(),
+    });
+    let interpreted = legacy.interpret(Default::default()).unwrap();
+    assert!(interpreted.diags.is_empty(), "{:?}", interpreted.diags);
+    assert_eq!(interpreted.scene.indices.len(), 3);
+    assert!(interpreted.scene.framebuffer_pairs.is_empty());
+    let mut load = task(
+        &[
+            gdp_set_texture_image(0, 2, 4, depth),
+            gdp_set_tile(0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            gdp_load_block(0, 0, 0, 3, 0),
+            gsp_enddl(),
+        ],
+        1,
+    );
+    load.spans.push(MemorySpan {
+        address: depth.into(),
+        bytes: vec![0xff; 8],
+    });
+    fixture.tasks = vec![legacy, load];
+    for known in [false, true] {
+        let mut initial_framebuffers = crate::hle::interp::FramebufferState::default();
+        if known {
+            initial_framebuffers
+                .targets
+                .record(
+                    depth.into(),
+                    crate::render::framebuffers::ImageLayout {
+                        width: 320,
+                        fmt: 0,
+                        siz: 2,
+                    },
+                    240,
+                    true,
+                )
+                .unwrap();
+        }
+        let capture = CaptureFrame {
+            fixture: fixture.clone(),
+            error: None,
+            initial_rdp: Default::default(),
+            initial_framebuffers,
+            expected_generation: std::rc::Rc::new(()),
+            sequence: false,
+        };
+        let result = capture.finish(None);
+        if known {
+            assert!(
+                matches!(result, Err(CaptureError::Invalid(message)) if message.contains("framebuffer history"))
+            );
+        } else {
+            assert!(result.is_ok(), "{result:?}");
+        }
+    }
+}
+
+#[test]
 fn framebuffer_primers_do_not_inherit_the_fixtures_final_registers() {
     let mut fixture = fixture();
     fixture.tasks[1] = task(

@@ -93,6 +93,57 @@ pub(super) struct TargetInputs {
     pub rect_indices: Vec<u32>,
 }
 
+impl TargetInputs {
+    pub(super) fn record_descriptors(
+        &self,
+        descriptors: &mut super::framebuffers::targets::TargetDescriptors,
+    ) -> Result<bool, crate::Diagnostic> {
+        if !self.valid {
+            return Ok(false);
+        }
+        if self.id == TargetId::Legacy && self.output_extent != self.logical_extent {
+            if let Some(address) = self.depth_image {
+                return Err(crate::Diagnostic {
+                    at: self.pc,
+                    kind: crate::DiagKind::UnsupportedLegacyDepthExtent {
+                        address,
+                        canvas: self.output_extent,
+                        depth: self.logical_extent,
+                    },
+                });
+            }
+        }
+        let (width, height) = self.output_extent;
+        if let TargetId::Guest(address) = self.id {
+            if !self.depth_clear {
+                let _ = descriptors.record(
+                    address,
+                    super::framebuffers::ImageLayout {
+                        width,
+                        fmt: self.color_image.fmt,
+                        siz: self.color_image.siz,
+                    },
+                    height,
+                    false,
+                );
+            }
+        }
+        if let Some(address) = self.depth_image {
+            let _ = descriptors.record(
+                address,
+                super::framebuffers::ImageLayout {
+                    width,
+                    fmt: 0,
+                    siz: 2,
+                },
+                height,
+                true,
+            );
+        }
+        Ok(true)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(super) struct OperationInputs {
     pub pc: u64,
@@ -136,7 +187,17 @@ impl OperationInputs {
 }
 
 impl<'a> RenderInputs<'a> {
-    #[cfg(any(test, feature = "capture"))]
+    #[cfg(feature = "capture")]
+    pub fn update_target_descriptors(
+        &self,
+        descriptors: &mut super::framebuffers::targets::TargetDescriptors,
+    ) {
+        for target in &self.targets {
+            let _ = target.record_descriptors(descriptors);
+        }
+    }
+
+    #[cfg(test)]
     pub fn new(scene: &'a Scene, legacy_extent: (u32, u32), frame: [u32; 2]) -> Option<Self> {
         Self::with_targets(scene, legacy_extent, frame, &Default::default())
     }

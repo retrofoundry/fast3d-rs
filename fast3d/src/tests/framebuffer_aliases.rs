@@ -134,6 +134,96 @@ fn framebuffer_range_overflow() {
 }
 
 #[test]
+fn overflowing_texture_load_never_reaches_guest_memory() {
+    for command in [
+        gdp_load_block(0, 0, 0, 3, 0),
+        (0xf4000000, 0),
+        gdp_load_tlut(0, 3),
+    ] {
+        let words = [command, gsp_enddl()];
+        let bytes: Vec<_> = words
+            .iter()
+            .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes()))
+            .collect();
+        let rdp = crate::hle::rdp::Rdp {
+            tex_image: (0, 2, 3, u64::MAX - 3),
+            ..Default::default()
+        };
+        let result = crate::hle::interp::interpret_with_state(
+            RdramImage::new(&bytes),
+            0,
+            GbiUcode::F3dex2,
+            GbiDataFormat::Fixed,
+            rdp,
+            None,
+        );
+        assert_eq!(
+            result.diags,
+            [crate::Diagnostic {
+                at: 0,
+                kind: DiagKind::FramebufferRangeOverflow {
+                    address: u64::MAX - 3,
+                    length: 8
+                },
+            }]
+        );
+        assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+    }
+}
+
+#[test]
+fn framebuffer_history_does_not_change_guest_register_equality() {
+    let words = commands(0x10000, 0x20000, 0x10000);
+    let first = run(&words);
+    let snapshot = first.rdp.clone();
+    let bytes: Vec<_> = words
+        .iter()
+        .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes()))
+        .collect();
+    let mut previous = first;
+    for _ in 0..3 {
+        previous = crate::hle::interp::interpret_with_framebuffers(
+            RdramImage::new(&bytes),
+            0,
+            GbiUcode::F3dex2,
+            GbiDataFormat::Fixed,
+            previous.rdp,
+            previous.framebuffers,
+            None,
+        );
+        assert!(previous.diags.is_empty(), "{:?}", previous.diags);
+        assert_eq!(previous.rdp, snapshot);
+    }
+    let loads = [
+        gdp_set_texture_image(0, 2, 64, 0x10000),
+        gdp_load_block(0, 0, 0, 3, 0),
+        gsp_enddl(),
+    ];
+    let bytes: Vec<_> = loads
+        .iter()
+        .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes()))
+        .collect();
+    let retained = crate::hle::interp::interpret_with_framebuffers(
+        RdramImage::new(&bytes),
+        0,
+        GbiUcode::F3dex2,
+        GbiDataFormat::Fixed,
+        previous.rdp,
+        previous.framebuffers,
+        None,
+    );
+    assert!(matches!(
+        retained.diags[0].kind,
+        DiagKind::UnsupportedFramebufferAccess {
+            reason: crate::FramebufferAccess::TextureLoad,
+            ..
+        }
+    ));
+    let fresh = run(&loads);
+    assert!(matches!(fresh.diags[0].kind, DiagKind::MemoryRead { .. }));
+}
+
+#[test]
 fn framebuffer_source_generation_and_extent_follow_writes() {
     use crate::render::framebuffers::{targets::*, ImageLayout};
     let mut targets = TargetDescriptors::default();
@@ -215,12 +305,13 @@ fn retained_tmem_ignores_unrelated_framebuffer_texture_image() {
         .iter()
         .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes()))
         .collect();
-    let result = crate::hle::interp::interpret_with_state(
+    let result = crate::hle::interp::interpret_with_framebuffers(
         RdramImage::new(&bytes),
         0,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,
         rdp,
+        Default::default(),
         None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
@@ -291,11 +382,12 @@ fn legacy_named_depth_is_a_known_gpu_texture_range() {
         ..Default::default()
     };
     let mut scene = Scene::default();
+    let mut rec = PairRec::default();
     crate::hle::rsp::record_tri(
         &mut Rsp::default(),
         &mut rdp,
         &mut scene,
-        &mut PairRec::default(),
+        &mut rec,
         0,
         0,
         0,
@@ -311,12 +403,13 @@ fn legacy_named_depth_is_a_known_gpu_texture_range() {
         .iter()
         .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes()))
         .collect();
-    let result = crate::hle::interp::interpret_with_state(
+    let result = crate::hle::interp::interpret_with_framebuffers(
         RdramImage::new(&bytes),
         0,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,
         rdp,
+        rec.framebuffers,
         None,
     );
     assert!(result.diags.iter().any(|d| d.at == 8

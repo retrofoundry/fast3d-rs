@@ -341,46 +341,18 @@ impl SceneRenderer {
                 self.discard_depth();
                 self.depth_color_epoch = Some(target.color_image_epoch);
             }
-            if !target.valid {
-                self.dropped_runs += target.operations.len() as u32;
-                continue;
-            }
-            let (w, h) = target.output_extent;
-            if target.id == TargetId::Legacy && target.output_extent != target.logical_extent {
-                if let Some(address) = target.depth_image {
-                    self.diagnostics.push(crate::Diagnostic {
-                        at: target.pc,
-                        kind: crate::DiagKind::UnsupportedLegacyDepthExtent {
-                            address,
-                            canvas: target.output_extent,
-                            depth: target.logical_extent,
-                        },
-                    });
+            match target.record_descriptors(&mut self.target_descriptors) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.dropped_runs += target.operations.len() as u32;
+                    continue;
+                }
+                Err(diagnostic) => {
+                    self.diagnostics.push(diagnostic);
                     continue;
                 }
             }
-            if let TargetId::Guest(address) = target.id {
-                let layout = ImageLayout {
-                    width: w,
-                    fmt: target.color_image.fmt,
-                    siz: target.color_image.siz,
-                };
-                if !target.depth_clear {
-                    let _ = self.target_descriptors.record(address, layout, h, false);
-                }
-            }
-            if let Some(address) = target.depth_image {
-                let _ = self.target_descriptors.record(
-                    address,
-                    ImageLayout {
-                        width: w,
-                        fmt: 0,
-                        siz: 2,
-                    },
-                    h,
-                    true,
-                );
-            }
+            let (w, h) = target.output_extent;
             let any_depth = target.any_depth;
             let depth_id = target
                 .depth_image

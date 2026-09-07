@@ -46,9 +46,16 @@ fn filter_changes_split_material_snapshots() {
         rsp.set_other_mode_h_raw(12, 2, mode << 12, &mut rdp);
         rsp.material_dirty = true;
         indices.push(
-            crate::hle::rsp::snapshot_run(&mut rsp, &rdp, &mut diags, &mut scene, 0)
-                .unwrap()
-                .0,
+            crate::hle::rsp::snapshot_run(
+                &mut rsp,
+                &Default::default(),
+                &rdp,
+                &mut diags,
+                &mut scene,
+                0,
+            )
+            .unwrap()
+            .0,
         );
     }
     assert!(diags.is_empty(), "{diags:?}");
