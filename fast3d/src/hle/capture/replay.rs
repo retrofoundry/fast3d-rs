@@ -1,3 +1,5 @@
+#[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+use super::{finish_recording, ReadLog, RecordingRdram};
 use super::{
     invalid, CaptureError, Fixture, Frame, MemoryLayout, MemorySpan, Provenance, RecordingHardware,
     ReplayHardware, Result, SourceLayout, Task,
@@ -79,6 +81,58 @@ impl CaptureFrame {
         }
     }
 
+    /// Records a native display-list walk while every reachable source span is still valid.
+    ///
+    /// # Safety
+    /// Every command and reachable input span must be allocated, readable, initialized, in
+    /// [`crate::HostRam`]'s native layout, and stable until return. Borrowed texture bytes must not
+    /// be mutated concurrently. Numeric CIMG/ZIMG identities need not be readable unless used as
+    /// inputs. The dispatch cap only bounds liveness; it cannot validate a native pointer.
+    #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+    pub unsafe fn process_dl_host(
+        &mut self,
+        renderer: &mut Renderer,
+        ram: crate::HostRam<'_>,
+        entry: u64,
+        microcode: Microcode,
+        data_format: DataFormat,
+        diagnostics: &mut dyn DiagSink,
+    ) -> Result<DlSummary> {
+        self.check_renderer(renderer);
+        renderer.set_data_format(data_format);
+        if let Some(error) = &self.error {
+            unsafe { renderer.process_dl_host(ram, entry, microcode, diagnostics) };
+            return Err(error.clone());
+        }
+        let source = ram.capture_layout();
+        let memory = unsafe { crate::hle::host_mem::HostMemory::new(ram) };
+        let log = std::cell::RefCell::new(ReadLog {
+            source: Some(source),
+            ..ReadLog::default()
+        });
+        let recording = RecordingRdram {
+            inner: memory,
+            layout: source.memory,
+            log: &log,
+        };
+        let summary = renderer.process_dl_memory(recording, entry, microcode, diagnostics);
+        let task = u32::try_from(self.fixture.tasks.len())
+            .map_err(|_| invalid("too many tasks in one frame"))
+            .and_then(|order| {
+                finish_recording(log.into_inner(), entry, microcode, data_format, order)
+            });
+        match task {
+            Ok(task) => {
+                self.fixture.tasks.push(task);
+                Ok(summary)
+            }
+            Err(error) => {
+                self.error = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+
     pub fn present(mut self, renderer: &mut Renderer, hardware: &impl Hardware) -> Result<Fixture> {
         self.check_renderer(renderer);
         let vi = hardware.vi();
@@ -105,6 +159,33 @@ impl CaptureFrame {
         let vi = hardware.vi();
         renderer.present_to(&PresentationHardware(vi), target);
         self.finish(vi)
+    }
+
+    /// Presents the last rendered framebuffer without consulting guest memory or VI registers.
+    pub fn present_last(mut self, renderer: &mut Renderer) -> Result<Fixture> {
+        self.check_renderer(renderer);
+        let presented = renderer.present_last();
+        let fixture = self.finish(None)?;
+        presented.map_err(|error| CaptureError::Gpu(format!("presentation failed: {error:?}")))?;
+        Ok(fixture)
+    }
+
+    /// Presents the last rendered framebuffer into `target` without consulting guest memory.
+    pub fn present_last_to(
+        mut self,
+        renderer: &mut Renderer,
+        target: &wgpu::TextureView,
+    ) -> Result<Fixture> {
+        self.check_renderer(renderer);
+        let expected = &self.fixture.frame;
+        if (target.texture().width(), target.texture().height())
+            != (expected.width, expected.height)
+        {
+            self.error
+                .get_or_insert_with(|| invalid("presentation target differs from captured target"));
+        }
+        renderer.present_last_to(target);
+        self.finish(None)
     }
 
     fn check_renderer(&mut self, renderer: &Renderer) {

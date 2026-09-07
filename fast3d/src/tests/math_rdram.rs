@@ -1,5 +1,5 @@
 use crate::hle::math::{identity, mul4, mul_row_vec4};
-use crate::hle::mem::RdramImage;
+use crate::hle::mem::{Rdram, RdramImage};
 use n64_gbi::encode::{mtx_identity_bytes, mtx_to_bytes};
 
 #[test]
@@ -22,15 +22,18 @@ fn translate_lives_in_last_row() {
 fn reads_be_scalars() {
     let buf = [0x12u8, 0x34, 0xFF, 0xFF];
     let r = RdramImage::new(&buf);
-    assert_eq!(r.read_i16(0), 0x1234);
-    assert_eq!(r.read_i16(2), -1);
+    assert_eq!(r.read_i16(0).unwrap(), 0x1234);
+    assert_eq!(r.read_i16(2).unwrap(), -1);
 }
 
 #[test]
 fn decodes_identity_matrix() {
     let b = mtx_identity_bytes();
     let r = RdramImage::new(&b);
-    assert_eq!(r.read_matrix(0), identity());
+    assert_eq!(
+        r.read_matrix(0, crate::DataFormat::Fixed).unwrap(),
+        identity()
+    );
 }
 
 #[test]
@@ -44,5 +47,5 @@ fn nonsymmetric_matrix_round_trips_without_swap() {
     ];
     let b = mtx_to_bytes(m);
     let r = RdramImage::new(&b);
-    assert_eq!(r.read_matrix(0), m);
+    assert_eq!(r.read_matrix(0, crate::DataFormat::Fixed).unwrap(), m);
 }

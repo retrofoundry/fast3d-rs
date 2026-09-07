@@ -1,209 +1,282 @@
-//! `HostRam` — native-endian host-pointer backend for sm64/host ports (fast3d-rs use case).
-//!
-//! The entire safety boundary is the module-level cfg: the web/wasm build never compiles this
-//! unsafe code, and the 16-byte `Gfx` command stride is only valid on a 64-bit host. Addresses
-//! here ARE raw host pointers (`u64`), so every typed read is an `unaligned` read at a byte
-//! offset (N64 structs have fields at odd offsets; an aligned deref would be UB). The `'a` frame
-//! witness ties any borrowed slice to the live DL backing storage so `read_bytes` can't dangle.
+//! Native host-pointer memory for 64-bit ports.
 #![cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 
-use crate::hle::math::Mat4;
-use crate::hle::mem::{Command, GbiDataFormat, RawVertex, Rdram};
+use crate::hle::mem::{
+    Command, GbiDataFormat, Matrix, MemoryError, MemoryErrorKind, RawVertex, Rdram,
+};
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::{marker::PhantomData, ptr};
 use std::borrow::Cow;
+
+fn memory_error(address: u64, length: u64, kind: MemoryErrorKind) -> MemoryError {
+    MemoryError {
+        address,
+        length,
+        kind,
+    }
+}
 
 fn probe_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("HELIX_DL_PROBE").is_ok())
 }
-// Two INDEPENDENT budgets so a flood of routine lines (set_segment / general) can never
-// starve the rare-but-critical NON-IDENTITY resolve signal that Task 2 exists to detect.
+
 static PROBE_LOGS: AtomicU32 = AtomicU32::new(0);
 static PROBE_NONIDENT: AtomicU32 = AtomicU32::new(0);
-fn probe_log(args: core::fmt::Arguments) {
+
+fn probe_log(args: core::fmt::Arguments<'_>) {
     if probe_on() && PROBE_LOGS.fetch_add(1, Ordering::Relaxed) < 128 {
-        eprintln!("[probe/host] {args}");
-    }
-}
-fn probe_log_nonident(args: core::fmt::Arguments) {
-    // Generous, separate budget — non-identity resolves are the signal, not noise.
-    if probe_on() && PROBE_NONIDENT.fetch_add(1, Ordering::Relaxed) < 4096 {
-        eprintln!("[probe/host] {args}");
+        log::trace!(target: "fast3d::host_mem", "{args}");
     }
 }
 
+fn probe_log_nonident(args: core::fmt::Arguments<'_>) {
+    if probe_on() && PROBE_NONIDENT.fetch_add(1, Ordering::Relaxed) < 4096 {
+        log::trace!(target: "fast3d::host_mem", "{args}");
+    }
+}
+
+/// A safe descriptor for one native display-list walk.
+///
+/// The descriptor stores only a lifetime witness and initial raw segment bases. It performs no
+/// reads and does not implement [`Rdram`]. Native memory is interpreted only by the crate's unsafe
+/// host entry point. Its fixed layout uses native-endian 16-byte commands with full-width address
+/// words, unaligned scalar reads, native packed Fixed matrices, 16-byte Fixed vertices, and
+/// 24-byte Float vertices.
+///
+/// ```compile_fail
+/// use fast3d::{HostRam, Rdram};
+///
+/// fn safe_reader(_: impl Rdram) {}
+/// let frame = [];
+/// safe_reader(HostRam::new(&frame));
+/// ```
 pub struct HostRam<'a> {
     pub segments: [u64; 16],
     _frame: PhantomData<&'a [u8]>,
 }
 
 impl<'a> HostRam<'a> {
-    /// Wrap a host frame as a DL memory backend over raw native pointers. The matrix/vertex data
-    /// format is the interpreter's ucode choice (`gbi.data_format`), not a backend default.
+    /// Creates a descriptor tied to the lifetime of the native frame.
     ///
-    /// # Safety
-    ///
-    /// Every address the interpreter resolves through this backend — the `entry` pointer, every
-    /// command operand, and every struct/texture pointer reachable from the walk — must point into
-    /// memory that lives at least as long as `frame` (the `'a` witness). Pointers are dereferenced
-    /// with `read_unaligned`/`from_raw_parts`, so a dangling or out-of-bounds address is UB.
-    pub unsafe fn new(_frame: &'a [u8]) -> Self {
-        HostRam {
+    /// This constructor does not make arbitrary addresses safe to read. The unsafe host processing
+    /// call requires every command and reachable input span to remain allocated, readable,
+    /// initialized, in the documented native layout, and stable until that call returns.
+    pub fn new(_frame: &'a [u8]) -> Self {
+        Self {
             segments: [0; 16],
             _frame: PhantomData,
         }
     }
-}
 
-impl<'a> Rdram for HostRam<'a> {
     #[cfg(feature = "capture")]
-    fn capture_layout(&self) -> Option<crate::capture::SourceLayout> {
-        Some(crate::capture::SourceLayout {
+    pub fn capture_layout(&self) -> crate::capture::SourceLayout {
+        crate::capture::SourceLayout {
             memory: crate::capture::MemoryLayout::host_native(),
             segments: self.segments,
+        }
+    }
+}
+
+pub(crate) struct HostMemory<'a> {
+    ram: HostRam<'a>,
+}
+
+impl<'a> HostMemory<'a> {
+    /// Creates the raw-pointer reader used only for the duration of an unsafe host walk.
+    ///
+    /// # Safety
+    ///
+    /// Every command and reachable input span read during the walk must remain allocated,
+    /// readable, initialized, correctly laid out, and stable until this reader and its borrowed slices are dropped. Borrowed texture bytes must
+    /// not be mutated concurrently. CIMG and ZIMG numeric identities need not be readable unless a
+    /// command uses them as input.
+    pub(crate) unsafe fn new(ram: HostRam<'a>) -> Self {
+        Self { ram }
+    }
+
+    fn checked_span(address: u64, length: u64) -> Result<(), MemoryError> {
+        address
+            .checked_add(length)
+            .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+        Ok(())
+    }
+
+    unsafe fn read_unaligned<T: Copy>(address: u64) -> T {
+        unsafe { ptr::read_unaligned(address as *const T) }
+    }
+}
+
+impl Rdram for HostMemory<'_> {
+    #[cfg(feature = "capture")]
+    fn capture_layout(&self) -> Option<crate::capture::SourceLayout> {
+        Some(self.ram.capture_layout())
+    }
+
+    fn set_segment(&mut self, segment: u32, value: u64) {
+        probe_log(format_args!(
+            "set_segment seg={} value={value:#018x}",
+            segment & 0x0f
+        ));
+        self.ram.segments[(segment & 0x0f) as usize] = value;
+    }
+
+    fn resolve(&self, address: u64) -> Result<u64, MemoryError> {
+        let segment = ((address >> 24) & 0x0f) as usize;
+        let base = self.ram.segments[segment];
+        let resolved = if base == 0 {
+            address
+        } else {
+            base.checked_add(address & 0x00ff_ffff)
+                .ok_or_else(|| memory_error(address, 0, MemoryErrorKind::AddressOverflow))?
+        };
+        if resolved != address {
+            probe_log_nonident(format_args!(
+                "resolve non-identity in={address:#018x} out={resolved:#018x} seg={segment} segval={base:#018x}"
+            ));
+        }
+        Ok(resolved)
+    }
+
+    fn resolve_masked(&self, address: u64) -> Result<u64, MemoryError> {
+        self.resolve(address)
+    }
+
+    fn read_command(&self, address: u64) -> Result<Command, MemoryError> {
+        Self::checked_span(address, 16)?;
+        let second = address + 8;
+        let w0_word = unsafe { Self::read_unaligned::<u64>(address) };
+        let w1_word = unsafe { Self::read_unaligned::<u64>(second) };
+        Ok(Command {
+            w0: w0_word as u32,
+            w1: w1_word as u32,
+            w1_addr: w1_word,
         })
     }
 
-    /// Store a raw 64-bit segment base. We deliberately do NOT mask the value.
-    ///
-    /// CONFIRMED (SP3b HELIX_DL_PROBE, 2026-06-25): sm64's PC port uses identity address
-    /// translation (VIRTUAL_TO_PHYSICAL / segmented_to_virtual are identity; load_segment is a
-    /// no-op) and emits NO `gSPSegment`/`G_MW_SEGMENT` into its gfx DLs — the probe saw zero
-    /// `set_segment` calls and zero non-identity `resolve`s across the captured frames, so
-    /// `segments` stay zero during interpret and `resolve` is pure pass-through. We keep the
-    /// full-width store (no 24-bit mask) so that if a future DL ever sets a host-pointer
-    /// segment base it is not truncated. (fast3d's F3DEX2 `MoveWord SEGMENT` masks to 24-bit,
-    /// which would corrupt a 64-bit host pointer — hence the deliberate divergence here.)
-    fn set_segment(&mut self, seg: u32, value: u64) {
-        probe_log(format_args!(
-            "set_segment seg={} value={:#018x}",
-            seg & 0xF,
-            value
-        ));
-        self.segments[(seg & 0xF) as usize] = value;
-    }
-    fn resolve(&self, a: u64) -> u64 {
-        let s = ((a >> 24) & 0x0F) as usize;
-        let out = if self.segments[s] != 0 {
-            self.segments[s] + (a & 0x00FF_FFFF)
-        } else {
-            a
-        };
-        if out != a {
-            probe_log_nonident(format_args!(
-                "resolve NON-IDENTITY in={a:#018x} out={out:#018x} seg={s} segval={:#018x}",
-                self.segments[s]
-            ));
-        }
-        out
-    }
-    fn resolve_masked(&self, a: u64) -> u64 {
-        self.resolve(a) // NO &0x00FFFFF8 on a pointer
-    }
-    fn read_command(&self, pc: u64) -> Command {
-        let p = pc as *const usize;
-        let w0 = unsafe { ptr::read_unaligned(p) } as u32;
-        let w1u = unsafe { ptr::read_unaligned(p.add(1)) };
-        Command {
-            w0,
-            w1: w1u as u32,
-            w1_addr: w1u as u64,
-        }
-    }
     fn command_stride(&self) -> u64 {
         16
     }
-    fn in_bounds(&self, _pc: u64, _stride: u64) -> bool {
-        true // host DL is G_ENDDL-terminated (fast3d run_dl); DISPATCH_CAP guards runaway
+
+    fn in_bounds(&self, address: u64, length: u64) -> bool {
+        address.checked_add(length).is_some()
     }
-    fn read_u8(&self, a: u64) -> u8 {
-        unsafe { ptr::read_unaligned(a as *const u8) }
+
+    fn read_u8(&self, address: u64) -> Result<u8, MemoryError> {
+        Self::checked_span(address, 1)?;
+        Ok(unsafe { Self::read_unaligned(address) })
     }
-    fn read_i8(&self, a: u64) -> i8 {
-        unsafe { ptr::read_unaligned(a as *const i8) }
+
+    fn read_i8(&self, address: u64) -> Result<i8, MemoryError> {
+        Self::checked_span(address, 1)?;
+        Ok(unsafe { Self::read_unaligned(address) })
     }
-    fn read_i16(&self, a: u64) -> i16 {
-        unsafe { ptr::read_unaligned(a as *const i16) }
+
+    fn read_i16(&self, address: u64) -> Result<i16, MemoryError> {
+        Self::checked_span(address, 2)?;
+        Ok(unsafe { Self::read_unaligned(address) })
     }
-    fn read_u16(&self, a: u64) -> u16 {
-        unsafe { ptr::read_unaligned(a as *const u16) }
+
+    fn read_u16(&self, address: u64) -> Result<u16, MemoryError> {
+        Self::checked_span(address, 2)?;
+        Ok(unsafe { Self::read_unaligned(address) })
     }
-    fn read_bytes<'s>(&'s self, a: u64, len: usize) -> Cow<'s, [u8]> {
-        Cow::Borrowed(unsafe { std::slice::from_raw_parts(a as *const u8, len) })
+
+    fn read_bytes(&self, address: u64, length: usize) -> Result<Cow<'_, [u8]>, MemoryError> {
+        let length_u64 = length as u64;
+        Self::checked_span(address, length_u64)?;
+        if length == 0 {
+            return Ok(Cow::Borrowed(&[]));
+        }
+        if length > isize::MAX as usize {
+            return Err(memory_error(
+                address,
+                length_u64,
+                MemoryErrorKind::AddressOverflow,
+            ));
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(address as *const u8, length) };
+        Ok(Cow::Borrowed(bytes))
     }
-    fn read_matrix(&self, a: u64, fmt: GbiDataFormat) -> Mat4 {
-        match fmt {
-            // Row-major `f32[4][4]`, read verbatim (GBI_FLOATS guMtxF2L is a memcpy).
+
+    fn read_matrix(&self, address: u64, format: GbiDataFormat) -> Result<Matrix, MemoryError> {
+        Self::checked_span(address, 64)?;
+        let mut matrix = [[0.0; 4]; 4];
+        match format {
             GbiDataFormat::Float => {
-                let mut m = [[0.0f32; 4]; 4];
-                for k in 0..16 {
-                    m[k / 4][k % 4] = unsafe { ptr::read_unaligned((a as *const f32).add(k)) };
+                for k in 0..16u64 {
+                    matrix[k as usize / 4][k as usize % 4] =
+                        unsafe { Self::read_unaligned::<f32>(address + k * 4) };
                 }
-                m
             }
-            // s15.16 split: 16 native i32 words, [0..8] integer halves, [8..16] fraction halves;
-            // element (i,j) = (int16 << 16 | frac16) / 65536. Native-endian (matches fast3d).
             GbiDataFormat::Fixed => {
-                let word =
-                    |k: usize| unsafe { ptr::read_unaligned((a as *const i32).add(k)) as u32 };
-                let mut m = [[0.0f32; 4]; 4];
-                for (i, row) in m.iter_mut().enumerate() {
-                    for c in 0..2 {
-                        let int = word(i * 2 + c);
-                        let frac = word(8 + i * 2 + c);
-                        row[c * 2] = (((int & 0xFFFF_0000) | (frac >> 16)) as i32) as f32 / 65536.0;
-                        row[c * 2 + 1] = (((int << 16) | (frac & 0xFFFF)) as i32) as f32 / 65536.0;
+                for (row_index, row) in matrix.iter_mut().enumerate() {
+                    for column_pair in 0..2 {
+                        let word_index = (row_index * 2 + column_pair) as u64;
+                        let integer =
+                            unsafe { Self::read_unaligned::<u32>(address + word_index * 4) };
+                        let fraction =
+                            unsafe { Self::read_unaligned::<u32>(address + (8 + word_index) * 4) };
+                        row[column_pair * 2] =
+                            (((integer & 0xffff_0000) | (fraction >> 16)) as i32) as f32 / 65536.0;
+                        row[column_pair * 2 + 1] =
+                            (((integer << 16) | (fraction & 0xffff)) as i32) as f32 / 65536.0;
                     }
                 }
-                m
             }
         }
+        Ok(matrix)
     }
 
-    /// `GBI_FLOATS` (F3DEX_GBI_2E) `Vtx` is 24 bytes (float ob[3] + flag + tc + cn, padded by the
-    /// `long long` union alignment); authentic fixed-point `Vtx` is 16.
-    fn vertex_stride(&self, fmt: GbiDataFormat) -> u64 {
-        match fmt {
-            GbiDataFormat::Float => 24,
+    fn vertex_stride(&self, format: GbiDataFormat) -> Result<u64, MemoryError> {
+        Ok(match format {
             GbiDataFormat::Fixed => 16,
-        }
+            GbiDataFormat::Float => 24,
+        })
     }
 
-    /// Float layout: `f32 ob[3]@0`, `flag@12`, `tc[2]@14`, `cn[4]@18`. Fixed layout: `s16 ob[3]@0`,
-    /// `flag@6`, `tc[2]@8`, `cn[4]@12`. Reading a float vertex as s16 misreads every position.
-    fn read_vertex(&self, a: u64, fmt: GbiDataFormat) -> RawVertex {
-        match fmt {
-            GbiDataFormat::Float => RawVertex {
+    fn read_vertex(&self, address: u64, format: GbiDataFormat) -> Result<RawVertex, MemoryError> {
+        let length = self.vertex_stride(format)?;
+        Self::checked_span(address, length)?;
+        match format {
+            GbiDataFormat::Float => Ok(RawVertex {
                 pos: unsafe {
                     [
-                        ptr::read_unaligned(a as *const f32),
-                        ptr::read_unaligned((a + 4) as *const f32),
-                        ptr::read_unaligned((a + 8) as *const f32),
+                        Self::read_unaligned(address),
+                        Self::read_unaligned(address + 4),
+                        Self::read_unaligned(address + 8),
                     ]
                 },
-                st: [self.read_i16(a + 14), self.read_i16(a + 16)],
-                rgba: [
-                    self.read_u8(a + 18),
-                    self.read_u8(a + 19),
-                    self.read_u8(a + 20),
-                    self.read_u8(a + 21),
-                ],
-            },
-            GbiDataFormat::Fixed => RawVertex {
+                st: [unsafe { Self::read_unaligned(address + 14) }, unsafe {
+                    Self::read_unaligned(address + 16)
+                }],
+                rgba: unsafe {
+                    [
+                        Self::read_unaligned(address + 18),
+                        Self::read_unaligned(address + 19),
+                        Self::read_unaligned(address + 20),
+                        Self::read_unaligned(address + 21),
+                    ]
+                },
+            }),
+            GbiDataFormat::Fixed => Ok(RawVertex {
                 pos: [
-                    self.read_i16(a) as f32,
-                    self.read_i16(a + 2) as f32,
-                    self.read_i16(a + 4) as f32,
+                    unsafe { Self::read_unaligned::<i16>(address) } as f32,
+                    unsafe { Self::read_unaligned::<i16>(address + 2) } as f32,
+                    unsafe { Self::read_unaligned::<i16>(address + 4) } as f32,
                 ],
-                st: [self.read_i16(a + 8), self.read_i16(a + 10)],
-                rgba: [
-                    self.read_u8(a + 12),
-                    self.read_u8(a + 13),
-                    self.read_u8(a + 14),
-                    self.read_u8(a + 15),
-                ],
-            },
+                st: [unsafe { Self::read_unaligned(address + 8) }, unsafe {
+                    Self::read_unaligned(address + 10)
+                }],
+                rgba: unsafe {
+                    [
+                        Self::read_unaligned(address + 12),
+                        Self::read_unaligned(address + 13),
+                        Self::read_unaligned(address + 14),
+                        Self::read_unaligned(address + 15),
+                    ]
+                },
+            }),
         }
     }
 }

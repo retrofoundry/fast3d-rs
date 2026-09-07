@@ -5,6 +5,7 @@ use crate::hle::consts::rdp::{
     G_SETCOMBINE, G_SETCONVERT, G_SETENVCOLOR, G_SETFILLCOLOR, G_SETFOGCOLOR, G_SETKEYGB,
     G_SETKEYR, G_SETPRIMCOLOR, G_SETPRIMDEPTH, G_SETSCISSOR, G_SETTILE, G_SETTILESIZE, G_SETZIMG,
 };
+use crate::hle::interp::{checked_span, memory_try, read_bytes_exact};
 use crate::hle::interp::{Cmd, Ctx, Handler};
 use crate::hle::mem::Rdram;
 
@@ -271,7 +272,7 @@ fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
                            // saturating_sub guards malformed input (uls > lrs) against u32 underflow/panic.
     let words = (lrs.saturating_sub(uls) >> (4 - siz as u32)) + 1; // RGBA16 siz=2
     let bytes = (words as usize) << 3; // 8 bytes/word (siz<=2)
-    let src = cx.mem.read_bytes(addr, bytes).into_owned();
+    let src = memory_try!(cx, Texture, read_bytes_exact(cx.mem, addr, bytes)).into_owned();
 
     // The load tile's `tmem`/`line` set the faithful write's destination base and DXT row stride
     // (both 0 for a well-formed LoadTextureBlock); the linear copy still feeds the CI decode path
@@ -310,11 +311,15 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let actual_width = width as u32 + 1;
     let bytes_per_row = (actual_width << siz) >> 1;
     let bytes_offset = (uls << siz) >> 1;
-    let texture_start = addr
-        .saturating_add(bytes_offset as u64)
-        .saturating_add(bytes_per_row as u64 * ult as u64);
+    let offset = u64::from(bytes_offset) + u64::from(bytes_per_row) * u64::from(ult);
+    let texture_start = memory_try!(cx, Texture, checked_span(addr, offset));
     let src_len = (row_count as usize - 1) * bytes_per_row as usize + words_per_row as usize * 8;
-    let src = cx.mem.read_bytes(texture_start, src_len).into_owned();
+    let src = memory_try!(
+        cx,
+        Texture,
+        read_bytes_exact(cx.mem, texture_start, src_len)
+    )
+    .into_owned();
 
     // Dest: the load tile's `tmem`/`line` set the destination base and the padded per-row stride.
     let dst_words = cx.rdp.tiles[tile_idx].tmem_addr as usize;
@@ -346,16 +351,7 @@ fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let addr = cx.rdp.tex_image.3;
     let count = c.p1(14, 10) as usize + 1;
     let packed_bytes = count * 2;
-    if addr.checked_add(packed_bytes as u64).is_none()
-        || !cx.mem.in_bounds(addr, packed_bytes as u64)
-    {
-        cx.diags.push(Diagnostic {
-            at: cx.pc,
-            kind: DiagKind::DlPastRdram,
-        });
-        return;
-    }
-    let packed = cx.mem.read_bytes(addr, packed_bytes);
+    let packed = memory_try!(cx, Tlut, read_bytes_exact(cx.mem, addr, packed_bytes));
     let tile = c.p1(24, 3) as usize;
     let dst_word = usize::from(cx.rdp.tiles[tile].tmem_addr);
     cx.rdp.tmem_bank.write_tlut(&packed, count, dst_word);
@@ -366,7 +362,7 @@ fn set_color_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let fmt = c.p0(21, 3) as u8;
     let siz = c.p0(19, 2) as u8;
     let width = (c.p0(0, 12) as u16) + 1;
-    let addr = cx.mem.resolve(c.w1_addr);
+    let addr = memory_try!(cx, Command, cx.mem.resolve(c.w1_addr));
     let new = crate::hle::rsp::ColorImage {
         fmt,
         siz,
@@ -380,7 +376,7 @@ fn set_color_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn set_depth_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    let addr = cx.mem.resolve(c.w1_addr);
+    let addr = memory_try!(cx, Command, cx.mem.resolve(c.w1_addr));
     if addr != cx.rdp.depth_image {
         cx.rdp.depth_image = addr;
         cx.rdp.depth_changed = true;

@@ -26,8 +26,8 @@ renderer.present(&hw)?;
 ```
 
 - **`Hardware`** — your bridge to guest memory. `rdram()` returns an `Rdram` reader —
-  `RdramImage::new(&bytes)` (safe, borrowed) or `unsafe HostRam::new(..)` (raw pointer, native
-  64-bit only) — and `vi()` gives the VI registers that pick the scanout framebuffer.
+  `RdramImage::new(&bytes)` or your own safe reader — and `vi()` gives the VI registers
+  that pick the scanout framebuffer. Native pointer graphs use the unsafe host entry below.
 - **`begin_frame` → `process_dl` → `present`** — reset per-frame state, interpret one display list
   into the internal framebuffer, then scan the VI framebuffer out to the owned surface (or
   `present_to` a view you own).
@@ -36,6 +36,58 @@ renderer.present(&hw)?;
   PC ports like sm64/wafel emit) — select it once with `Renderer::set_data_format`.
 
 Diagnostics stream through a `DiagSink` (`LogSink`, `NopSink`, or your own).
+
+## Memory readers and native ports
+
+`Rdram` reads and address resolution return `Result<_, MemoryError>`.
+`read_bytes(address, length)` returns exactly `length` bytes or an error;
+`in_bounds` is advisory and overflow-safe. Errors carry the requested `u64`
+address, byte length and a `MemoryErrorKind`, without a command PC or logging.
+`Command`, `RawVertex` and `Matrix` are exported from both `fast3d` and
+`fast3d::hardware`. They are decoded values, not guest layouts for casting.
+`Command::w1` contains numeric low bits; address operands use `w1_addr`.
+`Matrix` is `[[f32; 4]; 4]`.
+
+IMAGE readers decode big-endian Fixed data. Segment writes store the raw low
+32 bits; resolution uses bits 24–27 to select a segment and adds the low 24 bits
+with intentional 32-bit wrapping. Masked resolution then applies `0x00ff_fff8`.
+Operands above `u32::MAX` are rejected. Float matrix/vertex requests are errors;
+custom readers can implement their own decoded layouts.
+
+A failed read produces `DiagKind::MemoryRead { access, error }` at the command
+that initiated it. The first memory failure discards that task before GPU
+submission, with `errors > 0`, `tris = 0` and `renderable = false`. Earlier tasks
+remain visible. No source memory is read during presentation.
+
+`HostRam` is a safe descriptor with initial `segments: [u64; 16]`; it no longer
+implements `Rdram`. Replace native `Hardware` adapters with:
+
+```rust
+renderer.set_data_format(fast3d::DataFormat::Fixed);
+renderer.begin_frame();
+let ram = fast3d::HostRam::new(&[]);
+// SAFETY: the submitting guest is blocked; every reachable input stays valid until return.
+let summary = unsafe {
+    renderer.process_dl_host(ram, entry, fast3d::Microcode::F3dex2, &mut diags)
+};
+// The guest can resume here.
+renderer.present_last()?;
+```
+
+Native commands are 16-byte native-endian words with full-width addresses.
+Reads allow unaligned inputs; Fixed matrices use native packed words, and
+Fixed/Float vertices have 16/24-byte strides. Every reachable input must be
+allocated, readable, initialized in that layout and stable until consumption
+returns. The lifetime witness does not establish pointer validity, and the
+dispatch cap only bounds liveness. CIMG/ZIMG are GPU target identities and need
+not be readable unless a command uses them as input. `present_last_to(view)`
+scans out to a caller-owned view.
+
+With `capture`, use the equivalent unsafe
+`CaptureFrame::process_dl_host(&mut renderer, ram, entry, microcode, data_format, &mut diags)`.
+It owns all recorded spans before returning; `present_last(&mut renderer)` or
+`present_last_to(&mut renderer, view)` and fixture serialization can run after
+the guest resumes. Replay reads owned spans through the safe fallible API.
 
 ## Convert and key registers
 

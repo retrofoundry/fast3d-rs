@@ -22,13 +22,13 @@ impl Rdram for Traced<'_> {
     fn set_segment(&mut self, segment: u32, value: u64) {
         Rdram::set_segment(&mut self.image, segment, value);
     }
-    fn resolve(&self, address: u64) -> u64 {
+    fn resolve(&self, address: u64) -> Result<u64, crate::MemoryError> {
         self.image.resolve(address)
     }
-    fn resolve_masked(&self, address: u64) -> u64 {
+    fn resolve_masked(&self, address: u64) -> Result<u64, crate::MemoryError> {
         self.image.resolve_masked(address)
     }
-    fn read_command(&self, address: u64) -> Command {
+    fn read_command(&self, address: u64) -> Result<Command, crate::MemoryError> {
         self.reads.borrow_mut().push(address);
         self.image.read_command(address)
     }
@@ -38,22 +38,30 @@ impl Rdram for Traced<'_> {
     fn in_bounds(&self, address: u64, size: u64) -> bool {
         self.image.in_bounds(address, size)
     }
-    fn read_u8(&self, address: u64) -> u8 {
+    fn read_u8(&self, address: u64) -> Result<u8, crate::MemoryError> {
         Rdram::read_u8(&self.image, address)
     }
-    fn read_i8(&self, address: u64) -> i8 {
+    fn read_i8(&self, address: u64) -> Result<i8, crate::MemoryError> {
         Rdram::read_i8(&self.image, address)
     }
-    fn read_u16(&self, address: u64) -> u16 {
+    fn read_u16(&self, address: u64) -> Result<u16, crate::MemoryError> {
         Rdram::read_u16(&self.image, address)
     }
-    fn read_i16(&self, address: u64) -> i16 {
+    fn read_i16(&self, address: u64) -> Result<i16, crate::MemoryError> {
         Rdram::read_i16(&self.image, address)
     }
-    fn read_bytes(&self, address: u64, size: usize) -> std::borrow::Cow<'_, [u8]> {
+    fn read_bytes(
+        &self,
+        address: u64,
+        size: usize,
+    ) -> Result<std::borrow::Cow<'_, [u8]>, crate::MemoryError> {
         self.image.read_bytes(address, size)
     }
-    fn read_matrix(&self, address: u64, format: GbiDataFormat) -> crate::hle::math::Mat4 {
+    fn read_matrix(
+        &self,
+        address: u64,
+        format: GbiDataFormat,
+    ) -> Result<crate::hle::math::Mat4, crate::MemoryError> {
         Rdram::read_matrix(&self.image, address, format)
     }
 }
@@ -449,20 +457,27 @@ impl Rdram for &NativeCommands {
     fn set_segment(&mut self, _: u32, _: u64) {
         panic!("unexpected segment write")
     }
-    fn resolve(&self, address: u64) -> u64 {
-        address
+    fn resolve(&self, address: u64) -> Result<u64, crate::MemoryError> {
+        Ok(address)
     }
-    fn resolve_masked(&self, address: u64) -> u64 {
-        address
+    fn resolve_masked(&self, address: u64) -> Result<u64, crate::MemoryError> {
+        Ok(address)
     }
-    fn read_command(&self, address: u64) -> Command {
+    fn read_command(&self, address: u64) -> Result<Command, crate::MemoryError> {
         self.reads.borrow_mut().push(address);
+        if !self.in_bounds(address, 16) {
+            return Err(crate::MemoryError {
+                address,
+                length: 16,
+                kind: crate::MemoryErrorKind::OutOfBounds,
+            });
+        }
         let (w0, w1_addr) = self.commands[((address - self.base) / 16) as usize];
-        Command {
+        Ok(Command {
             w0,
             w1: w1_addr as u32,
             w1_addr,
-        }
+        })
     }
     fn command_stride(&self) -> u64 {
         16
@@ -473,35 +488,47 @@ impl Rdram for &NativeCommands {
             .and_then(|a| a.checked_add(size))
             .is_some_and(|end| end <= self.commands.len() as u64 * 16)
     }
-    fn read_u8(&self, _: u64) -> u8 {
+    fn read_u8(&self, _: u64) -> Result<u8, crate::MemoryError> {
         panic!("unexpected byte read")
     }
-    fn read_i8(&self, _: u64) -> i8 {
+    fn read_i8(&self, _: u64) -> Result<i8, crate::MemoryError> {
         panic!("unexpected byte read")
     }
-    fn read_u16(&self, _: u64) -> u16 {
+    fn read_u16(&self, _: u64) -> Result<u16, crate::MemoryError> {
         panic!("unexpected halfword read")
     }
-    fn read_i16(&self, _: u64) -> i16 {
+    fn read_i16(&self, _: u64) -> Result<i16, crate::MemoryError> {
         panic!("unexpected halfword read")
     }
-    fn read_bytes(&self, _: u64, _: usize) -> std::borrow::Cow<'_, [u8]> {
+    fn read_bytes(
+        &self,
+        _: u64,
+        _: usize,
+    ) -> Result<std::borrow::Cow<'_, [u8]>, crate::MemoryError> {
         panic!("unexpected byte read")
     }
-    fn read_matrix(&self, address: u64, _: GbiDataFormat) -> crate::hle::math::Mat4 {
+    fn read_matrix(
+        &self,
+        address: u64,
+        _: GbiDataFormat,
+    ) -> Result<crate::hle::math::Mat4, crate::MemoryError> {
         assert_eq!(address, 0x2000);
-        self.matrix
+        Ok(self.matrix)
     }
-    fn vertex_stride(&self, _: GbiDataFormat) -> u64 {
-        24
+    fn vertex_stride(&self, _: GbiDataFormat) -> Result<u64, crate::MemoryError> {
+        Ok(24)
     }
-    fn read_vertex(&self, address: u64, _: GbiDataFormat) -> crate::hle::mem::RawVertex {
+    fn read_vertex(
+        &self,
+        address: u64,
+        _: GbiDataFormat,
+    ) -> Result<crate::hle::mem::RawVertex, crate::MemoryError> {
         assert_eq!(address, 0x1000);
-        crate::hle::mem::RawVertex {
+        Ok(crate::hle::mem::RawVertex {
             pos: self.position,
             st: [0; 2],
             rgba: [255; 4],
-        }
+        })
     }
 }
 

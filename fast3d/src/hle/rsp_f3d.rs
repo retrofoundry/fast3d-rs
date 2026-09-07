@@ -7,6 +7,7 @@ use crate::hle::consts::rsp_f3d::{
     G_SETGEOMETRYMODE, G_SETOTHERMODE_H, G_SETOTHERMODE_L, G_SPNOOP, G_SPRITE2D_BASE, G_TEXTURE,
     G_TRI1, G_VTX,
 };
+use crate::hle::interp::memory_try;
 use crate::hle::interp::{Cmd, Ctx, Handler};
 use crate::hle::mem::Rdram;
 use crate::{DiagKind, Diagnostic};
@@ -55,8 +56,8 @@ fn no_op<M: Rdram>(_c: &Cmd, _cx: &mut Ctx<M>) {}
 
 fn matrix<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let params = c.p0(16, 8) as u8;
-    let addr = cx.mem.resolve_masked(c.w1_addr);
-    cx.rsp.matrix(cx.mem, addr, params);
+    let addr = memory_try!(cx, Matrix, cx.mem.resolve_masked(c.w1_addr));
+    memory_try!(cx, Matrix, cx.rsp.matrix(cx.mem, addr, params));
 }
 
 fn vtx<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
@@ -64,9 +65,13 @@ fn vtx<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let dst = c.p0(16, 4);
     let end = dst + count;
     if end <= 16 {
-        let addr = cx.mem.resolve_masked(c.w1_addr);
-        cx.rsp
-            .set_vertex(cx.mem, addr, count, dst, cx.rdp, cx.scene);
+        let addr = memory_try!(cx, Vertex, cx.mem.resolve_masked(c.w1_addr));
+        memory_try!(
+            cx,
+            Vertex,
+            cx.rsp
+                .set_vertex(cx.mem, addr, count, dst, cx.rdp, cx.scene)
+        );
     } else {
         cx.diags.push(Diagnostic {
             at: cx.pc,
@@ -142,25 +147,25 @@ fn move_mem<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let idx = c.p0(16, 8) as u8;
     match idx {
         G_MV_VIEWPORT => {
-            let addr = cx.mem.resolve_masked(c.w1_addr);
-            cx.rsp.set_viewport(cx.mem, addr);
+            let addr = memory_try!(cx, Viewport, cx.mem.resolve_masked(c.w1_addr));
+            memory_try!(cx, Viewport, cx.rsp.set_viewport(cx.mem, addr));
         }
         G_MV_LOOKATY => {
-            let addr = cx.mem.resolve_masked(c.w1_addr);
-            cx.rsp.set_lookat(cx.mem, 1, addr);
+            let addr = memory_try!(cx, LookAt, cx.mem.resolve_masked(c.w1_addr));
+            memory_try!(cx, LookAt, cx.rsp.set_lookat(cx.mem, 1, addr));
         }
         G_MV_LOOKATX => {
-            let addr = cx.mem.resolve_masked(c.w1_addr);
-            cx.rsp.set_lookat(cx.mem, 0, addr);
+            let addr = memory_try!(cx, LookAt, cx.mem.resolve_masked(c.w1_addr));
+            memory_try!(cx, LookAt, cx.rsp.set_lookat(cx.mem, 0, addr));
         }
         0x86..=0x94 if idx & 1 == 0 => {
             let light_idx = ((idx - 0x86) / 2) as u32;
-            let addr = cx.mem.resolve_masked(c.w1_addr);
-            cx.rsp.set_light(cx.mem, light_idx, addr);
+            let addr = memory_try!(cx, Light, cx.mem.resolve_masked(c.w1_addr));
+            memory_try!(cx, Light, cx.rsp.set_light(cx.mem, light_idx, addr));
         }
         G_MV_MATRIX_1 => {
-            let addr = cx.mem.resolve_masked(c.w1_addr);
-            cx.rsp.force_matrix(cx.mem, addr);
+            let addr = memory_try!(cx, Matrix, cx.mem.resolve_masked(c.w1_addr));
+            memory_try!(cx, Matrix, cx.rsp.force_matrix(cx.mem, addr));
         }
         G_MV_MATRIX_2 | G_MV_MATRIX_3 | G_MV_MATRIX_4 | G_MV_TXTATT => {}
         _ => cx.diags.push(Diagnostic {
@@ -235,7 +240,7 @@ fn set_texture_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let siz = c.p0(19, 2) as u8;
     // The width field is (actual_width - 1), but tex_image stores the field value directly.
     let width = (c.w0 & 0xFFF) as u16;
-    let addr = cx.mem.resolve(c.w1_addr);
+    let addr = memory_try!(cx, Texture, cx.mem.resolve(c.w1_addr));
     cx.rsp.set_texture_image(fmt, siz, width, addr, cx.rdp);
 }
 
@@ -1431,8 +1436,8 @@ mod phase6_tests {
         let bytes = std::fs::read(&path)
             .unwrap_or_else(|error| panic!("failed to read FAST3D_SM64_ROM at {path:?}: {error}"));
         let mut mem = RdramImage::new(&bytes);
-        mem.set_segment(7, env_hex_u32("FAST3D_SM64_SEGMENT_07"));
-        let entry = mem.from_segmented_masked(BOB_DL_ENTRY);
+        mem.set_segment(7, u64::from(env_hex_u32("FAST3D_SM64_SEGMENT_07")));
+        let entry = mem.from_segmented_masked(u64::from(BOB_DL_ENTRY)).unwrap();
         assert!(
             entry as usize + 8 <= bytes.len(),
             "resolved BOB DL entry {entry:#010X} lies outside the prepared image"
@@ -1440,7 +1445,7 @@ mod phase6_tests {
 
         let result = interpret(
             mem,
-            entry as u64,
+            entry,
             GbiUcode::F3d,
             crate::hle::mem::GbiDataFormat::Fixed,
         );

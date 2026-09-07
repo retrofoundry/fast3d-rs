@@ -270,8 +270,8 @@ mod host {
     use super::*;
     use fast3d::capture::{CaptureFrame, Provenance};
     use fast3d::{
-        ClearPolicy, DataFormat, DiagKind, Hardware, HostRam, Microcode, PresentTarget, Rdram,
-        RdramImage, Renderer, RendererConfig,
+        ClearPolicy, DataFormat, DiagKind, HostRam, Microcode, PresentTarget, Renderer,
+        RendererConfig,
     };
 
     struct HostGraph {
@@ -302,20 +302,6 @@ mod host {
 
         fn entry(&self) -> u64 {
             self.root.as_ptr() as u64
-        }
-    }
-
-    impl Hardware for HostGraph {
-        fn rdram(&self) -> impl Rdram + '_ {
-            // Both allocations stay owned by this borrow for the entire display-list walk.
-            unsafe { HostRam::new(&[]) }
-        }
-    }
-
-    struct PresentationHardware;
-    impl Hardware for PresentationHardware {
-        fn rdram(&self) -> impl Rdram + '_ {
-            RdramImage::new(&[])
         }
     }
 
@@ -356,7 +342,9 @@ mod host {
         receiver.recv().unwrap().unwrap();
         let mapped = buffer.slice(..).get_mapped_range();
         let pixels = mapped
-            .chunks_exact(stride as usize)
+            .as_chunks::<512>()
+            .0
+            .iter()
             .flat_map(|row| row[..65 * 4].iter().copied())
             .collect();
         drop(mapped);
@@ -404,40 +392,50 @@ mod host {
             );
             let mut diagnostics = vec![Vec::new(), Vec::new()];
             let mut raw_diagnostics = vec![Vec::new(), Vec::new()];
-            let raw_first = raw_renderer.process_dl(
-                &hardware,
-                hardware.entry(),
-                Microcode::F3d,
-                &mut raw_diagnostics[0],
-            );
-            let first = frame
-                .process_dl(
+            // The graph owns both command allocations and remains blocked and unchanged here.
+            let raw_first = unsafe {
+                raw_renderer.process_dl_host(
+                    HostRam::new(&[]),
+                    hardware.entry(),
+                    Microcode::F3d,
+                    &mut raw_diagnostics[0],
+                )
+            };
+            // Recording finishes before either command allocation can be changed or released.
+            let first = unsafe {
+                frame.process_dl_host(
                     &mut renderer,
-                    &hardware,
+                    HostRam::new(&[]),
                     hardware.entry(),
                     Microcode::F3d,
                     DataFormat::Fixed,
                     &mut diagnostics[0],
                 )
-                .unwrap();
+            }
+            .unwrap();
             hardware.child[4][1] = 0x003F_003F;
             hardware.child[5] = [0xF606_0060, 0x0002_0020];
-            let raw_second = raw_renderer.process_dl(
-                &hardware,
-                hardware.entry(),
-                Microcode::F3d,
-                &mut raw_diagnostics[1],
-            );
-            let second = frame
-                .process_dl(
+            // The graph owns both command allocations and remains blocked and unchanged here.
+            let raw_second = unsafe {
+                raw_renderer.process_dl_host(
+                    HostRam::new(&[]),
+                    hardware.entry(),
+                    Microcode::F3d,
+                    &mut raw_diagnostics[1],
+                )
+            };
+            // Recording finishes before either command allocation can be changed or released.
+            let second = unsafe {
+                frame.process_dl_host(
                     &mut renderer,
-                    &hardware,
+                    HostRam::new(&[]),
                     hardware.entry(),
                     Microcode::F3d,
                     DataFormat::Fixed,
                     &mut diagnostics[1],
                 )
-                .unwrap();
+            }
+            .unwrap();
             drop(hardware);
             let target_descriptor = wgpu::TextureDescriptor {
                 label: Some("live-capture-target"),
@@ -455,16 +453,9 @@ mod host {
             };
             let target = device.create_texture(&target_descriptor);
             let raw_target = device.create_texture(&target_descriptor);
-            raw_renderer.present_to(
-                &PresentationHardware,
-                &raw_target.create_view(&Default::default()),
-            );
+            raw_renderer.present_last_to(&raw_target.create_view(&Default::default()));
             let fixture = frame
-                .present_to(
-                    &mut renderer,
-                    &PresentationHardware,
-                    &target.create_view(&Default::default()),
-                )
+                .present_last_to(&mut renderer, &target.create_view(&Default::default()))
                 .unwrap();
             let live_pixels = read_pixels(&renderer, &target);
             let raw_live_pixels = read_pixels(&raw_renderer, &raw_target);

@@ -5,6 +5,7 @@ use crate::hle::consts::rsp_f3dex2::{
     G_QUAD, G_SETOTHERMODE_H, G_SETOTHERMODE_L, G_SPECIAL_1, G_SPECIAL_2, G_SPECIAL_3, G_SPNOOP,
     G_TEXTURE, G_TRI1, G_TRI2, G_VTX,
 };
+use crate::hle::interp::memory_try;
 use crate::hle::interp::{Cmd, Ctx, Handler};
 use crate::hle::mem::Rdram;
 use crate::hle::rsp::RSP_MAX_VERTICES;
@@ -56,9 +57,13 @@ fn vtx<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let end = c.p0(1, 7);
     match end.checked_sub(count) {
         Some(dst) if (dst + count) as usize <= RSP_MAX_VERTICES => {
-            let addr = cx.mem.resolve_masked(c.w1_addr);
-            cx.rsp
-                .set_vertex(cx.mem, addr, count, dst, cx.rdp, cx.scene);
+            let addr = memory_try!(cx, Vertex, cx.mem.resolve_masked(c.w1_addr));
+            memory_try!(
+                cx,
+                Vertex,
+                cx.rsp
+                    .set_vertex(cx.mem, addr, count, dst, cx.rdp, cx.scene)
+            );
         }
         _ => cx.diags.push(Diagnostic {
             at: cx.pc,
@@ -134,27 +139,32 @@ fn geometry_mode<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn matrix<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    let addr = cx.mem.resolve_masked(c.w1_addr);
-    cx.rsp.matrix(
-        cx.mem,
-        addr,
-        (c.p0(0, 8) ^ cx.gbi_consts.mtx_param_xor as u32) as u8,
+    let addr = memory_try!(cx, Matrix, cx.mem.resolve_masked(c.w1_addr));
+    memory_try!(
+        cx,
+        Matrix,
+        cx.rsp.matrix(
+            cx.mem,
+            addr,
+            (c.p0(0, 8) ^ cx.gbi_consts.mtx_param_xor as u32) as u8,
+        )
     );
 }
 
 fn move_mem<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let idx = c.p0(0, 8);
     if idx == cx.gbi_consts.g_mv_viewport as u32 {
-        let addr = cx.mem.resolve_masked(c.w1_addr);
-        cx.rsp.set_viewport(cx.mem, addr);
+        let addr = memory_try!(cx, Viewport, cx.mem.resolve_masked(c.w1_addr));
+        memory_try!(cx, Viewport, cx.rsp.set_viewport(cx.mem, addr));
     } else if idx == cx.gbi_consts.g_mv_light as u32 {
         let byte_off = c.p0(8, 8) * 8;
         let light_idx = byte_off / 24;
-        let addr = cx.mem.resolve_masked(c.w1_addr);
         if light_idx >= 2 {
-            cx.rsp.set_light(cx.mem, light_idx - 2, addr);
+            let addr = memory_try!(cx, Light, cx.mem.resolve_masked(c.w1_addr));
+            memory_try!(cx, Light, cx.rsp.set_light(cx.mem, light_idx - 2, addr));
         } else {
-            cx.rsp.set_lookat(cx.mem, light_idx, addr); // slots 0/1 = LookAt S/T
+            let addr = memory_try!(cx, LookAt, cx.mem.resolve_masked(c.w1_addr));
+            memory_try!(cx, LookAt, cx.rsp.set_lookat(cx.mem, light_idx, addr));
         }
     } else {
         cx.diags.push(Diagnostic {
@@ -196,7 +206,7 @@ fn set_texture_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let siz = c.p0(19, 2) as u8;
     // The width field is (actual_width - 1), but tex_image stores the field value directly.
     let width = (c.w0 & 0xFFF) as u16;
-    let addr = cx.mem.resolve(c.w1_addr);
+    let addr = memory_try!(cx, Texture, cx.mem.resolve(c.w1_addr));
     cx.rsp.set_texture_image(fmt, siz, width, addr, cx.rdp);
 }
 

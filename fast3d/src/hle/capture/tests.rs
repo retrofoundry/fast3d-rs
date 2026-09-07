@@ -1,5 +1,5 @@
 use super::*;
-use crate::{DataFormat, Hardware, Rdram, RdramImage};
+use crate::{DataFormat, Hardware, MemoryError, MemoryErrorKind, Rdram, RdramImage};
 
 struct Image(Vec<u8>);
 impl Hardware for Image {
@@ -8,29 +8,428 @@ impl Hardware for Image {
     }
 }
 
+struct TypedCommandFailure(Vec<u8>);
+
+struct TypedCommandFailureMemory<'a>(RdramImage<'a>);
+
+impl Hardware for TypedCommandFailure {
+    fn rdram(&self) -> impl Rdram + '_ {
+        TypedCommandFailureMemory(RdramImage::new(&self.0))
+    }
+}
+
+impl Rdram for TypedCommandFailureMemory<'_> {
+    fn capture_layout(&self) -> Option<SourceLayout> {
+        self.0.capture_layout()
+    }
+
+    fn set_segment(&mut self, segment: u32, value: u64) {
+        self.0.set_segment(segment, value);
+    }
+
+    fn resolve(&self, address: u64) -> std::result::Result<u64, MemoryError> {
+        self.0.resolve(address)
+    }
+
+    fn resolve_masked(&self, address: u64) -> std::result::Result<u64, MemoryError> {
+        self.0.resolve_masked(address)
+    }
+
+    fn read_command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
+        Err(MemoryError {
+            address,
+            length: 8,
+            kind: MemoryErrorKind::Unavailable,
+        })
+    }
+
+    fn command_stride(&self) -> u64 {
+        self.0.command_stride()
+    }
+
+    fn in_bounds(&self, address: u64, length: u64) -> bool {
+        self.0.in_bounds(address, length)
+    }
+
+    fn read_u8(&self, address: u64) -> std::result::Result<u8, MemoryError> {
+        self.0.read_u8(address)
+    }
+
+    fn read_i8(&self, address: u64) -> std::result::Result<i8, MemoryError> {
+        self.0.read_i8(address)
+    }
+
+    fn read_i16(&self, address: u64) -> std::result::Result<i16, MemoryError> {
+        self.0.read_i16(address)
+    }
+
+    fn read_u16(&self, address: u64) -> std::result::Result<u16, MemoryError> {
+        self.0.read_u16(address)
+    }
+
+    fn read_bytes(
+        &self,
+        address: u64,
+        length: usize,
+    ) -> std::result::Result<std::borrow::Cow<'_, [u8]>, MemoryError> {
+        self.0.read_bytes(address, length)
+    }
+
+    fn read_matrix(
+        &self,
+        address: u64,
+        format: DataFormat,
+    ) -> std::result::Result<crate::Matrix, MemoryError> {
+        self.0.read_matrix(address, format)
+    }
+
+    fn vertex_stride(&self, format: DataFormat) -> std::result::Result<u64, MemoryError> {
+        self.0.vertex_stride(format)
+    }
+
+    fn read_vertex(
+        &self,
+        address: u64,
+        format: DataFormat,
+    ) -> std::result::Result<RawVertex, MemoryError> {
+        self.0.read_vertex(address, format)
+    }
+
+    fn is_rdram_image(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn recording_preserves_typed_failure_when_bytes_are_available() {
+    let hardware = TypedCommandFailure(vec![0xdf, 0, 0, 0, 0, 0, 0, 0]);
+    let direct = crate::hle::interpret(
+        hardware.rdram(),
+        0,
+        crate::hle::gbi::GbiUcode::F3dex2,
+        DataFormat::Fixed,
+    );
+    let recording = RecordingHardware::new(&hardware);
+    let captured = crate::hle::interpret(
+        recording.rdram(),
+        0,
+        crate::hle::gbi::GbiUcode::F3dex2,
+        DataFormat::Fixed,
+    );
+    assert_eq!(captured.diags, direct.diags);
+    assert_eq!(captured.commands, direct.commands);
+    assert_eq!(
+        recording.finish(0, Microcode::F3dex2, DataFormat::Fixed, 0),
+        Err(CaptureError::MissingSpan {
+            address: 0,
+            length: 8,
+        })
+    );
+}
+
 #[test]
 fn capture_missing_span_is_error() {
     let hw = Image(vec![0xdf, 0, 0, 0, 0, 0, 0, 0]);
     let recorder = RecordingHardware::new(&hw);
     let mem = recorder.rdram();
-    assert_eq!(mem.read_command(0).w0, 0xdf00_0000);
+    assert_eq!(mem.read_command(0).unwrap().w0, 0xdf00_0000);
     drop(mem);
     let task = recorder
         .finish(0, crate::Microcode::F3dex2, DataFormat::Fixed, 0)
         .unwrap();
     let replay = ReplayHardware::new(&task, None).unwrap();
-    assert_eq!(replay.rdram().read_command(0).w0, 0xdf00_0000);
+    assert_eq!(replay.rdram().read_command(0).unwrap().w0, 0xdf00_0000);
     assert!(replay.check().is_ok());
     assert!(!replay.rdram().in_bounds(8, 8));
+    assert!(replay.check().is_ok());
+    assert_eq!(
+        replay.rdram().read_bytes(7, 2),
+        Err(MemoryError {
+            address: 7,
+            length: 2,
+            kind: MemoryErrorKind::Unavailable,
+        })
+    );
     assert!(matches!(
         replay.check(),
         Err(CaptureError::MissingSpan {
-            address: 8,
-            length: 8
+            address: 7,
+            length: 2
         })
     ));
-    assert_eq!(&*replay.rdram().read_bytes(7, 2), &[0, 0]);
-    assert!(replay.check().is_err());
+}
+
+#[test]
+fn recording_preserves_borrowed_bytes() {
+    let hardware = Image(vec![11, 22, 33, 44]);
+    let recording = RecordingHardware::new(&hardware);
+    let memory = recording.rdram();
+    let bytes = memory.read_bytes(1, 2).unwrap();
+    assert!(matches!(bytes, std::borrow::Cow::Borrowed(&[22, 33])));
+}
+
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn replay_huge_missing_range_does_not_require_proportional_allocation() {
+    let task = Task {
+        entry: 0,
+        microcode: Microcode::F3dex2,
+        data_format: DataFormat::Fixed,
+        order: 0,
+        source: SourceLayout {
+            memory: MemoryLayout::HOST64_LE,
+            segments: [0; 16],
+        },
+        spans: vec![MemorySpan {
+            address: 0,
+            bytes: vec![0],
+        }],
+    };
+    let replay = ReplayHardware::new(&task, None).unwrap();
+    assert_eq!(
+        replay.rdram().read_bytes(0, usize::MAX),
+        Err(MemoryError {
+            address: 0,
+            length: u64::MAX,
+            kind: MemoryErrorKind::Unavailable,
+        })
+    );
+    assert_eq!(
+        replay.check(),
+        Err(CaptureError::MissingSpan {
+            address: 0,
+            length: u64::MAX,
+        })
+    );
+}
+
+#[test]
+fn replay_vertex_missing_fields_report_the_full_typed_span() {
+    for (memory, format, available, stride) in [
+        (MemoryLayout::IMAGE, DataFormat::Fixed, 15, 16),
+        (MemoryLayout::HOST64_LE, DataFormat::Float, 21, 24),
+    ] {
+        let task = Task {
+            entry: 0,
+            microcode: Microcode::F3dex2,
+            data_format: format,
+            order: 0,
+            source: SourceLayout {
+                memory,
+                segments: [0; 16],
+            },
+            spans: vec![MemorySpan {
+                address: 0,
+                bytes: vec![0; available],
+            }],
+        };
+        let replay = ReplayHardware::new(&task, None).unwrap();
+        assert_eq!(
+            replay.rdram().read_vertex(0, format),
+            Err(MemoryError {
+                address: 0,
+                length: stride,
+                kind: MemoryErrorKind::Unavailable,
+            })
+        );
+        assert_eq!(
+            replay.check(),
+            Err(CaptureError::MissingSpan {
+                address: 0,
+                length: stride,
+            })
+        );
+    }
+}
+
+#[test]
+fn capture_vertex_requires_the_complete_source_stride() {
+    let hw = Image(vec![0; 15]);
+    let recorder = RecordingHardware::new(&hw);
+    assert_eq!(
+        recorder.rdram().read_vertex(0, DataFormat::Fixed),
+        Err(MemoryError {
+            address: 0,
+            length: 16,
+            kind: MemoryErrorKind::OutOfBounds,
+        })
+    );
+    assert_eq!(
+        recorder.finish(0, Microcode::F3dex2, DataFormat::Fixed, 0),
+        Err(CaptureError::MissingSpan {
+            address: 0,
+            length: 16,
+        })
+    );
+}
+
+#[test]
+fn image_float_typed_reads_are_unsupported() {
+    let hw = Image(vec![0; 64]);
+    let matrix = RecordingHardware::new(&hw);
+    assert_eq!(
+        matrix.rdram().read_matrix(0, DataFormat::Float),
+        Err(MemoryError {
+            address: 0,
+            length: 64,
+            kind: MemoryErrorKind::UnsupportedFormat,
+        })
+    );
+
+    let vertex = RecordingHardware::new(&hw);
+    assert_eq!(
+        vertex.rdram().read_vertex(0, DataFormat::Float),
+        Err(MemoryError {
+            address: 0,
+            length: 24,
+            kind: MemoryErrorKind::UnsupportedFormat,
+        })
+    );
+}
+
+#[test]
+fn recording_and_replay_reject_every_missing_input_kind() {
+    use crate::{DiagKind, MemoryAccess};
+
+    type FailureCase = (Vec<(u32, u32)>, MemoryAccess, u64, u64, u64);
+    let cases: [FailureCase; 10] = [
+        (vec![], MemoryAccess::Command, 0, 0, 8),
+        (vec![(0xe400_0000, 0)], MemoryAccess::Continuation, 0, 8, 8),
+        (
+            vec![(0xe400_0000, 0), (0xe100_0000, 0)],
+            MemoryAccess::Continuation,
+            0,
+            16,
+            8,
+        ),
+        (
+            vec![(0x0100_1002, 0x1000)],
+            MemoryAccess::Vertex,
+            0,
+            0x1000,
+            16,
+        ),
+        (
+            vec![(0xda38_0002, 0x1000)],
+            MemoryAccess::Matrix,
+            0,
+            0x1000,
+            64,
+        ),
+        (
+            vec![(0xdc08_0008, 0x1000)],
+            MemoryAccess::Viewport,
+            0,
+            0x1000,
+            2,
+        ),
+        (
+            vec![(0xdc08_060a, 0x1000)],
+            MemoryAccess::Light,
+            0,
+            0x1000,
+            1,
+        ),
+        (
+            vec![(0xdc08_000a, 0x1000)],
+            MemoryAccess::LookAt,
+            0,
+            0x1008,
+            1,
+        ),
+        (
+            vec![(0xfd10_0000, 0x1000), (0xf300_0000, 0)],
+            MemoryAccess::Texture,
+            8,
+            0x1000,
+            8,
+        ),
+        (
+            vec![(0xfd10_0000, 0x1000), (0xf000_0000, 0x0700_4000)],
+            MemoryAccess::Tlut,
+            8,
+            0x1000,
+            4,
+        ),
+    ];
+
+    for (commands, access, at, address, length) in cases {
+        let bytes: Vec<u8> = commands
+            .iter()
+            .flat_map(|&(w0, w1)| w0.to_be_bytes().into_iter().chain(w1.to_be_bytes()))
+            .collect();
+        let direct = crate::hle::interpret(
+            RdramImage::new(&bytes),
+            0,
+            crate::hle::gbi::GbiUcode::F3dex2,
+            DataFormat::Fixed,
+        );
+        let hardware = Image(bytes.clone());
+        let recording = RecordingHardware::new(&hardware);
+        let captured = crate::hle::interpret(
+            recording.rdram(),
+            0,
+            crate::hle::gbi::GbiUcode::F3dex2,
+            DataFormat::Fixed,
+        );
+        assert_eq!(captured.diags, direct.diags, "recording {access:?}");
+        assert_eq!(captured.commands, direct.commands, "recording {access:?}");
+        assert_eq!(
+            recording.finish(0, Microcode::F3dex2, DataFormat::Fixed, 0),
+            Err(CaptureError::MissingSpan { address, length }),
+            "recording {access:?}"
+        );
+
+        let task = Task {
+            entry: 0,
+            microcode: Microcode::F3dex2,
+            data_format: DataFormat::Fixed,
+            order: 0,
+            source: SourceLayout {
+                memory: MemoryLayout::IMAGE,
+                segments: [0; 16],
+            },
+            spans: if bytes.is_empty() {
+                vec![]
+            } else {
+                vec![MemorySpan { address: 0, bytes }]
+            },
+        };
+        let replay = ReplayHardware::new(&task, None).unwrap();
+        let replayed = crate::hle::interpret(
+            replay.rdram(),
+            0,
+            crate::hle::gbi::GbiUcode::F3dex2,
+            DataFormat::Fixed,
+        );
+        assert_eq!(replayed.commands, direct.commands, "replay {access:?}");
+        assert!(
+            matches!(
+                replayed.diags.as_slice(),
+                [crate::Diagnostic {
+                    at: diagnostic_at,
+                    kind: DiagKind::MemoryRead {
+                        access: diagnostic_access,
+                        error: MemoryError {
+                            address: diagnostic_address,
+                            length: diagnostic_length,
+                            kind: MemoryErrorKind::Unavailable,
+                        },
+                    },
+                }] if *diagnostic_at == at
+                    && *diagnostic_access == access
+                    && *diagnostic_address == address
+                    && *diagnostic_length == length
+            ),
+            "replay {access:?}: {:?}",
+            replayed.diags
+        );
+        assert_eq!(
+            replay.check(),
+            Err(CaptureError::MissingSpan { address, length }),
+            "replay {access:?}"
+        );
+    }
 }
 
 fn frame() -> Frame {
@@ -67,7 +466,7 @@ fn fixture(task: Task) -> Fixture {
 fn fixture_container_rejects_corruption() {
     let hw = Image(vec![0xdf, 0, 0, 0, 0, 0, 0, 0]);
     let recording = RecordingHardware::new(&hw);
-    recording.rdram().read_command(0);
+    recording.rdram().read_command(0).unwrap();
     let f = fixture(
         recording
             .finish(0, crate::Microcode::F3dex2, DataFormat::Fixed, 0)
@@ -108,14 +507,17 @@ fn fixture_container_rejects_corruption() {
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 mod host {
     use super::*;
+    use crate::hle::host_mem::HostMemory;
     use crate::HostRam;
     struct Host {
         segments: [u64; 16],
     }
     impl Hardware for Host {
         fn rdram(&self) -> impl Rdram + '_ {
-            let mut r = unsafe { HostRam::new(&[]) };
-            r.segments = self.segments;
+            let mut ram = HostRam::new(&[]);
+            ram.segments = self.segments;
+            // The tests keep every referenced allocation alive and unchanged for each walk.
+            let r = unsafe { HostMemory::new(ram) };
             r
         }
     }
@@ -158,7 +560,7 @@ mod host {
         let bytes = fixture(task).to_bytes().unwrap();
         let f = Fixture::from_bytes(&bytes).unwrap();
         let replay = ReplayHardware::new(&f.tasks[0], None).unwrap();
-        let c = replay.rdram().read_command(body_at);
+        let c = replay.rdram().read_command(body_at).unwrap();
         assert_eq!(
             (c.w0, c.w1, c.w1_addr),
             (0xdf00_0000, 0x7654_3210, 0xdead_beef_7654_3210)
@@ -184,11 +586,17 @@ mod host {
         hw.segments[2] = base;
         let rec = RecordingHardware::new(&hw);
         let mut mem = rec.rdram();
-        assert_eq!(mem.resolve_masked(0x0200_0003), base + 3);
-        assert_eq!(&*mem.read_bytes(base + 3, 5), &[14, 15, 16, 17, 18]);
-        assert_eq!(&*mem.read_bytes(base + 1, 5), &[12, 13, 14, 15, 16]);
+        assert_eq!(mem.resolve_masked(0x0200_0003).unwrap(), base + 3);
+        assert_eq!(
+            &*mem.read_bytes(base + 3, 5).unwrap(),
+            &[14, 15, 16, 17, 18]
+        );
+        assert_eq!(
+            &*mem.read_bytes(base + 1, 5).unwrap(),
+            &[12, 13, 14, 15, 16]
+        );
         mem.set_segment(3, base + 1);
-        assert_eq!(mem.read_u8(mem.resolve(0x0300_0005)), 17);
+        assert_eq!(mem.read_u8(mem.resolve(0x0300_0005).unwrap()).unwrap(), 17);
         drop(mem);
         let t = task(rec, base + 3, DataFormat::Fixed);
         assert_eq!(
@@ -201,12 +609,12 @@ mod host {
         drop(data);
         let replay = ReplayHardware::new(&t, None).unwrap();
         let mut mem = replay.rdram();
-        assert_eq!(mem.resolve_masked(0x0200_0003), base + 3);
-        assert_eq!(mem.read_u8(mem.resolve(0x0200_0003)), 14);
+        assert_eq!(mem.resolve_masked(0x0200_0003).unwrap(), base + 3);
+        assert_eq!(mem.read_u8(mem.resolve(0x0200_0003).unwrap()).unwrap(), 14);
         mem.set_segment(3, base + 1);
-        assert_eq!(mem.read_u8(mem.resolve(0x0300_0005)), 17);
+        assert_eq!(mem.read_u8(mem.resolve(0x0300_0005).unwrap()).unwrap(), 17);
         assert_eq!(
-            mem.resolve_masked(0xfedc_ba98_7654_3217),
+            mem.resolve_masked(0xfedc_ba98_7654_3217).unwrap(),
             0xfedc_ba98_7654_3217
         );
         replay.check().unwrap();
@@ -295,11 +703,11 @@ mod host {
             let b = p as u64;
             let live = hw.rdram();
             let mem = rec.rdram();
-            assert_eq!(live.read_matrix(a, format), expected);
-            assert_eq!(mem.read_matrix(a, format), expected);
-            assert_eq!(mem.vertex_stride(format), stride as u64);
+            assert_eq!(live.read_matrix(a, format).unwrap(), expected);
+            assert_eq!(mem.read_matrix(a, format).unwrap(), expected);
+            assert_eq!(mem.vertex_stride(format).unwrap(), stride as u64);
             for i in 0..2 {
-                let v = mem.read_vertex(b + i * stride as u64, format);
+                let v = mem.read_vertex(b + i * stride as u64, format).unwrap();
                 let expected_pos = if format == DataFormat::Float {
                     [-12.5, 27.25, i as f32 + 0.5]
                 } else {
@@ -308,7 +716,10 @@ mod host {
                 assert_eq!(v.pos, expected_pos);
                 assert_eq!(v.st, [-321, 1234]);
                 assert_eq!(v.rgba, [128, 17, 255, 64]);
-                assert_eq!(live.read_vertex(b + i * stride as u64, format).pos, v.pos);
+                assert_eq!(
+                    live.read_vertex(b + i * stride as u64, format).unwrap().pos,
+                    v.pos
+                );
             }
             drop(mem);
             let t = task(rec, a, format);
@@ -320,9 +731,12 @@ mod host {
             drop(vertices);
             let replay = ReplayHardware::new(&t, None).unwrap();
             let mem = replay.rdram();
-            assert_eq!(mem.read_matrix(a, format), expected);
-            assert_eq!(mem.read_vertex(b + stride as u64, format).st, [-321, 1234]);
-            assert_eq!(mem.read_vertex(b, format).rgba, [128, 17, 255, 64]);
+            assert_eq!(mem.read_matrix(a, format).unwrap(), expected);
+            assert_eq!(
+                mem.read_vertex(b + stride as u64, format).unwrap().st,
+                [-321, 1234]
+            );
+            assert_eq!(mem.read_vertex(b, format).unwrap().rgba, [128, 17, 255, 64]);
             replay.check().unwrap();
         }
     }
@@ -395,14 +809,20 @@ mod host {
         assert_eq!(got.diags, live.diags);
         assert_eq!(got.commands, live.commands);
         assert_eq!(got.scene, live.scene);
-        assert_eq!(replay.rdram().read_command(entry + 4 * 16).w1, 0x000b000d);
-        assert_eq!(replay.rdram().read_command(entry + 5 * 16).w1, 0x04000200);
         assert_eq!(
-            replay.rdram().read_matrix(m, DataFormat::Fixed)[0],
+            replay.rdram().read_command(entry + 4 * 16).unwrap().w1,
+            0x000b000d
+        );
+        assert_eq!(
+            replay.rdram().read_command(entry + 5 * 16).unwrap().w1,
+            0x04000200
+        );
+        assert_eq!(
+            replay.rdram().read_matrix(m, DataFormat::Fixed).unwrap()[0],
             [1., 0., 0., 0.]
         );
         assert_eq!(
-            replay.rdram().read_vertex(v, DataFormat::Fixed).st,
+            replay.rdram().read_vertex(v, DataFormat::Fixed).unwrap().st,
             [-321, 1234]
         );
         replay.check().unwrap();
@@ -444,13 +864,19 @@ mod host {
         let mut bytes = Box::new([11u8, 22, 33, 44]);
         let address = bytes.as_ptr() as u64;
         let first = RecordingHardware::new(&hw);
-        assert_eq!(&*first.rdram().read_bytes(address, 4), &[11, 22, 33, 44]);
+        assert_eq!(
+            &*first.rdram().read_bytes(address, 4).unwrap(),
+            &[11, 22, 33, 44]
+        );
         let first = first
             .finish(address, crate::Microcode::F3d, DataFormat::Fixed, 0)
             .unwrap();
         bytes[1] = 99;
         let second = RecordingHardware::new(&hw);
-        assert_eq!(&*second.rdram().read_bytes(address, 4), &[11, 99, 33, 44]);
+        assert_eq!(
+            &*second.rdram().read_bytes(address, 4).unwrap(),
+            &[11, 99, 33, 44]
+        );
         let second = second
             .finish(address, crate::Microcode::F3d, DataFormat::Float, 1)
             .unwrap();
@@ -460,7 +886,7 @@ mod host {
         let f = Fixture::from_bytes(&f.to_bytes().unwrap()).unwrap();
         for (task, expected) in f.tasks.iter().zip([22, 99]) {
             let replay = ReplayHardware::new(task, None).unwrap();
-            assert_eq!(replay.rdram().read_u8(address + 1), expected);
+            assert_eq!(replay.rdram().read_u8(address + 1).unwrap(), expected);
             replay.check().unwrap();
         }
     }
@@ -472,9 +898,9 @@ mod host {
         let address = bytes.as_ptr() as u64;
         let rec = RecordingHardware::new(&hw);
         let mem = rec.rdram();
-        mem.read_bytes(address, 3);
+        mem.read_bytes(address, 3).unwrap();
         bytes[1] = 99;
-        mem.read_bytes(address + 1, 3);
+        let _ = mem.read_bytes(address + 1, 3);
         drop(mem);
         assert_eq!(
             rec.finish(address, crate::Microcode::F3d, DataFormat::Fixed, 0),
@@ -593,16 +1019,16 @@ fn capture_image_preserves_masking_endianness_and_typed_reads() {
     ]);
     let rec = RecordingHardware::new(&hw);
     let mem = rec.rdram();
-    assert_eq!(mem.resolve_masked(0x0200_0007), 32);
-    assert_eq!(mem.resolve(0x0200_0007), 39);
-    assert_eq!(mem.read_command(0).w1_addr, 0xfedc_ba98);
-    assert_eq!(mem.read_matrix(32, DataFormat::Fixed), expected);
+    assert_eq!(mem.resolve_masked(0x0200_0007).unwrap(), 32);
+    assert_eq!(mem.resolve(0x0200_0007).unwrap(), 39);
+    assert_eq!(mem.read_command(0).unwrap().w1_addr, 0xfedc_ba98);
+    assert_eq!(mem.read_matrix(32, DataFormat::Fixed).unwrap(), expected);
     assert_eq!(
-        mem.read_vertex(96, DataFormat::Fixed).pos,
+        mem.read_vertex(96, DataFormat::Fixed).unwrap().pos,
         [-128., 23., 256.]
     );
-    assert_eq!(mem.read_i8(96), -1);
-    assert_eq!(mem.read_u16(106), 0x1234);
+    assert_eq!(mem.read_i8(96).unwrap(), -1);
+    assert_eq!(mem.read_u16(106).unwrap(), 0x1234);
     drop(mem);
     let t = rec
         .finish(0, Microcode::F3dex2, DataFormat::Fixed, 0)
@@ -610,13 +1036,16 @@ fn capture_image_preserves_masking_endianness_and_typed_reads() {
     drop(hw);
     let replay = ReplayHardware::new(&t, None).unwrap();
     let mem = replay.rdram();
-    assert_eq!(mem.resolve_masked(0x0200_0007), 32);
-    assert_eq!(mem.resolve(0x0200_0007), 39);
-    assert_eq!(mem.read_command(0).w1_addr, 0xfedc_ba98);
-    assert_eq!(mem.read_matrix(32, DataFormat::Fixed), expected);
-    assert_eq!(mem.read_vertex(96, DataFormat::Fixed).st, [-292, 0x1234]);
-    assert_eq!(mem.read_i8(96), -1);
-    assert_eq!(mem.read_u16(106), 0x1234);
+    assert_eq!(mem.resolve_masked(0x0200_0007).unwrap(), 32);
+    assert_eq!(mem.resolve(0x0200_0007).unwrap(), 39);
+    assert_eq!(mem.read_command(0).unwrap().w1_addr, 0xfedc_ba98);
+    assert_eq!(mem.read_matrix(32, DataFormat::Fixed).unwrap(), expected);
+    assert_eq!(
+        mem.read_vertex(96, DataFormat::Fixed).unwrap().st,
+        [-292, 0x1234]
+    );
+    assert_eq!(mem.read_i8(96).unwrap(), -1);
+    assert_eq!(mem.read_u16(106).unwrap(), 0x1234);
     replay.check().unwrap();
 }
 
@@ -637,7 +1066,7 @@ fn replay_adjacent_spans_are_one_address_interval() {
     ];
     let replay = ReplayHardware::new(&f.tasks[0], None).unwrap();
     assert!(replay.rdram().in_bounds(span.address + 16, 16));
-    let command = replay.rdram().read_command(span.address + 16);
+    let command = replay.rdram().read_command(span.address + 16).unwrap();
     assert_eq!(command.w1_addr, 0x234567000);
     replay.check().unwrap();
 }
@@ -652,7 +1081,7 @@ fn replay_host_big_endian_uses_recorded_byte_order() {
     }
     let replay = ReplayHardware::new(&f.tasks[0], None).unwrap();
     let mem = replay.rdram();
-    let command = mem.read_command(f.tasks[0].entry + 16);
+    let command = mem.read_command(f.tasks[0].entry + 16).unwrap();
     assert_eq!(
         (command.w0, command.w1, command.w1_addr),
         (0xff10003f, 0x34567000, 0x234567000)
@@ -676,16 +1105,30 @@ fn capture_missing_span_near_address_limit_does_not_panic() {
         task.spans[0].bytes = commands.iter().flat_map(|w| w.to_le_bytes()).collect();
         let task = &Fixture::from_bytes(&f.to_bytes().unwrap()).unwrap().tasks[0];
         let replay = ReplayHardware::new(task, None).unwrap();
-        crate::hle::interpret(
+        let result = crate::hle::interpret(
             replay.rdram(),
             task.entry,
             task.microcode.into(),
             task.data_format,
         );
-        assert!(matches!(
-            replay.check(),
-            Err(CaptureError::MissingSpan { .. })
-        ));
+        let error = result
+            .diags
+            .iter()
+            .find_map(|diagnostic| match diagnostic.kind {
+                crate::DiagKind::MemoryRead { error, .. } => Some(error),
+                _ => None,
+            })
+            .expect("the invalid address must reject the task");
+        match error.kind {
+            MemoryErrorKind::Unavailable => {
+                assert!(matches!(
+                    replay.check(),
+                    Err(CaptureError::MissingSpan { .. })
+                ));
+            }
+            MemoryErrorKind::AddressOverflow => replay.check().unwrap(),
+            _ => panic!("unexpected replay memory error: {error:?}"),
+        }
     }
 }
 

@@ -222,19 +222,26 @@ impl crate::Rdram for CommandMemory<'_> {
     fn set_segment(&mut self, _: u32, _: u64) {
         panic!("unexpected write")
     }
-    fn resolve(&self, addr: u64) -> u64 {
-        addr
+    fn resolve(&self, addr: u64) -> Result<u64, crate::MemoryError> {
+        Ok(addr)
     }
-    fn resolve_masked(&self, addr: u64) -> u64 {
-        addr
+    fn resolve_masked(&self, addr: u64) -> Result<u64, crate::MemoryError> {
+        Ok(addr)
     }
-    fn read_command(&self, pc: u64) -> crate::hle::mem::Command {
+    fn read_command(&self, pc: u64) -> Result<crate::hle::mem::Command, crate::MemoryError> {
+        if !self.in_bounds(pc, 16) {
+            return Err(crate::MemoryError {
+                address: pc,
+                length: 16,
+                kind: crate::MemoryErrorKind::OutOfBounds,
+            });
+        }
         let (w0, w1_addr) = self.0[pc as usize / 16];
-        crate::hle::mem::Command {
+        Ok(crate::hle::mem::Command {
             w0,
             w1: w1_addr as u32,
             w1_addr,
-        }
+        })
     }
     fn command_stride(&self) -> u64 {
         16
@@ -243,22 +250,30 @@ impl crate::Rdram for CommandMemory<'_> {
         pc.checked_add(stride)
             .is_some_and(|end| end <= self.0.len() as u64 * 16)
     }
-    fn read_u8(&self, _: u64) -> u8 {
+    fn read_u8(&self, _: u64) -> Result<u8, crate::MemoryError> {
         panic!("unexpected data read")
     }
-    fn read_i8(&self, _: u64) -> i8 {
+    fn read_i8(&self, _: u64) -> Result<i8, crate::MemoryError> {
         panic!("unexpected data read")
     }
-    fn read_i16(&self, _: u64) -> i16 {
+    fn read_i16(&self, _: u64) -> Result<i16, crate::MemoryError> {
         panic!("unexpected data read")
     }
-    fn read_u16(&self, _: u64) -> u16 {
+    fn read_u16(&self, _: u64) -> Result<u16, crate::MemoryError> {
         panic!("unexpected data read")
     }
-    fn read_bytes(&self, _: u64, _: usize) -> std::borrow::Cow<'_, [u8]> {
+    fn read_bytes(
+        &self,
+        _: u64,
+        _: usize,
+    ) -> Result<std::borrow::Cow<'_, [u8]>, crate::MemoryError> {
         panic!("unexpected data read")
     }
-    fn read_matrix(&self, _: u64, _: GbiDataFormat) -> crate::hle::math::Mat4 {
+    fn read_matrix(
+        &self,
+        _: u64,
+        _: GbiDataFormat,
+    ) -> Result<crate::hle::math::Mat4, crate::MemoryError> {
         panic!("unexpected data read")
     }
 }
