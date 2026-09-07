@@ -428,7 +428,7 @@ fn failed_texture_and_palette_loads_preserve_previous_bytes() {
             None,
         );
         assert_eq!(failed.summary(false).errors, 1);
-        assert_eq!(failed.rdp.tmem, prior.rdp.tmem);
+        assert_eq!(failed.rdp.texture_loaded, prior.rdp.texture_loaded);
         assert_eq!(failed.rdp.tmem_bank, prior.rdp.tmem_bank);
     }
 }

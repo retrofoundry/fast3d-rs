@@ -40,18 +40,9 @@ pub struct TileDescriptor {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Rdp {
-    pub tmem: Vec<u8>, // linear source bytes from LoadBlock (used by CI index decode + the load gate)
-    /// Hardware-faithful, byte-addressable TMEM (populated by LoadBlock's `write_block` and LoadTLUT's
-    /// `write_tlut`; sampled per tile). The single source of truth for the palette (TLUT) region:
-    /// both the faithful CI sampler and the legacy linear `decode_ci*` fallback read palette bytes
-    /// from its upper half via `tmem_bank.palette()`. `tmem.is_empty()` remains the "did a LoadBlock
-    /// run" gate for the linear index bytes.
+    pub texture_loaded: bool,
     pub tmem_bank: crate::hle::tmem::Tmem,
-    /// True when `tmem_bank` was last populated by G_LOADTILE (`write_tile`), false after
-    /// G_LOADBLOCK. LoadTile's genuine per-row stride lets the sampler read it faithfully for any
-    /// width; LoadBlock's contiguous rows gate the faithful path on word-alignment. Read by
-    /// `decode_tile_texture` to decide faithful-vs-legacy.
-    pub load_via_tile: bool,
+    pub load_via_tile: bool, // Last load kind, exposed by the inspector.
     pub tiles: [TileDescriptor; 8],
     pub tex_image: (u8, u8, u16, u64), // fmt, siz, width, addr (mirrored from RSP)
     pub combine_l: u32,                // = w0
@@ -276,16 +267,13 @@ fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let bytes = (words as usize) << 3; // 8 bytes/word (siz<=2)
     let src = memory_try!(cx, Texture, read_bytes_exact(cx.mem, addr, bytes)).into_owned();
 
-    // The load tile's `tmem`/`line` set the faithful write's destination base and DXT row stride
-    // (both 0 for a well-formed LoadTextureBlock); the linear copy still feeds the CI decode path
-    // and the `tmem.is_empty()` gate.
     let dst_words = cx.rdp.tiles[tile_idx].tmem_addr as usize;
     let line_words = cx.rdp.tiles[tile_idx].line as usize;
     cx.rdp
         .tmem_bank
         .write_block(&src, dst_words, line_words, dxt, words as usize, siz);
-    cx.rdp.tmem = src;
-    cx.rdp.load_via_tile = false; // contiguous rows: faithful path gated on word-aligned rows.
+    cx.rdp.texture_loaded = true;
+    cx.rdp.load_via_tile = false;
     cx.rsp.material_dirty = true;
 }
 
@@ -335,9 +323,7 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
         bytes_per_row as usize,
         siz,
     );
-    // Keep the linear source for the `tmem.is_empty()` gate; mark the padded-row (LoadTile) path so
-    // `decode_tile_texture` samples via the faithful bank even for sub-word widths.
-    cx.rdp.tmem = src;
+    cx.rdp.texture_loaded = true;
     cx.rdp.load_via_tile = true;
     cx.rsp.material_dirty = true;
 }
@@ -533,7 +519,7 @@ mod tests {
             tex_image: (0, 2, 1, 0),
             ..Rdp::default()
         }; // fmt=0, siz=2 (RGBA16), addr=0
-        let rdram_bytes = vec![0u8; 4096];
+        let rdram_bytes = vec![0x70u8; 4096];
         // LoadBlock: tile=7, uls=0, ult=0, lrs=1021, dxt=0
         // w0 = shiftl(G_LOADBLOCK, 24, 8) | shiftl(0, 12, 12) | shiftl(0, 0, 12)
         //    = 0xF3000000
@@ -543,7 +529,17 @@ mod tests {
         let w1 = (7u32 << 24) | (1021u32 << 12);
         let (rdp, diags) = run_cmd(&rdram_bytes, rdp, w0, w1);
         assert!(diags.is_empty());
-        assert_eq!(rdp.tmem.len(), 2048);
+        let tile = TileDescriptor {
+            fmt: 4,
+            siz: 1,
+            width: 8,
+            height: 257,
+            line: 1,
+            ..Default::default()
+        };
+        let decoded = rdp.tmem_bank.sample_tile(&tile, 0).unwrap();
+        assert_eq!(&decoded[..2048 * 4], vec![0x70; 2048 * 4]);
+        assert_eq!(&decoded[2048 * 4..], [0; 32]);
     }
 
     #[test]
@@ -806,8 +802,15 @@ mod tests {
         let w1 = (7u32 << 24) | (1023u32 << 12) | 256u32;
         let (rdp, diags) = run_cmd(&src, rdp, w0, w1);
         assert!(diags.is_empty());
-        assert_eq!(rdp.tmem.len(), 2048);
-        let decoded = crate::hle::combiner::decode_rgba16(&rdp.tmem);
+        let tile = TileDescriptor {
+            fmt: 0,
+            siz: 2,
+            width: 32,
+            height: 32,
+            line: 8,
+            ..Default::default()
+        };
+        let decoded = rdp.tmem_bank.sample_tile(&tile, 0).unwrap();
 
         // row 0 texel 0: 0xF8,0x01 -> r5=31,g5=0,b5=0,a1=1 -> R=255,G=0,B=0,A=255
         // 5-bit expand: (31<<3)|(31>>2) = 248|7 = 255

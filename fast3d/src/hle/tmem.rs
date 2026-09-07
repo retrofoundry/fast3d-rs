@@ -41,17 +41,132 @@ const SWAP_BIT: usize = 0x4;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tmem {
     bytes: Box<[u8; TMEM_BYTES]>,
+    sources: Box<[ByteSource; TMEM_BYTES]>,
+    blocks: Vec<BlockLoad>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ByteSource {
+    load: u16,
+    offset: u16,
+}
+
+impl ByteSource {
+    const BANK: Self = Self {
+        load: u16::MAX,
+        offset: 0,
+    };
+
+    fn block(self) -> Option<usize> {
+        match self.load {
+            0 | u16::MAX => None,
+            load => Some(usize::from(load) - 1),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct BlockLoad {
+    base: u16,
+    live_bytes: u16,
+    linear: bool,
 }
 
 impl Default for Tmem {
     fn default() -> Self {
         Tmem {
             bytes: Box::new([0u8; TMEM_BYTES]),
+            sources: Box::new([ByteSource::default(); TMEM_BYTES]),
+            blocks: Vec::new(),
         }
     }
 }
 
 impl Tmem {
+    fn store_byte(&mut self, addr: usize, value: u8, source: ByteSource) {
+        if let Some(previous) = self.sources[addr].block() {
+            self.blocks[previous].live_bytes -= 1;
+        }
+        if let Some(block) = source.block() {
+            self.blocks[block].live_bytes += 1;
+        }
+        self.sources[addr] = source;
+        self.bytes[addr] = value;
+    }
+
+    pub(crate) fn tile_contains_block(&self, tile: &TileDescriptor) -> bool {
+        self.tile_has_source(tile, |source| source.block().is_some())
+    }
+
+    fn tile_has_source(&self, tile: &TileDescriptor, matches: impl Fn(ByteSource) -> bool) -> bool {
+        let base = usize::from(tile.tmem_addr) << 3;
+        let stride = usize::from(tile.line) << 3;
+        let shift = tile.siz.min(2);
+        let row_bytes = (usize::from(tile.width.max(1)) << shift).div_ceil(2);
+        let mask = if tile.fmt == 2 || tile.siz == 3 {
+            MASK16
+        } else {
+            MASK8
+        };
+        for y in 0..usize::from(tile.height.max(1)) {
+            for x in 0..row_bytes {
+                let addr = (base + Self::swap_odd_line(y * stride + x, y & 1 != 0)) & mask;
+                if matches(self.sources[addr])
+                    || (tile.siz == 3 && matches(self.sources[addr | PALETTE_BASE]))
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn linear_bytes(
+        &self,
+        tile: &TileDescriptor,
+        needed: usize,
+    ) -> Result<Vec<u8>, DiagKind> {
+        let error = DiagKind::TextureBytesUnavailable {
+            tmem_addr: tile.tmem_addr,
+        };
+        let mask = if tile.fmt == 2 { MASK16 } else { MASK8 };
+        let base = (usize::from(tile.tmem_addr) << 3) & mask;
+        let source = self.sources[base];
+        let load = source.load;
+        let slot = source.block().ok_or(error)?;
+        if needed > TMEM_BYTES
+            || self.tile_has_source(tile, |source| source.load != 0 && source.load != load)
+        {
+            return Err(error);
+        }
+        let block = &self.blocks[slot];
+        if !block.linear {
+            return Err(error);
+        }
+        let start = if base == usize::from(block.base) {
+            0
+        } else {
+            usize::from(source.offset) & !7
+        };
+        if start >= TMEM_BYTES {
+            return Err(error);
+        }
+        let mut bytes = vec![0; needed];
+        let mut found = 0;
+        for (addr, source) in self.sources.iter().enumerate() {
+            let offset = usize::from(source.offset);
+            if source.load == load && (start..start + needed).contains(&offset) {
+                bytes[offset - start] = self.bytes[addr];
+                found += 1;
+            }
+        }
+        if found == needed {
+            Ok(bytes)
+        } else {
+            Err(error)
+        }
+    }
+
     /// The odd-line 32-bit word swap, shared by the write and read paths. When `odd`, flips bit
     /// `0x4` to exchange the two 4-byte halves of the enclosing 8-byte word; routing both paths
     /// through this one helper is what makes the swaps cancel for a well-formed LoadBlock.
@@ -101,21 +216,54 @@ impl Tmem {
         let mut odd = false;
         let mut dxt_counter: u32 = 0;
         let mut tex = 0usize;
+        let block = BlockLoad {
+            base: tmem_addr as u16,
+            live_bytes: 0,
+            linear: !rgba32,
+        };
+        let slot = if let Some(slot) = self.blocks.iter().position(|block| block.live_bytes == 0) {
+            self.blocks[slot] = block;
+            slot
+        } else {
+            self.blocks.push(block);
+            self.blocks.len() - 1
+        };
+        let load = (slot + 1) as u16;
 
         for _ in 0..word_count {
             if rgba32 {
                 // loadWord<true, false>: split R,G → low bank, B,A → high bank (dst | 0x800).
                 for i in 0..4 {
                     let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                    self.bytes[dst] = src.get(tex + LOW_SRC[i]).copied().unwrap_or(0);
-                    self.bytes[dst | PALETTE_BASE] =
-                        src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0);
+                    self.store_byte(
+                        dst,
+                        src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
+                        ByteSource {
+                            load,
+                            offset: (tex + LOW_SRC[i]) as u16,
+                        },
+                    );
+                    self.store_byte(
+                        dst | PALETTE_BASE,
+                        src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
+                        ByteSource {
+                            load,
+                            offset: (tex + HIGH_SRC[i]) as u16,
+                        },
+                    );
                 }
             } else {
                 // loadWord<false, false>: copy the whole 8-byte word, applying the odd-line swap.
                 for i in 0..8 {
                     let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                    self.bytes[dst] = src.get(tex + i).copied().unwrap_or(0);
+                    self.store_byte(
+                        dst,
+                        src.get(tex + i).copied().unwrap_or(0),
+                        ByteSource {
+                            load,
+                            offset: (tex + i) as u16,
+                        },
+                    );
                 }
             }
 
@@ -174,15 +322,26 @@ impl Tmem {
                     // loadWord<true, false>: split R,G → low bank, B,A → high bank (dst | 0x800).
                     for i in 0..4 {
                         let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                        self.bytes[dst] = src.get(tex + LOW_SRC[i]).copied().unwrap_or(0);
-                        self.bytes[dst | PALETTE_BASE] =
-                            src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0);
+                        self.store_byte(
+                            dst,
+                            src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
+                            ByteSource::BANK,
+                        );
+                        self.store_byte(
+                            dst | PALETTE_BASE,
+                            src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
+                            ByteSource::BANK,
+                        );
                     }
                 } else {
                     // loadWord<false, false>: copy the whole 8-byte word, applying the odd-line swap.
                     for i in 0..8 {
                         let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                        self.bytes[dst] = src.get(tex + i).copied().unwrap_or(0);
+                        self.store_byte(
+                            dst,
+                            src.get(tex + i).copied().unwrap_or(0),
+                            ByteSource::BANK,
+                        );
                     }
                 }
                 tmem_addr = (tmem_addr + advance) & mask;
@@ -197,8 +356,8 @@ impl Tmem {
         for i in 0..count {
             let entry = &entries_be[i * 2..i * 2 + 2];
             let addr = (base + i * 8) & MASK8;
-            for halfword in self.bytes[addr..addr + 8].as_chunks_mut::<2>().0 {
-                halfword.copy_from_slice(entry);
+            for byte in 0..8 {
+                self.store_byte(addr + byte, entry[byte & 1], ByteSource::BANK);
             }
         }
     }

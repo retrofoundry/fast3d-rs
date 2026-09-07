@@ -18,7 +18,7 @@ fn state(filter: u32) -> Rdp {
         combine_h: 0xfffc_f279,
         other_mode_h: filter << 12,
         load_via_tile: true,
-        tmem: TEXELS.as_flattened().to_vec(),
+        texture_loaded: true,
         ..Default::default()
     };
     rdp.tiles[0] = TileDescriptor {

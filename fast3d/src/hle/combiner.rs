@@ -616,9 +616,9 @@ fn tile_takes_faithful_path(
     tile: &crate::hle::rdp::TileDescriptor,
     tex_w: u32,
 ) -> bool {
-    let line_bytes = ((tex_w as usize) << tile.siz) >> 1;
-    line_bytes.is_multiple_of(8)
-        || rdp.load_via_tile
+    let row_bits = (tex_w as usize) << (tile.siz + 2);
+    row_bits.is_multiple_of(64)
+        || !rdp.tmem_bank.tile_contains_block(tile)
         || TileSampling::from_tile(tile, 0).image[2] == 1
 }
 
@@ -676,22 +676,8 @@ fn decode_tile_texture(
         siz: tile.siz,
     };
     let needed = fi.tmem_bytes(tex_w, tex_h);
-    if rdp.tmem.len() >= needed {
-        fi.decode(
-            &rdp.tmem[..needed],
-            tex_w,
-            tex_h,
-            tlut,
-            tile.palette,
-            tlut_fmt,
-        )
-    } else {
-        // tmem is shorter than the tile dimensions imply — zero-pad so the decoded buffer always
-        // satisfies texture.len() == tex_w*tex_h*4 (the renderer's write_texture contract).
-        let mut padded = rdp.tmem.to_vec();
-        padded.resize(needed, 0);
-        fi.decode(&padded, tex_w, tex_h, tlut, tile.palette, tlut_fmt)
-    }
+    let bytes = rdp.tmem_bank.linear_bytes(tile, needed)?;
+    fi.decode(&bytes, tex_w, tex_h, tlut, tile.palette, tlut_fmt)
 }
 
 fn decode_sampling_texture(
@@ -743,7 +729,7 @@ fn build_material_inner(
         return None;
     }
     let (uses_physical0, uses_physical1) = physical_texture_uses(&selectors, cycle_type);
-    if rdp.tmem.is_empty() && cycle_type < 2 {
+    if !rdp.texture_loaded && cycle_type < 2 {
         if !rect && rdp.combine_l == 0 && rdp.combine_h == 0 {
             return None;
         }
@@ -776,21 +762,10 @@ fn build_material_inner(
         u8::from(uses_physical0)
     };
 
-    // When tileCount == 2, decode the SECOND texture from tiles[(base+1)&7]. The legacy fallback
-    // ignores `tmem_addr`, so a tex1 that cannot take the faithful `sample_tile` path would silently
-    // read tex0's TMEM — refuse-to-draw + diagnose rather than emit a mis-decoded second texture.
     let tex1 = if tile_count == 2 {
         let t1 = &rdp.tiles[(base + 1) & 7];
         let t1_w = t1.width.max(1) as u32;
         let t1_h = t1.height.max(1) as u32;
-        texture_at_draw(validate_tile_texture(rdp, t1), diags, pc)?;
-        if !tile_takes_faithful_path(rdp, t1, t1_w) {
-            diags.push(crate::diag::Diagnostic {
-                at: pc,
-                kind: crate::diag::DiagKind::SecondTextureUndecodable,
-            });
-            return None;
-        }
         let decoded = texture_at_draw(decode_sampling_texture(rdp, t1, tlut_fmt), diags, pc)?;
         Some(Tex1 {
             sampling: decoded.sampling,
@@ -806,58 +781,32 @@ fn build_material_inner(
         None
     };
 
-    // N64-faithful LOD decode. LOD is active when G_TL_LOD (othermode_h bit 16) is set AND the
-    // G_TEXTURE `level` field is > 0 (num_levels = level + 1).
-    // Each level k comes from the CONSECUTIVE render tile `tiles[(base+k)&7]` and is decoded as an
-    // INDEPENDENT per-level texture (`MipLevel { texture, w, h }`) — no halving
-    // constraint. The renderer uploads each level as its OWN wgpu texture and the shader switch-
-    // selects between them, so NON-HALVING level sets (e.g. sm64 Castle Inside's two 32×32 TRILERP
-    // levels) engage LOD instead of falling back. The only remaining requirement is that every level
-    // takes the faithful `sample_tile` decode path; a level that would need the legacy linear
-    // fallback (which ignores `tmem_addr` and could read the wrong bank) forces `lod = false`,
-    // byte-identical to the non-LOD path. The count is capped at `MAX_LOD_LEVELS`.
     let (lod, num_levels, mip_levels, text_detail, detail_tex) = if !rect
         && (uses_physical0 || uses_physical1)
         && rdp.lod_enable()
         && rsp.texture_state.level > 0
     {
         let n = (rsp.texture_state.level as u32 + 1).min(MAX_LOD_LEVELS);
-        let faithful = (0..n).all(|k| {
-            let tk = &rdp.tiles[(base + k as usize) & 7];
-            tile_takes_faithful_path(rdp, tk, u32::from(tk.width.max(1)))
-        });
-        if faithful {
-            let mut levels: Vec<MipLevel> = Vec::with_capacity(n as usize);
-            for k in 0..n {
-                let tk = &rdp.tiles[(base + k as usize) & 7];
-                levels.push(texture_at_draw(
-                    decode_sampling_texture(rdp, tk, tlut_fmt),
-                    diags,
-                    pc,
-                )?);
-            }
-            let td = rdp.text_detail();
-            // DETAIL mode (text_detail bit1): the DETAIL tile is the finest tile (index 0),
-            // decoded independently. Only carried when it also takes the faithful path.
-            let detail = if td & 0b10 != 0 {
-                let dt = &rdp.tiles[0];
-                let dw = dt.width.max(1) as u32;
-                if tile_takes_faithful_path(rdp, dt, dw) {
-                    Some(texture_at_draw(
-                        decode_sampling_texture(rdp, dt, tlut_fmt),
-                        diags,
-                        pc,
-                    )?)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            (true, n as u8, levels, td, detail)
-        } else {
-            (false, 1u8, Vec::new(), 0u8, None)
+        let mut levels = Vec::with_capacity(n as usize);
+        for k in 0..n {
+            let tile = &rdp.tiles[(base + k as usize) & 7];
+            levels.push(texture_at_draw(
+                decode_sampling_texture(rdp, tile, tlut_fmt),
+                diags,
+                pc,
+            )?);
         }
+        let td = rdp.text_detail();
+        let detail = if td & 0b10 != 0 {
+            Some(texture_at_draw(
+                decode_sampling_texture(rdp, &rdp.tiles[0], tlut_fmt),
+                diags,
+                pc,
+            )?)
+        } else {
+            None
+        };
+        (true, n as u8, levels, td, detail)
     } else {
         (false, 1u8, Vec::new(), 0u8, None)
     };
@@ -1016,44 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn short_tmem_zero_pads_to_correct_decode_len() {
-        // Regression: SP3b first-light crash. When tmem is shorter than tex_w*tex_h*2 (e.g. sm64
-        // 8-bit textures loaded into a tile declared as RGBA16), the old code passed the short
-        // slice directly to decode_rgba16, producing texture.len() < tex_w*tex_h*4 and triggering
-        // wgpu's "Copy would overrun the bounds of the Source buffer" abort.
-        //
-        // The fix zero-pads tmem up to `needed` before decoding, guaranteeing:
-        //   texture.len() == tex_w * tex_h * 4
-        let tex_w: u32 = 8;
-        let tex_h: u32 = 8;
-        let needed = (tex_w * tex_h * 2) as usize; // 128 bytes for 8×8 RGBA16
-
-        // Simulate a tmem that is shorter than needed (e.g. only half filled).
-        let short_tmem: Vec<u8> = vec![0xAB; needed / 2]; // 64 bytes — shorter than 128
-        assert!(short_tmem.len() < needed, "precondition: tmem IS short");
-
-        let mut padded = short_tmem.to_vec();
-        padded.resize(needed, 0);
-        let texture = decode_rgba16(&padded);
-
-        assert_eq!(
-            texture.len(),
-            (tex_w * tex_h * 4) as usize,
-            "texture.len() must equal tex_w*tex_h*4 regardless of tmem shortfall"
-        );
-    }
-
-    #[test]
     fn synthetic_loadtile_dl_decodes_faithfully_through_the_interpreter() {
-        // End-to-end proof that G_LOADTILE (0xF4) is registered, reachable through the REAL ucode
-        // dispatch table, and wired into the faithful sample path — for a SUB-WORD width that the
-        // LoadBlock gate would send to the legacy linear decoder.
-        //
-        // Scene: an I8 (fmt=4, siz=1) source of actual width 16 in RDRAM; LoadTile copies a 3-row
-        // region (1 word / 8 texels per row, source stride 16 bytes) into TMEM at line=1; the render
-        // tile is 3×3 (line_bytes = 3 → NOT word-aligned). Because the load went through LoadTile
-        // (`rdp.load_via_tile`), decode routes to sample_tile and recovers the source exactly (the
-        // per-row odd-line swap on row 1 cancels between write and read).
         use crate::hle::interp::{Cmd, Ctx};
         use crate::hle::mem::RdramImage;
 
@@ -1121,14 +1033,9 @@ mod tests {
 
         // 0xF4 reached a real handler, not the unknown-opcode path (which would push a diagnostic).
         assert!(diags.is_empty(), "unexpected diags: {diags:?}");
-        assert!(
-            rdp.load_via_tile,
-            "LoadTile must set load_via_tile so decode routes to the faithful bank"
-        );
+        assert!(rdp.load_via_tile, "inspector records the latest load kind");
         assert_eq!((rdp.tiles[0].width, rdp.tiles[0].height), (3, 3));
 
-        // Sub-word width: the LoadBlock gate (line_bytes % 8 == 0) would be FALSE here (3 % 8 != 0),
-        // so only the LoadTile flag routes this to the faithful path.
         let line_bytes = ((rdp.tiles[0].width as usize) << rdp.tiles[0].siz) >> 1;
         assert_eq!(line_bytes, 3, "precondition: sub-word row (not 8-aligned)");
 
@@ -1160,9 +1067,7 @@ mod tests {
         cycle_type: u32,
     ) -> crate::hle::rdp::Rdp {
         let mut rdp = crate::hle::rdp::Rdp {
-            // Non-empty legacy buffer only to pass the `tmem.is_empty()` gate; the faithful RGBA16
-            // path reads `tmem_bank`, not this.
-            tmem: vec![0u8; 8],
+            texture_loaded: true,
             combine_l,
             combine_h,
             other_mode_h: cycle_type << 20,
@@ -1317,48 +1222,22 @@ mod tests {
     }
 
     #[test]
-    fn two_cycle_second_texture_non_faithful_refuses_to_draw() {
-        // A genuine two-texture combiner (cyc1 D=TEXEL0 → tileCount 2) whose SECOND tile
-        // cannot take the faithful sample_tile path. The legacy fallback ignores tmem_addr and would
-        // silently read tex0's TMEM, so build_material must refuse-to-draw + diagnose.
-        let (cl, ch, ct) = (0x0088_7F10u32, 0x88FC_FC7Eu32, 1u32); // cyc1 D=TEXEL0
-        let mut rdp = rdp_two_distinct_rgba16_tiles(cl, ch, ct);
-        // Override tiles[1] (the TEXEL1 source) with a sub-word I8 tile: line_bytes = (4<<1)>>1 = 4,
-        // not a whole 64-bit word, and no LoadTile — so tile_takes_faithful_path is false.
-        rdp.tiles[1] = crate::hle::rdp::TileDescriptor {
-            fmt: 4, // I
-            siz: 1, // 8b
-            width: 4,
-            height: 1,
-            line: 1,
-            tmem_addr: 8,
-            cms: 2,
-            cmt: 2,
-            ..Default::default()
-        };
+    fn two_cycle_second_texture_recovers_its_own_linear_bytes() {
+        let mut rdp = rdp_two_distinct_rgba16_tiles(0x0088_7f10, 0x88fc_fc7e, 1);
+        rdp.tiles[1].fmt = 4;
+        rdp.tiles[1].siz = 1;
         let mut rsp = crate::hle::rsp::Rsp::default();
-        rsp.texture_state.tile = 0;
         rsp.texture_state.on = true;
-
-        // Precondition: this IS a two-texture combiner and tex0 (tiles[0]) is faithful.
-        assert!(cycle_uses_texel1(&decode_combine(cl, ch), ct));
-        assert!(tile_takes_faithful_path(&rdp, &rdp.tiles[0], 4));
-        assert!(
-            !tile_takes_faithful_path(&rdp, &rdp.tiles[1], 4),
-            "precondition: tex1 tile is NOT faithful"
-        );
-
         let mut diags = Vec::new();
-        let mat = build_material(&rdp, &rsp, &mut diags, 0);
-        assert!(
-            mat.is_none(),
-            "non-faithful second texture must refuse-to-draw, not mis-decode"
-        );
-        assert!(
-            diags
-                .iter()
-                .any(|d| d.kind == crate::diag::DiagKind::SecondTextureUndecodable),
-            "must diagnose SecondTextureUndecodable: {diags:?}"
+        let mat = build_material(&rdp, &rsp, &mut diags, 0).unwrap();
+        assert!(diags.is_empty());
+        let texture = mat.tex1.unwrap().texture;
+        assert_eq!(
+            texture,
+            [64, 65, 66, 67]
+                .into_iter()
+                .flat_map(|v| [v; 4])
+                .collect::<Vec<_>>()
         );
     }
 
@@ -1411,26 +1290,20 @@ mod tests {
 
     // --- LOD mip-chain decode ------------------------------------------------------------------
 
-    /// Build an Rdp with a 3-level RGBA16 mip chain in tiles[0..3]: level 0 = 4×4, level 1 = 2×2,
-    /// level 2 = 1×1 (halving in both dims). A 128-byte gradient (byte i = i) fills the faithful
-    /// TMEM bank; each level reads a DISTINCT word offset so its decode differs from the others.
-    /// `load_via_tile = true` routes the sub-word (2-wide / 1-wide) rows through the faithful
-    /// sample path. `other_mode_h` carries G_TL_LOD (bit 16) plus the given detail bits.
     fn rdp_three_level_chain(detail_bit: bool) -> crate::hle::rdp::Rdp {
         let mut other_mode_h = 1u32 << 16; // G_TL_LOD, cycle_type 0
         if detail_bit {
             other_mode_h |= 0b10 << 17; // G_MDSFT_TEXTDETAIL bit1 = DETAIL
         }
         let mut rdp = crate::hle::rdp::Rdp {
-            tmem: vec![0u8; 8], // pass the tmem.is_empty() gate; faithful path reads tmem_bank
+            texture_loaded: true,
             combine_l: 0xFC12_7E24, // MODULATE: cyc1 references TEXEL0 → textured, tile_count 1
             combine_h: 0xFFFF_F9FC,
             other_mode_h,
-            load_via_tile: true, // sub-word level rows take the faithful path regardless of width
             ..Default::default()
         };
         let data: Vec<u8> = (0..128u32).map(|i| i as u8).collect();
-        rdp.tmem_bank.write_block(&data, 0, 0, 0, 16, 2);
+        rdp.tmem_bank.write_tile(&data, 0, 0, 1, 16, 128, 2);
         let mk = |w: u16, h: u16, tmem_words: u16| crate::hle::rdp::TileDescriptor {
             fmt: 0, // RGBA
             siz: 2, // 16b
@@ -1589,7 +1462,11 @@ mod tests {
             rdp.tiles[0].height = height;
             rdp.tiles[0].cms = if lookup { 0 } else { 2 };
             rdp.tiles[0].masks = if lookup { 3 } else { 0 };
-            rdp.load_via_tile = load_via_tile;
+            if load_via_tile {
+                rdp.tmem_bank.write_tile(&[0; 64], 0, 1, 2, 2, 16, 3);
+            } else {
+                rdp.tmem_bank.write_block(&[0; 64], 0, 0, 0, 8, 3);
+            }
             diags.clear();
             assert!(build_rect_material(&rdp, &rsp, 0, &mut diags, 0x80).is_some());
             assert!(diags.is_empty());
@@ -1663,74 +1540,32 @@ mod tests {
     }
 
     #[test]
-    fn lod_fallback_ignores_unsupported_uncarried_levels() {
-        for (unaligned_level, unsupported_level) in [(1, 2), (2, 1)] {
-            let mut rdp = rdp_three_level_chain(false);
-            rdp.load_via_tile = false;
-            rdp.tiles[unsupported_level].width = 4;
-            rdp.tiles[unsupported_level].fmt = 5;
-            rdp.tiles[unaligned_level].width = 1;
-            let mut rsp = crate::hle::rsp::Rsp::default();
-            rsp.texture_state.level = 2;
-            rsp.texture_state.on = true;
-
-            let mut diags = Vec::new();
-            let mat = build_material(&rdp, &rsp, &mut diags, 0x80)
-                .unwrap_or_else(|| panic!("unused level rejected draw: {diags:?}"));
-            assert!(diags.is_empty());
-            assert!(!mat.lod);
-            assert_eq!(mat.num_levels, 1);
-            assert!(mat.mip_levels.is_empty());
-            assert_eq!((mat.tex_w, mat.tex_h), (4, 4));
-            assert_eq!(&mat.texture[..4], &[0, 0, 0, 255]);
+    fn narrow_lod_and_detail_tiles_do_not_hide_unsupported_inputs() {
+        for detail in [false, true] {
+            for narrow in [0, 1, 2] {
+                let mut rdp = rdp_three_level_chain(detail);
+                rdp.tiles[narrow].width = 1;
+                let unsupported = if detail { 0 } else { 2 };
+                rdp.tiles[unsupported].fmt = 5;
+                let mut rsp = crate::hle::rsp::Rsp::default();
+                rsp.set_texture(
+                    u8::from(detail),
+                    if detail { 1 } else { 2 },
+                    true,
+                    65535,
+                    65535,
+                );
+                let mut diags = Vec::new();
+                assert!(build_material(&rdp, &rsp, &mut diags, 0x80).is_none());
+                assert_eq!(
+                    diags,
+                    [crate::diag::Diagnostic {
+                        at: 0x80,
+                        kind: crate::diag::DiagKind::UnsupportedTextureFormat { fmt: 5, siz: 2 },
+                    }]
+                );
+            }
         }
-    }
-
-    #[test]
-    fn lod_fallback_ignores_unsupported_detail_tile() {
-        let mut rdp = rdp_three_level_chain(true);
-        rdp.load_via_tile = false;
-        rdp.tiles[0].fmt = 6;
-        rdp.tiles[1].width = 4;
-        let mut rsp = crate::hle::rsp::Rsp::default();
-        rsp.texture_state.tile = 1;
-        rsp.texture_state.level = 1;
-        rsp.texture_state.on = true;
-
-        let mut diags = Vec::new();
-        let mat = build_material(&rdp, &rsp, &mut diags, 0x80)
-            .unwrap_or_else(|| panic!("unused detail rejected draw: {diags:?}"));
-        assert!(diags.is_empty());
-        assert!(!mat.lod);
-        assert_eq!(mat.num_levels, 1);
-        assert!(mat.mip_levels.is_empty());
-        assert!(mat.detail_tex.is_none());
-        assert_eq!(mat.text_detail, 0);
-        assert_eq!((mat.tex_w, mat.tex_h), (4, 2));
-        assert_eq!(&mat.texture[..4], &[33, 0, 132, 255]);
-    }
-
-    #[test]
-    fn lod_ignores_unsupported_detail_when_only_detail_is_uncarried() {
-        let mut rdp = rdp_three_level_chain(true);
-        rdp.load_via_tile = false;
-        rdp.tiles[0].fmt = 6;
-        rdp.tiles[0].width = 1;
-        rdp.tiles[1].width = 4;
-        rdp.tiles[2].width = 4;
-        let mut rsp = crate::hle::rsp::Rsp::default();
-        rsp.texture_state.tile = 1;
-        rsp.texture_state.level = 1;
-        rsp.texture_state.on = true;
-
-        let mut diags = Vec::new();
-        let mat = build_material(&rdp, &rsp, &mut diags, 0x80)
-            .unwrap_or_else(|| panic!("uncarried detail rejected draw: {diags:?}"));
-        assert!(diags.is_empty());
-        assert!(mat.lod);
-        assert_eq!(mat.num_levels, 2);
-        assert_eq!(mat.mip_levels.len(), 2);
-        assert!(mat.detail_tex.is_none());
     }
 
     #[test]

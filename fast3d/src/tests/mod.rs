@@ -65,6 +65,7 @@ mod dl_builder;
 pub(crate) mod fixtures;
 mod scene_builders;
 
+mod load_provenance;
 mod memory_failures;
 
 mod workload;
