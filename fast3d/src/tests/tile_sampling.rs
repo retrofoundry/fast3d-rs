@@ -25,7 +25,7 @@ fn rdp(tile: TileDescriptor) -> Rdp {
         combine_l: 0x00ff_ffff,
         combine_h: 0xfffc_f27c,
         load_via_tile: true,
-        tmem: vec![1; 4096],
+        texture_loaded: true,
         ..Default::default()
     };
     rdp.tiles[0] = tile;

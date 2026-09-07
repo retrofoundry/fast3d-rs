@@ -106,9 +106,10 @@ pub enum DiagKind {
     NonCanonicalBlend,
     StrayRdphalf,
     NoTextureLoaded,
-    /// A two-texture material's second texture (TEXEL1) tile cannot take the faithful `sample_tile`
-    /// path; the legacy fallback ignores `tmem_addr` and would read tex0's TMEM, so we refuse-to-draw
-    /// rather than mis-decode it.
+    TextureBytesUnavailable {
+        tmem_addr: u16,
+    },
+    /// A two-texture material's second texture cannot be decoded.
     SecondTextureUndecodable,
     /// CA/CB/CC/CD/AA/AB/AC/AD slots: low eight bits cycle 1, high eight bits cycle 0.
     UnwiredSelector {
@@ -155,6 +156,7 @@ impl DiagKind {
             | DiagKind::InvalidVertexTransform { .. }
             | DiagKind::MissingBranchTarget
             | DiagKind::NoTextureLoaded
+            | DiagKind::TextureBytesUnavailable { .. }
             | DiagKind::SecondTextureUndecodable
             | DiagKind::UnhandledMovemem(_)
             | DiagKind::UnhandledMoveword(_)
@@ -258,10 +260,10 @@ impl std::fmt::Display for DiagKind {
             }
             DiagKind::StrayRdphalf => write!(f, "stray RDPHALF — rect decode desync"),
             DiagKind::NoTextureLoaded => {
-                write!(
-                    f,
-                    "no texture loaded (tmem is empty; LoadBlock not executed)"
-                )
+                write!(f, "no texture loaded")
+            }
+            DiagKind::TextureBytesUnavailable { tmem_addr } => {
+                write!(f, "linear texture bytes unavailable at TMEM word 0x{tmem_addr:03X}; refusing to draw")
             }
             DiagKind::SecondTextureUndecodable => {
                 write!(

@@ -22,7 +22,7 @@ fn material(tile: TileDescriptor) -> super::Material {
     let mut rdp = Rdp {
         combine_l: 0x00ff_ffff,
         combine_h: 0xfffc_f279,
-        tmem: vec![1; 4096],
+        texture_loaded: true,
         load_via_tile: true,
         ..Default::default()
     };
@@ -214,7 +214,7 @@ fn lod_tiles_apply_independent_origin_and_shift() {
         combine_l: 0x00ff_ffff,
         combine_h: 0xfffc_f279,
         other_mode_h: (1 << 16) | (2 << 17),
-        tmem: vec![1; 4096],
+        texture_loaded: true,
         load_via_tile: true,
         ..Default::default()
     };

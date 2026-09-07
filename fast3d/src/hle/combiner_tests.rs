@@ -93,7 +93,7 @@ fn state(cycles: [[u32; 8]; 2], cycle_type: u32) -> Rdp {
         combine_l,
         combine_h,
         other_mode_h: cycle_type << 20,
-        tmem: vec![48; 16],
+        texture_loaded: true,
         prim: [64, 96, 128, 80],
         env: [160, 192, 224, 208],
         prim_lod_frac: 112.0 / 256.0,
@@ -194,7 +194,7 @@ fn combiner_rejects_unwired_cycle0() {
     for loaded in [false, true] {
         let mut rdp = state(cycles, 1);
         if !loaded {
-            rdp.tmem.clear();
+            rdp.texture_loaded = false;
         }
         let (mat, diags) = material(&rdp, false);
         assert!(mat.is_none());
@@ -265,7 +265,7 @@ fn combiner_texrect_uses_shared_validation() {
         let mut cycles = [FLAT; 2];
         cycles[cycle_type as usize ^ 1][0] = 7;
         let mut rdp = state(cycles, cycle_type);
-        rdp.tmem.clear();
+        rdp.texture_loaded = false;
         let triangle = material(&rdp, false);
         let rect = material(&rdp, true);
         assert!(
@@ -337,7 +337,7 @@ fn combiner_missing_texture_checks_both_cycles() {
                 let mut cycles = [FLAT; 2];
                 cycles[cycle][slot] = *token;
                 let mut rdp = state(cycles, 1);
-                rdp.tmem.clear();
+                rdp.texture_loaded = false;
                 for rect in [false, true] {
                     let (mat, diags) = material(&rdp, rect);
                     assert!(

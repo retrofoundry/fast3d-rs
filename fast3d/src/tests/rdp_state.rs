@@ -151,7 +151,7 @@ fn tmem_tiles_and_registers_survive_without_reloading_guest_memory() {
         expected.color_changed = false;
         expected.depth_changed = false;
         assert_eq!(expected.load_via_tile, via_tile);
-        assert_eq!(expected.tmem, [0xf8, 1].repeat(4));
+        assert!(expected.texture_loaded);
         assert_eq!(
             &expected.tmem_bank.palette()[..128],
             [0x07, 0xc1].repeat(64)
