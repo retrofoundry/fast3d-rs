@@ -125,7 +125,7 @@ fn render_scene_to_rgba8(name: &str, w: u32, h: u32) -> Vec<u8> {
 /// Compare `actual` RGBA8 pixels against the committed golden `.bin` file, or write the golden
 /// when `UPDATE_GOLDENS=1` is set.
 ///
-/// Goldens live in `crates/renderer/goldens/<name>.bin` (raw RGBA8, `w × h × 4` bytes).
+/// Goldens live in `fast3d/goldens/<name>.bin` (raw RGBA8, `w × h × 4` bytes).
 /// The comparison tolerates a max per-channel absolute difference of `TOL` to absorb
 /// platform-specific rounding in GPU rasterisation.
 fn compare_or_write(name: &str, actual: &[u8], w: u32, h: u32) {
@@ -147,7 +147,7 @@ fn compare_or_write(name: &str, actual: &[u8], w: u32, h: u32) {
     let golden = std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
             "golden '{name}' missing ({path}): {e}\n\
-             Run `UPDATE_GOLDENS=1 cargo test -p renderer golden_{name}` to generate it."
+             Run `UPDATE_GOLDENS=1 cargo test -p fast3d --all-features golden_{name}` to generate it."
         )
     });
     assert_eq!(
