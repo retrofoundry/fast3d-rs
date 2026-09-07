@@ -442,3 +442,16 @@ fn f3dex2_branchz_fixture_command_sequences() {
         assert_eq!(colors, [vec![color; 6], vec![BLUE; 6]].concat());
     }
 }
+
+#[test]
+fn f3dex2_fixtures_are_observationally_equivalent() {
+    for case in CASES {
+        let built = scene(case);
+        super::inspect::equivalent(
+            || crate::RdramImage::new(&built.rdram),
+            built.entry as u64,
+            crate::hle::GbiUcode::F3dex2,
+            crate::DataFormat::Fixed,
+        );
+    }
+}

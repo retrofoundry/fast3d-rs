@@ -97,6 +97,7 @@ pub(super) fn make_image(
         entry.into(),
         microcode.into(),
         DataFormat::Fixed,
+        None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     let task = recording

@@ -115,6 +115,7 @@ fn tlut_two_palettes_in_one_list() {
             built.entry.into(),
             GbiUcode::F3d,
             DataFormat::Fixed,
+            None,
         );
         assert!(result.diags.is_empty(), "{:?}", result.diags);
         let materials: Vec<_> = result

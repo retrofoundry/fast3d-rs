@@ -783,6 +783,7 @@ fn f3d_registers_and_conversion_mode_use_shared_rdp_state() {
             0,
             GbiUcode::F3d,
             GbiDataFormat::Fixed,
+            None,
         );
         assert_eq!(result.rdp.convert, [-256, -1, 0, 255, -256, -1]);
         assert_eq!(

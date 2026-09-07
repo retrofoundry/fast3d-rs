@@ -139,6 +139,7 @@ fn transparent_mario_commands_preserve_environment_alpha_for_dither() {
         0x400,
         GbiUcode::F3d,
         DataFormat::Fixed,
+        None,
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     let scene = &result.scene;

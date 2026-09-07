@@ -5,7 +5,12 @@ fn interpret_commands(commands: impl IntoIterator<Item = (u32, u32)>) -> crate::
         .into_iter()
         .flat_map(|(w0, w1)| w0.to_be_bytes().into_iter().chain(w1.to_be_bytes()))
         .collect();
-    crate::hle::interpret_rdram(&rdram, 0)
+    super::inspect::equivalent(
+        || crate::RdramImage::new(&rdram),
+        0,
+        crate::hle::GbiUcode::F3dex2,
+        crate::DataFormat::Fixed,
+    )
 }
 
 #[test]

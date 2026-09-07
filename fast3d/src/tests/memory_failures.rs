@@ -16,6 +16,7 @@ fn failed_command_discards_recorded_operations() {
         0,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,
+        None,
     );
     assert!(result.scene.framebuffer_pairs.is_empty());
     assert!(result.scene.indices.is_empty());
@@ -31,6 +32,7 @@ fn bad_vertex_input_returns_error_without_partial_vertices() {
         0,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,
+        None,
     );
     assert!(!result.diags.is_empty());
     assert!(result.scene.raw_pos.is_empty());
@@ -89,6 +91,7 @@ fn image_operand_bounds_all_read_kinds() {
             0,
             GbiUcode::F3dex2,
             GbiDataFormat::Fixed,
+            None,
         );
         assert_eq!(
             result.diags,
@@ -124,6 +127,7 @@ fn unsupported_float_image_is_diagnostic() {
             0,
             GbiUcode::F3dex2,
             GbiDataFormat::Float,
+            None,
         );
         assert!(
             matches!(result.diags.as_slice(), [crate::Diagnostic { at: 0,
@@ -143,6 +147,7 @@ fn image_address_overflow_is_diagnostic() {
         u64::MAX - 3,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,
+        None,
     );
     assert_eq!(
         result.diags,
@@ -407,6 +412,7 @@ fn failed_texture_and_palette_loads_preserve_previous_bytes() {
             0,
             GbiUcode::F3dex2,
             GbiDataFormat::Fixed,
+            None,
         );
         assert!(prior.diags.is_empty(), "{load:x}: {:?}", prior.diags);
         let fault = image(&[(0xfd10_0000, 0x84), (load, word)]);
@@ -416,6 +422,7 @@ fn failed_texture_and_palette_loads_preserve_previous_bytes() {
             0,
             GbiUcode::F3dex2,
             GbiDataFormat::Fixed,
+            None,
         );
         assert_eq!(failed.summary(false).errors, 1);
         assert_eq!(failed.rdp.tmem, prior.rdp.tmem);
@@ -528,7 +535,7 @@ fn walk_checks_pc_vertex_and_texture_arithmetic() {
         (tile, A::Texture, 8, u64::MAX - 4, 8),
     ] {
         let entry = memory.base;
-        let result = interpret(memory, entry, GbiUcode::F3dex2, GbiDataFormat::Fixed);
+        let result = interpret(memory, entry, GbiUcode::F3dex2, GbiDataFormat::Fixed, None);
         assert_eq!(
             result.diags,
             [crate::Diagnostic {
@@ -552,7 +559,7 @@ fn walk_checks_pc_vertex_and_texture_arithmetic() {
 fn advisory_bounds_do_not_suppress_read_failures() {
     let memory = address_memory(&[(0, 0)]);
     assert!(crate::Rdram::in_bounds(&memory, 8, 8));
-    let result = interpret(memory, 0, GbiUcode::F3dex2, GbiDataFormat::Fixed);
+    let result = interpret(memory, 0, GbiUcode::F3dex2, GbiDataFormat::Fixed, None);
     assert_eq!(result.commands, 2);
     assert_eq!(
         result.diags,

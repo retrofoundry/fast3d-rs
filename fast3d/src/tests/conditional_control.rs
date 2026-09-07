@@ -77,8 +77,16 @@ fn walk(b: DlBuilder, expected_offsets: &[u64]) -> InterpResult {
         built.entry as u64,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,
+        None,
     );
     assert_eq!(*reads.borrow(), expected_offsets);
+    let observed = super::inspect::equivalent(
+        || RdramImage::new(&built.rdram),
+        built.entry as u64,
+        GbiUcode::F3dex2,
+        GbiDataFormat::Fixed,
+    );
+    assert_eq!(result, observed);
     result
 }
 
@@ -553,7 +561,7 @@ fn branchz_half1_preserves_host_address() {
         (END.0, 0),
     ]);
     mem.commands[1].1 = mem.base + 4 * 16;
-    let r = interpret(&mem, mem.base, GbiUcode::F3dex2, GbiDataFormat::Float);
+    let r = interpret(&mem, mem.base, GbiUcode::F3dex2, GbiDataFormat::Float, None);
     assert!(r.diags.is_empty(), "{:?}", r.diags);
     assert_eq!(
         *mem.reads.borrow(),
@@ -584,7 +592,7 @@ fn conditional_invalid_transform_rejects_task() {
             let mut mem = native(&commands);
             mem.position = position;
             mem.matrix[3][3] = w;
-            let r = interpret(&mem, mem.base, GbiUcode::F3dex2, GbiDataFormat::Float);
+            let r = interpret(&mem, mem.base, GbiUcode::F3dex2, GbiDataFormat::Float, None);
             assert_eq!(
                 r.diags,
                 vec![crate::Diagnostic {
@@ -620,7 +628,7 @@ fn conditional_homogeneous_projection() {
         mem.position = [x, 0.0, z];
         mem.matrix[3][3] = 2.0;
         mem.commands[3].1 = mem.base + 6 * 16;
-        let r = interpret(&mem, mem.base, GbiUcode::F3dex2, GbiDataFormat::Float);
+        let r = interpret(&mem, mem.base, GbiUcode::F3dex2, GbiDataFormat::Float, None);
         assert!(r.diags.is_empty(), "{:?}", r.diags);
         let indices: &[u64] = if culled {
             &[0, 1, 2]
@@ -687,6 +695,7 @@ fn conditional_capture_records_only_reached_commands_and_typed_inputs() {
             entry as u64,
             GbiUcode::F3dex2,
             GbiDataFormat::Fixed,
+            None,
         );
         assert!(result.diags.is_empty(), "{:?}", result.diags);
         let task = recording
@@ -722,7 +731,8 @@ fn conditional_capture_records_only_reached_commands_and_typed_inputs() {
                 replay.rdram(),
                 entry as u64,
                 GbiUcode::F3dex2,
-                GbiDataFormat::Fixed
+                GbiDataFormat::Fixed,
+                None
             ),
             result
         );
