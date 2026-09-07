@@ -182,7 +182,7 @@ impl Rsp {
             blend_color: rdp.blend_color,
             fill_color_raw: rdp.fill_color_raw,
             color_image: rdp.color_image,
-            depth_image: rdp.depth_image,
+            depth_image: rdp.depth_image.unwrap_or(0),
             scissor: rdp.scissor,
         }
     }
@@ -942,7 +942,7 @@ pub(crate) fn ensure_pair_open(
     rec: &mut PairRec,
 ) {
     if !rec.paired || rdp.color_changed || rdp.depth_changed {
-        let depth_image = (rdp.depth_image != 0).then_some(rdp.depth_image);
+        let depth_image = rdp.depth_image;
         let is_depth_clear = depth_image == Some(rdp.color_image.addr);
         scene.framebuffer_pairs.push(FramebufferPair {
             color_image: rdp.color_image,

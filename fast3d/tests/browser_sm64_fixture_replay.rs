@@ -83,3 +83,45 @@ fn browser_sm64_fixture_replay() {
 async fn browser_sm64_fixture_replay() {
     replay_corpus().await;
 }
+
+#[path = "common/workload_semantics.rs"]
+mod workload_semantics;
+
+async fn replay_ordered_workload() {
+    for policy in [fast3d::ClearPolicy::PerFrame, fast3d::ClearPolicy::Persist] {
+        let mut fixture =
+            Fixture::from_bytes(include_bytes!("fixtures/workload-interleaving.f3dcap")).unwrap();
+        fixture.frame.config.clear_policy = policy;
+        let output = fixture
+            .replay_headless()
+            .await
+            .expect("ordered workload requires a WebGPU adapter");
+        #[cfg(target_arch = "wasm32")]
+        assert_eq!(
+            output.adapter_info.as_ref().unwrap().backend,
+            wgpu::Backend::BrowserWebGpu
+        );
+        assert_eq!((output.width, output.height), (320, 240));
+        assert_eq!(output.rgba8.len(), 320 * 240 * 4);
+        assert!(output.diagnostics.iter().all(Vec::is_empty));
+        for (i, pixel) in output.rgba8.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(
+                *pixel,
+                workload_semantics::expected(i as u32 % 320, i as u32 / 320),
+                "pixel {i}, {policy:?}"
+            );
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn browser_ordered_workload_replay() {
+    pollster::block_on(replay_ordered_workload());
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+async fn browser_ordered_workload_replay() {
+    replay_ordered_workload().await;
+}

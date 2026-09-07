@@ -256,6 +256,7 @@ pub fn interpret<M: Rdram>(
     let mut return_stack: Vec<u64> = Vec::new();
     let mut dispatched: u64 = 0;
     let mut rec = crate::hle::rsp::PairRec::default();
+    let mut scissor_set = false;
 
     let mut termination = WalkTermination::End;
     let mut final_diagnostics_start = 0;
@@ -547,6 +548,12 @@ pub fn interpret<M: Rdram>(
                         prim_depth: rdp.prim_depth,
                         fb_source,
                     });
+                scene.draw_origins.push(crate::scene::DrawOrigin {
+                    pc,
+                    scissor: rdp.scissor,
+                    indices: 0..0,
+                    rectangle: Some((cur, scene.framebuffer_pairs[cur].ops.len() - 1)),
+                });
                 if let Some(observed) = &mut observed {
                     observed.emission = Some(Emission::TexRect {
                         target: framebuffer_target(&scene, cur),
@@ -628,6 +635,15 @@ pub fn interpret<M: Rdram>(
                         key: rdp.key,
                     },
                 );
+                scene.draw_origins.push(crate::scene::DrawOrigin {
+                    pc,
+                    scissor: rdp.scissor,
+                    indices: 0..0,
+                    rectangle: Some((
+                        rec.cur_pair,
+                        scene.framebuffer_pairs[rec.cur_pair].ops.len() - 1,
+                    )),
+                });
                 if let Some(observed) = &mut observed {
                     observed.emission = Some(Emission::FillRect {
                         target: framebuffer_target(&scene, rec.cur_pair),
@@ -640,6 +656,8 @@ pub fn interpret<M: Rdram>(
                 break 'dispatch;
             }
 
+            scissor_set |= op == crate::hle::consts::G_SETSCISSOR;
+            let index_start = scene.indices.len() as u32;
             let mut cx = Ctx {
                 rsp: &mut rsp,
                 rdp: &mut rdp,
@@ -653,6 +671,23 @@ pub fn interpret<M: Rdram>(
                 unknown_seen: &mut unknown_seen,
             };
             gbi.table[op as usize](&c, &mut cx);
+            let index_end = scene.indices.len() as u32;
+            if index_end > index_start {
+                scene.draw_origins.push(crate::scene::DrawOrigin {
+                    pc,
+                    scissor: if !scissor_set && !rec.have_seen_cimg {
+                        crate::scene::Scissor {
+                            lrx: 320,
+                            lry: 240,
+                            ..Default::default()
+                        }
+                    } else {
+                        rdp.scissor
+                    },
+                    indices: index_start..index_end,
+                    rectangle: None,
+                });
+            }
             if diags.last().is_some_and(|d| {
                 matches!(
                     d.kind,
@@ -772,7 +807,6 @@ pub fn interpret<M: Rdram>(
         });
     }
     rsp.finish(&mut scene);
-    // The final color image — the pair-less renderer's internal-framebuffer key (spec §4).
     scene.color_image = rdp.color_image;
     InterpResult {
         scene,
@@ -1606,8 +1640,6 @@ mod rect_encoding_tests {
 
     #[test]
     fn interpret_stashes_final_color_image_on_scene() {
-        // A DL that only sets the color image (no draws) still stamps scene.color_image from the
-        // final RDP snapshot — the pair-less internal-FB key (spec §4).
         let mut b = Vec::new();
         push(&mut b, cimg(0x0010_0000)); // fmt=RGBA(0), siz=16b(2), width=320, addr=0x100000
         push(&mut b, enddl());

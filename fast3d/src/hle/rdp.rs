@@ -85,7 +85,7 @@ pub struct Rdp {
     /// True when `color_image` was updated since last pair-recording flush.
     pub color_changed: bool,
     /// Current depth buffer address (unmasked resolve of G_SETZIMG w1).
-    pub depth_image: u64,
+    pub depth_image: Option<u64>,
     /// True when `depth_image` was updated since last pair-recording flush.
     pub depth_changed: bool,
     /// Current scissor rectangle in pixels (decoded from G_SETSCISSOR 10.2 fields).
@@ -377,8 +377,8 @@ fn set_color_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 
 fn set_depth_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let addr = memory_try!(cx, Command, cx.mem.resolve(c.w1_addr));
-    if addr != cx.rdp.depth_image {
-        cx.rdp.depth_image = addr;
+    if Some(addr) != cx.rdp.depth_image {
+        cx.rdp.depth_image = Some(addr);
         cx.rdp.depth_changed = true;
     }
 }
@@ -858,7 +858,7 @@ mod tests {
         let w1 = 0x0010_0000u32;
         let (rdp, diags) = run_cmd(&[], Rdp::default(), w0, w1);
         assert!(diags.is_empty());
-        assert_eq!(rdp.depth_image, 0x0010_0000u64);
+        assert_eq!(rdp.depth_image, Some(0x0010_0000u64));
         assert!(
             rdp.depth_changed,
             "depth_changed must be set on first write"

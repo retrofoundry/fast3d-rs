@@ -66,3 +66,7 @@ pub(crate) mod fixtures;
 mod scene_builders;
 
 mod memory_failures;
+
+mod workload;
+
+mod workload_acceptance;
