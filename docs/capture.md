@@ -20,11 +20,17 @@ starting state. The fixture format does not store a prior register or TMEM snaps
 
 `CaptureFrame::begin` preserves live RDP state. At completion, capture walks its owned task
 snapshots from both the live starting registers and the version-one defaults. It rejects a
-difference in recorded scenes, diagnostics or summaries as dependence on prior RDP state.
-Every recorded task must match the default-start walk, including metadata in state-only
-scenes. This conservative check can reject inherited metadata even when later tasks overwrite
-it before drawing. Such captures require an earlier starting point or an explicit renderer
-reset before authoring the independent scene. The check does not reset the running guest.
+difference in prepared render inputs, diagnostics or summaries as dependence on prior RDP
+state. GPU submission consumes those same prepared inputs, including target effects, uniforms,
+textures and RSP buffers. Inspection-only metadata does not participate. Tasks that hit the
+renderer’s no-work return still carry each walk’s registers forward separately, so a later
+active use of inherited state is checked. The check does not reset the running guest.
+
+Reset before `CaptureFrame::begin` when recording an independent scene. Renderer mutations
+outside the capture wrapper, including either reset, frame boundaries, reconfiguration and
+unrecorded submissions, invalidate the capture. Recording and completion report an error while
+live rendering continues. Returning registers or configuration to their earlier values does
+not make the capture valid again.
 
 A version-one fixture must also be self-contained in framebuffer contents. Replay compares
 `PerFrame` and `Persist` output after initializing the used color targets with two contrasting colors through display lists.

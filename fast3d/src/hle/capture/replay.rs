@@ -18,13 +18,15 @@ pub struct CaptureFrame {
     fixture: Fixture,
     error: Option<CaptureError>,
     initial_rdp: crate::hle::rdp::Rdp,
+    expected_generation: std::rc::Rc<()>,
 }
 
 impl CaptureFrame {
     /// Begins a renderer frame. The legacy `serial` argument is ignored; the recorded serial
     /// counts the renderer's `begin_frame` calls, starting at one after construction or reset.
-    /// Leaves live RDP state intact. Finishing rejects tasks whose recorded scenes or diagnostics
-    /// depend on prior RDP state, which version-one fixtures cannot store.
+    /// Leaves live RDP state intact. Finishing rejects render inputs or diagnostics that depend
+    /// on prior RDP state, which version-one fixtures cannot store. Renderer mutations outside
+    /// this wrapper (including resets) invalidate the capture; live rendering still proceeds.
     pub fn begin(
         renderer: &mut Renderer,
         _serial: u64,
@@ -37,6 +39,7 @@ impl CaptureFrame {
         let (width, height) = target_extent(renderer);
         Self {
             initial_rdp: renderer.rdp.clone(),
+            expected_generation: renderer.capture_generation.clone(),
             fixture: Fixture {
                 frame: Frame {
                     serial,
@@ -74,6 +77,7 @@ impl CaptureFrame {
         }
         let recording = RecordingHardware::new(hardware);
         let summary = renderer.process_dl(&recording, entry, microcode, diagnostics);
+        self.expected_generation = renderer.capture_generation.clone();
         let task = u32::try_from(self.fixture.tasks.len())
             .map_err(|_| invalid("too many tasks in one frame"))
             .and_then(|order| recording.finish(entry, microcode, data_format, order));
@@ -124,6 +128,7 @@ impl CaptureFrame {
             log: &log,
         };
         let summary = renderer.process_dl_memory(recording, entry, microcode, diagnostics);
+        self.expected_generation = renderer.capture_generation.clone();
         let task = u32::try_from(self.fixture.tasks.len())
             .map_err(|_| invalid("too many tasks in one frame"))
             .and_then(|order| {
@@ -198,7 +203,8 @@ impl CaptureFrame {
 
     fn check_renderer(&mut self, renderer: &Renderer) {
         let frame = &self.fixture.frame;
-        if effective_config(renderer) != frame.config
+        if !std::rc::Rc::ptr_eq(&self.expected_generation, &renderer.capture_generation)
+            || effective_config(renderer) != frame.config
             || target_extent(renderer) != (frame.width, frame.height)
         {
             self.error
@@ -217,7 +223,17 @@ impl CaptureFrame {
         for task in &self.fixture.tasks {
             let actual = task.interpret(live.clone())?;
             let expected = task.interpret(replay.clone())?;
-            if actual.scene != expected.scene
+            let inputs = |scene| {
+                crate::render::inputs::RenderInputs::new(
+                    scene,
+                    (self.fixture.frame.width, self.fixture.frame.height),
+                    [
+                        self.fixture.frame.serial as u32,
+                        self.fixture.frame.dither_seed,
+                    ],
+                )
+            };
+            if inputs(&actual.scene) != inputs(&expected.scene)
                 || actual.diags != expected.diags
                 || actual.summary(false) != expected.summary(false)
             {

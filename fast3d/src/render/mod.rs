@@ -4,6 +4,8 @@ use bytemuck::{Pod, Zeroable};
 #[cfg(test)]
 mod texrect_tests;
 
+pub(crate) mod inputs;
+
 /// The depth format the Z-buffer uses. `Depth32Float` is WebGL2-core (`DEPTH_COMPONENT32F`) and
 /// matches `D32_FLOAT`. Callers that own the depth texture must use this format.
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -1524,15 +1526,14 @@ impl RspProcessPipeline {
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        scene: &crate::hle::Scene,
-        workload: &workload::Workload,
+        inputs: Option<&inputs::RspInputs<'_>>,
+        targets: &[inputs::TargetInputs],
     ) -> RspSceneBuffers {
-        use crate::render::rsp_buffers as rb;
         use wgpu::util::DeviceExt;
-        if scene.raw_pos.is_empty() || scene.indices.is_empty() {
+        let Some(inputs) = inputs else {
             return RspSceneBuffers::default();
-        }
-        let n = scene.raw_pos.len() as u32;
+        };
+        let n = inputs.source.len() as u32;
         let sb = |data: &[u8]| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: None,
@@ -1540,16 +1541,15 @@ impl RspProcessPipeline {
                 usage: wgpu::BufferUsages::STORAGE,
             })
         };
-        let source = sb(bytemuck::cast_slice(&rb::src_vertices(scene)));
-        let mvp_table = sb(bytemuck::cast_slice(&rb::mvp_table(scene)));
-        let viewport_table = sb(bytemuck::cast_slice(&rb::viewport_table(scene)));
-        let texcoord_table = sb(bytemuck::cast_slice(&rb::texcoord_table(scene)));
-        let lights_table = sb(bytemuck::cast_slice(&rb::lights_table(scene)));
-        let lookat_table = sb(bytemuck::cast_slice(&rb::lookat_table(scene)));
-        let fog_table = sb(bytemuck::cast_slice(&rb::fog_table(scene)));
+        let source = sb(bytemuck::cast_slice(&inputs.source));
+        let mvp_table = sb(bytemuck::cast_slice(&inputs.mvp_table));
+        let viewport_table = sb(bytemuck::cast_slice(&inputs.viewport_table));
+        let texcoord_table = sb(bytemuck::cast_slice(&inputs.texcoord_table));
+        let lights_table = sb(bytemuck::cast_slice(&inputs.lights_table));
+        let lookat_table = sb(bytemuck::cast_slice(&inputs.lookat_table));
+        let fog_table = sb(bytemuck::cast_slice(&inputs.fog_table));
 
-        let extents = workload
-            .targets
+        let extents = targets
             .iter()
             .filter(|target| !target.depth_clear)
             .map(|target| target.logical_extent);
@@ -1620,7 +1620,7 @@ impl RspProcessPipeline {
         }
         let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ibuf"),
-            contents: bytemuck::cast_slice(&scene.indices),
+            contents: bytemuck::cast_slice(inputs.indices),
             usage: wgpu::BufferUsages::INDEX,
         });
         RspSceneBuffers {
@@ -1693,7 +1693,7 @@ fn build_tex_entry(
     bgl: &wgpu::BindGroupLayout,
     samplers: &[[wgpu::Sampler; 3]; 3],
     dummy_view: &wgpu::TextureView,
-    mat: &crate::hle::Material,
+    mat: &inputs::TextureInputs<'_>,
 ) -> TexCache {
     // Upload one decoded RGBA8 texture (tex0, or the tex1 second texture) to a fresh GPU texture,
     // returning its view. The view keeps the texture alive via the bind group's strong ref.
@@ -1733,8 +1733,8 @@ fn build_tex_entry(
     // tex0: LOD level 0 as its OWN single-level texture (`upload` uses mip_level_count = 1). Non-LOD
     // materials upload only this from `mat.texture` — byte-identical to the pre-LOD single
     // `write_texture`. When LOD is active, level 0 is `mat.texture` (== `mip_levels[0]`).
-    let [w, h] = mat.sampling.allocation_extent();
-    let tex_view = upload("n64-tex", w, h, &mat.texture);
+    let [w, h] = mat.allocation_extent;
+    let tex_view = upload("n64-tex", w, h, mat.texture);
     // Levels 1..MAX_LOD as INDEPENDENT per-level textures (hardware-faithful — NO halving constraint),
     // bound at bindings 6..=12. `uploaded_level_count` caps the real count at MAX_LOD. A slot beyond
     // the uploaded count (or a non-LOD material) binds the shared 1×1 dummy; it is never sampled
@@ -1774,7 +1774,7 @@ fn build_tex_entry(
         }
         None => dummy_view.clone(),
     };
-    let sampling = material_sampling(mat);
+    let sampling = mat.sampling;
     let sampling_buffer = sampling_buffer(device, &sampling);
     let entries: Vec<wgpu::BindGroupEntry> = [
         sampling_entry(&sampling_buffer),
@@ -1825,11 +1825,11 @@ fn build_tex_entry(
         sampling,
         w: mat.tex_w,
         h: mat.tex_h,
-        bytes: mat.texture.clone(),
+        bytes: mat.texture.to_vec(),
         wrap_s: mat.wrap_s,
         wrap_t: mat.wrap_t,
         tex1: mat.tex1.clone(),
-        mip_levels: mat.mip_levels.clone(),
+        mip_levels: mat.mip_levels.to_vec(),
         detail_tex: mat.detail_tex.clone(),
         bind_group,
     }
@@ -2093,9 +2093,8 @@ impl SceneRenderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
-        target: &workload::TargetWorkload,
-        op: &crate::hle::SceneOp,
-        scene: &crate::hle::Scene,
+        target: &inputs::TargetInputs,
+        op: &inputs::DrawInputs,
         material_bgs: &[&wgpu::BindGroup],
         rect_vbuf: Option<&wgpu::Buffer>,
         uniform_bg: Option<&wgpu::BindGroup>,
@@ -2107,7 +2106,7 @@ impl SceneRenderer {
         // prior pair's SAMPLED color view as @group(0) instead of the RDRAM-decoded material
         // texture. The pool's sampled view is row-0-at-top (GPU-native); no re-flip needed. The
         // source pair is PRIOR (ordered loop guarantees it was rendered first).
-        let opt_fb_bg: Option<wgpu::BindGroup> = if let crate::hle::SceneOp::TexRect {
+        let opt_fb_bg: Option<wgpu::BindGroup> = if let inputs::DrawInputs::Rectangle {
             fb_source: Some(src_addr),
             ..
         } = op
@@ -2167,30 +2166,24 @@ impl SceneRenderer {
         };
         let group0: &wgpu::BindGroup = match (opt_fb_bg.as_ref(), op) {
             (Some(bg), _) => bg,
-            (None, crate::hle::SceneOp::TexRect { material_index, .. }) => {
-                material_bgs[*material_index as usize]
-            }
+            (
+                None,
+                inputs::DrawInputs::Rectangle {
+                    material_index: Some(material_index),
+                    ..
+                },
+            ) => material_bgs[*material_index as usize],
             _ => &self.fill_bind_group,
         };
-        // FillRect and COPY-mode TexRect → Replace.
-        // Non-COPY TexRect → render mode's fallback_class (may be AlphaOver).
-        let blend_class = match op {
-            crate::hle::SceneOp::TexRect {
-                render_mode_index,
-                copy_mode,
-                ..
-            } if !*copy_mode => {
-                let rm = &scene.render_modes[*render_mode_index as usize];
-                rm.fallback_class
-            }
-            _ => crate::hle::BlendClass::Replace,
+        let inputs::DrawInputs::Rectangle { blend_class, .. } = op else {
+            unreachable!("rectangle draw inputs required");
         };
         let pipeline = self.textured_fb.select(
             crate::hle::CullKind::None,
             false,
             false,
             any_depth,
-            blend_class,
+            *blend_class,
         );
         pass.set_pipeline(pipeline);
         if let Some(rv) = rect_vbuf {

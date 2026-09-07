@@ -181,6 +181,8 @@ pub struct Renderer {
     target: PresentTarget,
     inner: SceneRenderer,
     rdp: crate::hle::rdp::Rdp,
+    #[cfg(feature = "capture")]
+    capture_generation: std::rc::Rc<()>,
     pub(crate) frame_scenes: Vec<Scene>,
     pub(crate) last_scanout_addr: Option<TargetId>,
     pub(crate) last_backend_was_image: bool,
@@ -224,6 +226,12 @@ impl inspect::WalkObserver for PrefixObserver {
 }
 
 impl Renderer {
+    fn mark_mutation(&mut self) {
+        // A capture holds the old allocation alive: identity cannot wrap or match another renderer.
+        #[cfg(feature = "capture")]
+        std::rc::Rc::make_mut(&mut self.capture_generation);
+    }
+
     /// SECONDARY constructor: adopt a device/queue the consumer already created (wafel; headless
     /// tests). Synchronous. Capability probing (`DUAL_SOURCE_BLENDING`) is internal — no
     /// `dual_source` in the public surface (spec §3.1).
@@ -252,6 +260,8 @@ impl Renderer {
             target,
             inner,
             rdp: Default::default(),
+            #[cfg(feature = "capture")]
+            capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
             last_scanout_addr: None,
             last_backend_was_image: false,
@@ -330,6 +340,8 @@ impl Renderer {
             },
             inner,
             rdp: Default::default(),
+            #[cfg(feature = "capture")]
+            capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
             last_scanout_addr: None,
             last_backend_was_image: false,
@@ -357,12 +369,14 @@ impl Renderer {
     /// Select how subsequent `process_dl` calls read guest vertices and matrices (default
     /// `Fixed`). A per-consumer property — set once after construction, not per display list.
     pub fn set_data_format(&mut self, data_format: DataFormat) {
+        self.mark_mutation();
         self.data_format = data_format;
     }
 
     /// Window/drawable resized: reconfigure the owned surface only. Internal framebuffers are
     /// game-sized and NOT touched here (spec §3.1). No-op for `Headless`.
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.mark_mutation();
         let (w, h) = (width.max(1), height.max(1));
         if let PresentTarget::Surface { surface, config } = &mut self.target {
             config.width = w;
@@ -376,6 +390,7 @@ impl Renderer {
     /// Re-applies `present_mode` (and an explicit `format` override) to a `Surface`. A `None` format
     /// keeps the currently picked format (no adapter retained to re-run `pick_surface_format`).
     pub fn reconfigure(&mut self, config: RendererConfig) {
+        self.mark_mutation();
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely()); // #[must_use]; no-op on web
         warn_unsupported(&config);
 
@@ -580,6 +595,7 @@ impl Renderer {
         observer: Option<&mut dyn inspect::WalkObserver>,
         submission: Submission,
     ) -> DlSummary {
+        self.mark_mutation();
         let is_image = mem.is_rdram_image();
         let rdp = if submission == Submission::RasterizePrefix {
             Default::default()
@@ -641,6 +657,7 @@ impl Renderer {
     /// Framebuffer contents, retained scenes, scanout and the dither sequence are preserved.
     /// Use this before submitting an independently authored display list.
     pub fn reset_rdp_state(&mut self) {
+        self.mark_mutation();
         self.rdp = Default::default();
     }
 
@@ -660,6 +677,7 @@ impl Renderer {
     /// set (ClearPolicy::PerFrame) and the retained `frame_scenes`. Preserves guest RDP state
     /// and TMEM; advances the dither serial.
     pub fn begin_frame(&mut self) {
+        self.mark_mutation();
         self.inner.begin_frame();
         self.frame_scenes.clear();
     }
@@ -681,6 +699,7 @@ impl Renderer {
     /// Install a render hook, firing its `init` SYNCHRONOUSLY (the device already exists). Replacing
     /// an existing hook fires the old hook's `deinit` FIRST, then the new hook's `init`.
     pub fn set_render_hook(&mut self, mut hook: Box<dyn RenderHook>) {
+        self.mark_mutation();
         if let Some(mut old) = self.hook.take() {
             old.deinit();
         }
@@ -690,6 +709,7 @@ impl Renderer {
 
     /// Remove the render hook (if any), firing its `deinit` before returning it to the caller.
     pub fn take_render_hook(&mut self) -> Option<Box<dyn RenderHook>> {
+        self.mark_mutation();
         let mut hook = self.hook.take()?;
         hook.deinit();
         Some(hook)
@@ -705,6 +725,7 @@ impl Renderer {
     /// never renders and `present_to` stays byte-identical (headless goldens unaffected).
     #[cfg(feature = "debug-ui")]
     pub fn set_debugger_enabled(&mut self, enabled: bool) {
+        self.mark_mutation();
         self.debugger.enabled = enabled;
     }
 
@@ -718,6 +739,7 @@ impl Renderer {
     /// withhold it from the game). No-op returning `false` while the debugger is disabled.
     #[cfg(feature = "debug-ui")]
     pub fn debugger_input(&mut self, input: &crate::debug::DebugInput) -> bool {
+        self.mark_mutation();
         self.debugger.input(input)
     }
 }
@@ -806,6 +828,7 @@ impl Renderer {
     }
 
     fn present_to_vi(&mut self, vi: Option<ViRegisters>, target: &wgpu::TextureView) {
+        self.mark_mutation();
         // Always create an encoder + run the render hook, even when nothing has been scanned out yet
         // (a UI overlay should still draw — RN). Scanout is recorded only when a source FB exists;
         // with no hook and no scanout the submit is an empty no-op, so `target` is left as-is.
@@ -834,6 +857,7 @@ impl Renderer {
     }
 
     fn present_vi(&mut self, vi: Option<ViRegisters>) -> Result<(), PresentError> {
+        self.mark_mutation();
         let src = self.scanout_source(vi);
 
         // RO: acquire in a scope so the `&self.target` borrow (surface/config) ENDS before

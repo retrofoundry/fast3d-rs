@@ -167,22 +167,13 @@ fn push_triangles(
     }
 }
 
-use super::{
-    build_tex_entry, clamp_scissor, material_sampling, rect_quad, texrect_quad,
-    triangle_inv_tex_size, CombinerUniform, OutVertex, SceneRenderer, CLEAR_COLOR,
-};
+use super::inputs::{DrawInputs, RenderInputs, TargetInputs, TextureInputs};
+use super::{build_tex_entry, CombinerUniform, SceneRenderer, CLEAR_COLOR};
 use crate::ClearPolicy;
 use wgpu::util::DeviceExt;
 
 impl TargetWorkload {
-    fn output_extent(&self, renderer: &SceneRenderer) -> (u32, u32) {
-        match self.id {
-            TargetId::Legacy => (renderer.fb_w, renderer.fb_h),
-            TargetId::Guest(_) => self.logical_extent,
-        }
-    }
-
-    fn uses_depth(&self, scene: &Scene) -> bool {
+    pub(super) fn uses_depth(&self, scene: &Scene) -> bool {
         self.depth_image.is_some()
             || self.id == TargetId::Legacy
                 && self.operations.iter().any(|op| match &op.draw {
@@ -198,23 +189,27 @@ impl TargetWorkload {
 struct DrawUpload {
     uniforms: wgpu::BindGroup,
     rectangles: Option<wgpu::Buffer>,
-    rect_indices: Vec<u32>,
 }
 
 impl SceneRenderer {
-    fn upload_materials(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &Scene) {
-        self.tex_caches.truncate(scene.materials.len());
-        for (i, mat) in scene.materials.iter().enumerate() {
+    fn upload_materials(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textures: &[TextureInputs<'_>],
+    ) {
+        self.tex_caches.truncate(textures.len());
+        for (i, mat) in textures.iter().enumerate() {
             let rebuild = self.tex_caches.get(i).is_none_or(|cache| {
-                cache.sampling != material_sampling(mat)
+                cache.sampling != mat.sampling
                     || cache.w != mat.tex_w
                     || cache.h != mat.tex_h
                     || cache.bytes != mat.texture
                     || cache.wrap_s != mat.wrap_s
                     || cache.wrap_t != mat.wrap_t
-                    || cache.tex1 != mat.tex1
+                    || &cache.tex1 != mat.tex1
                     || cache.mip_levels != mat.mip_levels
-                    || cache.detail_tex != mat.detail_tex
+                    || &cache.detail_tex != mat.detail_tex
             });
             if rebuild {
                 let entry = build_tex_entry(
@@ -234,82 +229,10 @@ impl SceneRenderer {
         }
     }
 
-    fn upload_draws(
-        &self,
-        device: &wgpu::Device,
-        scene: &Scene,
-        target: &TargetWorkload,
-    ) -> DrawUpload {
-        let (w, h) = target.output_extent(self);
-        let mut pool = vec![0; target.operations.len() * 256];
-        let mut rectangles: Vec<OutVertex> = Vec::new();
-        let mut rect_indices = Vec::new();
-        for (slot, operation) in target.operations.iter().enumerate() {
-            rect_indices.push((rectangles.len() / 6) as u32);
-            let mut uniform = match &operation.draw {
-                SceneOp::Tris(run) => {
-                    let mat = &scene.materials[run.material_index as usize];
-                    let mode = &scene.render_modes[run.render_mode_index as usize];
-                    let mut uniform = CombinerUniform::from_run(mat, mode, run.fog_color);
-                    uniform.inv_tex_size = triangle_inv_tex_size(mat);
-                    uniform
-                }
-                SceneOp::TexRect {
-                    rect,
-                    uls,
-                    ult,
-                    dsdx,
-                    dtdy,
-                    flip,
-                    copy_mode,
-                    material_index,
-                    render_mode_index,
-                    fog_color,
-                    ..
-                } => {
-                    let mat = &scene.materials[*material_index as usize];
-                    let mut uniform = if *copy_mode {
-                        CombinerUniform::tex_copy(
-                            scene.render_modes.get(*render_mode_index as usize),
-                            mat.fmt,
-                        )
-                    } else {
-                        CombinerUniform::from_rect(
-                            mat,
-                            &scene.render_modes[*render_mode_index as usize],
-                            *fog_color,
-                        )
-                    };
-                    uniform.inv_tex_size = triangle_inv_tex_size(mat);
-                    uniform.inv_tex_size[2] = 1.0;
-                    rectangles.extend_from_slice(&texrect_quad(
-                        rect,
-                        (*uls, *ult),
-                        (*dsdx, *dtdy),
-                        *flip,
-                        *copy_mode,
-                        target.logical_extent,
-                    ));
-                    uniform
-                }
-                SceneOp::FillRect {
-                    rect, color_raw, ..
-                } => {
-                    rectangles.extend_from_slice(&rect_quad(rect, w, h, [1.0; 4], [[0.0; 2]; 4]));
-                    CombinerUniform::fill_rect(*color_raw, target.color_image.siz)
-                }
-                SceneOp::SetScissor(_) => unreachable!("scissor is normalized onto draws"),
-            };
-            // Fills do not dither.
-            if !matches!(operation.draw, SceneOp::FillRect { .. }) {
-                uniform.frame = [self.frame_serial as u32, self.dither_seed, w, h];
-            }
-            let bytes = bytemuck::bytes_of(&uniform);
-            pool[slot * 256..slot * 256 + bytes.len()].copy_from_slice(bytes);
-        }
+    fn upload_draws(&self, device: &wgpu::Device, target: &TargetInputs) -> DrawUpload {
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("workload-uniforms"),
-            contents: &pool,
+            contents: &target.uniforms,
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -324,17 +247,16 @@ impl SceneRenderer {
                 }),
             }],
         });
-        let rectangles = (!rectangles.is_empty()).then(|| {
+        let rectangles = (!target.rectangles.is_empty()).then(|| {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("workload-rectangles"),
-                contents: bytemuck::cast_slice(&rectangles),
+                contents: bytemuck::cast_slice(&target.rectangles),
                 usage: wgpu::BufferUsages::VERTEX,
             })
         });
         DrawUpload {
             uniforms,
             rectangles,
-            rect_indices,
         }
     }
 
@@ -345,23 +267,32 @@ impl SceneRenderer {
         scene: &Scene,
         clear_policy: ClearPolicy,
     ) -> Option<TargetId> {
-        if (scene.draw_runs.is_empty() || scene.raw_pos.is_empty() || scene.indices.is_empty())
-            && scene.framebuffer_pairs.is_empty()
-        {
-            return None;
-        }
-        let workload = Workload::new(scene);
-        self.upload_materials(device, queue, scene);
+        let inputs = RenderInputs::new(
+            scene,
+            (self.fb_w, self.fb_h),
+            [self.frame_serial as u32, self.dither_seed],
+        )?;
+        self.render_inputs(device, queue, &inputs, clear_policy)
+    }
+
+    fn render_inputs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        inputs: &RenderInputs<'_>,
+        clear_policy: ClearPolicy,
+    ) -> Option<TargetId> {
+        self.upload_materials(device, queue, &inputs.textures);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("workload"),
         });
-        let buffers = self
-            .rsp
-            .process_scene(device, &mut encoder, scene, &workload);
+        let buffers =
+            self.rsp
+                .process_scene(device, &mut encoder, inputs.rsp.as_ref(), &inputs.targets);
         let mut last_target = None;
-        for target in &workload.targets {
-            let (w, h) = target.output_extent(self);
-            let any_depth = target.uses_depth(scene);
+        for target in &inputs.targets {
+            let (w, h) = target.output_extent;
+            let any_depth = target.any_depth;
             let depth =
                 (any_depth || target.depth_clear).then(|| Self::make_depth_view(device, w, h));
             if target.depth_clear {
@@ -379,7 +310,7 @@ impl SceneRenderer {
                 );
                 continue;
             }
-            let upload = self.upload_draws(device, scene, target);
+            let upload = self.upload_draws(device, target);
             let material_bgs: Vec<_> = self
                 .tex_caches
                 .iter()
@@ -395,18 +326,14 @@ impl SceneRenderer {
                     }],
                 })
             });
-            let is_decal = |operation: &Operation| {
-                any_depth
-                    && matches!(&operation.draw, SceneOp::Tris(run) if scene.render_modes[run.render_mode_index as usize].z_mode == crate::hle::ZMode::Decal)
-            };
             let mut depth_initialized = false;
             let mut start = 0;
             while start < target.operations.len() {
-                let read_depth = is_decal(&target.operations[start]);
+                let read_depth = target.operations[start].reads_depth();
                 let end = start
                     + target.operations[start..]
                         .iter()
-                        .take_while(|op| is_decal(op) == read_depth)
+                        .take_while(|op| op.reads_depth() == read_depth)
                         .count();
                 if read_depth && !depth_initialized {
                     clear_depth(&mut encoder, &depth.as_ref().unwrap().0);
@@ -452,18 +379,22 @@ impl SceneRenderer {
                 }
                 for (slot, operation) in target.operations.iter().enumerate().take(end).skip(start)
                 {
-                    let scissor = output_scissor(operation.scissor, target.logical_extent, (w, h));
-                    let (x, y, width, height) = clamp_scissor(&scissor, w, h);
+                    let (x, y, width, height) = operation.scissor;
                     if width == 0 || height == 0 {
                         continue;
                     }
                     pass.set_scissor_rect(x, y, width, height);
                     match &operation.draw {
-                        SceneOp::Tris(run) => {
-                            let mode = &scene.render_modes[run.render_mode_index as usize];
+                        DrawInputs::Tris {
+                            cull,
+                            index_start,
+                            index_count,
+                            material_index,
+                            mode,
+                        } => {
                             let pipeline = if read_depth {
                                 self.textured_fb.select_decal(
-                                    run.cull,
+                                    *cull,
                                     mode.fallback_class,
                                     mode.blend_class,
                                 )
@@ -474,10 +405,10 @@ impl SceneRenderer {
                                     Some(dual)
                                         if mode.blend_class == crate::hle::BlendClass::DualSrc =>
                                     {
-                                        dual.select(run.cull, test, write, any_depth)
+                                        dual.select(*cull, test, write, any_depth)
                                     }
                                     _ => self.textured_fb.select(
-                                        run.cull,
+                                        *cull,
                                         test,
                                         write,
                                         any_depth,
@@ -489,30 +420,24 @@ impl SceneRenderer {
                             if let Some(vertices) = buffers.vertices.get(&target.logical_extent) {
                                 pass.set_vertex_buffer(0, vertices.slice(..));
                             }
-                            pass.set_bind_group(0, material_bgs[run.material_index as usize], &[]);
+                            pass.set_bind_group(0, material_bgs[*material_index as usize], &[]);
                             pass.set_bind_group(1, &upload.uniforms, &[(slot * 256) as u32]);
-                            pass.draw_indexed(
-                                run.index_start..run.index_start + run.index_count,
-                                0,
-                                0..1,
-                            );
+                            pass.draw_indexed(*index_start..*index_start + *index_count, 0, 0..1);
                         }
-                        SceneOp::FillRect { .. } | SceneOp::TexRect { .. } => {
+                        DrawInputs::Rectangle { .. } => {
                             self.draw_rect_op(
                                 &mut pass,
                                 device,
                                 target,
                                 &operation.draw,
-                                scene,
                                 &material_bgs,
                                 upload.rectangles.as_ref(),
                                 Some(&upload.uniforms),
                                 slot as u32,
-                                upload.rect_indices[slot],
+                                target.rect_indices[slot],
                                 any_depth,
                             );
                         }
-                        SceneOp::SetScissor(_) => unreachable!("scissor is normalized onto draws"),
                     }
                 }
                 start = end;
@@ -563,7 +488,7 @@ fn clear_depth(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
     });
 }
 
-fn output_scissor(scissor: Scissor, logical: (u32, u32), output: (u32, u32)) -> Scissor {
+pub(super) fn output_scissor(scissor: Scissor, logical: (u32, u32), output: (u32, u32)) -> Scissor {
     let scale = |value: i32, from: u32, to: u32| {
         (i64::from(value) * i64::from(to) / i64::from(from)) as i32
     };
