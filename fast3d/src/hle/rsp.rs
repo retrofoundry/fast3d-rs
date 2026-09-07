@@ -859,6 +859,7 @@ pub fn snapshot_run(
     scene: &mut Scene,
     pc: u64,
 ) -> Option<(u32, u32)> {
+    validate_depth_alias(rdp, false, diags, pc)?;
     validate_depth_source(rdp, diags, pc)?;
     // --- Material ---
     let material_index = if rsp.material_dirty {
@@ -979,6 +980,7 @@ pub(crate) fn snapshot_rect_run(
     scene: &mut Scene,
     pc: u64,
 ) -> Option<(u32, u32)> {
+    validate_depth_alias(rdp, false, diags, pc)?;
     validate_depth_source(rdp, diags, pc)?;
     let m = crate::hle::combiner::build_rect_material(rdp, rsp, tile, diags, pc)?;
     let material_index = match scene.materials.last() {
@@ -997,6 +999,30 @@ pub(crate) fn snapshot_rect_run(
         }
     };
     Some((material_index, render_mode_index))
+}
+
+pub(crate) fn validate_depth_alias(
+    rdp: &crate::hle::rdp::Rdp,
+    fill: bool,
+    diags: &mut Vec<crate::diag::Diagnostic>,
+    pc: u64,
+) -> Option<()> {
+    if rdp.color_image_set
+        && rdp.depth_image == Some(rdp.color_image.addr)
+        && !(fill
+            && (rdp.other_mode_h >> 20) & 3 == 3
+            && rdp.color_image.fmt == 0
+            && rdp.color_image.siz == 2)
+    {
+        diags.push(crate::diag::Diagnostic {
+            at: pc,
+            kind: crate::diag::DiagKind::UnsupportedDepthAlias {
+                address: rdp.color_image.addr,
+            },
+        });
+        return None;
+    }
+    Some(())
 }
 
 fn validate_depth_source(

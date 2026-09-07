@@ -9,6 +9,7 @@ pub(crate) enum TargetId {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Operation {
     pub draw: SceneOp,
+    pub depth_image: Option<u64>,
     pub scissor: Scissor,
     /// First command in this operation; individual command spans remain in `Scene::draw_origins`.
     pub pc: Option<u64>,
@@ -41,20 +42,27 @@ impl Workload {
             .iter()
             .filter_map(|origin| origin.rectangle.map(|key| (key, origin)))
             .collect();
-        let mut targets = Vec::new();
+        let mut targets: Vec<TargetWorkload> = Vec::new();
         if !scene.draw_runs.is_empty() {
             let mut operations = Vec::new();
             for run in &scene.draw_runs {
                 push_triangles(&mut operations, 0, &triangles, run, None);
             }
-            targets.push(TargetWorkload {
-                id: TargetId::Legacy,
-                color_image: ColorImage::default(),
-                depth_image: None,
-                logical_extent: super::PAIRLESS_LOGICAL_EXTENT,
-                depth_clear: false,
-                operations,
-            });
+            for operation in operations {
+                match targets.last_mut() {
+                    Some(target) if target.depth_image == operation.depth_image => {
+                        target.operations.push(operation);
+                    }
+                    _ => targets.push(TargetWorkload {
+                        id: TargetId::Legacy,
+                        color_image: ColorImage::default(),
+                        depth_image: operation.depth_image,
+                        logical_extent: super::PAIRLESS_LOGICAL_EXTENT,
+                        depth_clear: false,
+                        operations: vec![operation],
+                    }),
+                }
+            }
         }
         for (pair_index, pair) in scene.framebuffer_pairs.iter().enumerate() {
             let mut scissor = pair.active_scissor;
@@ -73,20 +81,33 @@ impl Workload {
                         let origin = rectangles.get(&(pair_index, op_index));
                         operations.push(Operation {
                             draw: draw.clone(),
+                            depth_image: pair.depth_image,
                             scissor,
                             pc: origin.map(|origin| origin.pc),
                         });
                     }
                 }
             }
-            targets.push(TargetWorkload {
+            let mut target = TargetWorkload {
                 id: TargetId::Guest(pair.color_image.addr),
                 color_image: pair.color_image,
                 depth_image: pair.depth_image,
                 logical_extent: super::pair_render_extent(pair),
-                depth_clear: pair.is_depth_clear,
-                operations,
-            });
+                depth_clear: pair.depth_image == Some(pair.color_image.addr),
+                operations: Vec::new(),
+            };
+            for operation in operations {
+                let height = operation.scissor.lry.max(0) as u32;
+                if height > target.logical_extent.1 {
+                    if !target.operations.is_empty() {
+                        targets.push(target.clone());
+                        target.operations.clear();
+                    }
+                    target.logical_extent.1 = height;
+                }
+                target.operations.push(operation);
+            }
+            targets.push(target);
         }
         Self { targets }
     }
@@ -107,7 +128,7 @@ fn push_triangles(
     run: &DrawRun,
     scissor: Option<Scissor>,
 ) {
-    let mut push = |start, end, scissor, pc: Option<u64>| {
+    let mut push = |start, end, scissor, pc: Option<u64>, depth_image: Option<u64>| {
         let draw = DrawRun {
             index_start: start,
             index_count: end - start,
@@ -118,9 +139,11 @@ fn push_triangles(
                 draw: SceneOp::Tris(previous),
                 scissor: previous_scissor,
                 pc: previous_pc,
+                depth_image: previous_depth,
             }) if previous.index_start + previous.index_count == start
                 && *previous_scissor == scissor
                 && previous_pc.is_some() == pc.is_some()
+                && *previous_depth == depth_image
                 && *previous
                     == (DrawRun {
                         index_start: previous.index_start,
@@ -132,6 +155,7 @@ fn push_triangles(
             }
             _ => operations.push(Operation {
                 draw: SceneOp::Tris(draw),
+                depth_image,
                 scissor,
                 pc,
             }),
@@ -150,6 +174,7 @@ fn push_triangles(
                 origin.indices.start,
                 scissor.unwrap_or_else(legacy_scissor),
                 None,
+                None,
             );
             start = origin.indices.start;
         }
@@ -159,14 +184,22 @@ fn push_triangles(
             next,
             scissor.unwrap_or(origin.scissor),
             Some(origin.pc),
+            origin.depth_image,
         );
         start = next;
     }
     if start < end {
-        push(start, end, scissor.unwrap_or_else(legacy_scissor), None);
+        push(
+            start,
+            end,
+            scissor.unwrap_or_else(legacy_scissor),
+            None,
+            None,
+        );
     }
 }
 
+use super::framebuffers::{ImageLayout, ImageRequest};
 use super::inputs::{DrawInputs, RenderInputs, TargetInputs, TextureInputs};
 use super::{build_tex_entry, CombinerUniform, SceneRenderer, CLEAR_COLOR};
 use crate::ClearPolicy;
@@ -267,6 +300,7 @@ impl SceneRenderer {
         scene: &Scene,
         clear_policy: ClearPolicy,
     ) -> Option<TargetId> {
+        self.diagnostics.clear();
         let inputs = RenderInputs::new(
             scene,
             (self.fb_w, self.fb_h),
@@ -282,6 +316,7 @@ impl SceneRenderer {
         inputs: &RenderInputs<'_>,
         clear_policy: ClearPolicy,
     ) -> Option<TargetId> {
+        self.diagnostics.clear();
         self.upload_materials(device, queue, &inputs.textures);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("workload"),
@@ -292,15 +327,100 @@ impl SceneRenderer {
         let mut last_target = None;
         for target in &inputs.targets {
             let (w, h) = target.output_extent;
+            if target.id == TargetId::Legacy && target.output_extent != target.logical_extent {
+                if let Some(address) = target.depth_image {
+                    self.diagnostics.push(crate::Diagnostic {
+                        at: target.pc,
+                        kind: crate::DiagKind::UnsupportedLegacyDepthExtent {
+                            address,
+                            canvas: target.output_extent,
+                            depth: target.logical_extent,
+                        },
+                    });
+                    continue;
+                }
+            }
             let any_depth = target.any_depth;
-            let depth =
-                (any_depth || target.depth_clear).then(|| Self::make_depth_view(device, w, h));
+            let depth_id = target
+                .depth_image
+                .map(TargetId::Guest)
+                .or_else(|| any_depth.then_some(TargetId::Legacy));
+            let color_layout = ImageLayout {
+                width: w,
+                fmt: target.color_image.fmt,
+                siz: target.color_image.siz,
+            };
+            let depth_layout = ImageLayout {
+                width: w,
+                fmt: 0,
+                siz: 2,
+            };
+            let mut height = h;
+            if !target.depth_clear {
+                if let Some(old) = self.framebuffers.get(&target.id).filter(|old| {
+                    old.layout == color_layout && (target.id != TargetId::Legacy || old.height == h)
+                }) {
+                    height = height.max(old.color.height());
+                }
+            }
+            if let Some(old) = depth_id
+                .and_then(|id| self.depthbuffers.get(&id))
+                .filter(|old| {
+                    old.layout == depth_layout
+                        && (depth_id != Some(TargetId::Legacy) || old.texture.height() == h)
+                })
+            {
+                height = height.max(old.texture.height());
+            }
+            if let Some(id) = depth_id {
+                self.ensure_depth(
+                    device,
+                    &mut encoder,
+                    ImageRequest {
+                        id,
+                        layout: depth_layout,
+                        height,
+                        pc: target.pc,
+                    },
+                    clear_policy,
+                );
+            }
             if target.depth_clear {
-                clear_depth(&mut encoder, &depth.as_ref().unwrap().0);
+                let depth = &self.depthbuffers[&depth_id.unwrap()];
+                for operation in &target.operations {
+                    if let DrawInputs::DepthFill { word } = operation.draw {
+                        self.depth_pipeline.fill(
+                            device,
+                            &mut encoder,
+                            depth,
+                            word,
+                            operation.scissor,
+                        );
+                    } else {
+                        self.diagnostics.push(crate::Diagnostic {
+                            at: target.pc,
+                            kind: crate::DiagKind::UnsupportedDepthAlias {
+                                address: target.color_image.addr,
+                            },
+                        });
+                    }
+                }
                 continue;
             }
-            let created = self.ensure_fb(device, target.id, w, h);
-            let mut color_load = self.fb_clear_op(target.id, created, clear_policy);
+            self.ensure_color(
+                device,
+                &mut encoder,
+                ImageRequest {
+                    id: target.id,
+                    layout: color_layout,
+                    height: h,
+                    pc: target.pc,
+                },
+                height,
+                clear_policy,
+            );
+            let depth = depth_id.map(|id| &self.depthbuffers[&id]);
+            let mut color_load = wgpu::LoadOp::Load;
             last_target = Some(target.id);
             if target.operations.is_empty() {
                 clear_color(
@@ -316,17 +436,16 @@ impl SceneRenderer {
                 .iter()
                 .map(|cache| &cache.bind_group)
                 .collect();
-            let depth_bg = depth.as_ref().map(|(_, sampled)| {
+            let depth_bg = depth.map(|depth| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("workload-depth"),
                     layout: self.textured_fb.depth_bind_group_layout(),
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(sampled),
+                        resource: wgpu::BindingResource::TextureView(&depth.attach),
                     }],
                 })
             });
-            let mut depth_initialized = false;
             let mut start = 0;
             while start < target.operations.len() {
                 let read_depth = target.operations[start].reads_depth();
@@ -335,19 +454,11 @@ impl SceneRenderer {
                         .iter()
                         .take_while(|op| op.reads_depth() == read_depth)
                         .count();
-                if read_depth && !depth_initialized {
-                    clear_depth(&mut encoder, &depth.as_ref().unwrap().0);
-                    depth_initialized = true;
-                }
-                let attachment = depth.as_ref().filter(|_| !read_depth).map(|(view, _)| {
+                let attachment = depth.filter(|_| !read_depth).map(|depth| {
                     wgpu::RenderPassDepthStencilAttachment {
-                        view,
+                        view: &depth.attach,
                         depth_ops: Some(wgpu::Operations {
-                            load: if depth_initialized {
-                                wgpu::LoadOp::Load
-                            } else {
-                                wgpu::LoadOp::Clear(1.0)
-                            },
+                            load: wgpu::LoadOp::Load,
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
@@ -370,7 +481,7 @@ impl SceneRenderer {
                     multiview_mask: None,
                 });
                 color_load = wgpu::LoadOp::Load;
-                depth_initialized |= any_depth && !read_depth;
+                pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
                 if let Some(index) = &buffers.indices {
                     pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -385,6 +496,9 @@ impl SceneRenderer {
                     }
                     pass.set_scissor_rect(x, y, width, height);
                     match &operation.draw {
+                        DrawInputs::DepthFill { .. } => {
+                            unreachable!("depth fills have no color attachment")
+                        }
                         DrawInputs::Tris {
                             cull,
                             index_start,
@@ -457,6 +571,7 @@ impl SceneRenderer {
     ) {
         // Internal renders are independent frames; retain the dither frame chosen by the caller.
         self.first_touch.clear();
+        self.depth_first_touch.clear();
         let source = self.render_into_store(device, queue, scene, ClearPolicy::PerFrame);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("workload-present"),
@@ -468,24 +583,6 @@ impl SceneRenderer {
         }
         queue.submit(Some(encoder.finish()));
     }
-}
-
-fn clear_depth(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
-    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("workload-depth-init"),
-        color_attachments: &[],
-        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-            view,
-            depth_ops: Some(wgpu::Operations {
-                load: wgpu::LoadOp::Clear(1.0),
-                store: wgpu::StoreOp::Store,
-            }),
-            stencil_ops: None,
-        }),
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
 }
 
 pub(super) fn output_scissor(scissor: Scissor, logical: (u32, u32), output: (u32, u32)) -> Scissor {
@@ -507,7 +604,7 @@ impl From<u64> for TargetId {
     }
 }
 
-fn clear_color(
+pub(super) fn clear_color(
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     load: wgpu::LoadOp<wgpu::Color>,

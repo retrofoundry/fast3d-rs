@@ -76,6 +76,9 @@ impl<'a> RspInputs<'a> {
 #[derive(Debug, PartialEq)]
 pub(super) struct TargetInputs {
     pub id: TargetId,
+    pub color_image: crate::scene::ColorImage,
+    pub depth_image: Option<u64>,
+    pub pc: u64,
     pub logical_extent: (u32, u32),
     pub output_extent: (u32, u32),
     pub any_depth: bool,
@@ -94,6 +97,9 @@ pub(super) struct OperationInputs {
 
 #[derive(Debug, PartialEq)]
 pub(super) enum DrawInputs {
+    DepthFill {
+        word: u32,
+    },
     Tris {
         cull: CullKind,
         index_start: u32,
@@ -145,23 +151,19 @@ impl<'a> RenderInputs<'a> {
                     let any_depth = target.uses_depth(scene);
                     let mut inputs = TargetInputs {
                         id: target.id,
+                        color_image: target.color_image,
+                        depth_image: target.depth_image,
+                        pc: target.operations.first().and_then(|op| op.pc).unwrap_or(0),
                         logical_extent: target.logical_extent,
                         output_extent: (w, h),
                         any_depth,
                         depth_clear: target.depth_clear,
                         operations: Vec::new(),
-                        uniforms: vec![
-                            0;
-                            if target.depth_clear {
-                                0
-                            } else {
-                                target.operations.len() * 256
-                            }
-                        ],
+                        uniforms: vec![0; target.operations.len() * 256],
                         rectangles: Vec::new().into(),
                         rect_indices: Vec::new(),
                     };
-                    if !target.depth_clear {
+                    {
                         for (slot, operation) in target.operations.iter().enumerate() {
                             inputs
                                 .rect_indices
@@ -245,6 +247,26 @@ impl<'a> RenderInputs<'a> {
                                 SceneOp::FillRect {
                                     rect, color_raw, ..
                                 } => {
+                                    if target.depth_clear {
+                                        let scissor = crate::scene::Scissor {
+                                            ulx: operation.scissor.ulx.max(rect.ulx),
+                                            uly: operation.scissor.uly.max(rect.uly),
+                                            lrx: operation
+                                                .scissor
+                                                .lrx
+                                                .min(rect.lrx.saturating_add(1)),
+                                            lry: operation
+                                                .scissor
+                                                .lry
+                                                .min(rect.lry.saturating_add(1)),
+                                            mode: operation.scissor.mode,
+                                        };
+                                        inputs.operations.push(OperationInputs {
+                                            scissor: super::clamp_scissor(&scissor, w, h),
+                                            draw: DrawInputs::DepthFill { word: *color_raw },
+                                        });
+                                        continue;
+                                    }
                                     inputs.rectangles.extend_from_slice(&super::rect_quad(
                                         rect,
                                         w,

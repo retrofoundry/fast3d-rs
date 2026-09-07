@@ -36,7 +36,7 @@ pub use hardware::{
 };
 
 /// How internal framebuffers are cleared across frames (spec §4).
-/// Applies to legacy and guest color targets; subsequent tasks in a frame load existing color.
+/// Applies to legacy and guest color and depth targets; subsequent tasks in a frame load them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClearPolicy {
     /// Clear each framebuffer on first touch every frame — simple/no-VI consumers (web, goldens).
@@ -444,6 +444,9 @@ impl Renderer {
     /// Guest RDP registers, TMEM and the established color image survive subsequent tasks,
     /// `begin_frame`, resize and reconfiguration. RSP and scene recording state start fresh per
     /// task. Triangles use Legacy only until a color image is established, including address zero.
+    /// Legacy draws with a selected guest depth image require a 320x240 canvas; other extents
+    /// emit [`DiagKind::UnsupportedLegacyDepthExtent`] and skip that target. Set a color image
+    /// to share guest depth independently of canvas size.
     /// Call `reset_rdp_state` before an independent scene, or `reset` to also discard pixels.
     /// Rejected, memory-faulted and observer-cancelled tasks discard their register changes;
     /// the runaway guard retains the executed prefix. ClearPolicy governs pixels independently.
@@ -511,8 +514,8 @@ impl Renderer {
     /// subsequent tasks in a frame load existing contents, and [`ClearPolicy::Persist`] also
     /// loads across frames. [`ClearPolicy::PerFrame`] clears each touched target on its first
     /// touch after [`Self::begin_frame`]. Replaying a shorter prefix without a clear retains
-    /// earlier pixels outside its draws. Depth remains transient. `begin_frame` advances the
-    /// dither serial. Call [`Self::reset`] before each independent inspector prefix to discard
+    /// earlier pixels outside its draws. Depth follows the same clear policy. `begin_frame`
+    /// advances the dither serial. Call [`Self::reset`] before each independent inspector prefix to discard
     /// previous targets and restart that sequence, giving repeatable pixels under either policy.
     pub fn process_dl_prefix(
         &mut self,
@@ -641,6 +644,10 @@ impl Renderer {
             &result.scene,
             self.config.clear_policy,
         );
+        for &diagnostic in &self.inner.diagnostics {
+            diags.emit(diagnostic);
+            result.diags.push(diagnostic);
+        }
         if let Some(addr) = scanout {
             self.last_scanout_addr = Some(addr);
             self.last_backend_was_image = is_image;

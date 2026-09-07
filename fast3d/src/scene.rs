@@ -103,6 +103,7 @@ pub struct FramebufferPair {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DrawOrigin {
     pub pc: u64,
+    pub depth_image: Option<u64>,
     pub scissor: Scissor,
     pub indices: std::ops::Range<u32>,
     pub rectangle: Option<(usize, usize)>,

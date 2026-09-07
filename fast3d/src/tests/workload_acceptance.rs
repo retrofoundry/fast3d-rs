@@ -469,33 +469,61 @@ fn decal_first_initializes_depth() {
 #[test]
 fn logical_extent_survives_canvas_resize() {
     let (device, queue) = headless_device_forced_fallback();
-    let mut b = DlBuilder::new();
-    let mut dl = setup(&mut b, false);
-    dl.push(gdp_set_scissor(0, 64 * 4, 24 * 4, 192 * 4, 144 * 4));
-    quad(&mut b, &mut dl, [32, 40, 208, 168], 32, RED, OPAQUE);
-    dl.push(gdp_set_scissor(0, 128 * 4, 112 * 4, 256 * 4, 192 * 4));
-    quad(&mut b, &mut dl, [144, 96, 272, 216], 0, GREEN, OPAQUE);
-    let scene = interpret(&finish(b, dl));
-    for policy in POLICIES {
-        let mut renderer = SceneRenderer::new(&device, FORMAT, 320, 240, false);
-        for (width, height) in [(320, 240), (640, 480), (640, 240), (320, 480), (320, 240)] {
-            renderer.resize(&device, width, height);
-            renderer.begin_frame();
-            assert_eq!(
-                renderer.render_into_store(&device, &queue, &scene, policy),
-                Some(TargetId::Legacy)
-            );
-            let pixels = scanout(&device, &queue, &renderer, TargetId::Legacy, width, height);
-            assert_pixels(&pixels, width, height, |x, y| {
-                let (x, y) = (x * 320 / width, y * 240 / height);
-                if in_rect(x, y, [144, 112, 256, 192]) {
-                    GREEN
-                } else if in_rect(x, y, [64, 40, 192, 144]) {
-                    RED
-                } else {
-                    BACKGROUND
+    for paired in [false, true] {
+        let mut b = DlBuilder::new();
+        let mut dl = setup(&mut b, paired);
+        if !paired {
+            dl.retain(|&(w0, _)| w0 >> 24 != 0xfe);
+        } else {
+            fill(&mut dl, [0, 0, 320, 240], 0x0001_0001);
+            dl.push(gdp_set_cycle_type(0));
+        }
+        dl.push(gdp_set_scissor(0, 64 * 4, 24 * 4, 192 * 4, 144 * 4));
+        quad(&mut b, &mut dl, [32, 40, 208, 168], 32, RED, OPAQUE);
+        dl.push(gdp_set_scissor(0, 128 * 4, 112 * 4, 256 * 4, 192 * 4));
+        quad(&mut b, &mut dl, [144, 96, 272, 216], 0, GREEN, OPAQUE);
+        let scene = interpret(&finish(b, dl));
+        let mut clear_dl = vec![
+            gdp_set_depth_image(DEPTH_ADDRESS),
+            gdp_set_color_image(0, 2, 320, DEPTH_ADDRESS),
+            gdp_set_scissor(0, 0, 0, 1280, 960),
+        ];
+        fill(&mut clear_dl, [0, 0, 320, 240], 0xfffc_fffc);
+        let clear = interpret(&finish(DlBuilder::new(), clear_dl));
+        for policy in POLICIES {
+            let mut renderer = SceneRenderer::new(&device, FORMAT, 320, 240, false);
+            for (width, height) in [(320, 240), (640, 480), (640, 240), (320, 480), (320, 240)] {
+                renderer.resize(&device, width, height);
+                renderer.begin_frame();
+                if paired {
+                    renderer.render_into_store(&device, &queue, &clear, policy);
                 }
-            });
+                assert_eq!(
+                    renderer.render_into_store(&device, &queue, &scene, policy),
+                    Some(target(paired))
+                );
+                let (read_width, read_height) = if paired { (320, 240) } else { (width, height) };
+                let pixels = scanout(
+                    &device,
+                    &queue,
+                    &renderer,
+                    target(paired),
+                    read_width,
+                    read_height,
+                );
+                assert_pixels(&pixels, read_width, read_height, |x, y| {
+                    let (x, y) = (x * 320 / read_width, y * 240 / read_height);
+                    if in_rect(x, y, [144, 112, 256, 192]) {
+                        GREEN
+                    } else if in_rect(x, y, [64, 40, 192, 144]) {
+                        RED
+                    } else if paired {
+                        BLACK
+                    } else {
+                        BACKGROUND
+                    }
+                });
+            }
         }
     }
 }

@@ -4,7 +4,9 @@ use bytemuck::{Pod, Zeroable};
 #[cfg(test)]
 mod texrect_tests;
 
+pub(crate) mod framebuffers;
 pub(crate) mod inputs;
+use framebuffers::{DepthImage, DepthPipeline, Framebuffer, ImageLayout};
 
 /// The depth format the Z-buffer uses. `Depth32Float` is WebGL2-core (`DEPTH_COMPONENT32F`) and
 /// matches `D32_FLOAT`. Callers that own the depth texture must use this format.
@@ -1835,13 +1837,6 @@ fn build_tex_entry(
     }
 }
 
-struct Framebuffer {
-    color: wgpu::Texture,      // Rgba8Unorm | RENDER_ATTACHMENT | TEXTURE_BINDING
-    attach: wgpu::TextureView, // color attachment for the RCP pass
-    sampled: wgpu::TextureView,
-    present_bg: wgpu::BindGroup, // @group(0): sampled(color) + Clamp/Linear sampler, for `scanout`
-}
-
 pub struct SceneRenderer {
     pub(crate) frame_serial: u64,
     pub(crate) dither_seed: u32,
@@ -1850,6 +1845,7 @@ pub struct SceneRenderer {
     /// Fullscreen-triangle blit pipeline built at the surface `color_format`. Reads from an
     /// `Rgba8Unorm` intermediate FB (produced by `textured_fb` passes) via `group0_bgl`.
     present: wgpu::RenderPipeline,
+    present_extent_layout: wgpu::BindGroupLayout,
     rsp: RspProcessPipeline,
     samplers: [[wgpu::Sampler; 3]; 3],
     /// Content-keyed GPU texture + `@group(0)` bind group — one per `scene.materials[i]`.
@@ -1871,39 +1867,15 @@ pub struct SceneRenderer {
     fb_h: u32,
     framebuffers: std::collections::HashMap<workload::TargetId, Framebuffer>,
     first_touch: std::collections::HashSet<workload::TargetId>,
+    pub(crate) depthbuffers: std::collections::HashMap<workload::TargetId, DepthImage>,
+    depth_first_touch: std::collections::HashSet<workload::TargetId>,
+    depth_pipeline: DepthPipeline,
+    pub(crate) diagnostics: Vec<crate::Diagnostic>,
     /// Descriptor array for bind groups that sample plain images (fill, scanout, FB alias).
     image_sampling: wgpu::Buffer,
 }
 
 impl SceneRenderer {
-    /// Create the scene depth texture and return `(attachment_view, sample_view)`. The texture
-    /// carries `RENDER_ATTACHMENT | TEXTURE_BINDING` (E1) so the SAME `Depth32Float` buffer that
-    /// pass 1 writes as a depth attachment can be SAMPLED (`texture_depth_2d`) by the decal pass.
-    /// Both views are over the same texture; they are used in distinct, sequential passes.
-    fn make_depth_view(
-        device: &wgpu::Device,
-        w: u32,
-        h: u32,
-    ) -> (wgpu::TextureView, wgpu::TextureView) {
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("n64-depth"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let attachment = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sample = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        (attachment, sample)
-    }
-
     pub fn new(
         device: &wgpu::Device,
         color_format: wgpu::TextureFormat,
@@ -1920,6 +1892,20 @@ impl SceneRenderer {
         // Present (blit) pipeline: fullscreen triangle at surface color_format, reads from an
         // Rgba8Unorm intermediate via group0_bgl (tex+sampler). Blits both the per-pair FB passes
         // and the pair-less internal FB to the caller's target.
+        let present_extent_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("present-extent"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
         let present = {
             let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("present-shader"),
@@ -1927,7 +1913,10 @@ impl SceneRenderer {
             });
             let present_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("present-layout"),
-                bind_group_layouts: &[Some(textured.bind_group_layout())],
+                bind_group_layouts: &[
+                    Some(textured.bind_group_layout()),
+                    Some(&present_extent_layout),
+                ],
                 immediate_size: 0,
             });
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -2037,6 +2026,7 @@ impl SceneRenderer {
             textured,
             textured_fb,
             present,
+            present_extent_layout,
             rsp,
             samplers,
             tex_caches: Vec::new(),
@@ -2046,6 +2036,10 @@ impl SceneRenderer {
             fb_h: h,
             framebuffers: std::collections::HashMap::new(),
             first_touch: std::collections::HashSet::new(),
+            depthbuffers: std::collections::HashMap::new(),
+            depth_first_touch: std::collections::HashSet::new(),
+            depth_pipeline: DepthPipeline::new(device),
+            diagnostics: Vec::new(),
             frame_serial: 0,
             dither_seed: 0,
             image_sampling,
@@ -2066,6 +2060,7 @@ impl SceneRenderer {
         encoder: &mut wgpu::CommandEncoder,
         dst_view: &wgpu::TextureView,
         src_bg: &wgpu::BindGroup,
+        extent_bg: &wgpu::BindGroup,
     ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("present-pass"),
@@ -2085,6 +2080,7 @@ impl SceneRenderer {
         });
         pass.set_pipeline(&self.present);
         pass.set_bind_group(0, src_bg, &[]);
+        pass.set_bind_group(1, extent_bg, &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -2116,11 +2112,10 @@ impl SceneRenderer {
                 target.id,
                 "fb_source cannot reference the current pair (same-pair is invalid)"
             );
-            let sampled = &self
+            let source = &self
                 .framebuffers
                 .get(&workload::TargetId::Guest(*src_addr))
-                .expect("framebuffer source must precede its consumer")
-                .sampled;
+                .expect("framebuffer source must precede its consumer");
             Some(
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("fb-source-bg"),
@@ -2128,7 +2123,7 @@ impl SceneRenderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(sampled),
+                            resource: wgpu::BindingResource::TextureView(&source.sampled),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
@@ -2157,7 +2152,7 @@ impl SceneRenderer {
                     ]
                     .into_iter()
                     .chain(lod_level_entries(&self.dummy_view))
-                    .chain([sampling_entry(&self.image_sampling)])
+                    .chain([sampling_entry(&source.sampling)])
                     .collect::<Vec<_>>(),
                 }),
             )
@@ -2196,20 +2191,42 @@ impl SceneRenderer {
         pass.draw((rect_idx * 6)..(rect_idx * 6 + 6), 0..1);
     }
 
-    fn ensure_fb(
-        &mut self,
+    fn make_present_extent(
+        &self,
         device: &wgpu::Device,
-        addr: workload::TargetId,
-        w: u32,
+        width: u32,
+        height: u32,
+        attachment_height: u32,
+    ) -> wgpu::BindGroup {
+        use wgpu::util::DeviceExt;
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("present-extent"),
+            contents: bytemuck::cast_slice(&[
+                1.0_f32,
+                height as f32 / attachment_height as f32,
+                (width as f32 - 0.5) / width as f32,
+                (height as f32 - 0.5) / attachment_height as f32,
+            ]),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present-extent"),
+            layout: &self.present_extent_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buffer.as_entire_binding(),
+            }],
+        })
+    }
+
+    fn make_fb(
+        &self,
+        device: &wgpu::Device,
+        layout: ImageLayout,
         h: u32,
-    ) -> bool {
-        let need = match self.framebuffers.get(&addr) {
-            Some(fb) => fb.color.width() != w || fb.color.height() != h,
-            None => true,
-        };
-        if !need {
-            return false;
-        }
+        logical_height: u32,
+    ) -> Framebuffer {
+        let w = layout.width;
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("fb-store-color"),
             size: wgpu::Extent3d {
@@ -2221,7 +2238,10 @@ impl SceneRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let attach = color.create_view(&wgpu::TextureViewDescriptor::default());
@@ -2263,16 +2283,17 @@ impl SceneRenderer {
             .chain([sampling_entry(&self.image_sampling)])
             .collect::<Vec<_>>(),
         });
-        self.framebuffers.insert(
-            addr,
-            Framebuffer {
-                color,
-                attach,
-                sampled,
-                present_bg,
-            },
-        );
-        true
+        let present_extent = self.make_present_extent(device, w, logical_height, h);
+        Framebuffer {
+            height: logical_height,
+            sampling: framebuffers::color_sampling(device, w, logical_height),
+            present_extent,
+            color,
+            attach,
+            sampled,
+            present_bg,
+            layout,
+        }
     }
 
     /// True if the store holds a framebuffer for `addr` (the VI source-selection guard `present` uses).
@@ -2294,11 +2315,14 @@ impl SceneRenderer {
             .framebuffers
             .get(&src_addr.into())
             .expect("scanout: src_addr not in the store (gate on has_fb)");
-        self.blit_to(encoder, target, &fb.present_bg);
+        self.blit_to(encoder, target, &fb.present_bg, &fb.present_extent);
     }
 
     pub(crate) fn reset(&mut self) {
         self.framebuffers.clear();
+        self.depthbuffers.clear();
+        self.depth_first_touch.clear();
+        self.diagnostics.clear();
         self.first_touch.clear();
         self.frame_serial = 0;
         self.dither_seed = 0;
@@ -2309,27 +2333,7 @@ impl SceneRenderer {
     pub fn begin_frame(&mut self) {
         self.frame_serial = self.frame_serial.wrapping_add(1);
         self.first_touch.clear();
-    }
-
-    /// The color LoadOp for a store FB this frame under `clear_policy`. Mutates the per-frame
-    /// first-touch set, so it MUST be called once per pair in DL order.
-    fn fb_clear_op(
-        &mut self,
-        addr: workload::TargetId,
-        created_or_resized: bool,
-        clear_policy: crate::ClearPolicy,
-    ) -> wgpu::LoadOp<wgpu::Color> {
-        let first_this_frame = self.first_touch.insert(addr);
-        let clear = created_or_resized
-            || match clear_policy {
-                crate::ClearPolicy::PerFrame => first_this_frame,
-                crate::ClearPolicy::Persist => created_or_resized,
-            };
-        if clear {
-            wgpu::LoadOp::Clear(CLEAR_COLOR)
-        } else {
-            wgpu::LoadOp::Load
-        }
+        self.depth_first_touch.clear();
     }
 }
 

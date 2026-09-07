@@ -565,6 +565,7 @@ pub(crate) fn interpret_with_state<M: Rdram>(
                     });
                 scene.draw_origins.push(crate::scene::DrawOrigin {
                     pc,
+                    depth_image: rdp.depth_image,
                     scissor: rdp.scissor,
                     indices: 0..0,
                     rectangle: Some((cur, scene.framebuffer_pairs[cur].ops.len() - 1)),
@@ -633,7 +634,9 @@ pub(crate) fn interpret_with_state<M: Rdram>(
                     break 'dispatch;
                 }
 
-                if !crate::hle::combiner::validate_fill_inputs(&rdp, &mut diags, pc) {
+                if crate::hle::rsp::validate_depth_alias(&rdp, true, &mut diags, pc).is_none()
+                    || !crate::hle::combiner::validate_fill_inputs(&rdp, &mut diags, pc)
+                {
                     dropped_runs += 1;
                     pc = next_pc;
                     break 'dispatch;
@@ -652,6 +655,7 @@ pub(crate) fn interpret_with_state<M: Rdram>(
                 );
                 scene.draw_origins.push(crate::scene::DrawOrigin {
                     pc,
+                    depth_image: rdp.depth_image,
                     scissor: rdp.scissor,
                     indices: 0..0,
                     rectangle: Some((
@@ -689,6 +693,7 @@ pub(crate) fn interpret_with_state<M: Rdram>(
             if index_end > index_start {
                 scene.draw_origins.push(crate::scene::DrawOrigin {
                     pc,
+                    depth_image: rdp.depth_image,
                     scissor: if !rdp.scissor_set && !rdp.color_image_set {
                         crate::scene::Scissor {
                             lrx: 320,

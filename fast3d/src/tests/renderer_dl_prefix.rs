@@ -387,6 +387,7 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
 #[test]
 fn depth_only_prefix_matches_shorter_list_and_keeps_prior_color_scanout() {
     let full = hw([
+        gdp_set_cycle_type(3),
         gdp_set_depth_image(Z),
         gdp_set_color_image(0, 2, 64, Z),
         gdp_set_scissor(0, 0, 0, 256, 256),
@@ -398,6 +399,7 @@ fn depth_only_prefix_matches_shorter_list_and_keeps_prior_color_scanout() {
         gsp_enddl(),
     ]);
     let short = hw([
+        gdp_set_cycle_type(3),
         gdp_set_depth_image(Z),
         gdp_set_color_image(0, 2, 64, Z),
         gdp_set_scissor(0, 0, 0, 256, 256),
@@ -405,12 +407,12 @@ fn depth_only_prefix_matches_shorter_list_and_keeps_prior_color_scanout() {
         gdp_fill_rectangle(0, 0, 252, 252),
         gsp_enddl(),
     ]);
-    let mut r = compare_prefix(&full, &short, 0, 5, &[A, Z]);
+    let mut r = compare_prefix(&full, &short, 0, 6, &[A, Z]);
     assert!(r.frame_scenes[0].framebuffer_pairs[0].is_depth_clear);
     assert_eq!(r.last_scanout_addr, None);
     r.process_dl(&fill_hw(A, 0xf801f801), 0, Microcode::F3dex2, &mut NopSink);
     let before = store_pixels(&r, A.into());
-    let s = r.process_dl_prefix(&full, 0, Microcode::F3dex2, &mut NopSink, 5);
+    let s = r.process_dl_prefix(&full, 0, Microcode::F3dex2, &mut NopSink, 6);
     assert!(!s.renderable);
     assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
     assert_eq!(store_pixels(&r, A.into()), before);
