@@ -150,18 +150,10 @@ pub fn color_b(idx: u32) -> ColorIn {
     }
 }
 
-/// True iff `color_a(a_idx)` and `color_b(b_idx)` are PROVABLY the same value for every possible
-/// runtime state, i.e. the `(a - b)` term these two color-combiner slots feed is guaranteed to
-/// cancel to zero. Index equality ALONE is not sufficient: the two mux tables are asymmetric —
-/// `color_a` idx 6 = ONE (constant 1.0) but `color_b` idx 6 = KEY_CENTER (unwired, resolves to
-/// 0.0), so `a_idx == b_idx == 6` must NOT be treated as annulled. Provably equal iff
-/// `a_idx == b_idx` and both are in `0..=5` (the identical runtime source feeds both sides), or
-/// `a_idx` is in `7..=15` and `b_idx` is in `6..=15` (both sides are the constant ZERO). Used by
-/// the LOD byte-identity regression guard (`tests/goldens.rs`) to decide whether a color-C LOD
-/// selector (idx 13/14) can affect output through a given A/B pair. Test-only.
+/// Equal decoded sources cancel the color combiner's A-B term in every register state.
 #[cfg(test)]
 pub(crate) fn color_ab_provably_equal(a_idx: u32, b_idx: u32) -> bool {
-    (a_idx == b_idx && a_idx <= 5) || (a_idx >= 7 && b_idx >= 6)
+    color_a(a_idx) == color_b(b_idx)
 }
 
 /// color_c slot: 5-bit index. 16 entries: 0-5 common; 6=KEY_SCALE, 7=COMBINED_ALPHA,
@@ -376,6 +368,8 @@ pub struct Material {
     pub filter_mode: u32,
     pub prim: [u8; 4],
     pub env: [u8; 4],
+    pub convert: [i16; 6],
+    pub key: [crate::hle::rdp::KeyChannel; 3],
     /// Whether physical texture 0 is sampled; triangles also require SPTexture on.
     pub tex_enable: bool,
     /// Wrap mode from the render tile (cms/cmt): 0=WRAP 1=MIRROR 2=CLAMP.
@@ -505,6 +499,9 @@ fn validate_combiner(
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
 ) -> bool {
+    if !validate_register_selectors(selectors, cycle_type, diags, pc) {
+        return false;
+    }
     let slots = match cycle_type {
         0 => selectors.cyc1.unwired_mask() | selectors.cyc1.texel1_mask(),
         1 => (selectors.cyc0.unwired_mask() << 8) | selectors.cyc1.unwired_mask(),
@@ -518,6 +515,74 @@ fn validate_combiner(
         kind: crate::diag::DiagKind::UnwiredSelector { slots },
     });
     false
+}
+
+fn validate_register_selectors(
+    selectors: &CombinerSelectors,
+    cycle_type: u32,
+    diags: &mut Vec<crate::diag::Diagnostic>,
+    pc: u64,
+) -> bool {
+    use crate::diag::{ConvertInput, DiagKind, Diagnostic, KeyInput};
+
+    let cycles: &[&CycleSel] = match cycle_type {
+        0 => &[&selectors.cyc1],
+        1 => &[&selectors.cyc0, &selectors.cyc1],
+        _ => &[],
+    };
+    for cycle in cycles {
+        for input in [cycle.ca, cycle.cb, cycle.cc, cycle.cd] {
+            let kind = match input {
+                ColorIn::KeyCenter => DiagKind::UnsupportedKeyInput {
+                    selector: KeyInput::Center,
+                },
+                ColorIn::KeyScale => DiagKind::UnsupportedKeyInput {
+                    selector: KeyInput::Scale,
+                },
+                ColorIn::K4 => DiagKind::UnsupportedConvertInput {
+                    selector: ConvertInput::K4,
+                },
+                ColorIn::K5 => DiagKind::UnsupportedConvertInput {
+                    selector: ConvertInput::K5,
+                },
+                _ => continue,
+            };
+            diags.push(Diagnostic { at: pc, kind });
+            return false;
+        }
+    }
+    true
+}
+
+pub(crate) fn validate_fill_inputs(
+    rdp: &crate::hle::rdp::Rdp,
+    diags: &mut Vec<crate::diag::Diagnostic>,
+    pc: u64,
+) -> bool {
+    let selectors = decode_combine(rdp.combine_l, rdp.combine_h);
+    validate_register_selectors(&selectors, (rdp.other_mode_h >> 20) & 3, diags, pc)
+        && validate_conversion_modes(rdp, diags, pc)
+}
+
+fn validate_conversion_modes(
+    rdp: &crate::hle::rdp::Rdp,
+    diags: &mut Vec<crate::diag::Diagnostic>,
+    pc: u64,
+) -> bool {
+    let mode_error = if rdp.other_mode_h & crate::hle::consts::G_CK_KEY != 0 {
+        Some(crate::diag::DiagKind::UnsupportedChromaKey)
+    } else if rdp.texture_conversion_set
+        && rdp.other_mode_h & (7 << 9) != crate::hle::consts::G_TC_FILT
+    {
+        Some(crate::diag::DiagKind::UnsupportedTextureConversion)
+    } else {
+        None
+    };
+    if let Some(kind) = mode_error {
+        diags.push(crate::diag::Diagnostic { at: pc, kind });
+        return false;
+    }
+    true
 }
 
 fn physical_texture_uses(sel: &CombinerSelectors, cycle_type: u32) -> (bool, bool) {
@@ -674,6 +739,9 @@ fn build_material_inner(
     if !validate_combiner(&selectors, cycle_type, diags, pc) {
         return None;
     }
+    if !validate_conversion_modes(rdp, diags, pc) {
+        return None;
+    }
     let (uses_physical0, uses_physical1) = physical_texture_uses(&selectors, cycle_type);
     if rdp.tmem.is_empty() && cycle_type < 2 {
         if !rect && rdp.combine_l == 0 && rdp.combine_h == 0 {
@@ -809,6 +877,8 @@ fn build_material_inner(
         },
         prim: rdp.prim,
         env: rdp.env,
+        convert: rdp.convert,
+        key: rdp.key,
         tex_enable,
         wrap_s: tile.cms,
         wrap_t: tile.cmt,
@@ -888,23 +958,18 @@ mod tests {
 
     #[test]
     fn color_ab_idx6_pair_is_not_provably_equal_and_guard_flags_it() {
-        // Regression for the byte-identity-guard hardening fix. The two color mux tables are
-        // asymmetric at idx 6: color_a(6) = ONE (constant 1.0), color_b(6) = KEY_CENTER, which the
-        // shader resolves to 0.0 (unwired) — see `color_a_rgb`/`color_b_rgb` in
-        // render/combiner_prelude.wgsl. A naive "a_idx == b_idx => annulled" test (the guard's
-        // pre-fix logic) wrongly treated this pair as a byte-identity no-op.
         assert_eq!(color_a(6), ColorIn::One);
         assert_eq!(color_b(6), ColorIn::KeyCenter);
         assert!(
             !ColorIn::KeyCenter.wired(),
-            "KEY_CENTER is unwired => the shader resolves it to the constant 0.0"
+            "KEY_CENTER is recognised but unwired; active draws must reject it"
         );
 
         // The corrected, extracted annulment predicate must NOT treat this pair as provably zero.
         assert!(
             !color_ab_provably_equal(6, 6),
             "a_idx == b_idx == 6 must NOT be annulled: color_a(6) = ONE(1.0) != color_b(6) = \
-             KEY_CENTER(0.0)"
+             KEY_CENTER"
         );
 
         // Positive-detection: a synthetic cyc1 combine word with A=6 (ONE), B=6 (KEY_CENTER),

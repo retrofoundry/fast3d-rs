@@ -683,6 +683,7 @@ impl Rsp {
             ((1u32 << length) - 1) << shift
         };
         rdp.other_mode_h = (rdp.other_mode_h & !mask) | data;
+        rdp.texture_conversion_set |= (mask | data) & (7 << 9) != 0;
     }
 
     pub fn set_texture_image(

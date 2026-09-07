@@ -68,7 +68,9 @@ fn roundtrip_fill_rectangle() {
 
     assert_eq!(pair.ops.len(), 1);
     match &pair.ops[0] {
-        crate::hle::SceneOp::FillRect { rect, color_raw } => {
+        crate::hle::SceneOp::FillRect {
+            rect, color_raw, ..
+        } => {
             assert_eq!(*color_raw, 0xCAFECAFE);
             assert_eq!(rect.ulx, 0);
             assert_eq!(rect.uly, 0);

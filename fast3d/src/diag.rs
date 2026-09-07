@@ -9,6 +9,18 @@ pub struct Diagnostic {
     pub kind: DiagKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyInput {
+    Center,
+    Scale,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConvertInput {
+    K4,
+    K5,
+}
+
 /// The kind of a diagnostic. `Copy` (no per-diag allocation). `#[non_exhaustive]`: the walk's
 /// internal set may grow. The variable-length unwired-selector list is a `Copy` bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +42,14 @@ pub enum DiagKind {
         siz: u8,
     },
     UnsupportedPrimitiveDepthSource,
+    UnsupportedKeyInput {
+        selector: KeyInput,
+    },
+    UnsupportedConvertInput {
+        selector: ConvertInput,
+    },
+    UnsupportedTextureConversion,
+    UnsupportedChromaKey,
     UnsupportedCommandParameters {
         opcode: u8,
     },
@@ -98,6 +118,10 @@ impl DiagKind {
             | DiagKind::UnsupportedCommand { .. }
             | DiagKind::UnsupportedMicrocodeLoad { .. }
             | DiagKind::UnsupportedTextureFormat { .. }
+            | DiagKind::UnsupportedKeyInput { .. }
+            | DiagKind::UnsupportedConvertInput { .. }
+            | DiagKind::UnsupportedTextureConversion
+            | DiagKind::UnsupportedChromaKey
             | DiagKind::UnsupportedPrimitiveDepthSource
             | DiagKind::UnsupportedCommandParameters { .. }
             | DiagKind::RunawayDl { .. }
@@ -149,6 +173,16 @@ impl std::fmt::Display for DiagKind {
             DiagKind::UnsupportedTextureFormat { fmt, siz } => {
                 write!(f, "unsupported texture format: fmt={fmt}, siz={siz}")
             }
+            DiagKind::UnsupportedKeyInput { selector } => {
+                write!(f, "unsupported key input: {selector:?}")
+            }
+            DiagKind::UnsupportedConvertInput { selector } => {
+                write!(f, "unsupported convert input: {selector:?}")
+            }
+            DiagKind::UnsupportedTextureConversion => {
+                write!(f, "texture conversion is unsupported")
+            }
+            DiagKind::UnsupportedChromaKey => write!(f, "chroma keying is unsupported"),
             DiagKind::UnsupportedPrimitiveDepthSource => {
                 write!(f, "primitive depth source is unsupported")
             }

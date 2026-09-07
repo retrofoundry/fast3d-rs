@@ -1102,7 +1102,9 @@ mod phase5_tests {
         assert_eq!(pair.color_image.width, 64);
         assert_eq!(pair.color_image.addr, 0x0001_0000);
         match pair.ops.as_slice() {
-            [SceneOp::FillRect { rect, color_raw }, SceneOp::TexRect {
+            [SceneOp::FillRect {
+                rect, color_raw, ..
+            }, SceneOp::TexRect {
                 rect: tex_rect,
                 uls,
                 ult,

@@ -419,12 +419,23 @@ pub fn interpret<M: Rdram>(
                 continue;
             }
 
+            if !crate::hle::combiner::validate_fill_inputs(&rdp, &mut diags, pc) {
+                dropped_runs += 1;
+                pc += words * stride;
+                continue;
+            }
+
             crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
             crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
             let color_raw = rdp.fill_color_raw;
             scene.framebuffer_pairs[rec.cur_pair]
                 .ops
-                .push(crate::hle::rsp::SceneOp::FillRect { rect, color_raw });
+                .push(crate::hle::rsp::SceneOp::FillRect {
+                    rect,
+                    color_raw,
+                    convert: rdp.convert,
+                    key: rdp.key,
+                });
             pc += words * stride;
             continue;
         }
@@ -1115,6 +1126,8 @@ mod rect_encoding_tests {
         assert_eq!(
             r.scene.framebuffer_pairs[0].ops,
             vec![SceneOp::FillRect {
+                convert: Default::default(),
+                key: Default::default(),
                 rect: Rect {
                     ulx: 10,
                     uly: 20,
@@ -1192,6 +1205,8 @@ mod rect_encoding_tests {
         assert_eq!(
             r.scene.framebuffer_pairs[0].ops,
             vec![SceneOp::FillRect {
+                convert: Default::default(),
+                key: Default::default(),
                 rect: Rect {
                     ulx: 0,
                     uly: 0,
@@ -1247,6 +1262,8 @@ mod rect_encoding_tests {
             p.ops,
             vec![
                 SceneOp::FillRect {
+                    convert: Default::default(),
+                    key: Default::default(),
                     rect: Rect {
                         ulx: 0,
                         uly: 0,
@@ -1263,6 +1280,8 @@ mod rect_encoding_tests {
                     mode: 1
                 }),
                 SceneOp::FillRect {
+                    convert: Default::default(),
+                    key: Default::default(),
                     rect: Rect {
                         ulx: 50,
                         uly: 40,

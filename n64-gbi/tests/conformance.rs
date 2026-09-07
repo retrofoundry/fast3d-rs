@@ -591,3 +591,92 @@ fn conditional_control_words_match_libultra() {
         [(0xe100_0000, 0x1234_5678), (0x0409_b03e, 0xffff_ffff)]
     );
 }
+
+#[test]
+fn convert_key_words_match_libultra() {
+    for (value, expected) in [
+        (-256, (0xec20_1008, 0x0402_0100)),
+        (-1, (0xec3f_ffff, 0xffff_ffff)),
+        (0, (0xec00_0000, 0)),
+        (255, (0xec1f_eff7, 0xfbfd_feff)),
+    ] {
+        assert_eq!(
+            gdp_set_convert(value, value, value, value, value, value),
+            expected
+        );
+    }
+    assert_eq!(
+        gdp_set_convert(-256, -1, 0, 255, -256, -1),
+        (0xec20_1ff0, 0x03fe_01ff)
+    );
+    assert_eq!(
+        gdp_set_convert(0, 0, 31, 0, 0, 0),
+        (0xec00_0000, 0xf800_0000)
+    );
+    assert_eq!(gdp_set_convert(0, 0, 32, 0, 0, 0), (0xec00_0001, 0));
+    assert_eq!(gdp_set_convert(512, -513, 0, 0, 0, 0), (0xec00_1ff0, 0));
+    assert_eq!(gdp_set_key_r(0x12, 0x34, 0xabc), (0xeb00_0000, 0x0abc_1234));
+    assert_eq!(
+        gdp_set_key_gb(0x56, 0x78, 0x123, 0x9a, 0xbc, 0xfed),
+        (0xea12_3fed, 0x5678_9abc)
+    );
+    assert_eq!(
+        gdp_set_key_r(0x123, 0x456, 0x789a),
+        (0xeb00_0000, 0x089a_2356)
+    );
+    assert_eq!(
+        gdp_set_key_gb(0x123, 0x456, 0x789a, 0xbcd, 0xef0, 0x1234),
+        (0xea89_a234, 0x2356_cdf0)
+    );
+}
+
+#[test]
+fn convert_key_mode_words_match_libultra() {
+    use n64_gbi::consts::*;
+    assert_eq!(
+        gdp_set_other_mode_h(G_MDSFT_TEXTCONV, 3, G_TC_CONV),
+        (0xe300_1402, 0)
+    );
+    assert_eq!(
+        gdp_set_other_mode_h(G_MDSFT_TEXTCONV, 3, G_TC_FILTCONV),
+        (0xe300_1402, 0xa00)
+    );
+    assert_eq!(
+        gdp_set_other_mode_h(G_MDSFT_TEXTCONV, 3, G_TC_FILT),
+        (0xe300_1402, 0xc00)
+    );
+    assert_eq!(
+        gdp_set_other_mode_h(G_MDSFT_COMBKEY, 1, G_CK_NONE),
+        (0xe300_1700, 0)
+    );
+    assert_eq!(
+        gdp_set_other_mode_h(G_MDSFT_COMBKEY, 1, G_CK_KEY),
+        (0xe300_1700, 0x100)
+    );
+    let color = CcPass {
+        a: 15,
+        b: G_CCMUX_CENTER,
+        c: G_CCMUX_SCALE,
+        d: 3,
+    };
+    let alpha = CcPass {
+        a: 7,
+        b: 7,
+        c: 7,
+        d: 3,
+    };
+    assert_eq!(
+        gdp_set_combine_lerp(color, alpha, color, alpha),
+        (0xfcf3_7fe6, 0x66fd_f6fb)
+    );
+    let color = CcPass {
+        a: 15,
+        b: G_CCMUX_K4,
+        c: G_CCMUX_K5,
+        d: 3,
+    };
+    assert_eq!(
+        gdp_set_combine_lerp(color, alpha, color, alpha),
+        (0xfcf7_ffef, 0x77fd_f6fb)
+    );
+}

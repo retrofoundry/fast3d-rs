@@ -69,6 +69,8 @@ pub enum SceneOp {
     FillRect {
         rect: Rect,
         color_raw: u32,
+        convert: [i16; 6],
+        key: [crate::hle::rdp::KeyChannel; 3],
     },
     TexRect {
         rect: TexRectBounds,

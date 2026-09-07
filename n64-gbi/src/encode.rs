@@ -121,6 +121,34 @@ pub fn gdp_set_prim_depth(z: u32, dz: u32) -> (u32, u32) {
     )
 }
 
+/// Store signed nine-bit coefficients (-256..=255); operands are masked like the SDK macro.
+pub fn gdp_set_convert(k0: i32, k1: i32, k2: i32, k3: i32, k4: i32, k5: i32) -> (u32, u32) {
+    (
+        shiftl(G_SETCONVERT as u32, 24, 8)
+            | shiftl(k0 as u32, 13, 9)
+            | shiftl(k1 as u32, 4, 9)
+            | ((k2 as u32 >> 5) & 15),
+        shiftl(k2 as u32, 27, 5)
+            | shiftl(k3 as u32, 18, 9)
+            | shiftl(k4 as u32, 9, 9)
+            | shiftl(k5 as u32, 0, 9),
+    )
+}
+
+pub fn gdp_set_key_r(center: u32, scale: u32, width: u32) -> (u32, u32) {
+    (
+        shiftl(G_SETKEYR as u32, 24, 8),
+        shiftl(width, 16, 12) | shiftl(center, 8, 8) | shiftl(scale, 0, 8),
+    )
+}
+
+pub fn gdp_set_key_gb(cg: u32, sg: u32, wg: u32, cb: u32, sb: u32, wb: u32) -> (u32, u32) {
+    (
+        shiftl(G_SETKEYGB as u32, 24, 8) | shiftl(wg, 12, 12) | shiftl(wb, 0, 12),
+        shiftl(cg, 24, 8) | shiftl(sg, 16, 8) | shiftl(cb, 8, 8) | shiftl(sb, 0, 8),
+    )
+}
+
 pub fn gdp_set_other_mode_h(shift: u32, length: u32, data: u32) -> (u32, u32) {
     let w0 = shiftl(G_SETOTHERMODE_H as u32, 24, 8)
         | shiftl(32 - shift - length, 8, 8)

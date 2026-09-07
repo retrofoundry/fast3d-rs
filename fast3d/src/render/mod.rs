@@ -424,6 +424,8 @@ mod tests {
 
     fn test_material() -> crate::hle::Material {
         crate::hle::Material {
+            convert: Default::default(),
+            key: Default::default(),
             sampling: Default::default(),
             texture: vec![255u8; 4],
             tex_w: 1,
@@ -3338,7 +3340,9 @@ impl SceneRenderer {
                             (fb_w, fb_h),
                         ));
                     }
-                    crate::hle::SceneOp::FillRect { rect, color_raw } => {
+                    crate::hle::SceneOp::FillRect {
+                        rect, color_raw, ..
+                    } => {
                         let u = CombinerUniform::fill_rect(*color_raw, pair.color_image.siz);
                         push_slot(&mut pool, &u);
                         rect_verts.extend_from_slice(&rect_quad(
@@ -3779,7 +3783,9 @@ impl SceneRenderer {
                             (fb_w, fb_h),
                         ));
                     }
-                    crate::hle::SceneOp::FillRect { rect, color_raw } => {
+                    crate::hle::SceneOp::FillRect {
+                        rect, color_raw, ..
+                    } => {
                         let u = CombinerUniform::fill_rect(*color_raw, pair.color_image.siz);
                         push_slot(&mut pool, &u);
                         rect_verts.extend_from_slice(&rect_quad(
