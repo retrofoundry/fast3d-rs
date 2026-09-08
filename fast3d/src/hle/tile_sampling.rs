@@ -9,7 +9,7 @@ pub struct TileSampling {
     pub shift_mask: [u32; 4],
     /// S/T clamp/mirror flags followed by the logical clamp extents.
     pub modes: [u32; 4],
-    /// Decoded image extent, representation (0 = tile, 1 = TMEM lookup, 2 = normalized image), padding.
+    /// Decoded extent, representation (0 = tile, 1 = TMEM lookup, 2 = normalized), explicit normalized extent in `modes.zw`.
     pub image: [u32; 4],
     /// TMEM base and line in bytes, format, size.
     pub tmem: [u32; 4],

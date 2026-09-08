@@ -60,6 +60,18 @@ pub enum DiagKind {
         fmt: u8,
         siz: u8,
     },
+    UnsupportedDepthAlias {
+        address: u64,
+    },
+    UnsupportedLegacyDepthExtent {
+        address: u64,
+        canvas: (u32, u32),
+        depth: (u32, u32),
+    },
+    UnsupportedImageReinterpretation {
+        address: u64,
+        depth: bool,
+    },
     UnsupportedPrimitiveDepthSource,
     UnsupportedKeyInput {
         selector: KeyInput,
@@ -143,6 +155,8 @@ impl DiagKind {
             | DiagKind::UnsupportedConvertInput { .. }
             | DiagKind::UnsupportedTextureConversion
             | DiagKind::UnsupportedChromaKey
+            | DiagKind::UnsupportedDepthAlias { .. }
+            | DiagKind::UnsupportedLegacyDepthExtent { .. }
             | DiagKind::UnsupportedPrimitiveDepthSource
             | DiagKind::UnsupportedCommandParameters { .. }
             | DiagKind::RunawayDl { .. }
@@ -161,9 +175,10 @@ impl DiagKind {
             | DiagKind::UnhandledMovemem(_)
             | DiagKind::UnhandledMoveword(_)
             | DiagKind::UnwiredSelector { .. } => Severity::Error,
-            DiagKind::RenderModeNeverSet | DiagKind::NonCanonicalBlend | DiagKind::StrayRdphalf => {
-                Severity::Warn
-            }
+            DiagKind::UnsupportedImageReinterpretation { .. }
+            | DiagKind::RenderModeNeverSet
+            | DiagKind::NonCanonicalBlend
+            | DiagKind::StrayRdphalf => Severity::Warn,
         }
     }
 }
@@ -210,6 +225,19 @@ impl std::fmt::Display for DiagKind {
                 write!(f, "texture conversion is unsupported")
             }
             DiagKind::UnsupportedChromaKey => write!(f, "chroma keying is unsupported"),
+            DiagKind::UnsupportedDepthAlias { address } => {
+                write!(f, "unsupported color/depth alias at {address:#018x}")
+            }
+            DiagKind::UnsupportedLegacyDepthExtent { address, canvas, depth } => write!(
+                f,
+                "legacy canvas {}x{} cannot share guest depth {address:#018x} at {}x{}; set a color image or use a {}x{} canvas",
+                canvas.0, canvas.1, depth.0, depth.1, depth.0, depth.1
+            ),
+            DiagKind::UnsupportedImageReinterpretation { address, depth } => write!(
+                f,
+                "unsupported preservation across {} image reinterpretation at {address:#018x}",
+                if *depth { "depth" } else { "color" }
+            ),
             DiagKind::UnsupportedPrimitiveDepthSource => {
                 write!(f, "primitive depth source is unsupported")
             }
@@ -353,6 +381,11 @@ mod tests {
             },
             DiagKind::UnsupportedTextureFormat { fmt: 1, siz: 2 },
             DiagKind::UnsupportedPrimitiveDepthSource,
+            DiagKind::UnsupportedLegacyDepthExtent {
+                address: 0x200000,
+                canvas: (640, 480),
+                depth: (320, 240),
+            },
             DiagKind::UnsupportedCommandParameters { opcode: 0xf0 },
             DiagKind::RunawayDl { cap: 1 },
             DiagKind::DlPastRdram,

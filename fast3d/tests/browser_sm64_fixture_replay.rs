@@ -70,6 +70,7 @@ async fn replay_corpus() {
         );
         case.assert_pixels(&output.rgba8);
     }
+    replay_shared_depth().await;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -124,4 +125,38 @@ fn browser_ordered_workload_replay() {
 #[wasm_bindgen_test::wasm_bindgen_test]
 async fn browser_ordered_workload_replay() {
     replay_ordered_workload().await;
+}
+
+#[path = "common/depth_semantics.rs"]
+mod depth_semantics;
+
+async fn replay_shared_depth() {
+    for policy in [fast3d::ClearPolicy::PerFrame, fast3d::ClearPolicy::Persist] {
+        let mut fixture =
+            Fixture::from_bytes(include_bytes!("fixtures/shared-depth.f3dcap")).unwrap();
+        fixture.frame.config.clear_policy = policy;
+        let output = fixture
+            .replay_headless()
+            .await
+            .expect("shared depth requires a WebGPU adapter");
+        #[cfg(target_arch = "wasm32")]
+        assert_eq!(
+            output.adapter_info.as_ref().unwrap().backend,
+            wgpu::Backend::BrowserWebGpu
+        );
+        assert_eq!((output.width, output.height), (320, 240));
+        assert_eq!(output.rgba8.len(), 320 * 240 * 4);
+        assert!(output.diagnostics.iter().all(Vec::is_empty));
+        assert!(output
+            .summaries
+            .iter()
+            .all(|summary| summary.renderable && summary.errors == 0));
+        for (i, pixel) in output.rgba8.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(
+                *pixel,
+                depth_semantics::expected(i as u32 % 320, i as u32 / 320),
+                "shared depth pixel {i}, {policy:?}"
+            );
+        }
+    }
 }

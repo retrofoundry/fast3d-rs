@@ -381,7 +381,7 @@ fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>) -> vec4<
     var tile = tile_sampling[index];
     var coordinate: vec2<f32>;
     if tile.image.z == 2u {
-        let extent = textureDimensions(texture);
+        let extent = select(textureDimensions(texture), tile.modes.zw, tile.image.w != 0u);
         tile.modes = vec4<u32>(2u, 2u, extent.x, extent.y);
         coordinate = tile_coordinate(tile, uv * vec2<f32>(extent));
     } else {

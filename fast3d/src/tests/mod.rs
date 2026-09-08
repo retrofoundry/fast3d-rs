@@ -13,6 +13,7 @@ mod conditional_control;
 mod convert_key;
 mod culling;
 mod decode;
+mod depth_persistence;
 mod dl_plumbing;
 mod e2e;
 #[cfg(feature = "capture")]

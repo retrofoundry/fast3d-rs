@@ -258,3 +258,13 @@ every fragment fails the depth test. The wrapper in `fixture.rs` now does both, 
 On macOS rt64's own SDL window path hands plume an `SDL_Window*` where `CocoaWindow` expects an
 `NSWindow*` and crashes in `objc_msgSend`; the harness creates the window itself and passes the
 Cocoa window plus the Metal layer through `core.window`, as the recomp frontends do.
+
+The library-contract PR 7 fixture `shared-depth.f3dcap` writes A/Z, B/Z, then
+A/Z, with Z at `0x200000` shared by A=`0x100000` and B=`0x300000`. Its final
+image has red at `[32,144) × [32,208)`, blue at `[144,176) × [32,208)`, and
+black elsewhere. The right region stays black because B wrote nearer depth.
+`write_rt64_shared_depth_fixture` exports the IMAGE fixture, independent expected
+pixels and the `PersistentDepthByAddress` mask to `FAST3D_WRITE_FIXTURES`.
+`shared_depth_fixture_pixels` and the browser corpus check its pixels. Export
+and replay it with the commands above; compare rt64 RGB using `--ignore-alpha
+--threshold 0 --max-diff-pixels 0` (RGBA16 coverage alpha is separate).

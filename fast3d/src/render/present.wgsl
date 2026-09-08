@@ -5,6 +5,7 @@
 
 @group(0) @binding(0) var src: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
+@group(1) @binding(0) var<uniform> extent: vec4<f32>;
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -36,5 +37,5 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(src, samp, in.uv);
+    return textureSample(src, samp, min(in.uv * extent.xy, extent.zw));
 }

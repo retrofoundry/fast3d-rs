@@ -369,3 +369,29 @@ fn normalization_keeps_zero_depth_image_address() {
     assert_eq!(workload.targets[1].depth_image, Some(0));
     assert!(workload.targets[1].depth_clear);
 }
+
+#[test]
+fn depth_alias_fill_requires_supported_layout_and_cycle() {
+    for (fmt, size, cycle) in [(0, 2, 0), (0, 2, 1), (0, 2, 2), (0, 3, 3), (1, 2, 3)] {
+        let mut b = DlBuilder::new();
+        b.list(
+            "main",
+            &[
+                gdp_set_depth_image(0x2000),
+                gdp_set_color_image(fmt, size, 320, 0x2000),
+                gdp_set_scissor(0, 0, 0, 1280, 960),
+                gdp_set_cycle_type(cycle),
+                gdp_fill_rectangle(0, 0, 4, 4),
+                gsp_enddl(),
+            ],
+        );
+        let built = b.finish("main");
+        let result = crate::hle::interpret_rdram(&built.rdram, built.entry);
+        assert_eq!(result.diags.len(), 1);
+        assert!(result.scene.framebuffer_pairs.is_empty());
+        assert!(matches!(
+            result.diags[0].kind,
+            crate::DiagKind::UnsupportedDepthAlias { address: 0x2000 }
+        ));
+    }
+}
