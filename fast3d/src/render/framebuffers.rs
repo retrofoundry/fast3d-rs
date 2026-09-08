@@ -1,9 +1,11 @@
+pub(crate) mod targets;
+
 use super::{workload::TargetId, SceneRenderer, CLEAR_COLOR, DEPTH_FORMAT};
 use crate::{ClearPolicy, DiagKind, Diagnostic};
 use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ImageLayout {
+pub(crate) struct ImageLayout {
     pub width: u32,
     pub fmt: u8,
     pub siz: u8,
@@ -238,6 +240,68 @@ pub(super) fn color_sampling(device: &wgpu::Device, width: u32, height: u32) -> 
 }
 
 impl SceneRenderer {
+    #[cfg(feature = "capture")]
+    pub(crate) fn prime_legacy_attachments(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        color: wgpu::Color,
+        depth: f32,
+    ) {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let layout = ImageLayout {
+            width: self.fb_w,
+            fmt: 0,
+            siz: 2,
+        };
+        self.ensure_color(
+            device,
+            &mut encoder,
+            ImageRequest {
+                id: TargetId::Legacy,
+                layout,
+                height: self.fb_h,
+                pc: 0,
+            },
+            self.fb_h,
+            ClearPolicy::Persist,
+        );
+        self.ensure_depth(
+            device,
+            &mut encoder,
+            ImageRequest {
+                id: TargetId::Legacy,
+                layout,
+                height: self.fb_h,
+                pc: 0,
+            },
+            ClearPolicy::Persist,
+        );
+        super::workload::clear_color(
+            &mut encoder,
+            &self.framebuffers[&TargetId::Legacy].attach,
+            wgpu::LoadOp::Clear(color),
+        );
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("capture-depth-contamination"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depthbuffers[&TargetId::Legacy].attach,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(depth),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        queue.submit([encoder.finish()]);
+    }
+
     pub(super) fn ensure_color(
         &mut self,
         device: &wgpu::Device,

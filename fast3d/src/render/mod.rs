@@ -1865,12 +1865,18 @@ pub struct SceneRenderer {
     /// caller's `target` (the present blit scales FB→target).
     fb_w: u32,
     fb_h: u32,
+    pub(crate) target_descriptors: framebuffers::targets::TargetDescriptors,
     framebuffers: std::collections::HashMap<workload::TargetId, Framebuffer>,
     first_touch: std::collections::HashSet<workload::TargetId>,
     pub(crate) depthbuffers: std::collections::HashMap<workload::TargetId, DepthImage>,
     depth_first_touch: std::collections::HashSet<workload::TargetId>,
     depth_pipeline: DepthPipeline,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
+    pub(crate) dropped_runs: u32,
+    #[cfg(feature = "capture")]
+    pub(crate) depth_reset_policy: crate::DepthResetPolicy,
+    #[cfg(feature = "capture")]
+    depth_color_epoch: Option<u64>,
     /// Descriptor array for bind groups that sample plain images (fill, scanout, FB alias).
     image_sampling: wgpu::Buffer,
 }
@@ -2034,12 +2040,18 @@ impl SceneRenderer {
             dummy_view,
             fb_w: w,
             fb_h: h,
+            target_descriptors: Default::default(),
             framebuffers: std::collections::HashMap::new(),
             first_touch: std::collections::HashSet::new(),
             depthbuffers: std::collections::HashMap::new(),
             depth_first_touch: std::collections::HashSet::new(),
             depth_pipeline: DepthPipeline::new(device),
             diagnostics: Vec::new(),
+            dropped_runs: 0,
+            #[cfg(feature = "capture")]
+            depth_reset_policy: Default::default(),
+            #[cfg(feature = "capture")]
+            depth_color_epoch: None,
             frame_serial: 0,
             dither_seed: 0,
             image_sampling,
@@ -2089,7 +2101,6 @@ impl SceneRenderer {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         device: &wgpu::Device,
-        target: &inputs::TargetInputs,
         op: &inputs::DrawInputs,
         material_bgs: &[&wgpu::BindGroup],
         rect_vbuf: Option<&wgpu::Buffer>,
@@ -2098,24 +2109,17 @@ impl SceneRenderer {
         rect_idx: u32,
         any_depth: bool,
     ) {
-        // Step 1 (spec §2.4): FB-as-texture alias — if this TexRect carries a `fb_source`, bind the
-        // prior pair's SAMPLED color view as @group(0) instead of the RDRAM-decoded material
-        // texture. The pool's sampled view is row-0-at-top (GPU-native); no re-flip needed. The
-        // source pair is PRIOR (ordered loop guarantees it was rendered first).
         let opt_fb_bg: Option<wgpu::BindGroup> = if let inputs::DrawInputs::Rectangle {
-            fb_source: Some(src_addr),
+            fb_source: Some(descriptor),
             ..
         } = op
         {
-            assert_ne!(
-                workload::TargetId::Guest(*src_addr),
-                target.id,
-                "fb_source cannot reference the current pair (same-pair is invalid)"
-            );
-            let source = &self
+            let Some(source) = self
                 .framebuffers
-                .get(&workload::TargetId::Guest(*src_addr))
-                .expect("framebuffer source must precede its consumer");
+                .get(&workload::TargetId::Guest(descriptor.address))
+            else {
+                return;
+            };
             Some(
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("fb-source-bg"),
@@ -2319,6 +2323,11 @@ impl SceneRenderer {
     }
 
     pub(crate) fn reset(&mut self) {
+        #[cfg(feature = "capture")]
+        {
+            self.depth_color_epoch = None;
+        }
+        self.target_descriptors = Default::default();
         self.framebuffers.clear();
         self.depthbuffers.clear();
         self.depth_first_touch.clear();
@@ -2331,8 +2340,18 @@ impl SceneRenderer {
     /// Explicit frame boundary (D2): reset the per-frame first-touch-clear set. Does NOT drop the
     /// textures (cross-frame persistence). `Renderer::begin_frame` delegates here.
     pub fn begin_frame(&mut self) {
+        #[cfg(feature = "capture")]
+        if self.depth_reset_policy == crate::DepthResetPolicy::FrameBoundary {
+            self.discard_depth();
+        }
         self.frame_serial = self.frame_serial.wrapping_add(1);
         self.first_touch.clear();
+        self.depth_first_touch.clear();
+    }
+
+    #[cfg(feature = "capture")]
+    pub(crate) fn discard_depth(&mut self) {
+        self.depthbuffers.clear();
         self.depth_first_touch.clear();
     }
 }

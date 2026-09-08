@@ -5,6 +5,8 @@ use crate::scene::{CullKind, Scene, SceneOp};
 // GPU submission only receives these inputs. Capture compares the same preparation result.
 #[derive(Debug, PartialEq)]
 pub(crate) struct RenderInputs<'a> {
+    pub(crate) diagnostics: Vec<crate::Diagnostic>,
+    pub(crate) dropped_runs: u32,
     pub(super) textures: Vec<TextureInputs<'a>>,
     pub(super) rsp: Option<RspInputs<'a>>,
     pub(super) targets: Vec<TargetInputs>,
@@ -75,6 +77,8 @@ impl<'a> RspInputs<'a> {
 
 #[derive(Debug, PartialEq)]
 pub(super) struct TargetInputs {
+    pub color_image_epoch: u64,
+    pub valid: bool,
     pub id: TargetId,
     pub color_image: crate::scene::ColorImage,
     pub depth_image: Option<u64>,
@@ -89,14 +93,67 @@ pub(super) struct TargetInputs {
     pub rect_indices: Vec<u32>,
 }
 
+impl TargetInputs {
+    pub(super) fn record_descriptors(
+        &self,
+        descriptors: &mut super::framebuffers::targets::TargetDescriptors,
+    ) -> Result<bool, crate::Diagnostic> {
+        if !self.valid {
+            return Ok(false);
+        }
+        if self.id == TargetId::Legacy && self.output_extent != self.logical_extent {
+            if let Some(address) = self.depth_image {
+                return Err(crate::Diagnostic {
+                    at: self.pc,
+                    kind: crate::DiagKind::UnsupportedLegacyDepthExtent {
+                        address,
+                        canvas: self.output_extent,
+                        depth: self.logical_extent,
+                    },
+                });
+            }
+        }
+        let (width, height) = self.output_extent;
+        if let TargetId::Guest(address) = self.id {
+            if !self.depth_clear {
+                let _ = descriptors.record(
+                    address,
+                    super::framebuffers::ImageLayout {
+                        width,
+                        fmt: self.color_image.fmt,
+                        siz: self.color_image.siz,
+                    },
+                    height,
+                    false,
+                );
+            }
+        }
+        if let Some(address) = self.depth_image {
+            let _ = descriptors.record(
+                address,
+                super::framebuffers::ImageLayout {
+                    width,
+                    fmt: 0,
+                    siz: 2,
+                },
+                height,
+                true,
+            );
+        }
+        Ok(true)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(super) struct OperationInputs {
+    pub pc: u64,
     pub scissor: (u32, u32, u32, u32),
     pub draw: DrawInputs,
 }
 
 #[derive(Debug, PartialEq)]
 pub(super) enum DrawInputs {
+    Rejected,
     DepthFill {
         word: u32,
     },
@@ -109,7 +166,7 @@ pub(super) enum DrawInputs {
     },
     Rectangle {
         material_index: Option<u32>,
-        fb_source: Option<u64>,
+        fb_source: Option<super::framebuffers::targets::ImageDescriptor>,
         blend_class: BlendClass,
     },
 }
@@ -130,14 +187,39 @@ impl OperationInputs {
 }
 
 impl<'a> RenderInputs<'a> {
+    #[cfg(feature = "capture")]
+    pub fn update_target_descriptors(
+        &self,
+        descriptors: &mut super::framebuffers::targets::TargetDescriptors,
+    ) {
+        for target in &self.targets {
+            let _ = target.record_descriptors(descriptors);
+        }
+    }
+
+    #[cfg(test)]
     pub fn new(scene: &'a Scene, legacy_extent: (u32, u32), frame: [u32; 2]) -> Option<Self> {
+        Self::with_targets(scene, legacy_extent, frame, &Default::default())
+    }
+
+    pub fn with_targets(
+        scene: &'a Scene,
+        legacy_extent: (u32, u32),
+        frame: [u32; 2],
+        descriptors: &super::framebuffers::targets::TargetDescriptors,
+    ) -> Option<Self> {
+        let mut descriptors = descriptors.clone();
+        let mut diagnostics = Vec::new();
+        let mut dropped_runs = 0;
         if (scene.draw_runs.is_empty() || scene.raw_pos.is_empty() || scene.indices.is_empty())
             && scene.framebuffer_pairs.is_empty()
         {
             return None;
         }
         let workload = super::workload::Workload::new(scene);
-        Some(Self {
+        let mut result = Self {
+            diagnostics: Vec::new(),
+            dropped_runs: 0,
             textures: scene.materials.iter().map(TextureInputs::from).collect(),
             rsp: RspInputs::new(scene),
             targets: workload
@@ -149,7 +231,39 @@ impl<'a> RenderInputs<'a> {
                         TargetId::Guest(_) => target.logical_extent,
                     };
                     let any_depth = target.uses_depth(scene);
+                    let mut valid = true;
+                    let pc = target.operations.first().and_then(|op| op.pc).unwrap_or(0);
+                    if let Some(address) = target.depth_image {
+                        if let Err(kind) = descriptors.record(
+                            address,
+                            super::framebuffers::ImageLayout {
+                                width: w,
+                                fmt: 0,
+                                siz: 2,
+                            },
+                            h,
+                            true,
+                        ) {
+                            diagnostics.push(crate::Diagnostic { at: pc, kind });
+                            valid = false;
+                        }
+                    }
+                    if let TargetId::Guest(address) = target.id {
+                        let layout = super::framebuffers::ImageLayout {
+                            width: w,
+                            fmt: target.color_image.fmt,
+                            siz: target.color_image.siz,
+                        };
+                        if !target.depth_clear {
+                            if let Err(kind) = descriptors.record(address, layout, h, false) {
+                                diagnostics.push(crate::Diagnostic { at: pc, kind });
+                                valid = false;
+                            }
+                        }
+                    }
                     let mut inputs = TargetInputs {
+                        color_image_epoch: target.color_image_epoch,
+                        valid,
                         id: target.id,
                         color_image: target.color_image,
                         depth_image: target.depth_image,
@@ -233,7 +347,9 @@ impl<'a> RenderInputs<'a> {
                                     (
                                         DrawInputs::Rectangle {
                                             material_index: Some(*material_index),
-                                            fb_source: *fb_source,
+                                            fb_source: fb_source.and_then(|address| {
+                                                descriptors.get(address, false)
+                                            }),
                                             blend_class: if *copy_mode {
                                                 BlendClass::Replace
                                             } else {
@@ -262,6 +378,7 @@ impl<'a> RenderInputs<'a> {
                                             mode: operation.scissor.mode,
                                         };
                                         inputs.operations.push(OperationInputs {
+                                            pc: operation.pc.unwrap_or(0),
                                             scissor: super::clamp_scissor(&scissor, w, h),
                                             draw: DrawInputs::DepthFill { word: *color_raw },
                                         });
@@ -290,6 +407,47 @@ impl<'a> RenderInputs<'a> {
                                     unreachable!("scissor is normalized onto draws")
                                 }
                             };
+                            let mut draw = draw;
+                            if let SceneOp::TexRect {
+                                fb_source: Some(address),
+                                material_index,
+                                ..
+                            } = &operation.draw
+                            {
+                                let material = &scene.materials[*material_index as usize];
+                                let kind = match descriptors.get(*address, false) {
+                                    None => Some(crate::DiagKind::UnsupportedFramebufferAccess {
+                                        address: *address,
+                                        reason: crate::FramebufferAccess::MissingSource,
+                                    }),
+                                    Some(_) if material.tile_count > 1 => {
+                                        Some(crate::DiagKind::UnsupportedFramebufferAccess {
+                                            address: *address,
+                                            reason: crate::FramebufferAccess::TextureMode,
+                                        })
+                                    }
+                                    Some(source) => descriptors
+                                        .source(
+                                            *address,
+                                            target.color_image.addr,
+                                            super::framebuffers::ImageLayout {
+                                                width: source.layout.width,
+                                                fmt: material.fmt,
+                                                siz: material.siz,
+                                            },
+                                            material.tex_h,
+                                        )
+                                        .err(),
+                                };
+                                if let Some(kind) = kind {
+                                    diagnostics.push(crate::Diagnostic {
+                                        at: operation.pc.unwrap_or(0),
+                                        kind,
+                                    });
+                                    dropped_runs += 1;
+                                    draw = DrawInputs::Rejected;
+                                }
+                            }
                             if !matches!(operation.draw, SceneOp::FillRect { .. }) {
                                 uniform.frame = [frame[0], frame[1], w, h];
                             }
@@ -302,6 +460,7 @@ impl<'a> RenderInputs<'a> {
                                 (w, h),
                             );
                             inputs.operations.push(OperationInputs {
+                                pc: operation.pc.unwrap_or(0),
                                 scissor: super::clamp_scissor(&scissor, w, h),
                                 draw,
                             });
@@ -310,7 +469,10 @@ impl<'a> RenderInputs<'a> {
                     inputs
                 })
                 .collect(),
-        })
+        };
+        result.diagnostics = diagnostics;
+        result.dropped_runs = dropped_runs;
+        Some(result)
     }
 }
 

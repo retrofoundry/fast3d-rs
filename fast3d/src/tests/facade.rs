@@ -167,6 +167,7 @@ fn scene_renderer_paired_tris_matches_pair_less() {
         .map(crate::hle::SceneOp::Tris)
         .collect();
     paired.framebuffer_pairs = vec![crate::hle::FramebufferPair {
+        color_image_epoch: 0,
         color_image: crate::hle::ColorImage {
             fmt: 0,
             siz: 2, // G_IM_SIZ_16b

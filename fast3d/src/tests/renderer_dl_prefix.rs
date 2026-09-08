@@ -13,6 +13,36 @@ const A: u32 = 0x100000;
 const B: u32 = 0x200000;
 const Z: u32 = 0x300000;
 
+#[test]
+fn prefix_texture_load_ignores_targets_created_by_other_tasks() {
+    let mut renderer = headless_renderer();
+    renderer.process_dl(&fill_hw(A, 0xf801f801), 0, Microcode::F3dex2, &mut NopSink);
+    let snapshot = renderer.rdp.clone();
+    let mut memory = hw([
+        gdp_set_texture_image(0, 2, 4, A),
+        gdp_set_tile(0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        gdp_load_block(0, 0, 0, 3, 0),
+        gsp_enddl(),
+    ]);
+    memory.rdram.resize(A as usize + 8, 0xff);
+    let mut diags = Vec::new();
+    let prefix = renderer.process_dl_prefix(&memory, 0, Microcode::F3dex2, &mut diags, 3);
+    assert!(diags.is_empty(), "{diags:?}");
+    assert_eq!(prefix.termination, WalkTermination::Cap);
+    assert_eq!(renderer.rdp, snapshot);
+    renderer.process_dl(&memory, 0, Microcode::F3dex2, &mut diags);
+    assert_eq!(
+        diags,
+        [Diagnostic {
+            at: 16,
+            kind: crate::DiagKind::UnsupportedFramebufferAccess {
+                address: u64::from(A),
+                reason: crate::FramebufferAccess::TextureLoad,
+            },
+        }]
+    );
+}
+
 fn hw(words: impl IntoIterator<Item = (u32, u32)>) -> ImgHw {
     ImgHw {
         rdram: words

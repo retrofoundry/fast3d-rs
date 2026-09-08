@@ -852,13 +852,39 @@ impl Rsp {
 /// render mode is decoded + deduped every call (cheap, no texture state involved).
 /// When a NEW render mode with `non_canonical_blend` is pushed, one Diagnostic is emitted
 /// (the §4.4/§9 additive-clamp diagnostic [IMP12]).
-pub fn snapshot_run(
+pub(crate) fn snapshot_run(
     rsp: &mut Rsp,
+    rec: &PairRec,
     rdp: &crate::hle::rdp::Rdp,
     diags: &mut Vec<crate::diag::Diagnostic>,
     scene: &mut Scene,
     pc: u64,
 ) -> Option<(u32, u32)> {
+    let selectors = crate::hle::combiner::decode_combine(rdp.combine_l, rdp.combine_h);
+    let (uses_texture, uses_second) =
+        crate::hle::combiner::physical_texture_uses(&selectors, (rdp.other_mode_h >> 20) & 3);
+    if !rdp
+        .tmem_bank
+        .tile_has_load(&rdp.tiles[usize::from(rsp.texture_state.tile & 7)])
+        && (uses_texture || uses_second)
+        && rec
+            .framebuffers
+            .targets
+            .overlap(rdp.tex_image.3, 1)
+            .ok()
+            .flatten()
+            .is_some()
+    {
+        diags.push(crate::Diagnostic {
+            at: pc,
+            kind: crate::DiagKind::UnsupportedFramebufferAccess {
+                address: rdp.tex_image.3,
+                reason: crate::FramebufferAccess::TriangleTexture,
+            },
+        });
+        return None;
+    }
+
     validate_depth_alias(rdp, false, diags, pc)?;
     validate_depth_source(rdp, diags, pc)?;
     // --- Material ---
@@ -913,19 +939,15 @@ pub fn snapshot_run(
     Some((material_index, render_mode_index))
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PairRec {
+    pub framebuffers: crate::hle::interp::FramebufferState,
     /// True once at least one `FramebufferPair` has been opened.
     pub paired: bool,
     /// Index of the currently-open pair in `scene.framebuffer_pairs`.
     pub cur_pair: usize,
     /// Scissor currently in effect for the open pair (drives mid-pair `SetScissor` ops).
     pub last_scissor: Scissor,
-}
-
-/// Bytes per pixel for an RDP image size code (G_IM_SIZ_*): 4b→0, 8b→1, 16b→2, 32b→4.
-pub(crate) fn bpp(siz: u8) -> u64 {
-    (1u64 << siz) >> 1
 }
 
 /// Open a new `FramebufferPair` lazily on the first draw after a color/depth `changed` delta
@@ -937,10 +959,39 @@ pub(crate) fn ensure_pair_open(
     rdp: &mut crate::hle::rdp::Rdp,
     rec: &mut PairRec,
 ) {
+    let height = if rdp.scissor.lry > 0 {
+        rdp.scissor.lry as u32
+    } else {
+        240
+    };
+    let layout = crate::render::framebuffers::ImageLayout {
+        width: u32::from(rdp.color_image.width),
+        fmt: rdp.color_image.fmt,
+        siz: rdp.color_image.siz,
+    };
+    if rdp.depth_image != Some(rdp.color_image.addr) {
+        let _ = rec
+            .framebuffers
+            .targets
+            .record(rdp.color_image.addr, layout, height, false);
+    }
+    if let Some(address) = rdp.depth_image {
+        let _ = rec.framebuffers.targets.record(
+            address,
+            crate::render::framebuffers::ImageLayout {
+                fmt: 0,
+                siz: 2,
+                ..layout
+            },
+            height,
+            true,
+        );
+    }
     if !rec.paired || rdp.color_changed || rdp.depth_changed {
         let depth_image = rdp.depth_image;
         let is_depth_clear = depth_image == Some(rdp.color_image.addr);
         scene.framebuffer_pairs.push(FramebufferPair {
+            color_image_epoch: rec.framebuffers.color_image_epoch,
             color_image: rdp.color_image,
             depth_image,
             ops: Vec::new(),
@@ -1067,6 +1118,18 @@ pub(crate) fn record_tri(
             Some(rec.cur_pair),
         );
     } else {
+        if let Some(address) = rdp.depth_image {
+            let _ = rec.framebuffers.targets.record(
+                address,
+                crate::render::framebuffers::ImageLayout {
+                    width: 320,
+                    fmt: 0,
+                    siz: 2,
+                },
+                240,
+                true,
+            );
+        }
         rsp.draw_tri(
             a,
             b,

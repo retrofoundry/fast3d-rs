@@ -16,7 +16,8 @@ use crate::scene::Scene;
 
 // ── New vNext public API (spec §3.6): structured diagnostics ──
 pub use diag::{
-    DiagKind, DiagSink, Diagnostic, DlSummary, LogSink, MemoryAccess, NopSink, Severity,
+    DiagKind, DiagSink, Diagnostic, DlSummary, FramebufferAccess, LogSink, MemoryAccess, NopSink,
+    Severity,
 };
 // ── New vNext public API (spec §3.6): microcode selector ──
 pub use microcode::{detect_microcode, Microcode};
@@ -44,6 +45,17 @@ pub enum ClearPolicy {
     /// N64-faithful: clear only when a framebuffer texture is newly created or resized; Load
     /// thereafter (a HUD-only repaint keeps last frame's 3D underneath). Live-VI game consumers.
     Persist,
+}
+
+/// Controlled depth-only discard for recorded workload experiments.
+#[cfg(feature = "capture")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DepthResetPolicy {
+    #[default]
+    Never,
+    ColorImageSwitch,
+    TaskBoundary,
+    FrameBoundary,
 }
 
 /// Renderer configuration. All fields are `Copy`; the `Renderer` stores it by value.
@@ -181,6 +193,7 @@ pub struct Renderer {
     target: PresentTarget,
     inner: SceneRenderer,
     rdp: crate::hle::rdp::Rdp,
+    color_image_epoch: u64,
     #[cfg(feature = "capture")]
     capture_generation: std::rc::Rc<()>,
     pub(crate) frame_scenes: Vec<Scene>,
@@ -260,6 +273,7 @@ impl Renderer {
             target,
             inner,
             rdp: Default::default(),
+            color_image_epoch: 0,
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
@@ -340,6 +354,7 @@ impl Renderer {
             },
             inner,
             rdp: Default::default(),
+            color_image_epoch: 0,
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
@@ -507,7 +522,8 @@ impl Renderer {
     /// draw can open a framebuffer pair before rejecting its triangles: no emission does not
     /// mean no framebuffer effect.
     ///
-    /// Every nonzero prefix starts with default RDP registers and empty TMEM, as `inspect::walk`
+    /// Every nonzero prefix starts with default RDP registers, empty TMEM and no prior target
+    /// descriptors, as `inspect::walk`
     /// does, and leaves the live task registers unchanged. This includes `u32::MAX`.
     /// Framebuffer contents and the dither sequence still belong to the renderer. For both
     /// legacy and guest color targets,
@@ -589,6 +605,13 @@ impl Renderer {
         self.process_dl_memory_observed(mem, entry, ucode, diags, None, Submission::DiscardOnStop)
     }
 
+    fn interpreter_framebuffers(&self) -> crate::hle::interp::FramebufferState {
+        crate::hle::interp::FramebufferState {
+            targets: self.inner.target_descriptors.clone(),
+            color_image_epoch: self.color_image_epoch,
+        }
+    }
+
     fn process_dl_memory_observed(
         &mut self,
         mem: impl Rdram,
@@ -599,18 +622,28 @@ impl Renderer {
         submission: Submission,
     ) -> DlSummary {
         self.mark_mutation();
+        #[cfg(feature = "capture")]
+        if self.inner.depth_reset_policy == DepthResetPolicy::TaskBoundary {
+            self.inner.discard_depth();
+        }
         let is_image = mem.is_rdram_image();
         let rdp = if submission == Submission::RasterizePrefix {
             Default::default()
         } else {
             self.rdp.clone()
         };
-        let mut result = crate::hle::interp::interpret_with_state(
+        let framebuffers = if submission == Submission::RasterizePrefix {
+            Default::default()
+        } else {
+            self.interpreter_framebuffers()
+        };
+        let mut result = crate::hle::interp::interpret_with_framebuffers(
             mem,
             entry,
             ucode.into(),
             self.data_format,
             rdp,
+            framebuffers,
             observer,
         );
         if submission == Submission::RasterizePrefix
@@ -634,6 +667,7 @@ impl Renderer {
 
         if submission == Submission::DiscardOnStop && result.commits_rdp() {
             self.rdp = result.rdp.clone();
+            self.color_image_epoch = result.framebuffers.color_image_epoch;
         }
 
         // Rasterize into the persistent store. A draw-nothing walk returns None and leaves
@@ -652,6 +686,7 @@ impl Renderer {
             self.last_scanout_addr = Some(addr);
             self.last_backend_was_image = is_image;
         }
+        result.dropped_runs += self.inner.dropped_runs;
         let summary = result.summary(scanout.is_some());
 
         // Retained for the frame (P4 debugger reads all of them; cleared at begin_frame).
@@ -674,6 +709,7 @@ impl Renderer {
     /// images, call this before each prefix, then use the same sequence of `begin_frame` calls.
     pub fn reset(&mut self) {
         self.reset_rdp_state();
+        self.color_image_epoch = 0;
         self.inner.reset();
         self.frame_scenes.clear();
         self.last_scanout_addr = None;
@@ -687,6 +723,12 @@ impl Renderer {
         self.mark_mutation();
         self.inner.begin_frame();
         self.frame_scenes.clear();
+    }
+
+    #[cfg(feature = "capture")]
+    pub fn set_depth_reset_policy(&mut self, policy: DepthResetPolicy) {
+        self.mark_mutation();
+        self.inner.depth_reset_policy = policy;
     }
 }
 

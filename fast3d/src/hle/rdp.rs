@@ -255,6 +255,21 @@ fn set_tile_size<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     cx.rsp.material_dirty = true;
 }
 
+fn framebuffer_load<M: Rdram>(cx: &mut Ctx<M>, address: u64, length: usize) -> Option<Diagnostic> {
+    let kind = match cx.rec.framebuffers.targets.overlap(address, length as u64) {
+        Ok(None) => return None,
+        Ok(Some(_)) => DiagKind::UnsupportedFramebufferAccess {
+            address,
+            reason: crate::diag::FramebufferAccess::TextureLoad,
+        },
+        Err(kind) => kind,
+    };
+    let diagnostic = Diagnostic { at: cx.pc, kind };
+    cx.diags.push(diagnostic);
+    cx.rsp.material_dirty = true;
+    Some(diagnostic)
+}
+
 fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     // contiguous, linear: N64 RDP hardware word count.
     let (_fmt, siz, _w, addr) = cx.rdp.tex_image;
@@ -265,6 +280,14 @@ fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
                            // saturating_sub guards malformed input (uls > lrs) against u32 underflow/panic.
     let words = (lrs.saturating_sub(uls) >> (4 - siz as u32)) + 1; // RGBA16 siz=2
     let bytes = (words as usize) << 3; // 8 bytes/word (siz<=2)
+    if let Some(diagnostic) = framebuffer_load(cx, addr, bytes) {
+        let tile = &cx.rdp.tiles[tile_idx];
+        let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
+        cx.rdp.tmem_bank.reject_load(diagnostic, |tmem| {
+            tmem.write_block(&[], dst, line, dxt, words as usize, siz)
+        });
+        return;
+    }
     let src = memory_try!(cx, Texture, read_bytes_exact(cx.mem, addr, bytes)).into_owned();
 
     let dst_words = cx.rdp.tiles[tile_idx].tmem_addr as usize;
@@ -304,6 +327,22 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let offset = u64::from(bytes_offset) + u64::from(bytes_per_row) * u64::from(ult);
     let texture_start = memory_try!(cx, Texture, checked_span(addr, offset));
     let src_len = (row_count as usize - 1) * bytes_per_row as usize + words_per_row as usize * 8;
+    if let Some(diagnostic) = framebuffer_load(cx, texture_start, src_len) {
+        let tile = &cx.rdp.tiles[tile_idx];
+        let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
+        cx.rdp.tmem_bank.reject_load(diagnostic, |tmem| {
+            tmem.write_tile(
+                &[],
+                dst,
+                line,
+                row_count as usize,
+                words_per_row as usize,
+                bytes_per_row as usize,
+                siz,
+            )
+        });
+        return;
+    }
     let src = memory_try!(
         cx,
         Texture,
@@ -339,6 +378,13 @@ fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let addr = cx.rdp.tex_image.3;
     let count = c.p1(14, 10) as usize + 1;
     let packed_bytes = count * 2;
+    if let Some(diagnostic) = framebuffer_load(cx, addr, packed_bytes) {
+        let dst = usize::from(cx.rdp.tiles[c.p1(24, 3) as usize].tmem_addr);
+        cx.rdp
+            .tmem_bank
+            .reject_load(diagnostic, |tmem| tmem.write_tlut(&[0; 2048], count, dst));
+        return;
+    }
     let packed = memory_try!(cx, Tlut, read_bytes_exact(cx.mem, addr, packed_bytes));
     let tile = c.p1(24, 3) as usize;
     let dst_word = usize::from(cx.rdp.tiles[tile].tmem_addr);
@@ -359,6 +405,8 @@ fn set_color_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     };
     cx.rdp.color_image_set = true;
     if cx.rdp.color_image != new {
+        cx.rec.framebuffers.color_image_epoch =
+            cx.rec.framebuffers.color_image_epoch.wrapping_add(1);
         cx.rdp.color_image = new;
         cx.rdp.color_changed = true;
     }

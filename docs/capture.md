@@ -33,11 +33,13 @@ live rendering continues. Returning registers or configuration to their earlier 
 not make the capture valid again.
 
 A version-one fixture must also be self-contained in framebuffer contents. Replay compares
-`PerFrame` and `Persist` output after initializing the used color targets with two contrasting colors through display lists.
-This catches missing clears that two fresh renderers would conceal. A mismatch rejects the
-fixture. This is a test of the current renderer's color-persistence behavior; it does not add
-persistent depth or reconstruct GPU contents from RAM. The initialization check rejects paired
-framebuffers wider or taller than 1023 pixels, the primer's fixed-coordinate range.
+`PerFrame` and `Persist` output after initializing used color targets with two contrasting
+colors and depth targets with distinct near (`0x0000`) and far (`0xfffc`) packed depths through
+display lists. Every color/depth combination starts with a fresh renderer. A mismatch rejects
+the fixture as dependence on prior attachment contents. The initialization check rejects targets
+wider or taller than 1023 pixels, the primer's fixed-coordinate range. GPU contents are never
+reconstructed from guest RAM. Legacy color and depth attachments are also primed through GPU
+load clears, including pairless workloads.
 
 Alpha dither uses the recorded frame serial and seed on replay. `CaptureFrame::begin` calls
 `Renderer::begin_frame` and records its count, starting at one; its legacy serial argument is
@@ -82,6 +84,93 @@ and raw RGBA8 file. Failure to obtain an adapter, missing memory, or a clear-pol
 is an error. Review live images and independent semantic assertions before pinning any
 regression golden. `fast3d/tests/fixtures/host64-fill.f3dcap` is a synthetic full-frame red fill,
 with literal F3D commands and addresses above 4 GiB; it contains no game assets.
+
+## Reset-rooted sequences
+
+`Sequence` wraps existing frame payloads in a version-two container. It requires every frame
+from renderer reset, serials `1..N` in order, contiguous task order within each frame, `Persist`,
+and one unchanged configuration, extent and dither seed. `warmup_frames` counts the retained
+initial frames before observation. `presentations` contains sorted original serials after that
+warm-up. Cropped, missing, duplicated or reordered frames are rejected; packing never renumbers
+a serial. Payloads retain their source layouts and full 64-bit addresses.
+
+For a live recording, call `CaptureSequence::begin(&mut renderer, seed)`. It resets the renderer
+and selects normal depth persistence. For each frame, call `begin_frame`, record every task
+through `frame_mut()?.process_dl(...)` or its existing unsafe `process_dl_host(...)`, then call
+one of the sequence's `present`, `present_to`, `present_last` or `present_last_to` methods.
+Finish with `finish(warmup_frames, presentation_serials)`. Task memory is copied synchronously
+before the recording call returns. `CaptureSequence` owns the active frame so its completion
+can retain inherited RDP/TMEM state without changing standalone `CaptureFrame` admission.
+Unrecorded renderer changes invalidate recording. The sequence starts from reset; it cannot be
+attached halfway through a running game.
+
+`Sequence::replay(device, queue, DepthResetPolicy::Never)` and `replay_headless` execute all
+frames and tasks through one renderer, including every warm-up presentation. They preserve
+registers, TMEM, attachments, original serials and seed between frames. Selected presentations
+return packed RGBA8; every frame returns summaries, diagnostics and fetched CIMG, ZIMG,
+FILLRECT, FILLCOLOR and SCISSOR commands with full words, task order and command PC. The log
+records fetch order, including repeated commands reached through control flow.
+
+The `capture` feature also exposes `Renderer::set_depth_reset_policy`. `Never` is the normal
+path. `ColorImageSwitch`, `TaskBoundary` and `FrameBoundary` discard only depth at their named
+boundaries. Color, explicit fills, task order, seed and presentation stay fixed. These switches
+are diagnostic controls, separate from `ClearPolicy`. `CaptureFrame` rejects recording with a
+diagnostic reset policy because version-one metadata cannot preserve it.
+
+Pack a complete, ordered set of frame payloads and replay all controls:
+
+```sh
+cargo run -p fast3d --features capture --example replay_capture -- \
+  --pack startup.f3dcap 120 121,122,123 captures/frame-*.f3dcap
+cargo run -p fast3d --features capture --example replay_capture -- \
+  startup.f3dcap evidence/startup all
+```
+
+The output directory must already exist. The fourth packing argument lists selected renderer
+serials, not Helix's zero-based consume indices. A frame payload within a sequence may inherit
+prior state; replaying that payload alone still uses strict standalone admission. The old Helix
+single-frame hook must be updated to use the sequence recorder for inherited RDP/TMEM workloads.
+A directory of intermittently selected captures cannot be converted into a reset prefix.
+
+The replay mode defaults to `persist`; alternatives are `cimg`, `task`, `frame`, or `all`.
+Each selected serial gets a PNG and `.rgba8` file per variant. Each run gets a `.log` with
+adapter, frame configuration, provenance, task metadata, diagnostics and command records.
+`all` uses the same device and adapter for every variant and also writes exact changed-pixel counts, inclusive bounds, FNV-1a 64-bit image hashes and
+white-on-transparent PNG masks against the persistent run. These hashes identify bytes for
+comparison; use an external SHA-256 tool when archiving cryptographic evidence. File names keep
+the original serial, for example `startup-task-000121.png`.
+
+This harness supports steps 2 and 3 of the live sm64 depth experiment. Authored sequence tests
+exercise persistence and distinguish multiple tasks in one frame from separate frames. They do
+not close the live gate. That requires a continuous startup-to-gameplay capture covering the
+specified route, scene annotations, reviewed visible differences with writer/read PCs and shared
+Z addresses, or complete zero-diff results plus command evidence that prior writes are cleared
+or unused before observation. The current Helix hook puts one task in each frame, so task and
+frame controls coincide for those recordings. The harness emits color images and command logs;
+it does not yet emit per-operation depth readback probes or identify writer/read dependencies
+automatically. HOST64 replay remains semantic evidence, not an rt64 input. No live route or
+absence result is claimed by these tests.
+
+## Version-two sequence byte layout
+
+The version-two header uses `F3DCAP\0\0` and the same little-endian marker as version one.
+All integer fields are little-endian and reserved fields must be zero.
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 8 | Magic `F3DCAP\0\0` |
+| 8 | 4 | Version, `2` |
+| 12 | 4 | Endian marker, `0x04030201` |
+| 16 | 8 | Total file length |
+| 24 | 4 | Frame count |
+| 28 | 4 | Warm-up frame count |
+| 32 | 4 | Selected presentation count |
+| 36 | 4 | Reserved |
+
+The header is followed by selected presentation serials as u64 values. Each frame then has a
+u64 payload length and a complete version-one fixture, including its header and provenance.
+Lengths must fit the container and trailing bytes are rejected. The version-two contract implies
+a reset origin; there is no optional missing-prefix flag. Version-one decoding is unchanged.
 
 ## Authored corpus and browser tests
 

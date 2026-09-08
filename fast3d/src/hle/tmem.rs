@@ -43,6 +43,8 @@ pub struct Tmem {
     bytes: Box<[u8; TMEM_BYTES]>,
     sources: Box<[ByteSource; TMEM_BYTES]>,
     blocks: Vec<BlockLoad>,
+    rejected: Box<[Option<crate::Diagnostic>; TMEM_BYTES]>,
+    rejecting: Option<crate::Diagnostic>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -78,6 +80,8 @@ impl Default for Tmem {
             bytes: Box::new([0u8; TMEM_BYTES]),
             sources: Box::new([ByteSource::default(); TMEM_BYTES]),
             blocks: Vec::new(),
+            rejected: Box::new([None; TMEM_BYTES]),
+            rejecting: None,
         }
     }
 }
@@ -90,12 +94,83 @@ impl Tmem {
         if let Some(block) = source.block() {
             self.blocks[block].live_bytes += 1;
         }
+        self.rejected[addr] = self.rejecting;
         self.sources[addr] = source;
         self.bytes[addr] = value;
     }
 
+    pub(crate) fn reject_load(
+        &mut self,
+        diagnostic: crate::Diagnostic,
+        write: impl FnOnce(&mut Self),
+    ) {
+        self.rejecting = Some(diagnostic);
+        write(self);
+        self.rejecting = None;
+    }
+
+    pub(crate) fn rejection(&self, tile: &TileDescriptor) -> Option<crate::Diagnostic> {
+        if let Some(diag) = self.reachable_byte(tile, |addr| self.rejected[addr]) {
+            return Some(diag);
+        }
+        if tile.fmt == 2 {
+            let (start, end) = if tile.siz == 0 {
+                (
+                    PALETTE_BASE + usize::from(tile.palette) * 128,
+                    PALETTE_BASE + (usize::from(tile.palette) + 1) * 128,
+                )
+            } else {
+                (PALETTE_BASE, TMEM_BYTES)
+            };
+            return self.rejected[start..end].iter().flatten().copied().next();
+        }
+        None
+    }
+
+    fn reachable_byte<T>(
+        &self,
+        tile: &TileDescriptor,
+        find: impl Fn(usize) -> Option<T>,
+    ) -> Option<T> {
+        let base = usize::from(tile.tmem_addr) << 3;
+        let stride = usize::from(tile.line) << 3;
+        let extent = |size: u16, mode: u8, mask: u8| {
+            if mask != 0 && mode & 2 == 0 {
+                1usize << mask
+            } else {
+                usize::from(size.max(1))
+            }
+        };
+        let width = extent(tile.width, tile.cms, tile.masks);
+        let height = extent(tile.height, tile.cmt, tile.maskt);
+        let row_bytes = ((width << tile.siz.min(2)).div_ceil(2)).min(TMEM_BYTES);
+        // TMEM addressing repeats after this many rows, including the odd-row swap.
+        let row_period = (TMEM_BYTES >> stride.trailing_zeros().min(12)).max(2);
+        let mask = if tile.fmt == 2 || tile.siz == 3 {
+            MASK16
+        } else {
+            MASK8
+        };
+        for y in 0..height.min(row_period) {
+            for x in 0..row_bytes {
+                let addr = (base + Self::swap_odd_line(y * stride + x, y & 1 != 0)) & mask;
+                if let Some(value) = find(addr)
+                    .or_else(|| (tile.siz == 3).then(|| find(addr | PALETTE_BASE)).flatten())
+                {
+                    return Some(value);
+                }
+            }
+        }
+        None
+    }
+
     pub(crate) fn tile_contains_block(&self, tile: &TileDescriptor) -> bool {
         self.tile_has_source(tile, |source| source.block().is_some())
+    }
+
+    pub(crate) fn tile_has_load(&self, tile: &TileDescriptor) -> bool {
+        self.reachable_byte(tile, |addr| (self.sources[addr].load != 0).then_some(()))
+            .is_some()
     }
 
     fn tile_has_source(&self, tile: &TileDescriptor, matches: impl Fn(ByteSource) -> bool) -> bool {

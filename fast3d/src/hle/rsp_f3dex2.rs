@@ -82,7 +82,8 @@ fn modify_vertex<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn tri1<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    if let Some((mi, ri)) = crate::hle::rsp::snapshot_run(cx.rsp, cx.rdp, cx.diags, cx.scene, cx.pc)
+    if let Some((mi, ri)) =
+        crate::hle::rsp::snapshot_run(cx.rsp, cx.rec, cx.rdp, cx.diags, cx.scene, cx.pc)
     {
         crate::hle::rsp::record_tri(
             cx.rsp,
@@ -101,7 +102,8 @@ fn tri1<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn tri2<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    if let Some((mi, ri)) = crate::hle::rsp::snapshot_run(cx.rsp, cx.rdp, cx.diags, cx.scene, cx.pc)
+    if let Some((mi, ri)) =
+        crate::hle::rsp::snapshot_run(cx.rsp, cx.rec, cx.rdp, cx.diags, cx.scene, cx.pc)
     {
         crate::hle::rsp::record_tri(
             cx.rsp,

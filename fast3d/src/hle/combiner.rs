@@ -585,7 +585,7 @@ fn validate_conversion_modes(
     true
 }
 
-fn physical_texture_uses(sel: &CombinerSelectors, cycle_type: u32) -> (bool, bool) {
+pub(crate) fn physical_texture_uses(sel: &CombinerSelectors, cycle_type: u32) -> (bool, bool) {
     match cycle_type {
         0 => (cycle_uses_texel0(&sel.cyc1), false),
         1 => (
@@ -729,6 +729,35 @@ fn build_material_inner(
         return None;
     }
     let (uses_physical0, uses_physical1) = physical_texture_uses(&selectors, cycle_type);
+    let base = usize::from(rect_tile.unwrap_or(rsp.texture_state.tile) & 7);
+    let mut used_tiles = Vec::new();
+    if uses_physical0 {
+        used_tiles.push(base);
+    }
+    if uses_physical1 {
+        used_tiles.push((base + 1) & 7);
+    }
+    if !rect
+        && (uses_physical0 || uses_physical1)
+        && rdp.lod_enable()
+        && rsp.texture_state.level > 0
+    {
+        used_tiles.extend(
+            (0..(usize::from(rsp.texture_state.level) + 1).min(MAX_LOD_LEVELS as usize))
+                .map(|k| (base + k) & 7),
+        );
+        if rdp.text_detail() & 2 != 0 {
+            used_tiles.push(0);
+        }
+    }
+    for index in used_tiles {
+        if let Some(diagnostic) = rdp.tmem_bank.rejection(&rdp.tiles[index]) {
+            if !diags.contains(&diagnostic) {
+                diags.push(diagnostic);
+            }
+            return None;
+        }
+    }
     if !rdp.texture_loaded && cycle_type < 2 {
         if !rect && rdp.combine_l == 0 && rdp.combine_h == 0 {
             return None;

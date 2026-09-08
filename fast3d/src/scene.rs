@@ -92,6 +92,7 @@ pub enum SceneOp {
 /// One color+depth framebuffer pass: a list of scene ops bounded by SetColorImage.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FramebufferPair {
+    pub(crate) color_image_epoch: u64,
     pub color_image: ColorImage,
     pub depth_image: Option<u64>,
     pub ops: Vec<SceneOp>,
