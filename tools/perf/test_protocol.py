@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from protocol import POLICY, VERSION, sample_reasons, spread, invalidate_pairs, disallowed_process
+from protocol import POLICY, VERSION, sample_reasons, spread, invalidate_pairs, disallowed_process, resting_profile
 from report import CAPTURES, validate_manifest, validate_pair_order, break_even, cost_report, batch_report
 
 class ProtocolTests(unittest.TestCase):
@@ -49,24 +49,25 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(len(batch['spreads']),16)
 
     def samples(self,n=30):
-        return [{'monotonic':float(i),'idle_percent':99,'idle_age_seconds':.1,'background_cores':.01,'swapouts':0,'thermal_throttled':False,'disallowed':[],'power':'AC','power_mode':'fixed'} for i in range(n)]
+        return [{'monotonic':float(i),'idle_percent':99,'idle_age_seconds':.1,'background_cores':.01,'swapouts':0,'thermal_throttled':False,'disallowed':[],'power':'AC','power_mode':'fixed','processes':[]} for i in range(n)]
     def test_benchmark_run_admission_rejects_contention_and_spread(self):
-        self.assertEqual(sample_reasons(self.samples(),'preflight'),[])
+        profile = resting_profile(self.samples())
+        self.assertEqual(sample_reasons(self.samples(),'preflight',profile),[])
         chrome={'command':'/Applications/Google Chrome.app/Google Chrome','cores':0.0}
-        self.assertTrue(disallowed_process(chrome,[]))
+        self.assertFalse(disallowed_process(chrome,[]))
         self.assertFalse(disallowed_process(chrome,['Google Chrome']))
-        chrome['cores']=.01
+        chrome['cores']=.04
         self.assertTrue(disallowed_process(chrome,['Google Chrome']))
-        for field,value,phase in [('idle_percent',94,'preflight'),('thermal_throttled',True,'run'),('disallowed',[12],'run'),('swapouts',1,'run'),('idle_age_seconds',2,'run'),('power','battery','run')]:
+        for field,value,phase in [('idle_percent',94,'preflight'),('thermal_throttled',True,'run'),('processes',[{'pid':12,'command':'cargo','cores':0,'exemption':None}],'run'),('swapouts',1,'run'),('idle_age_seconds',2,'run'),('power','battery','run')]:
             samples=self.samples(); samples[10][field]=value
-            self.assertTrue(sample_reasons(samples,phase),field)
+            self.assertTrue(sample_reasons(samples,phase,profile),field)
         samples=self.samples(); samples[10]['monotonic']+=.7
-        self.assertIn('monitor gap',sample_reasons(samples,'run'))
+        self.assertIn('monitor gap',sample_reasons(samples,'run',profile))
         samples=self.samples(); samples[10]['background_cores']=.26; samples[11]['background_cores']=.26
-        self.assertIn('background above 0.25 core twice',sample_reasons(samples,'run'))
+        self.assertIn('background above resting ceiling 0.0600 core twice',sample_reasons(samples,'run',profile))
         samples=self.samples()
         for row in samples: row['background_cores']=.11
-        self.assertIn('background average above 0.10 core',sample_reasons(samples,'run'))
+        self.assertIn('background average above resting allowance 0.0600 core',sample_reasons(samples,'run',profile))
         self.assertTrue(spread([97.5,100,100,100,102.5])['valid'])
         self.assertFalse(spread([97.49,100,100,100,102.5])['valid'])
         self.assertFalse(spread([100]*4)['valid'])
