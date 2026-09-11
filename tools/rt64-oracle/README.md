@@ -168,8 +168,7 @@ bounding box. White pixels in the mask exceed the threshold. The default is
 `--max-diff-pixels N` to fail when the count exceeds a reviewed budget. With no
 budget the command reports differences and succeeds. No budget or golden is
 established by this tool: current filtering, coverage and blending differences
-can still produce a mask. Review that mask before using it as a gate for
-`docs/design/sm64-fidelity.md` PRs 2 through 4.
+can still produce a mask. Review that mask before using it as a gate.
 
 Use `--ignore-alpha` to compare RGB only, including dither-background matching, when rt64's RGBA16 coverage alpha differs from fast3d's blended alpha.
 
