@@ -114,3 +114,69 @@ pub async fn read_pixels(
     buffer.unmap();
     Ok(pixels)
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn sequence_input(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    if input != "authored" {
+        return Ok(std::fs::read(input)?);
+    }
+    let fixture = fast3d::capture::Fixture::from_bytes(include_bytes!(
+        "../../fast3d/tests/fixtures/host64-fill.f3dcap"
+    ))?;
+    let sequence = fast3d::capture::Sequence {
+        frames: (1..=6)
+            .map(|serial| {
+                let mut frame = fixture.clone();
+                frame.frame.serial = serial;
+                frame.frame.dither_seed = 0;
+                frame.frame.config.clear_policy = fast3d::ClearPolicy::Persist;
+                frame
+            })
+            .collect(),
+        warmup_frames: 2,
+        presentations: vec![6],
+    };
+    Ok(sequence.to_bytes()?)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authored_sequence_matches_parent_declarations() {
+        let sequence =
+            fast3d::capture::Sequence::from_bytes(&sequence_input("authored").unwrap()).unwrap();
+        let original = fast3d::capture::Fixture::from_bytes(include_bytes!(
+            "../../fast3d/tests/fixtures/host64-fill.f3dcap"
+        ))
+        .unwrap();
+        assert_eq!(sequence.frames.len(), 6);
+        assert_eq!(sequence.warmup_frames, 2);
+        assert_eq!(sequence.presentations, [6]);
+        for (index, fixture) in sequence.frames.iter().enumerate() {
+            assert_eq!(fixture.frame.serial, index as u64 + 1);
+            assert_eq!(fixture.frame.dither_seed, 0);
+            assert_eq!(
+                fixture.frame.config.clear_policy,
+                fast3d::ClearPolicy::Persist
+            );
+            assert_eq!((fixture.frame.width, fixture.frame.height), (64, 48));
+            assert_eq!(fixture.tasks, original.tasks);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub struct EmissionClock(Option<std::time::Instant>);
+#[cfg(not(target_arch = "wasm32"))]
+impl EmissionClock {
+    pub fn record(&mut self, value: &mut Value) {
+        let now = std::time::Instant::now();
+        value["emission_interval_ms"] = json!(self
+            .0
+            .replace(now)
+            .map(|previous| now.duration_since(previous).as_secs_f64() * 1000.0));
+    }
+}

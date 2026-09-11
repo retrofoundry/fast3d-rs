@@ -77,6 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let mut frames = file(out.join("frames.jsonl"));
+    let mut emission = EmissionClock::default();
     let mut traces = file(out.join("requests.jsonl"));
     let mut hits = file(out.join("hits.jsonl"));
     let cache_budget = std::env::var("B1_CACHE_BUDGET")
@@ -102,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     match command.as_str() {
         "inspect" | "sequence" | "ordinary" => {
             let start = fast3d::profiling::now_ms();
-            let bytes = fs::read(input)?;
+            let bytes = sequence_input(input)?;
             let sequence = Sequence::from_bytes(&bytes)?;
             let input_ms = fast3d::profiling::now_ms() - start;
             let metadata = json!({"capture":input,"sha256":sha(&bytes),"frames":sequence.frames.len(),"warmup":sequence.warmup_frames,"presentations":sequence.presentations,"config":format!("{:?}",sequence.frames[0].frame),"provenance":format!("{:?}",sequence.frames[0].provenance),"input_loading_validation_ms":input_ms,"clock":fast3d::profiling::clock_probe(),"execution":command,"all_frame_admission":admission(&sequence)});
@@ -165,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             2
                         },
-                        command_trace: false,
+                        command_trace: args.iter().any(|a| a == "--parent-compatible"),
                     };
                     let setup = pollster::block_on(sequence.measure(
                         device,
@@ -176,13 +177,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 trace(frame.serial, frame.observed, &frame.profile);
                             }
                             frame.profile.requests.clear();
-                            write_timed(&formatting_ms, &mut frames, &frame_record(&frame));
+                            let mut row = frame_record(&frame);
+                            row["timing_source"] = json!("library-recorder");
+                            emission.record(&mut row);
+                            write_timed(&formatting_ms, &mut frames, &row);
                         },
                     ))?;
                     fs::write(
                         out.join("setup.json"),
                         serde_json::to_vec_pretty(
-                            &json!({"setup":setup,"device_ms":device_ms,"adapter":format!("{info:?}"),"features":features,"limits":limits,"mode":options.mode,"readback":options.readback,"frames_in_flight":options.frames_in_flight}),
+                            &json!({"setup":setup,"device_ms":device_ms,"adapter":format!("{info:?}"),"features":features,"limits":limits,"mode":options.mode,"readback":options.readback,"frames_in_flight":options.frames_in_flight,"command_trace":options.command_trace}),
                         )?,
                     )?;
                 }
@@ -222,7 +226,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         2
                     },
-                    |v| write_timed(&formatting_ms, &mut frames, &v),
+                    |mut v| {
+                        v["timing_source"] = json!("library-recorder");
+                        emission.record(&mut v);
+                        write_timed(&formatting_ms, &mut frames, &v);
+                    },
                 ))?;
                 fs::write(out.join("setup.json"), serde_json::to_vec_pretty(&setup)?)?;
             }

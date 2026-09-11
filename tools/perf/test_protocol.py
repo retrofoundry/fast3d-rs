@@ -39,7 +39,7 @@ class ProtocolTests(unittest.TestCase):
             attempts=[]
             for i in range(5):
                 run=root/f'run-{i}.json'
-                run.write_text(json.dumps({'valid':True,'reasons':[],'pair':i,'revision':'candidate',
+                run.write_text(json.dumps({'quiet_protocol_version':VERSION,'valid':True,'reasons':[],'pair':i,'revision':'candidate',
                                           'workload':'authored','configuration':'preflight','actual_utc_interval':[i,i+1]}))
                 attempts.append({'quiet_run':str(run),'costs':str(costs)})
             plan=root/'plan.json'; plan.write_text(json.dumps({'comparison':False,'attempts':attempts}))
@@ -58,9 +58,12 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse(disallowed_process(chrome,['Google Chrome']))
         chrome['cores']=.04
         self.assertTrue(disallowed_process(chrome,['Google Chrome']))
-        for field,value,phase in [('idle_percent',94,'preflight'),('thermal_throttled',True,'run'),('processes',[{'pid':12,'command':'cargo','cores':0,'exemption':None}],'run'),('swapouts',1,'run'),('idle_age_seconds',2,'run'),('power','battery','run')]:
+        for field,value,phase in [('thermal_throttled',True,'run'),('processes',[{'pid':12,'command':'cargo','cores':0,'exemption':None}],'run'),('swapouts',1,'run'),('idle_age_seconds',2,'run'),('power','battery','run')]:
             samples=self.samples(); samples[10][field]=value
             self.assertTrue(sample_reasons(samples,phase,profile),field)
+        samples=self.samples()
+        for sample in samples: sample['idle_percent']=94
+        self.assertTrue(sample_reasons(samples,'preflight',profile))
         samples=self.samples(); samples[10]['monotonic']+=.7
         self.assertIn('monitor gap',sample_reasons(samples,'run',profile))
         samples=self.samples(); samples[10]['background_cores']=.26; samples[11]['background_cores']=.26

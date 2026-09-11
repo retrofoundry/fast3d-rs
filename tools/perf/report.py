@@ -2,6 +2,7 @@
 import argparse
 import collections
 import json
+import math
 import statistics
 import zipfile
 from pathlib import Path
@@ -135,6 +136,18 @@ def summarize(args):
     groups={'cold':[f for f in frames if not f.get('observed')], 'observed':[f for f in frames if f.get('observed')]}
     if any(f['serial']==1400 for f in frames):
         groups['serial-1400-after-prefix']=[f for f in frames if f['serial']==1400]
+    errors = []
+    if not frames:
+        errors.append('missing frame records')
+    if any(type(f.get('observed')) is not bool for f in frames):
+        errors.append('missing explicit observed flags')
+    if any(a['serial'] >= b['serial'] for a,b in zip(frames,frames[1:])):
+        errors.append('frame serials are not increasing')
+    if not groups['observed']:
+        errors.append('empty observed window')
+    expected = getattr(args, 'expected_observed', None)
+    if expected is not None and len(groups['observed']) != expected:
+        errors.append(f'expected {expected} observed frames, got {len(groups["observed"])}')
     output={}
     for name, selected in groups.items():
         counts=collections.Counter()
@@ -154,11 +167,30 @@ def summarize(args):
                 timing[key+'.exclusive_ms']+=row['exclusive_ms']
             total=sum(profile.get('timings',{}).get(phase,{}).get('inclusive_ms',0) for phase in ['process_dl','begin_frame','presentation'])
             values.append((total,frame['serial']))
-        timed=any(any(phase in f.get('profile',{}).get('timings',{}) for phase in ['process_dl','begin_frame','presentation']) for f in selected)
+        def has_timing(frame):
+            required = ['begin_frame','presentation'] + (['process_dl'] if frame.get('tasks',1) else [])
+            spans = frame.get('profile',{}).get('timings',{})
+            return all(phase in spans and math.isfinite(spans[phase]['inclusive_ms']) and
+                       spans[phase]['inclusive_ms'] >= 0 for phase in required)
+        timed=bool(selected) and all(has_timing(f) for f in selected)
         ordered=sorted(v for v,_ in values) if timed else []
         output[name]={'frames':len(selected),'counters':counts,'memory_high_water_bytes':peaks,'decodes':dict(decodes),'timings':timing,'cpu_ms':sum(ordered) if timed else None,'cpu_ms_per_frame':sum(ordered)/len(ordered) if ordered else None,'median_ms':statistics.median(ordered) if ordered else None,'p95_ms':ordered[min(len(ordered)-1,int(len(ordered)*.95))] if ordered else None,'slowest':sorted(values,reverse=True)[:10] if timed else [],'library_timing_available':timed,
+                      'timing_sources':sorted({f.get('timing_source','library-recorder') for f in selected}),
+                      'emission_interval_ms':sum(f['emission_interval_ms'] for f in selected if f.get('emission_interval_ms') is not None),
+                      'emission_intervals':sum(f.get('emission_interval_ms') is not None for f in selected),
                       'assembly_ms':sum(f.get('assembly_ms',0) for f in selected),'wait_ms':sum(f.get('wait_ms',0) for f in selected),'adapter_ms':sum(f.get('adapter_ms',0) for f in selected),'readback_ms':sum(f.get('readback_ms',0) for f in selected)}
+    configuration = getattr(args, 'configuration', None)
+    if configuration == 'coarse' and not (output['observed']['library_timing_available'] and (output['observed']['cpu_ms'] or 0)>0):
+        errors.append('coarse observed window lacks complete positive CPU timing')
+    if configuration in ['coarse','counters']:
+        observed = output['observed']
+        if observed['emission_intervals'] != observed['frames'] or observed['emission_interval_ms'] <= 0:
+            errors.append('observed window lacks complete emission intervals')
+    output['validation'] = {'valid':not errors,'reasons':errors,'configuration':configuration}
     args.out.write_text(json.dumps(output,indent=2))
+    if configuration and errors:
+        raise ValueError('; '.join(errors))
+
 
 def cost_prediction(cost, h):
     c=cost['costs_ns']
@@ -268,8 +300,36 @@ def batch_report(args):
     for entry in plan['attempts']:
         run=json.loads(Path(entry['quiet_run']).read_text())
         run['artifacts']=entry
+        if run.get('quiet_protocol_version') != VERSION:
+            run['valid'] = False
+            run['reasons'] = sorted(set(run['reasons'] + ['quiet protocol version differs']))
         runs.append(run)
-    runs.sort(key=lambda run: run['actual_utc_interval'][0])
+    runs.sort(key=lambda run: run['actual_utc_interval'][0] if run['actual_utc_interval'][0] is not None else run.get('monitoring_utc_interval',[''])[0])
+    summaries = {}
+    for run in runs:
+        entry = run['artifacts']
+        if 'summary' not in entry:
+            continue
+        path = Path(entry['summary'])
+        errors = []
+        if not path.exists():
+            errors.append('missing summary')
+        else:
+            summary = json.loads(path.read_text())
+            summaries[str(path)] = summary
+            observed = summary.get('observed',{})
+            if not summary.get('validation',{}).get('valid'):
+                errors.append('summary failed validation')
+            expected = entry.get('expected_observed')
+            if not observed.get('frames') or (expected is not None and observed['frames'] != expected):
+                errors.append('missing or incomplete observed window')
+            if run['configuration']=='coarse' and not (observed.get('library_timing_available') and (observed.get('cpu_ms') or 0)>0):
+                errors.append('missing observed CPU timing')
+            if run['configuration'] in ['coarse','counters'] and (not observed.get('emission_interval_ms') or observed.get('emission_intervals') != observed.get('frames')):
+                errors.append('missing observed emission timing')
+        if errors:
+            run['valid'] = False
+            run['reasons'] = sorted(set(run['reasons'] + errors))
     invalidate_pairs(runs)
     comparison=plan.get('comparison',True)
     pair_reasons=validate_pair_order(runs) if comparison else []
@@ -281,10 +341,10 @@ def batch_report(args):
         entry=run['artifacts']
         prefix=f"{run['revision']}.{run['workload']}.{run['configuration']}"
         if 'summary' in entry:
-            summary=json.loads(Path(entry['summary']).read_text())
+            summary=summaries[entry['summary']]
             for window in ['cold','observed']:
-                for metric in ['cpu_ms','assembly_ms']:
-                    if summary[window][metric] is not None and summary[window][metric]>0:
+                for metric in ['cpu_ms','assembly_ms','emission_interval_ms']:
+                    if summary[window].get(metric) is not None and summary[window][metric]>0:
                         totals[f'{prefix}.{window}.{metric}'].append(summary[window][metric])
                 for phase,value in summary[window]['timings'].items():
                     if value>0:
@@ -295,7 +355,16 @@ def batch_report(args):
                     totals[f"{prefix}.{row['hash_version']}.{row['class']}.{row['set']}.{component}"].append(statistics.median(values))
     result={'quiet_protocol_version':VERSION,'attempts':runs,'pair_order':[{'pair':r['pair'],'revision':r['revision']} for r in runs],'spreads':{key:spread(values) for key,values in totals.items()},'spread_limit':.05,'comparison':comparison}
     result['pair_rejections']=pair_reasons
-    result['valid']=bool(totals) and not pair_reasons and all(value['valid'] for value in result['spreads'].values())
+    cells = {}
+    expected_cells = plan.get('cells') or sorted({f"{r['revision']}.{r['workload']}.{r['configuration']}" for r in runs})
+    for key in expected_cells:
+        members = [r for r in runs if f"{r['revision']}.{r['workload']}.{r['configuration']}" == key]
+        metrics = {k:v for k,v in result['spreads'].items() if k.startswith(key+'.')}
+        cells[key] = {'attempts':len(members),'valid_runs':sum(r['valid'] for r in members),
+                      'metrics':list(metrics),
+                      'valid':len(members)==5 and all(r['valid'] for r in members) and bool(metrics) and all(v['valid'] for v in metrics.values())}
+    result['cells'] = cells
+    result['valid']=bool(cells) and not pair_reasons and all(value['valid'] for value in cells.values())
     args.out.write_text(json.dumps(result,indent=2))
 
 
@@ -331,6 +400,9 @@ if __name__=='__main__':
             p.add_argument('--costs',type=Path,required=True); p.add_argument('--hits',type=Path,required=True)
         else:
             p.add_argument('--input',type=Path,required=True)
+        if name=='summarize':
+            p.add_argument('--configuration',choices=['coarse','counters'])
+            p.add_argument('--expected-observed',type=int)
         if name=='compare':
             p.add_argument('--other',type=Path,required=True)
         p.add_argument('--out',type=Path,required=True)
