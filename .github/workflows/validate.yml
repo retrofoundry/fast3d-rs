@@ -81,6 +81,6 @@ jobs:
           "$CHROMEWEBDRIVER/chromedriver" --version
           export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
           export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
-          cargo test -p fast3d --features capture --target wasm32-unknown-unknown \
+          cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown \
             --test browser_sm64_fixture_replay --test capture_facade \
-            --test capture_memory_wasm -- --nocapture
+            --test capture_memory_wasm --test profiling_capture -- --nocapture

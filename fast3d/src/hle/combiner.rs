@@ -611,7 +611,7 @@ fn cycle_uses_texel1(sel: &CombinerSelectors, cycle_type: u32) -> bool {
 }
 
 // Multi-row LoadBlock swaps cancel only for word-aligned rows.
-fn tile_takes_faithful_path(
+pub(crate) fn tile_takes_faithful_path(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
     tex_w: u32,
@@ -622,7 +622,7 @@ fn tile_takes_faithful_path(
         || TileSampling::from_tile(tile, 0).image[2] == 1
 }
 
-fn validate_tile_texture(
+pub(crate) fn validate_tile_texture(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
 ) -> Result<(), crate::diag::DiagKind> {
@@ -680,7 +680,7 @@ fn decode_tile_texture(
     fi.decode(&bytes, tex_w, tex_h, tlut, tile.palette, tlut_fmt)
 }
 
-fn decode_sampling_texture(
+pub(crate) fn decode_sampling_texture(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
     tlut_fmt: u8,
@@ -702,6 +702,57 @@ fn decode_sampling_texture(
     })
 }
 
+fn decode_profiled(
+    rdp: &crate::hle::rdp::Rdp,
+    tile: &crate::hle::rdp::TileDescriptor,
+    tlut: u8,
+    rsp: &crate::hle::rsp::Rsp,
+    role: &str,
+) -> Result<MipLevel, crate::DiagKind> {
+    let _span = rsp.profiling.span("decode");
+    let output = decode_sampling_texture(rdp, tile, tlut);
+    #[cfg(any(test, feature = "profiling"))]
+    if rsp.profiling.active() {
+        let representation = crate::profiling::representation(rdp, tile, tlut);
+        let extent = TileSampling::from_tile(tile, tlut).allocation_extent();
+        rsp.profiling.decode(
+            format!(
+                "{representation:?}.{}-{}.tlut{tlut}.{}x{}.{role}",
+                tile.fmt, tile.siz, extent[0], extent[1]
+            ),
+            output.as_ref().ok().map(|v| v.texture.len()),
+        );
+        if rsp.profiling.tracing() {
+            rsp.profiling.request(crate::profiling::Request::capture(
+                rdp,
+                tile,
+                tlut,
+                role,
+                output
+                    .as_ref()
+                    .map(|v| v.texture.as_slice())
+                    .map_err(|e| *e),
+            ));
+        }
+    }
+    #[cfg(not(any(test, feature = "profiling")))]
+    let _ = role;
+    output
+}
+
+impl Material {
+    pub(crate) fn owned_texture_bytes(&self) -> usize {
+        self.texture.len()
+            + self.tex1.as_ref().map_or(0, |v| v.texture.len())
+            + self
+                .mip_levels
+                .iter()
+                .map(|v| v.texture.len())
+                .sum::<usize>()
+            + self.detail_tex.as_ref().map_or(0, |v| v.texture.len())
+    }
+}
+
 /// Build a triangle material, diagnosing unsupported selectors or missing textures.
 pub fn build_material(
     rdp: &crate::hle::rdp::Rdp,
@@ -719,6 +770,7 @@ fn build_material_inner(
     pc: u64,
     rect_tile: Option<u8>,
 ) -> Option<Material> {
+    rsp.profiling.count("material.builds", 1);
     let rect = rect_tile.is_some();
     let selectors = decode_combine(rdp.combine_l, rdp.combine_h);
     let cycle_type = (rdp.other_mode_h >> 20) & 3;
@@ -775,7 +827,11 @@ fn build_material_inner(
     let tile = &rdp.tiles[base];
     let tlut_fmt = ((rdp.other_mode_h >> 14) & 0x3) as u8;
     let decoded = if uses_physical0 {
-        texture_at_draw(decode_sampling_texture(rdp, tile, tlut_fmt), diags, pc)?
+        texture_at_draw(
+            decode_profiled(rdp, tile, tlut_fmt, rsp, "texture0"),
+            diags,
+            pc,
+        )?
     } else {
         MipLevel {
             sampling: TileSampling::default(),
@@ -795,7 +851,11 @@ fn build_material_inner(
         let t1 = &rdp.tiles[(base + 1) & 7];
         let t1_w = t1.width.max(1) as u32;
         let t1_h = t1.height.max(1) as u32;
-        let decoded = texture_at_draw(decode_sampling_texture(rdp, t1, tlut_fmt), diags, pc)?;
+        let decoded = texture_at_draw(
+            decode_profiled(rdp, t1, tlut_fmt, rsp, "texture1"),
+            diags,
+            pc,
+        )?;
         Some(Tex1 {
             sampling: decoded.sampling,
             texture: decoded.texture,
@@ -820,7 +880,15 @@ fn build_material_inner(
         for k in 0..n {
             let tile = &rdp.tiles[(base + k as usize) & 7];
             levels.push(texture_at_draw(
-                decode_sampling_texture(rdp, tile, tlut_fmt),
+                decode_profiled(
+                    rdp,
+                    tile,
+                    tlut_fmt,
+                    rsp,
+                    [
+                        "lod0", "lod1", "lod2", "lod3", "lod4", "lod5", "lod6", "lod7",
+                    ][k as usize],
+                ),
                 diags,
                 pc,
             )?);
@@ -828,7 +896,7 @@ fn build_material_inner(
         let td = rdp.text_detail();
         let detail = if td & 0b10 != 0 {
             Some(texture_at_draw(
-                decode_sampling_texture(rdp, &rdp.tiles[0], tlut_fmt),
+                decode_profiled(rdp, &rdp.tiles[0], tlut_fmt, rsp, "detail"),
                 diags,
                 pc,
             )?)
@@ -840,7 +908,15 @@ fn build_material_inner(
         (false, 1u8, Vec::new(), 0u8, None)
     };
 
-    let decoded = if lod { mip_levels[0].clone() } else { decoded };
+    let decoded = if lod {
+        rsp.profiling.count(
+            "owned_copy.level_zero_bytes",
+            mip_levels[0].texture.len() as u64,
+        );
+        mip_levels[0].clone()
+    } else {
+        decoded
+    };
     Some(Material {
         sampling: decoded.sampling,
         texture: decoded.texture,

@@ -282,13 +282,37 @@ pub(crate) fn interpret_with_framebuffers<M: Rdram>(
     entry: u64,
     ucode: crate::hle::gbi::GbiUcode,
     data_format: crate::hle::mem::GbiDataFormat,
+    rdp: crate::hle::rdp::Rdp,
+    framebuffers: FramebufferState,
+    observer: Option<&mut dyn crate::inspect::WalkObserver>,
+) -> InterpResult {
+    interpret_profiled(
+        mem,
+        entry,
+        ucode,
+        data_format,
+        rdp,
+        framebuffers,
+        observer,
+        Default::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn interpret_profiled<M: Rdram>(
+    mem: M,
+    entry: u64,
+    ucode: crate::hle::gbi::GbiUcode,
+    data_format: crate::hle::mem::GbiDataFormat,
     mut rdp: crate::hle::rdp::Rdp,
     framebuffers: FramebufferState,
     mut observer: Option<&mut dyn crate::inspect::WalkObserver>,
+    profiling: crate::profiling::Recorder,
 ) -> InterpResult {
     let mut mem = mem;
     let gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
     let mut rsp = crate::hle::rsp::Rsp::new(gbi.consts, gbi.data_format);
+    rsp.profiling = profiling;
     rdp.color_changed = false;
     rdp.depth_changed = false;
     // Fog factors are RSP task state despite their storage beside the RDP fog color.

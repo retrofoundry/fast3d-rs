@@ -187,7 +187,14 @@ impl OperationInputs {
 }
 
 impl<'a> RenderInputs<'a> {
-    #[cfg(feature = "capture")]
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) fn profile_targets(&self, recorder: &crate::profiling::Recorder) {
+        for target in &self.targets {
+            recorder.target(target.logical_extent, target.output_extent);
+        }
+    }
+
+    #[cfg(any(test, feature = "capture", feature = "profiling"))]
     pub fn update_target_descriptors(
         &self,
         descriptors: &mut super::framebuffers::targets::TargetDescriptors,

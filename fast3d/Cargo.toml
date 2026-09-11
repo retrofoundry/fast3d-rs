@@ -13,6 +13,7 @@ n64-gbi.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 log.workspace = true
+serde = { version = "1", features = ["derive"], optional = true }
 futures-channel = { version = "0.3", optional = true }
 egui = { version = "0.35", optional = true }
 egui-wgpu = { version = "0.35", optional = true }
@@ -31,6 +32,7 @@ wgpu = { version = "29.0", features = ["static-dxc"] }
 
 [features]
 default = []
+profiling = ["dep:serde", "dep:web-sys"]
 capture = ["dep:futures-channel"]
 debug-ui = ["dep:egui", "dep:egui-wgpu"]
 
@@ -47,3 +49,6 @@ required-features = ["capture"]
 [[example]]
 name = "export_capture_rdram"
 required-features = ["capture"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = ["Window", "Performance"], optional = true }

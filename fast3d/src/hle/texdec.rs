@@ -217,11 +217,28 @@ pub(crate) fn decode_ia16_entry(v: u16) -> [u8; 4] {
 ///
 /// The `palette` field (CI4 sub-palette select) is IGNORED for CI8 — CI8 has no sub-palette.
 pub fn decode_ci8(src: &[u8], w: u32, h: u32, tlut: &[u8], tlut_fmt: u8) -> Vec<u8> {
+    decode_ci8_observed(src, w, h, tlut, tlut_fmt, &mut |_| {})
+}
+
+pub(crate) fn decode_ci8_observed(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    tlut: &[u8],
+    tlut_fmt: u8,
+    reads: &mut impl FnMut(usize),
+) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
     for i in 0..n {
         let index = src.get(i).copied().unwrap_or(0) as usize;
         let off = index << 3;
+        if off < tlut.len() {
+            reads(off);
+        }
+        if off + 1 < tlut.len() {
+            reads(off + 1);
+        }
         let entry = match (tlut.get(off), tlut.get(off + 1)) {
             (Some(&hi), Some(&lo)) => u16::from_be_bytes([hi, lo]),
             _ => 0, // out-of-range index -> 0 (silent zero-pad safety net)
@@ -250,6 +267,18 @@ pub fn decode_ci8(src: &[u8], w: u32, h: u32, tlut: &[u8], tlut_fmt: u8) -> Vec<
 /// `(index<<3)` index directly into this stride-8 buffer — no adjustment needed.
 /// Out-of-range index → 0 (zero-pad safety net, same as decode_ci8).
 pub fn decode_ci4(src: &[u8], w: u32, h: u32, tlut: &[u8], palette: u8, tlut_fmt: u8) -> Vec<u8> {
+    decode_ci4_observed(src, w, h, tlut, palette, tlut_fmt, &mut |_| {})
+}
+
+pub(crate) fn decode_ci4_observed(
+    src: &[u8],
+    w: u32,
+    h: u32,
+    tlut: &[u8],
+    palette: u8,
+    tlut_fmt: u8,
+    reads: &mut impl FnMut(usize),
+) -> Vec<u8> {
     let n = (w * h) as usize;
     let base = (palette as usize) << 7;
     let mut out = vec![0u8; n * 4];
@@ -258,6 +287,12 @@ pub fn decode_ci4(src: &[u8], w: u32, h: u32, tlut: &[u8], palette: u8, tlut_fmt
         // Even column (i%2==0) → high nibble; odd column (i%2==1) → low nibble.
         let index = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F } as usize;
         let off = base + (index << 3);
+        if off < tlut.len() {
+            reads(off);
+        }
+        if off + 1 < tlut.len() {
+            reads(off + 1);
+        }
         let entry = match (tlut.get(off), tlut.get(off + 1)) {
             (Some(&hi), Some(&lo)) => u16::from_be_bytes([hi, lo]),
             _ => 0, // out-of-range index → 0 (silent zero-pad safety net)
