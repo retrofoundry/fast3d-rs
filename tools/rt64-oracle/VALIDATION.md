@@ -15,7 +15,7 @@ Files:
 - `fast3d/src/tests/{texgen,fog,mod}.rs` and `tools/rt64-oracle/fixture.rs`: shared raw scene construction and ignored fixture writers.
 - `fast3d/Cargo.toml`: capture feature gate for the exporter example.
 - `tools/rt64-oracle/{CMakeLists.txt,main.cpp}`: standalone macOS C++17 harness, direct GBI selection, native RDRAM readback, PNG/RGBA8/log outputs.
-- `tools/rt64-oracle/README.md` and `docs/ROADMAP.md`: commands, scope and limitations.
+- `tools/rt64-oracle/README.md`: commands, scope and limitations.
 
 No renderer or interpreter behavior changed. The small public capture helper is
 needed because examples cannot access the crate-private CPU interpreter. The C++
