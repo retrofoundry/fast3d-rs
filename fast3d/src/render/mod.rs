@@ -99,14 +99,38 @@ pub(crate) fn material_sampling(mat: &crate::hle::Material) -> TileSamplingArray
     tiles
 }
 
-pub(crate) fn sampling_buffer(device: &wgpu::Device, tiles: &TileSamplingArray) -> wgpu::Buffer {
+pub(crate) fn buffer_init(
+    device: &wgpu::Device,
+    profiling: &crate::profiling::Recorder,
+    class: &'static str,
+    descriptor: &wgpu::util::BufferInitDescriptor<'_>,
+) -> wgpu::Buffer {
     use wgpu::util::DeviceExt;
+    let _span = profiling.span("resources");
+    let buffer = device.create_buffer_init(descriptor);
+    profiling.buffer(class, buffer.size(), descriptor.contents.len() as u64);
+    buffer
+}
 
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("tile-sampling"),
-        contents: bytemuck::cast_slice(tiles),
-        usage: wgpu::BufferUsages::UNIFORM,
-    })
+pub(crate) fn sampling_buffer(device: &wgpu::Device, tiles: &TileSamplingArray) -> wgpu::Buffer {
+    sampling_buffer_profiled(device, tiles, &Default::default())
+}
+
+fn sampling_buffer_profiled(
+    device: &wgpu::Device,
+    tiles: &TileSamplingArray,
+    profiling: &crate::profiling::Recorder,
+) -> wgpu::Buffer {
+    buffer_init(
+        device,
+        profiling,
+        "uniforms",
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("tile-sampling"),
+            contents: bytemuck::cast_slice(tiles),
+            usage: wgpu::BufferUsages::UNIFORM,
+        },
+    )
 }
 
 pub(crate) fn sampling_entry(buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
@@ -424,6 +448,74 @@ mod tests {
             .validate(&module)
             .unwrap_or_else(|err| panic!("{}", err.emit_to_string(&source)));
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn buffer_init_counts_bytes() {
+        let (device, _, _) = headless_device();
+        let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+        let buffer = buffer_init(
+            &device,
+            &recorder,
+            "source",
+            &wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: &[1, 2, 3],
+                usage: wgpu::BufferUsages::COPY_SRC,
+            },
+        );
+        let snapshot = recorder.drain();
+        assert_eq!(snapshot.counters["buffer.source.creations"], 1);
+        assert_eq!(snapshot.counters["buffer.source.upload_bytes"], 3);
+        assert_eq!(
+            snapshot.counters["buffer.source.capacity_bytes"],
+            buffer.size()
+        );
+        assert_eq!(buffer.size(), 4);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn upload_counts_include_all_texture_roles() {
+        let (device, queue, dual) = headless_device();
+        let mut renderer =
+            SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 48, dual);
+        let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+        renderer.profiling = recorder.clone();
+        let mut material = test_material();
+        material.lod = true;
+        material.num_levels = 3;
+        let level = crate::hle::combiner::MipLevel {
+            sampling: Default::default(),
+            texture: vec![255; 4],
+            w: 1,
+            h: 1,
+        };
+        material.mip_levels = vec![level.clone(); 3];
+        material.detail_tex = Some(level);
+        material.tex1 = Some(crate::hle::combiner::Tex1 {
+            sampling: Default::default(),
+            texture: vec![255; 4],
+            tex_w: 1,
+            tex_h: 1,
+            wrap_s: 0,
+            wrap_t: 0,
+            fmt: 0,
+            siz: 2,
+        });
+        renderer.upload_materials(&device, &queue, &[inputs::TextureInputs::from(&material)]);
+        let snapshot = recorder.drain();
+        for role in ["lod0", "lod1", "lod2", "texture1", "detail"] {
+            assert_eq!(snapshot.counters[&format!("texture.{role}.creations")], 1);
+            assert_eq!(
+                snapshot.counters[&format!("texture.{role}.upload_bytes")],
+                4
+            );
+        }
+        assert!(!snapshot.counters.contains_key("texture.texture0.creations"));
+        renderer.upload_materials(&device, &queue, &[inputs::TextureInputs::from(&material)]);
+        assert!(recorder.drain().counters.is_empty());
     }
 
     fn test_material() -> crate::hle::Material {
@@ -1530,26 +1622,31 @@ impl RspProcessPipeline {
         encoder: &mut wgpu::CommandEncoder,
         inputs: Option<&inputs::RspInputs<'_>>,
         targets: &[inputs::TargetInputs],
+        profiling: &crate::profiling::Recorder,
     ) -> RspSceneBuffers {
-        use wgpu::util::DeviceExt;
         let Some(inputs) = inputs else {
             return RspSceneBuffers::default();
         };
         let n = inputs.source.len() as u32;
-        let sb = |data: &[u8]| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: data,
-                usage: wgpu::BufferUsages::STORAGE,
-            })
+        let sb = |class, data: &[u8]| {
+            buffer_init(
+                device,
+                profiling,
+                class,
+                &wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: data,
+                    usage: wgpu::BufferUsages::STORAGE,
+                },
+            )
         };
-        let source = sb(bytemuck::cast_slice(&inputs.source));
-        let mvp_table = sb(bytemuck::cast_slice(&inputs.mvp_table));
-        let viewport_table = sb(bytemuck::cast_slice(&inputs.viewport_table));
-        let texcoord_table = sb(bytemuck::cast_slice(&inputs.texcoord_table));
-        let lights_table = sb(bytemuck::cast_slice(&inputs.lights_table));
-        let lookat_table = sb(bytemuck::cast_slice(&inputs.lookat_table));
-        let fog_table = sb(bytemuck::cast_slice(&inputs.fog_table));
+        let source = sb("source", bytemuck::cast_slice(&inputs.source));
+        let mvp_table = sb("state", bytemuck::cast_slice(&inputs.mvp_table));
+        let viewport_table = sb("state", bytemuck::cast_slice(&inputs.viewport_table));
+        let texcoord_table = sb("state", bytemuck::cast_slice(&inputs.texcoord_table));
+        let lights_table = sb("state", bytemuck::cast_slice(&inputs.lights_table));
+        let lookat_table = sb("state", bytemuck::cast_slice(&inputs.lookat_table));
+        let fog_table = sb("state", bytemuck::cast_slice(&inputs.fog_table));
 
         let extents = targets
             .iter()
@@ -1558,22 +1655,29 @@ impl RspProcessPipeline {
         let mut vertices = std::collections::HashMap::new();
         for extent in extents {
             vertices.entry(extent).or_insert_with(|| {
+                let resources = profiling.span("resources");
                 let dst = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("out-vertices"),
                     size: (n as u64) * 48,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
                     mapped_at_creation: false,
                 });
-                let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("rsp-params"),
-                    contents: bytemuck::bytes_of(&RspProcessParams {
-                        vertex_count: n,
-                        _pad: 0,
-                        fb_width: extent.0 as f32,
-                        fb_height: extent.1 as f32,
-                    }),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
+                profiling.buffer("compute_outputs", dst.size(), 0);
+                let params = buffer_init(
+                    device,
+                    profiling,
+                    "uniforms",
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some("rsp-params"),
+                        contents: bytemuck::bytes_of(&RspProcessParams {
+                            vertex_count: n,
+                            _pad: 0,
+                            fb_width: extent.0 as f32,
+                            fb_height: extent.1 as f32,
+                        }),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    },
+                );
                 let rsp_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("rsp-bg"),
                     layout: self.bind_group_layout(),
@@ -1616,15 +1720,21 @@ impl RspProcessPipeline {
                         },
                     ],
                 });
+                drop(resources);
                 self.dispatch(encoder, &rsp_bg, n);
                 dst
             });
         }
-        let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ibuf"),
-            contents: bytemuck::cast_slice(inputs.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+        let indices = buffer_init(
+            device,
+            profiling,
+            "indices",
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("ibuf"),
+                contents: bytemuck::cast_slice(inputs.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            },
+        );
         RspSceneBuffers {
             vertices,
             indices: Some(indices),
@@ -1696,47 +1806,61 @@ fn build_tex_entry(
     samplers: &[[wgpu::Sampler; 3]; 3],
     dummy_view: &wgpu::TextureView,
     mat: &inputs::TextureInputs<'_>,
+    profiling: &crate::profiling::Recorder,
 ) -> TexCache {
+    let _span = profiling.span("resources");
     // Upload one decoded RGBA8 texture (tex0, or the tex1 second texture) to a fresh GPU texture,
     // returning its view. The view keeps the texture alive via the bind group's strong ref.
-    let upload = |label: &str, w: u32, h: u32, bytes: &[u8]| -> wgpu::TextureView {
-        let size = wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
+    let upload =
+        |role: &'static str, label: &str, w: u32, h: u32, bytes: &[u8]| -> wgpu::TextureView {
+            let size = wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            };
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+                size,
+            );
+            profiling.texture(role, u64::from(w) * u64::from(h) * 4, bytes.len() as u64);
+            tex.create_view(&wgpu::TextureViewDescriptor::default())
         };
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(w * 4),
-                rows_per_image: Some(h),
-            },
-            size,
-        );
-        tex.create_view(&wgpu::TextureViewDescriptor::default())
-    };
     // tex0: LOD level 0 as its OWN single-level texture (`upload` uses mip_level_count = 1). Non-LOD
     // materials upload only this from `mat.texture` — byte-identical to the pre-LOD single
     // `write_texture`. When LOD is active, level 0 is `mat.texture` (== `mip_levels[0]`).
     let [w, h] = mat.allocation_extent;
-    let tex_view = upload("n64-tex", w, h, mat.texture);
+    let tex_view = upload(
+        if mat.mip_levels.is_empty() {
+            "texture0"
+        } else {
+            "lod0"
+        },
+        "n64-tex",
+        w,
+        h,
+        mat.texture,
+    );
     // Levels 1..MAX_LOD as INDEPENDENT per-level textures (hardware-faithful — NO halving constraint),
     // bound at bindings 6..=12. `uploaded_level_count` caps the real count at MAX_LOD. A slot beyond
     // the uploaded count (or a non-LOD material) binds the shared 1×1 dummy; it is never sampled
@@ -1748,7 +1872,15 @@ fn build_tex_entry(
             if k < num_levels {
                 if let Some(lvl) = mat.mip_levels.get(k as usize) {
                     let [w, h] = lvl.sampling.allocation_extent();
-                    return upload(&format!("n64-tex-lod{k}"), w, h, &lvl.texture);
+                    return upload(
+                        [
+                            "lod0", "lod1", "lod2", "lod3", "lod4", "lod5", "lod6", "lod7",
+                        ][k as usize],
+                        &format!("n64-tex-lod{k}"),
+                        w,
+                        h,
+                        &lvl.texture,
+                    );
                 }
             }
             dummy_view.clone()
@@ -1759,7 +1891,7 @@ fn build_tex_entry(
     let tex1_view = match &mat.tex1 {
         Some(t) => {
             let [w, h] = t.sampling.allocation_extent();
-            upload("n64-tex1", w, h, &t.texture)
+            upload("texture1", "n64-tex1", w, h, &t.texture)
         }
         None => dummy_view.clone(),
     };
@@ -1772,12 +1904,12 @@ fn build_tex_entry(
     let detail_view = match &mat.detail_tex {
         Some(d) => {
             let [w, h] = d.sampling.allocation_extent();
-            upload("n64-tex-detail", w, h, &d.texture)
+            upload("detail", "n64-tex-detail", w, h, &d.texture)
         }
         None => dummy_view.clone(),
     };
     let sampling = mat.sampling;
-    let sampling_buffer = sampling_buffer(device, &sampling);
+    let sampling_buffer = sampling_buffer_profiled(device, &sampling, profiling);
     let entries: Vec<wgpu::BindGroupEntry> = [
         sampling_entry(&sampling_buffer),
         wgpu::BindGroupEntry {
@@ -1823,6 +1955,17 @@ fn build_tex_entry(
         layout: bgl,
         entries: &entries,
     });
+    profiling.count(
+        "owned_copy.upload_cache_bytes",
+        (mat.texture.len()
+            + mat.tex1.as_ref().map_or(0, |v| v.texture.len())
+            + mat
+                .mip_levels
+                .iter()
+                .map(|v| v.texture.len())
+                .sum::<usize>()
+            + mat.detail_tex.as_ref().map_or(0, |v| v.texture.len())) as u64,
+    );
     TexCache {
         sampling,
         w: mat.tex_w,
@@ -1838,6 +1981,7 @@ fn build_tex_entry(
 }
 
 pub struct SceneRenderer {
+    pub(crate) profiling: crate::profiling::Recorder,
     pub(crate) frame_serial: u64,
     pub(crate) dither_seed: u32,
     textured: TexturedPipeline,
@@ -1882,12 +2026,70 @@ pub struct SceneRenderer {
 }
 
 impl SceneRenderer {
+    fn profile_resident_resources(&self) {
+        self.profiling.gauge(
+            "gpu_decoded_texture_bytes",
+            self.tex_caches
+                .iter()
+                .map(|c| {
+                    (c.bytes.len()
+                        + c.tex1.as_ref().map_or(0, |t| t.texture.len())
+                        + c.mip_levels
+                            .iter()
+                            .skip(1)
+                            .map(|m| m.texture.len())
+                            .sum::<usize>()
+                        + c.detail_tex.as_ref().map_or(0, |t| t.texture.len()))
+                        as u64
+                })
+                .sum(),
+        );
+        self.profiling.gauge(
+            "cpu_upload_cache_bytes",
+            self.tex_caches
+                .iter()
+                .map(|c| {
+                    (c.bytes.len()
+                        + c.tex1.as_ref().map_or(0, |t| t.texture.len())
+                        + c.mip_levels.iter().map(|m| m.texture.len()).sum::<usize>()
+                        + c.detail_tex.as_ref().map_or(0, |t| t.texture.len()))
+                        as u64
+                })
+                .sum(),
+        );
+        self.profiling.gauge(
+            "gpu_framebuffer_bytes",
+            self.framebuffers
+                .values()
+                .map(|f| u64::from(f.color.width()) * u64::from(f.color.height()) * 4)
+                .sum(),
+        );
+        self.profiling.gauge(
+            "gpu_depth_bytes",
+            self.depthbuffers
+                .values()
+                .map(|f| u64::from(f.texture.width()) * u64::from(f.texture.height()) * 4)
+                .sum(),
+        );
+    }
+
     pub fn new(
         device: &wgpu::Device,
         color_format: wgpu::TextureFormat,
         w: u32,
         h: u32,
         _dual_source: bool,
+    ) -> Self {
+        Self::new_profiled(device, color_format, w, h, _dual_source, Default::default())
+    }
+
+    pub(crate) fn new_profiled(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        w: u32,
+        h: u32,
+        _dual_source: bool,
+        profiling: crate::profiling::Recorder,
     ) -> Self {
         let textured = TexturedPipeline::new(device, color_format, DEPTH_FORMAT);
         // Second draw-pipeline (Rgba8Unorm): the internal-framebuffer draw target — used by both
@@ -1987,11 +2189,17 @@ impl SceneRenderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+        profiling.texture("dummy", 4, 0);
         let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
         // 1×1 `@group(0)` bind group used as the FillRect texture binding. The pipeline layout
         // requires group 0, but the fill combine has `tex_enable = 0`, so binding 0 is never sampled;
         // bindings 2/3 (TEXEL1) point at the same dummy and are likewise never read (tex_enable1 = 0).
         let image_sampling = image_sampling_buffer(device);
+        profiling.buffer(
+            "uniforms",
+            image_sampling.size(),
+            std::mem::size_of::<TileSamplingArray>() as u64,
+        );
         let fill_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("fill-bg"),
             layout: textured_fb.bind_group_layout(),
@@ -2029,6 +2237,7 @@ impl SceneRenderer {
             .collect::<Vec<_>>(),
         });
         Self {
+            profiling,
             textured,
             textured_fb,
             present,
@@ -2202,17 +2411,21 @@ impl SceneRenderer {
         height: u32,
         attachment_height: u32,
     ) -> wgpu::BindGroup {
-        use wgpu::util::DeviceExt;
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("present-extent"),
-            contents: bytemuck::cast_slice(&[
-                1.0_f32,
-                height as f32 / attachment_height as f32,
-                (width as f32 - 0.5) / width as f32,
-                (height as f32 - 0.5) / attachment_height as f32,
-            ]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let buffer = buffer_init(
+            device,
+            &self.profiling,
+            "presentation",
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("present-extent"),
+                contents: bytemuck::cast_slice(&[
+                    1.0_f32,
+                    height as f32 / attachment_height as f32,
+                    (width as f32 - 0.5) / width as f32,
+                    (height as f32 - 0.5) / attachment_height as f32,
+                ]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        );
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("present-extent"),
             layout: &self.present_extent_layout,
@@ -2230,7 +2443,10 @@ impl SceneRenderer {
         h: u32,
         logical_height: u32,
     ) -> Framebuffer {
+        let _span = self.profiling.span("resources");
         let w = layout.width;
+        self.profiling
+            .texture("framebuffer", u64::from(w) * u64::from(h) * 4, 0);
         let color = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("fb-store-color"),
             size: wgpu::Extent3d {
@@ -2288,9 +2504,15 @@ impl SceneRenderer {
             .collect::<Vec<_>>(),
         });
         let present_extent = self.make_present_extent(device, w, logical_height, h);
+        let sampling = framebuffers::color_sampling(device, w, logical_height);
+        self.profiling.buffer(
+            "uniforms",
+            sampling.size(),
+            std::mem::size_of::<TileSamplingArray>() as u64,
+        );
         Framebuffer {
             height: logical_height,
-            sampling: framebuffers::color_sampling(device, w, logical_height),
+            sampling,
             present_extent,
             color,
             attach,
@@ -2653,4 +2875,65 @@ pub mod rsp_buffers {
             .expect("rsp_process.wgsl must validate");
         }
     }
+}
+
+#[cfg(feature = "profiling")]
+pub(crate) fn gpu_accounting_probe(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> (crate::profiling::Snapshot, crate::profiling::Snapshot) {
+    let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+    let mut renderer = SceneRenderer::new(device, wgpu::TextureFormat::Rgba8Unorm, 64, 48, false);
+    renderer.profiling = recorder.clone();
+    let mut rdp = crate::hle::rdp::Rdp {
+        texture_loaded: true,
+        combine_l: 0xFC12_7E24,
+        combine_h: 0xFFFF_F9FC,
+        ..Default::default()
+    };
+    rdp.tiles[0] = crate::hle::rdp::TileDescriptor {
+        fmt: 0,
+        siz: 2,
+        width: 1,
+        height: 1,
+        ..Default::default()
+    };
+    let mut material =
+        crate::hle::combiner::build_material(&rdp, &Default::default(), &mut Vec::new(), 0)
+            .unwrap();
+    let level = crate::hle::combiner::MipLevel {
+        sampling: material.sampling,
+        texture: material.texture.clone(),
+        w: 1,
+        h: 1,
+    };
+    material.lod = true;
+    material.num_levels = 3;
+    material.mip_levels = vec![level.clone(); 3];
+    material.detail_tex = Some(level);
+    material.tex1 = Some(crate::hle::combiner::Tex1 {
+        sampling: material.sampling,
+        texture: material.texture.clone(),
+        tex_w: 1,
+        tex_h: 1,
+        wrap_s: 0,
+        wrap_t: 0,
+        fmt: 0,
+        siz: 2,
+    });
+    let buffer = buffer_init(
+        device,
+        &recorder,
+        "source",
+        &wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: &[1, 2, 3],
+            usage: wgpu::BufferUsages::COPY_SRC,
+        },
+    );
+    assert_eq!(buffer.size(), 4);
+    renderer.upload_materials(device, queue, &[inputs::TextureInputs::from(&material)]);
+    let first = recorder.drain();
+    renderer.upload_materials(device, queue, &[inputs::TextureInputs::from(&material)]);
+    (first, recorder.drain())
 }

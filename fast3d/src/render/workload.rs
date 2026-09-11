@@ -206,7 +206,6 @@ use super::framebuffers::{ImageLayout, ImageRequest};
 use super::inputs::{DrawInputs, RenderInputs, TargetInputs, TextureInputs};
 use super::{build_tex_entry, CombinerUniform, SceneRenderer, CLEAR_COLOR};
 use crate::ClearPolicy;
-use wgpu::util::DeviceExt;
 
 impl TargetWorkload {
     pub(super) fn uses_depth(&self, scene: &Scene) -> bool {
@@ -228,7 +227,7 @@ struct DrawUpload {
 }
 
 impl SceneRenderer {
-    fn upload_materials(
+    pub(super) fn upload_materials(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -255,6 +254,7 @@ impl SceneRenderer {
                     &self.samplers,
                     &self.dummy_view,
                     mat,
+                    &self.profiling,
                 );
                 if i < self.tex_caches.len() {
                     self.tex_caches[i] = entry;
@@ -266,11 +266,17 @@ impl SceneRenderer {
     }
 
     fn upload_draws(&self, device: &wgpu::Device, target: &TargetInputs) -> DrawUpload {
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("workload-uniforms"),
-            contents: &target.uniforms,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let _span = self.profiling.span("resources");
+        let buffer = super::buffer_init(
+            device,
+            &self.profiling,
+            "uniforms",
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("workload-uniforms"),
+                contents: &target.uniforms,
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        );
         let uniforms = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("workload-uniforms"),
             layout: self.textured_fb.uniform_bind_group_layout(),
@@ -284,11 +290,16 @@ impl SceneRenderer {
             }],
         });
         let rectangles = (!target.rectangles.is_empty()).then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("workload-rectangles"),
-                contents: bytemuck::cast_slice(&target.rectangles),
-                usage: wgpu::BufferUsages::VERTEX,
-            })
+            super::buffer_init(
+                device,
+                &self.profiling,
+                "rectangles",
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("workload-rectangles"),
+                    contents: bytemuck::cast_slice(&target.rectangles),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            )
         });
         DrawUpload {
             uniforms,
@@ -305,12 +316,14 @@ impl SceneRenderer {
     ) -> Option<TargetId> {
         self.diagnostics.clear();
         self.dropped_runs = 0;
+        let preparation = self.profiling.span("render_inputs");
         let inputs = RenderInputs::with_targets(
             scene,
             (self.fb_w, self.fb_h),
             [self.frame_serial as u32, self.dither_seed],
             &self.target_descriptors,
         )?;
+        drop(preparation);
         let result = self.render_inputs(device, queue, &inputs, clear_policy);
         self.diagnostics.extend_from_slice(&inputs.diagnostics);
         self.dropped_runs += inputs.dropped_runs;
@@ -325,15 +338,22 @@ impl SceneRenderer {
         clear_policy: ClearPolicy,
     ) -> Option<TargetId> {
         self.diagnostics.clear();
+        let encoding = self.profiling.span("encoding");
         self.upload_materials(device, queue, &inputs.textures);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("workload"),
         });
-        let buffers =
-            self.rsp
-                .process_scene(device, &mut encoder, inputs.rsp.as_ref(), &inputs.targets);
+        let buffers = self.rsp.process_scene(
+            device,
+            &mut encoder,
+            inputs.rsp.as_ref(),
+            &inputs.targets,
+            &self.profiling,
+        );
         let mut last_target = None;
         for target in &inputs.targets {
+            self.profiling
+                .target(target.logical_extent, target.output_extent);
             #[cfg(feature = "capture")]
             if self.depth_reset_policy == crate::DepthResetPolicy::ColorImageSwitch
                 && self.depth_color_epoch != Some(target.color_image_epoch)
@@ -408,6 +428,7 @@ impl SceneRenderer {
                             depth,
                             word,
                             operation.scissor,
+                            &self.profiling,
                         );
                     } else {
                         self.diagnostics.push(crate::Diagnostic {
@@ -605,7 +626,12 @@ impl SceneRenderer {
                 start = end;
             }
         }
-        queue.submit(Some(encoder.finish()));
+        self.profile_resident_resources();
+        let command = encoder.finish();
+        drop(encoding);
+        let _submission = self.profiling.span("submission");
+        queue.submit(Some(command));
+        self.profiling.count("submissions", 1);
         last_target
     }
 

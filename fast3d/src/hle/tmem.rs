@@ -87,6 +87,48 @@ impl Default for Tmem {
 }
 
 impl Tmem {
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) fn profile_bank(&self, linear: bool) -> crate::profiling::Bank {
+        crate::profiling::Bank {
+            bytes: self.bytes.to_vec(),
+            sources: if linear {
+                self.sources.iter().map(|s| [s.load, s.offset]).collect()
+            } else {
+                Vec::new()
+            },
+            blocks: if linear {
+                self.blocks
+                    .iter()
+                    .map(|b| (b.base, b.live_bytes, b.linear))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) fn from_profile(bank: &crate::profiling::Bank) -> Self {
+        let mut tmem = Self::default();
+        tmem.bytes.copy_from_slice(&bank.bytes);
+        for (dst, src) in tmem.sources.iter_mut().zip(&bank.sources) {
+            *dst = ByteSource {
+                load: src[0],
+                offset: src[1],
+            };
+        }
+        tmem.blocks = bank
+            .blocks
+            .iter()
+            .map(|&(base, live_bytes, linear)| BlockLoad {
+                base,
+                live_bytes,
+                linear,
+            })
+            .collect();
+        tmem
+    }
+
     fn store_byte(&mut self, addr: usize, value: u8, source: ByteSource) {
         if let Some(previous) = self.sources[addr].block() {
             self.blocks[previous].live_bytes -= 1;
@@ -454,15 +496,29 @@ impl Tmem {
     /// CI **index** read (TLUT sampling addresses only the low 2 KiB bank, matching the RDP's
     /// `addressMask = usesTlut ? RDP_TMEM_MASK16 : RDP_TMEM_MASK8`).
     #[inline]
-    fn load_byte_masked(&self, base: usize, rel: usize, odd_row: bool, mask: usize) -> u8 {
+    fn load_byte_masked(
+        &self,
+        base: usize,
+        rel: usize,
+        odd_row: bool,
+        mask: usize,
+        reads: &mut impl FnMut(usize),
+    ) -> u8 {
         let addr = (base + Self::swap_odd_line(rel, odd_row)) & mask;
+        reads(addr);
         self.bytes[addr]
     }
 
     /// The non-paletted byte read: [`load_byte_masked`](Self::load_byte_masked) with [`MASK8`].
     #[inline]
-    fn load_byte(&self, base: usize, rel: usize, odd_row: bool) -> u8 {
-        self.load_byte_masked(base, rel, odd_row, MASK8)
+    fn load_byte(
+        &self,
+        base: usize,
+        rel: usize,
+        odd_row: bool,
+        reads: &mut impl FnMut(usize),
+    ) -> u8 {
+        self.load_byte_masked(base, rel, odd_row, MASK8, reads)
     }
 
     /// The RGBA32 dual-bank byte read. Mirrors `implLoadTMEM(..., MASK16, orAddress)`: the address
@@ -470,8 +526,16 @@ impl Tmem {
     /// ORs [`PALETTE_BASE`] (`orAddress = RDP_TMEM_BYTES >> 1`). `or_addr` is 0 for the R,G bytes in
     /// the low bank and [`PALETTE_BASE`] for the B,A bytes in the high bank.
     #[inline]
-    fn load_byte_rgba32(&self, base: usize, rel: usize, odd_row: bool, or_addr: usize) -> u8 {
+    fn load_byte_rgba32(
+        &self,
+        base: usize,
+        rel: usize,
+        odd_row: bool,
+        or_addr: usize,
+        reads: &mut impl FnMut(usize),
+    ) -> u8 {
         let addr = ((base + Self::swap_odd_line(rel, odd_row)) & MASK16) | or_addr;
+        reads(addr);
         self.bytes[addr]
     }
 
@@ -481,7 +545,14 @@ impl Tmem {
     /// high byte, `paddr+1` the low byte. `tlut_fmt`: 2 => RGBA16 entry, 3 => IA16 entry, else
     /// transparent black (matching `texdec::decode_ci*`).
     #[inline]
-    fn load_palette_entry(&self, paddr: usize, tlut_fmt: u8) -> [u8; 4] {
+    fn load_palette_entry(
+        &self,
+        paddr: usize,
+        tlut_fmt: u8,
+        reads: &mut impl FnMut(usize),
+    ) -> [u8; 4] {
+        reads(paddr & MASK8);
+        reads((paddr + 1) & MASK8);
         let hi = self.bytes[paddr & MASK8];
         let lo = self.bytes[(paddr + 1) & MASK8];
         let entry = ((hi as u16) << 8) | lo as u16;
@@ -502,6 +573,15 @@ impl Tmem {
     /// `tlut_fmt` (othermode TT: 0=NONE, 2=RGBA16, 3=IA16) is consulted only by the CI4/CI8
     /// arms, which read a palette index from the low bank and resolve it against the TLUT region.
     pub fn sample_tile(&self, tile: &TileDescriptor, tlut_fmt: u8) -> Result<Vec<u8>, DiagKind> {
+        self.sample_tile_observed(tile, tlut_fmt, &mut |_| {})
+    }
+
+    pub(crate) fn sample_tile_observed(
+        &self,
+        tile: &TileDescriptor,
+        tlut_fmt: u8,
+        reads: &mut impl FnMut(usize),
+    ) -> Result<Vec<u8>, DiagKind> {
         FormatInfo {
             fmt: tile.fmt,
             siz: tile.siz,
@@ -525,8 +605,9 @@ impl Tmem {
             let odd = (y & 1) == 1;
             for x in 0..w {
                 let rel = y * stride + ((x << tmem_shift) >> 1);
-                let px =
-                    self.decode_texel(tile.fmt, tile.siz, base, rel, odd, x, tlut_fmt, palette)?;
+                let px = self.decode_texel(
+                    tile.fmt, tile.siz, base, rel, odd, x, tlut_fmt, palette, reads,
+                )?;
                 let o = (y * w + x) * 4;
                 out[o..o + 4].copy_from_slice(&px);
             }
@@ -538,6 +619,15 @@ impl Tmem {
         &self,
         tile: &TileDescriptor,
         tlut_fmt: u8,
+    ) -> Result<Vec<u8>, DiagKind> {
+        self.sampling_lookup_observed(tile, tlut_fmt, &mut |_| {})
+    }
+
+    pub(crate) fn sampling_lookup_observed(
+        &self,
+        tile: &TileDescriptor,
+        tlut_fmt: u8,
+        reads: &mut impl FnMut(usize),
     ) -> Result<Vec<u8>, DiagKind> {
         FormatInfo {
             fmt: tile.fmt,
@@ -557,6 +647,7 @@ impl Tmem {
                         parity,
                         tlut_fmt,
                         usize::from(tile.palette),
+                        reads,
                     )?);
                 }
             }
@@ -579,12 +670,13 @@ impl Tmem {
         x: usize,
         tlut_fmt: u8,
         palette: usize,
+        reads: &mut impl FnMut(usize),
     ) -> Result<[u8; 4], DiagKind> {
         Ok(match (fmt, siz) {
             // RGBA16: big-endian 5/5/5/1 word, channel bit-replicated (c<<3)|(c>>2).
             (0, 2) => {
-                let hi = self.load_byte(base, rel, odd_row);
-                let lo = self.load_byte(base, rel + 1, odd_row);
+                let hi = self.load_byte(base, rel, odd_row, reads);
+                let lo = self.load_byte(base, rel + 1, odd_row, reads);
                 decode_rgba16_entry(((hi as u16) << 8) | lo as u16)
             }
             // RGBA32: dual-bank. R,G are the two bytes at `rel`/`rel+1` in the LOW bank; B,A the two
@@ -592,49 +684,49 @@ impl Tmem {
             // these are already 8-bit channels. Assembles the 32-bit texel as
             // `(r<<24)|(g<<16)|(b<<8)|a`, i.e. the byte order [r, g, b, a].
             (0, 3) => {
-                let r = self.load_byte_rgba32(base, rel, odd_row, 0);
-                let g = self.load_byte_rgba32(base, rel + 1, odd_row, 0);
-                let b = self.load_byte_rgba32(base, rel, odd_row, PALETTE_BASE);
-                let a = self.load_byte_rgba32(base, rel + 1, odd_row, PALETTE_BASE);
+                let r = self.load_byte_rgba32(base, rel, odd_row, 0, reads);
+                let g = self.load_byte_rgba32(base, rel + 1, odd_row, 0, reads);
+                let b = self.load_byte_rgba32(base, rel, odd_row, PALETTE_BASE, reads);
+                let a = self.load_byte_rgba32(base, rel + 1, odd_row, PALETTE_BASE, reads);
                 [r, g, b, a]
             }
             // CI4: 4-bit palette index (even column = high nibble). The index read honors the
             // odd-line swap and is confined to the low 2 KiB bank (MASK16); the palette entry is
             // then read directly (no swap) from a 32-entry sub-palette selected by `palette<<7`.
             (2, 0) => {
-                let byte = self.load_byte_masked(base, rel, odd_row, MASK16);
+                let byte = self.load_byte_masked(base, rel, odd_row, MASK16, reads);
                 let index = if x & 1 == 0 { byte >> 4 } else { byte & 0x0F } as usize;
                 let paddr = PALETTE_BASE + (palette << 7) + (index << 3);
-                self.load_palette_entry(paddr, tlut_fmt)
+                self.load_palette_entry(paddr, tlut_fmt, reads)
             }
             // CI8: 8-bit palette index into the full table (palette ignored). Same swap/mask
             // discipline as CI4 on the index read; palette entry read directly.
             (2, 1) => {
-                let index = self.load_byte_masked(base, rel, odd_row, MASK16) as usize;
+                let index = self.load_byte_masked(base, rel, odd_row, MASK16, reads) as usize;
                 let paddr = PALETTE_BASE + (index << 3);
-                self.load_palette_entry(paddr, tlut_fmt)
+                self.load_palette_entry(paddr, tlut_fmt, reads)
             }
             // I8: 8-bit intensity broadcast to all four channels (alpha = intensity).
             (4, 1) => {
-                let v = self.load_byte(base, rel, odd_row);
+                let v = self.load_byte(base, rel, odd_row, reads);
                 [v, v, v, v]
             }
             // I4: even column = high nibble; 4->8 by replication, broadcast incl. alpha.
             (4, 0) => {
-                let byte = self.load_byte(base, rel, odd_row);
+                let byte = self.load_byte(base, rel, odd_row, reads);
                 let v4 = if x & 1 == 0 { byte >> 4 } else { byte & 0x0F };
                 let v8 = (v4 << 4) | v4;
                 [v8, v8, v8, v8]
             }
             // IA16: high byte intensity, low byte explicit alpha.
             (3, 2) => {
-                let i = self.load_byte(base, rel, odd_row);
-                let a = self.load_byte(base, rel + 1, odd_row);
+                let i = self.load_byte(base, rel, odd_row, reads);
+                let a = self.load_byte(base, rel + 1, odd_row, reads);
                 [i, i, i, a]
             }
             // IA8: high nibble intensity, low nibble alpha, each 4->8 by replication.
             (3, 1) => {
-                let v = self.load_byte(base, rel, odd_row);
+                let v = self.load_byte(base, rel, odd_row, reads);
                 let i4 = (v >> 4) & 0xF;
                 let a4 = v & 0xF;
                 let i8 = (i4 << 4) | i4;
@@ -643,7 +735,7 @@ impl Tmem {
             }
             // IA4: even column = high nibble; 3-bit intensity + 1-bit explicit alpha.
             (3, 0) => {
-                let byte = self.load_byte(base, rel, odd_row);
+                let byte = self.load_byte(base, rel, odd_row, reads);
                 let nib = if x & 1 == 0 { byte >> 4 } else { byte & 0x0F };
                 let i_raw = nib & 0x0E;
                 let i8 = (i_raw << 4) | (i_raw << 1) | (i_raw >> 2);
@@ -715,6 +807,7 @@ mod tests {
                                     parity,
                                     tlut,
                                     usize::from(palette),
+                                    &mut |_| {},
                                 )
                                 .unwrap();
                             assert_eq!(lookup[offset..offset + 4], expected,

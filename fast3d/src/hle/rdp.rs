@@ -17,6 +17,7 @@ pub struct KeyChannel {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "profiling", derive(serde::Serialize, serde::Deserialize))]
 pub struct TileDescriptor {
     pub uls: u16,
     pub ult: u16,

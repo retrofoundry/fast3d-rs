@@ -551,7 +551,7 @@ fn target_extent(renderer: &Renderer) -> (u32, u32) {
     }
 }
 
-struct PresentationHardware(Option<ViRegisters>);
+pub(super) struct PresentationHardware(pub(super) Option<ViRegisters>);
 
 impl Hardware for PresentationHardware {
     fn rdram(&self) -> impl Rdram + '_ {
@@ -626,7 +626,7 @@ fn prime_framebuffers(
     Ok(())
 }
 
-async fn read_rgba8(renderer: &Renderer, texture: &wgpu::Texture) -> Result<Vec<u8>> {
+pub(super) async fn read_rgba8(renderer: &Renderer, texture: &wgpu::Texture) -> Result<Vec<u8>> {
     let unpadded = texture.width() * 4;
     let stride =
         unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -636,6 +636,14 @@ async fn read_rgba8(renderer: &Renderer, texture: &wgpu::Texture) -> Result<Vec<
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
+    renderer
+        .inner
+        .profiling
+        .buffer("readback", buffer.size(), 0);
+    renderer.inner.profiling.count(
+        "copy.readback_bytes",
+        u64::from(unpadded) * u64::from(texture.height()),
+    );
     let mut encoder = renderer
         .device()
         .create_command_encoder(&Default::default());

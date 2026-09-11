@@ -12,6 +12,8 @@ pub use format::{Fixture, Frame, Provenance, Sequence};
 pub use replay::{CaptureFrame, ReplayOutput};
 mod sequence;
 pub use sequence::{CaptureSequence, FrameLog, Presentation, SequenceOutput};
+#[cfg(feature = "profiling")]
+pub use sequence::{MeasuredFrame, MeasurementOptions, MeasurementSetup};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureError {
@@ -667,6 +669,7 @@ pub struct ReplayHardware<'a> {
     vi: Option<ViRegisters>,
     error: RefCell<Option<CaptureError>>,
     commands: RefCell<Vec<CommandRead>>,
+    trace_commands: bool,
 }
 
 impl<'a> ReplayHardware<'a> {
@@ -677,8 +680,14 @@ impl<'a> ReplayHardware<'a> {
             vi,
             error: RefCell::new(None),
             commands: RefCell::default(),
+            trace_commands: true,
         })
     }
+    #[cfg(feature = "profiling")]
+    pub fn set_command_tracing(&mut self, enabled: bool) {
+        self.trace_commands = enabled;
+    }
+
     pub fn check(&self) -> Result<()> {
         self.error.borrow().clone().map_or(Ok(()), Err)
     }
@@ -690,6 +699,7 @@ impl Hardware for ReplayHardware<'_> {
             segments: self.task.source.segments,
             error: &self.error,
             commands: &self.commands,
+            trace_commands: self.trace_commands,
         }
     }
     fn vi(&self) -> Option<ViRegisters> {
@@ -702,6 +712,7 @@ pub struct ReplayRdram<'a> {
     segments: [u64; 16],
     error: &'a RefCell<Option<CaptureError>>,
     commands: &'a RefCell<Vec<CommandRead>>,
+    trace_commands: bool,
 }
 
 impl ReplayRdram<'_> {
@@ -885,7 +896,7 @@ impl Rdram for ReplayRdram<'_> {
     }
     fn read_command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
         let command = self.command(address)?;
-        if matches!(command.w0 >> 24, 0xff | 0xfe | 0xf6 | 0xf7 | 0xed) {
+        if self.trace_commands && matches!(command.w0 >> 24, 0xff | 0xfe | 0xf6 | 0xf7 | 0xed) {
             self.commands.borrow_mut().push(CommandRead {
                 pc: address,
                 w0: command.w0,

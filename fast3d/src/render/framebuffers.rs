@@ -2,7 +2,6 @@ pub(crate) mod targets;
 
 use super::{workload::TargetId, SceneRenderer, CLEAR_COLOR, DEPTH_FORMAT};
 use crate::{ClearPolicy, DiagKind, Diagnostic};
-use wgpu::util::DeviceExt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ImageLayout {
@@ -172,6 +171,7 @@ impl DepthPipeline {
         target: &DepthImage,
         word: u32,
         bounds: (u32, u32, u32, u32),
+        profiling: &crate::profiling::Recorder,
     ) {
         let (x, y, width, height) = bounds;
         if width == 0 || height == 0 {
@@ -183,11 +183,16 @@ impl DepthPipeline {
             clear_depth(encoder, &target.attach);
             return;
         }
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("depth-fill"),
-            contents: bytemuck::cast_slice(&[word, target.layout.width, 0, 0]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let buffer = super::buffer_init(
+            device,
+            profiling,
+            "uniforms",
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("depth-fill"),
+                contents: bytemuck::cast_slice(&[word, target.layout.width, 0, 0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        );
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("depth-fill"),
             layout: &self.fill_layout,
@@ -339,6 +344,11 @@ impl SceneRenderer {
                 old.height = height;
                 old.present_extent = group;
                 old.sampling = color_sampling(device, layout.width, height);
+                self.profiling.buffer(
+                    "uniforms",
+                    old.sampling.size(),
+                    std::mem::size_of::<super::TileSamplingArray>() as u64,
+                );
             }
             let old = &self.framebuffers[&id];
             if initialize {
@@ -357,6 +367,10 @@ impl SceneRenderer {
         super::workload::clear_color(encoder, &new.attach, wgpu::LoadOp::Clear(CLEAR_COLOR));
         if compatible && !initialize {
             let old = &self.framebuffers[&id];
+            self.profiling.count(
+                "copy.framebuffer_bytes",
+                u64::from(old.color.width()) * u64::from(old.color.height()) * 4,
+            );
             encoder.copy_texture_to_texture(
                 old.color.as_image_copy(),
                 new.color.as_image_copy(),
@@ -394,11 +408,19 @@ impl SceneRenderer {
         if old.is_some() && !compatible {
             self.reinterpretation(id, true, pc);
         }
+        let resources = self.profiling.span("resources");
         let new = DepthImage::new(device, layout, height);
+        self.profiling
+            .texture("depth", u64::from(layout.width) * u64::from(height) * 4, 0);
+        drop(resources);
         clear_depth(encoder, &new.attach);
         if compatible && !initialize {
-            self.depth_pipeline
-                .copy(device, encoder, &self.depthbuffers[&id], &new);
+            let old = &self.depthbuffers[&id];
+            self.profiling.count(
+                "copy.depth_raster_bytes",
+                u64::from(old.texture.width()) * u64::from(old.texture.height()) * 4,
+            );
+            self.depth_pipeline.copy(device, encoder, old, &new);
         }
         self.depthbuffers.insert(id, new);
     }

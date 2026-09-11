@@ -32,6 +32,7 @@ pub struct TextureState {
 }
 
 pub struct Rsp {
+    pub(crate) profiling: crate::profiling::Recorder,
     cache_global_index: [u32; RSP_MAX_VERTICES],
     loaded: [bool; RSP_MAX_VERTICES],
     clip_codes: [Option<u8>; RSP_MAX_VERTICES],
@@ -81,6 +82,7 @@ pub struct Rsp {
 impl Default for Rsp {
     fn default() -> Self {
         Rsp {
+            profiling: Default::default(),
             cache_global_index: [0u32; RSP_MAX_VERTICES],
             loaded: [false; RSP_MAX_VERTICES],
             clip_codes: [None; RSP_MAX_VERTICES],
@@ -897,6 +899,8 @@ pub(crate) fn snapshot_run(
             rsp.last_material_index.unwrap()
         } else {
             let idx = scene.materials.len() as u32;
+            rsp.profiling
+                .count("owned_copy.material_bytes", m.owned_texture_bytes() as u64);
             scene.materials.push(m.clone());
             rsp.last_material = Some(m);
             rsp.last_material_index = Some(idx);
@@ -910,6 +914,8 @@ pub(crate) fn snapshot_run(
         let m = crate::hle::combiner::build_material(rdp, rsp, diags, pc)?;
         rsp.material_dirty = false;
         let idx = scene.materials.len() as u32;
+        rsp.profiling
+            .count("owned_copy.material_bytes", m.owned_texture_bytes() as u64);
         scene.materials.push(m.clone());
         rsp.last_material = Some(m);
         rsp.last_material_index = Some(idx);

@@ -1,5 +1,9 @@
 #[cfg(feature = "debug-ui")]
 pub mod debug;
+#[cfg(any(test, feature = "profiling"))]
+pub mod profiling;
+#[cfg(not(any(test, feature = "profiling")))]
+mod profiling;
 #[cfg(feature = "capture")]
 pub use hle::capture;
 pub mod diag;
@@ -254,6 +258,27 @@ impl Renderer {
         target: PresentTarget,
         config: RendererConfig,
     ) -> Self {
+        Self::with_device_recorder(device, queue, target, config, Default::default())
+    }
+
+    #[cfg(feature = "profiling")]
+    pub fn with_device_profiled(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        target: PresentTarget,
+        config: RendererConfig,
+        profiling: profiling::Recorder,
+    ) -> Self {
+        Self::with_device_recorder(device, queue, target, config, profiling)
+    }
+
+    fn with_device_recorder(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        target: PresentTarget,
+        config: RendererConfig,
+        profiling: profiling::Recorder,
+    ) -> Self {
         let (render_fmt, w, h) = match &target {
             PresentTarget::Surface { config: sc, .. } => {
                 (render_format_of(sc), sc.width.max(1), sc.height.max(1))
@@ -268,7 +293,7 @@ impl Renderer {
         let dual_source = device
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
-        let inner = SceneRenderer::new(&device, render_fmt, w, h, dual_source);
+        let inner = SceneRenderer::new_profiled(&device, render_fmt, w, h, dual_source, profiling);
         Self {
             target,
             inner,
@@ -434,7 +459,14 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
         let (frame_serial, dither_seed) = (self.inner.frame_serial, self.inner.dither_seed);
-        self.inner = SceneRenderer::new(&self.device, render_fmt, w, h, dual_source);
+        self.inner = SceneRenderer::new_profiled(
+            &self.device,
+            render_fmt,
+            w,
+            h,
+            dual_source,
+            self.inner.profiling.clone(),
+        );
         self.inner.frame_serial = frame_serial;
         self.inner.dither_seed = dither_seed;
         self.surface_format = render_fmt;
@@ -621,6 +653,7 @@ impl Renderer {
         observer: Option<&mut dyn inspect::WalkObserver>,
         submission: Submission,
     ) -> DlSummary {
+        let _process = self.inner.profiling.span("process_dl");
         self.mark_mutation();
         #[cfg(feature = "capture")]
         if self.inner.depth_reset_policy == DepthResetPolicy::TaskBoundary {
@@ -637,7 +670,8 @@ impl Renderer {
         } else {
             self.interpreter_framebuffers()
         };
-        let mut result = crate::hle::interp::interpret_with_framebuffers(
+        let interpretation = self.inner.profiling.span("interpretation");
+        let mut result = crate::hle::interp::interpret_profiled(
             mem,
             entry,
             ucode.into(),
@@ -645,7 +679,16 @@ impl Renderer {
             rdp,
             framebuffers,
             observer,
+            self.inner.profiling.clone(),
         );
+        drop(interpretation);
+        self.inner.profiling.count("tasks", 1);
+        self.inner
+            .profiling
+            .count("geometry.vertices", result.scene.raw_pos.len() as u64);
+        self.inner
+            .profiling
+            .count("geometry.indices", result.scene.indices.len() as u64);
         if submission == Submission::RasterizePrefix
             && result.termination == inspect::WalkTermination::ObserverStopped
         {
@@ -691,6 +734,14 @@ impl Renderer {
 
         // Retained for the frame (P4 debugger reads all of them; cleared at begin_frame).
         self.frame_scenes.push(result.scene);
+        self.inner.profiling.gauge(
+            "scene_owned_texture_bytes",
+            self.frame_scenes
+                .iter()
+                .flat_map(|s| &s.materials)
+                .map(|m| m.owned_texture_bytes() as u64)
+                .sum(),
+        );
 
         summary
     }
@@ -720,9 +771,15 @@ impl Renderer {
     /// set (ClearPolicy::PerFrame) and the retained `frame_scenes`. Preserves guest RDP state
     /// and TMEM; advances the dither serial.
     pub fn begin_frame(&mut self) {
+        let _span = self.inner.profiling.span("begin_frame");
         self.mark_mutation();
         self.inner.begin_frame();
         self.frame_scenes.clear();
+    }
+
+    #[cfg(feature = "profiling")]
+    pub fn set_profiling(&mut self, recorder: profiling::Recorder) {
+        self.inner.profiling = recorder;
     }
 
     #[cfg(feature = "capture")]
@@ -860,8 +917,12 @@ impl Renderer {
                 &self.frame_scenes,
             );
         }
+        let command = encoder.finish();
+        let _submission = self.inner.profiling.span("submission");
         self.queue
-            .submit(extra.into_iter().chain(std::iter::once(encoder.finish())));
+            .submit(extra.into_iter().chain(std::iter::once(command)));
+        self.inner.profiling.count("submissions", 1);
+        self.inner.profiling.count("presentation.submissions", 1);
     }
 
     /// VI scanout into a CALLER-OWNED view (wafel embeds the N64 image in its own UI; headless
@@ -877,6 +938,7 @@ impl Renderer {
     }
 
     fn present_to_vi(&mut self, vi: Option<ViRegisters>, target: &wgpu::TextureView) {
+        let _span = self.inner.profiling.span("presentation");
         self.mark_mutation();
         // Always create an encoder + run the render hook, even when nothing has been scanned out yet
         // (a UI overlay should still draw — RN). Scanout is recorded only when a source FB exists;
@@ -906,6 +968,7 @@ impl Renderer {
     }
 
     fn present_vi(&mut self, vi: Option<ViRegisters>) -> Result<(), PresentError> {
+        let _span = self.inner.profiling.span("presentation");
         self.mark_mutation();
         let src = self.scanout_source(vi);
 
