@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>B1 measurement driver</title>
+<style>body{font:16px system-ui;max-width:60rem;margin:3rem auto}button,select,input{font:inherit;margin:.4rem}pre{white-space:pre-wrap}</style>
+<h1>B1 measurement driver</h1>
+<p>Each source run creates a fresh renderer, assembles all 720 frames, and renders all presentations. Performance results require the separate quiet-machine monitor.</p>
+<label>Mode <select id="mode"><option>coarse</option><option>counters</option><option>detailed</option><option>trace</option></select></label>
+<label><input id="readback" type="checkbox">Correctness readback</label>
+<label><input id="one" type="checkbox">One frame in flight</label>
+<button id="source">Run saved source</button>
+<button id="preflight">Authored preflight</button>
+<label>Observed cases <input id="cases" type="file" accept=".json"></label>
+<button id="tracecost">Preflight observed cases</button>
+<label>Sequence <input id="capture" type="file" accept=".f3dcap"></label>
+<button id="sequence">Replay complete sequence</button>
+<pre id="status">Loading wasm…</pre>
+<script type="module">
+import init, {source, preflight, sequence} from './pkg/b1_perf.js';
+await init();
+const status = document.querySelector('#status');
+status.textContent = 'Ready';
+async function run(name, operation) {
+  status.textContent = 'Running ' + name;
+  const started = new Date().toISOString();
+  try {
+    const result = JSON.parse(await operation());
+    result.browser = navigator.userAgent;
+    result.started_utc = started;
+    result.ended_utc = new Date().toISOString();
+    result.isolated = crossOriginIsolated;
+    const response = await fetch('/artifact/' + name + '-' + Date.now() + '.json', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result)});
+    if (!response.ok) throw new Error(await response.text());
+    status.textContent = await response.text();
+  } catch (error) { status.textContent = 'BLOCKED / FAILED: ' + error; }
+}
+document.querySelector('#source').onclick = () => run('source', async () => source(await (await fetch('/scene.n64')).text(), document.querySelector('#mode').value, document.querySelector('#readback').checked, document.querySelector('#one').checked));
+document.querySelector('#preflight').onclick = () => run('preflight-authored', () => preflight(''));
+document.querySelector('#tracecost').onclick = () => run('preflight-observed', async () => preflight(await document.querySelector('#cases').files[0].text()));
+document.querySelector('#sequence').onclick = () => run('sequence', async () => sequence(new Uint8Array(await document.querySelector('#capture').files[0].arrayBuffer()), document.querySelector('#mode').value, document.querySelector('#readback').checked, document.querySelector('#one').checked));
+</script>
