@@ -87,20 +87,52 @@ impl Hardware for ViHardware {
     }
 }
 
-pub async fn sequence(sequence: &Sequence, mut emit: impl FnMut(Value)) -> Result<(), String> {
+pub async fn sequence(sequence: &Sequence, emit: impl FnMut(Value)) -> Result<(), String> {
+    sequence_with_options(sequence, Options::correctness(), emit).await
+}
+
+pub async fn sequence_with_options(
+    sequence: &Sequence,
+    options: Options,
+    mut emit: impl FnMut(Value),
+) -> Result<(), String> {
     sequence.validate().map_err(|e| e.to_string())?;
     let first = &sequence.frames[0].frame;
     if first.dither_seed != 0 {
-        return Err("parent adapter only supports the declared seed-zero inputs".into());
+        return Err(format!(
+            "parent adapter requires dither_seed=0; frame {} declares dither_seed={}",
+            first.serial, first.dither_seed
+        ));
     }
     let mut renderer = renderer(
-        first.config,
+        RendererConfig {
+            clear_policy: ClearPolicy::Persist,
+            ..first.config
+        },
         first.width,
         first.height,
         first.dual_source_blending,
     )
     .await?;
+    let texture = output(
+        &renderer,
+        first.width,
+        first.height,
+        first
+            .config
+            .format
+            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm),
+    );
+    let view = texture.create_view(&Default::default());
+    let mut pending = std::collections::VecDeque::new();
     for fixture in &sequence.frames {
+        let start = now_ms();
+        if pending.len() >= options.frames_in_flight {
+            wait(renderer.device(), pending.pop_front().unwrap()).await?;
+        }
+        let wait_ms = now_ms() - start;
+        let mut timing = Timings::default();
+        let mut adapter_ms = 0.0;
         let limits = renderer.device().limits();
         let row = (fixture.frame.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -115,32 +147,39 @@ pub async fn sequence(sequence: &Sequence, mut emit: impl FnMut(Value)) -> Resul
         {
             return Err("capture device declaration or output limits mismatch".into());
         }
-        renderer.begin_frame();
+        timing.measure("begin_frame", options.coarse, || renderer.begin_frame());
         let mut summaries = Vec::new();
         let mut diagnostics = Vec::new();
         for task in &fixture.tasks {
+            let start = now_ms();
             let hardware =
                 ReplayHardware::new(task, fixture.frame.vi).map_err(|e| e.to_string())?;
             renderer.set_data_format(task.data_format);
             let mut diags = Vec::new();
-            summaries.push(renderer.process_dl(&hardware, task.entry, task.microcode, &mut diags));
+            adapter_ms += now_ms() - start;
+            summaries.push(timing.measure("process_dl", options.coarse, || {
+                renderer.process_dl(&hardware, task.entry, task.microcode, &mut diags)
+            }));
+            let start = now_ms();
             hardware.check().map_err(|e| e.to_string())?;
             diagnostics.push(diags);
+            adapter_ms += now_ms() - start;
         }
-        let texture = output(
-            &renderer,
-            first.width,
-            first.height,
-            first
-                .config
-                .format
-                .unwrap_or(wgpu::TextureFormat::Rgba8Unorm),
-        );
-        renderer.present_to(
-            &ViHardware(fixture.frame.vi),
-            &texture.create_view(&Default::default()),
-        );
-        let mut pixels = read_pixels(&renderer, &texture).await?;
+        timing.measure("presentation", options.coarse, || {
+            renderer.present_to(&ViHardware(fixture.frame.vi), &view)
+        });
+        pending.push_back(completion(&renderer));
+        let start = now_ms();
+        let mut pixels = if options.readback {
+            read_pixels(&renderer, &texture).await?
+        } else {
+            Vec::new()
+        };
+        let readback_ms = if options.readback {
+            now_ms() - start
+        } else {
+            0.0
+        };
         if matches!(
             texture.format(),
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
@@ -158,35 +197,81 @@ pub async fn sequence(sequence: &Sequence, mut emit: impl FnMut(Value)) -> Resul
             adapter_info: None,
             commands: Vec::new(),
         };
-        emit(output_record(fixture.frame.serial, &frame));
+        let mut row = output_record(fixture.frame.serial, &frame);
+        row["observed"] = json!(fixture.frame.serial > u64::from(sequence.warmup_frames));
+        row["profile"] = json!({"timings":timing.0});
+        row["timing_source"] = json!("public-api-boundaries");
+        row["wait_ms"] = json!(wait_ms);
+        row["adapter_ms"] = json!(adapter_ms);
+        row["readback_ms"] = json!(readback_ms);
+        emit(row);
+    }
+    for item in pending {
+        wait(renderer.device(), item).await?;
     }
     Ok(())
 }
 
-pub async fn source(source: &str, mut emit: impl FnMut(Value)) -> Result<(), String> {
+pub async fn source(source: &str, emit: impl FnMut(Value)) -> Result<(), String> {
+    source_with_options(source, Options::correctness(), emit).await
+}
+
+pub async fn source_with_options(
+    source: &str,
+    options: Options,
+    mut emit: impl FnMut(Value),
+) -> Result<(), String> {
     source_metadata(source)?;
     let rgba = synthetic_texture();
     let mut renderer = renderer(config(), 800, 600, false).await?;
+    let texture = output(&renderer, 800, 600, wgpu::TextureFormat::Rgba8Unorm);
+    let view = texture.create_view(&Default::default());
+    let mut pending = std::collections::VecDeque::new();
     for index in 0..720 {
+        let start = now_ms();
+        if pending.len() >= options.frames_in_flight {
+            wait(renderer.device(), pending.pop_front().unwrap()).await?;
+        }
+        let wait_ms = now_ms() - start;
+        let start = now_ms();
         let image = assemble(source, index, &rgba)?;
-        renderer.begin_frame();
+        let assembly_ms = now_ms() - start;
+        let mut timing = Timings::default();
+        timing.measure("begin_frame", options.coarse, || renderer.begin_frame());
         renderer.set_data_format(DataFormat::Fixed);
         let mut diags = Vec::new();
-        let summary = renderer.process_dl(
-            &ImageHardware(&image.rdram),
-            image.entry_addr.into(),
-            Microcode::F3dex2,
-            &mut diags,
-        );
+        let summary = timing.measure("process_dl", options.coarse, || {
+            renderer.process_dl(
+                &ImageHardware(&image.rdram),
+                image.entry_addr.into(),
+                Microcode::F3dex2,
+                &mut diags,
+            )
+        });
         if !diags.is_empty() {
             return Err(format!("source input rejected: {diags:?}"));
         }
-        let texture = output(&renderer, 800, 600, wgpu::TextureFormat::Rgba8Unorm);
-        renderer.present_last_to(&texture.create_view(&Default::default()));
-        let pixels = read_pixels(&renderer, &texture).await?;
+        timing.measure("presentation", options.coarse, || {
+            renderer.present_last_to(&view)
+        });
+        pending.push_back(completion(&renderer));
+        let start = now_ms();
+        let pixels = if options.readback {
+            read_pixels(&renderer, &texture).await?
+        } else {
+            Vec::new()
+        };
+        let readback_ms = if options.readback {
+            now_ms() - start
+        } else {
+            0.0
+        };
         emit(
-            json!({"serial":index,"rgba8_sha256":sha(&pixels),"summary":format!("{summary:?}"),"diagnostics":format!("{diags:?}")}),
+            json!({"serial":index,"observed":index>=120,"profile":{"timings":timing.0},"timing_source":"public-api-boundaries","assembly_ms":assembly_ms,"wait_ms":wait_ms,"readback_ms":readback_ms,"rgba8_sha256":options.readback.then(||sha(&pixels)),"summary":format!("{summary:?}"),"diagnostics":format!("{diags:?}")}),
         );
+    }
+    for item in pending {
+        wait(renderer.device(), item).await?;
     }
     Ok(())
 }
@@ -238,5 +323,103 @@ mod browser {
         Err(JsValue::from_str(
             "preflight requires the B1 profiling library",
         ))
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Options {
+    pub coarse: bool,
+    pub readback: bool,
+    pub frames_in_flight: usize,
+}
+impl Options {
+    fn correctness() -> Self {
+        Self {
+            coarse: false,
+            readback: true,
+            frames_in_flight: 2,
+        }
+    }
+}
+fn now_ms() -> f64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_secs_f64()
+            * 1000.0
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window().unwrap().performance().unwrap().now()
+    }
+}
+#[derive(Default)]
+struct Timings(std::collections::BTreeMap<&'static str, Value>);
+impl Timings {
+    fn measure<T>(&mut self, name: &'static str, enabled: bool, call: impl FnOnce() -> T) -> T {
+        if !enabled {
+            return call();
+        }
+        let start = now_ms();
+        let value = call();
+        let elapsed = now_ms() - start;
+        let row = self
+            .0
+            .entry(name)
+            .or_insert(json!({"calls":0,"inclusive_ms":0.0,"exclusive_ms":0.0}));
+        row["calls"] = json!(row["calls"].as_u64().unwrap() + 1);
+        for field in ["inclusive_ms", "exclusive_ms"] {
+            row[field] = json!(row[field].as_f64().unwrap() + elapsed);
+        }
+        value
+    }
+}
+fn completion(renderer: &Renderer) -> futures_channel::oneshot::Receiver<()> {
+    let (send, receive) = futures_channel::oneshot::channel();
+    renderer.queue().on_submitted_work_done(move || {
+        let _ = send.send(());
+    });
+    receive
+}
+async fn wait(
+    device: &wgpu::Device,
+    completion: futures_channel::oneshot::Receiver<()>,
+) -> Result<(), String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_arch = "wasm32")]
+    let _ = device;
+    completion.await.map_err(|e| e.to_string())
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nonzero_seed_is_rejected_before_gpu_work() {
+        let mut sequence = Sequence::from_bytes(&sequence_input("authored").unwrap()).unwrap();
+        for fixture in &mut sequence.frames {
+            fixture.frame.dither_seed = 17;
+        }
+        for coarse in [false, true] {
+            let error = pollster::block_on(sequence_with_options(
+                &sequence,
+                Options {
+                    coarse,
+                    readback: false,
+                    frames_in_flight: 2,
+                },
+                |_| panic!("rejected input must not emit a frame"),
+            ))
+            .unwrap_err();
+            assert!(error.contains("frame 1 declares dither_seed=17"), "{error}");
+            assert!(error.contains("requires dither_seed=0"), "{error}");
+        }
     }
 }

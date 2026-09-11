@@ -126,6 +126,62 @@ class QuietTests(unittest.TestCase):
             run = repeated[offset:offset+5]
             self.assertEqual(protocol.sample_reasons(run, 'run', profile, history=history), [])
 
+    def test_phase_transition_is_not_a_cadence_gap_but_long_blind_spots_fail(self):
+        samples = protocol.recalculate(self.recorded_samples())
+        profile = protocol.resting_profile(samples)
+        history = copy.deepcopy(samples)
+        for i, row in enumerate(history):
+            row.update(phase='preflight', monotonic=float(i))
+        run = copy.deepcopy(samples[:4])
+        for i, row in enumerate(run):
+            row.update(phase='run', monotonic=len(history)-1+1.56+i)
+        self.assertNotIn('monitor gap', protocol.sample_reasons(run,'run',profile,history=history))
+        run[2]['monotonic'] += .7
+        self.assertIn('monitor gap', protocol.sample_reasons(run,'run',profile,history=history))
+        for i, row in enumerate(run):
+            row['monotonic'] = len(history)+4+i
+        self.assertIn('phase transition gap', protocol.sample_reasons(run,'run',profile,history=history))
+
+    def test_idle_compares_trimmed_means_and_ignores_one_noise_sample(self):
+        samples = protocol.recalculate(self.recorded_samples())
+        for row in samples:
+            row['idle_percent'] = 94
+        profile = protocol.resting_profile(samples)
+        for count in [10,29]:
+            selected = copy.deepcopy(samples[:count])
+            selected[0]['idle_percent'] = 89.9
+            reasons = protocol.sample_reasons(selected,'replay',profile)
+            self.assertFalse(any('idle trimmed mean' in r for r in reasons), reasons)
+            for row in selected:
+                row['idle_percent'] = 90
+            self.assertTrue(any('idle trimmed mean' in r for r in protocol.sample_reasons(selected,'replay',profile)))
+
+    def test_aggregate_dirty_calibration_cannot_loosen_thresholds(self):
+        samples = protocol.recalculate(self.recorded_samples())
+        for row in samples:
+            row.update(background_cores=.56, idle_percent=76)
+        profile = protocol.resting_profile(samples)
+        self.assertTrue(any('dirty calibration: background average' in r for r in profile['reasons']))
+        self.assertTrue(any('dirty calibration: idle p20' in r for r in profile['reasons']))
+        self.assertGreaterEqual(profile['thresholds']['minimum_idle_percent'],90)
+        self.assertTrue(protocol.sample_reasons(samples,'run',profile))
+
+    def test_phase_duration_allows_endpoint_probe_jitter(self):
+        samples = protocol.recalculate(self.recorded_samples())
+        samples.append(copy.deepcopy(samples[-1]))
+        for i, row in enumerate(samples):
+            row['monotonic'] = float(i)
+        samples[-1]['monotonic'] -= .02
+        self.assertNotIn('incomplete 30-second resting', protocol.sample_reasons(samples,'resting'))
+        for i, row in enumerate(samples):
+            row['monotonic'] = i*.5
+        self.assertIn('incomplete 30-second resting', protocol.sample_reasons(samples,'resting'))
+
+    def test_safe_browsing_is_a_background_service_not_a_gpu_producer(self):
+        name = '/System/Library/PrivateFrameworks/SafariSafeBrowsing.framework/com.apple.Safari.SafeBrowsing.Service'
+        self.assertFalse(protocol.idle_process(name, []))
+        self.assertTrue(protocol.idle_process('/Applications/Safari.app/Contents/MacOS/Safari', []))
+
     def test_attempt_archives_profile_and_runs_sleep_only_after_quiet_admission(self):
         recorded = protocol.recalculate(self.recorded_samples())
         class RecordedMonitor:

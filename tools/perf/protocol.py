@@ -14,7 +14,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-VERSION = 'b2-quiet-v2'
+VERSION = 'b2-quiet-v3'
 GPU_PRODUCERS = r'(Google Chrome|Chromium|chrome_crashpad_handler|Safari|Firefox|WebKit|MTLCompilerService|Metal|blender|OBS|QuickTime|VLC|Unity|Unreal|Godot|replay|sm64|helix)'
 AGENTS = r'(^|/)(codex|claude)([ /]|$)|/claude/versions/|ChatGPT|Codex Framework'
 PROHIBITED = r'(^|/)(cargo|rustc|rustup|ninja|make|cmake|clang(?:\+\+)?|cc1|ld|swiftc|wasm-bindgen|ffmpeg|rsync|curl|wget|replay_capture|sm64|helix)( |$)'
@@ -23,8 +23,12 @@ POLICY = {'resting_seconds': 30, 'preflight_seconds': 30, 'postflight_seconds': 
           'idle_process_cores_average': .03, 'idle_process_cores_two_samples': .10,
           'resting_process_cores_average': .10, 'resting_process_cores_two_samples': .50,
           'background_margin_cores': .05, 'idle_margin_percentage_points': 1.0,
-          'noise_mad_multiplier': 3,
-          'reference_limits': 'background mean + max(0.05, 3*MAD); background two-sample ceiling = max + same margin; idle floor = min - max(1 percentage point, 3*MAD)',
+          'noise_mad_multiplier': 3, 'idle_percentile': .20, 'idle_trim_fraction': .10,
+          'maximum_phase_transition_seconds': 3,
+          'calibration_background_average_max': .35, 'calibration_background_two_samples_max': .75,
+          'calibration_idle_percentile_min': 90,
+          'calibration_background_mad_max': .10, 'calibration_idle_mad_max': 1.5,
+          'reference_limits': 'background mean + max(0.05, 3*MAD); background two-sample ceiling = max + same margin; idle trimmed-mean floor = 10%-trimmed mean - max(1 percentage point, 3*MAD); independent absolute calibration limits apply before deriving allowances',
           'cpu_normalization': 'one fully occupied logical CPU = 1.0 core',
           'prohibited': PROHIBITED, 'gpu_producers': GPU_PRODUCERS, 'idle_agents': AGENTS,
           'idle_sessions': 'May remain open without work: each named agent/browser process must average <= 0.03 core in every 30-sample window (short runs include preflight history) and never exceed 0.10 core in two consecutive samples. Their CPU remains background.',
@@ -114,13 +118,36 @@ def recalculate(samples):
 
 
 def idle_process(name, allowed_idle):
+    if name.endswith('/com.apple.Safari.SafeBrowsing.Service'):
+        return name in allowed_idle or Path(name).name in allowed_idle
     return bool(re.search(AGENTS, name, re.I) or re.search(GPU_PRODUCERS, name, re.I)
                 or name in allowed_idle or Path(name).name in allowed_idle)
 
 
 def maximum_average(values):
     window = min(len(values), POLICY['activity_window_samples'])
-    return max(statistics.mean(values[i:i+window]) for i in range(len(values)-window+1))
+    if not window:
+        return 0.0
+    total = sum(values[:window])
+    maximum = total
+    for index in range(window, len(values)):
+        total += values[index] - values[index-window]
+        maximum = max(maximum, total)
+    return maximum / window
+
+
+def trimmed_mean(values):
+    values = sorted(values)
+    trim = int(len(values)*POLICY['idle_trim_fraction'])
+    return statistics.mean(values[trim:len(values)-trim])
+
+
+def percentile(values, fraction):
+    values = sorted(values)
+    position = (len(values)-1)*fraction
+    lower = int(position)
+    upper = min(lower+1, len(values)-1)
+    return values[lower] + (values[upper]-values[lower])*(position-lower)
 
 
 def process_activity(samples, phase, allowed_idle=()):
@@ -136,7 +163,7 @@ def process_activity(samples, phase, allowed_idle=()):
                 reasons.append(f"benchmark process survived teardown: {name} (pid {p['pid']})")
             if exemption:
                 continue
-            key = (p['pid'], name)
+            key = (p['pid'], p.get('started'), name)
             if key not in rows:
                 rows[key] = {'pid':p['pid'], 'command':name, 'cores':[0.0]*len(samples),
                              'idle_policy':idle_process(name, allowed_idle)}
@@ -166,17 +193,29 @@ def resting_profile(samples, allowed_idle=()):
         values = [s[field] for s in samples]
         middle = statistics.median(values)
         return {'minimum':min(values), 'median':middle, 'mean':statistics.mean(values),
-                'maximum':max(values), 'mad':statistics.median(abs(v-middle) for v in values)}
+                'maximum':max(values), 'trimmed_mean':trimmed_mean(values), 'p20':percentile(values, POLICY['idle_percentile']), 'mad':statistics.median(abs(v-middle) for v in values)}
     background = distribution('background_cores')
     idle = distribution('idle_percent')
     background_margin = max(POLICY['background_margin_cores'], POLICY['noise_mad_multiplier']*background['mad'])
     idle_margin = max(POLICY['idle_margin_percentage_points'], POLICY['noise_mad_multiplier']*idle['mad'])
     processes, reasons = process_activity(samples, 'resting', allowed_idle)
+    checks = [
+        (background['mean'], 'calibration_background_average_max', 'background average', False),
+        (max((min(a['background_cores'], b['background_cores']) for a,b in zip(samples,samples[1:])), default=0),
+         'calibration_background_two_samples_max', 'background two samples', False),
+        (idle['p20'], 'calibration_idle_percentile_min', 'idle p20', True),
+        (background['mad'], 'calibration_background_mad_max', 'background MAD', False),
+        (idle['mad'], 'calibration_idle_mad_max', 'idle MAD', False),
+    ]
+    for value, key, label, lower in checks:
+        limit = POLICY[key]
+        if (value < limit) if lower else (value > limit):
+            reasons.append(f'dirty calibration: {label} {value:.4f} {"<" if lower else ">"} {limit}')
     return {'sample_count':len(samples), 'utc_interval':[samples[0].get('utc'),samples[-1].get('utc')],
             'background_cores':background, 'idle_percent':idle,
             'thresholds':{'maximum_background_cores_average':background['mean']+background_margin,
                           'maximum_background_cores_two_samples':background['maximum']+background_margin,
-                          'minimum_idle_percent':max(0, idle['minimum']-idle_margin)},
+                          'minimum_idle_percent':max(POLICY['calibration_idle_percentile_min'], idle['trimmed_mean']-idle_margin)},
             'idle_processes':[p for p in processes if p['idle_policy']],
             'process_activity':processes, 'reasons':reasons}
 
@@ -186,7 +225,7 @@ def sample_reasons(samples, phase, profile=None, allowed_idle=(), history=()):
     if not samples:
         return ['missing telemetry']
     seconds = POLICY.get(phase+'_seconds')
-    if seconds and (len(samples) < seconds or samples[-1]['monotonic'] - samples[0]['monotonic'] < seconds-1):
+    if seconds and (len(samples) < seconds or samples[-1]['monotonic'] - samples[0]['monotonic'] < seconds-1-(POLICY['maximum_gap_seconds']-POLICY['sample_period_seconds'])):
         reasons.append(f'incomplete {seconds}-second {phase}')
     activity = list(history[-(POLICY['activity_window_samples']-1):]) + samples
     thresholds = profile['thresholds'] if profile else None
@@ -196,8 +235,10 @@ def sample_reasons(samples, phase, profile=None, allowed_idle=(), history=()):
         reasons.extend(profile['reasons'])
     for previous, current in zip(activity, activity[1:]):
         gap = current['monotonic'] - previous['monotonic']
-        if gap <= 0 or gap > POLICY['maximum_gap_seconds']:
-            reasons.append('monitor gap')
+        transition = previous.get('phase') != current.get('phase')
+        limit = POLICY['maximum_phase_transition_seconds'] if transition else POLICY['maximum_gap_seconds']
+        if gap <= 0 or gap > limit:
+            reasons.append('phase transition gap' if transition else 'monitor gap')
         if current['swapouts'] > previous['swapouts']:
             reasons.append('swap-out growth')
         if current['power'] != previous['power'] or current['power_mode'] != previous['power_mode']:
@@ -206,13 +247,15 @@ def sample_reasons(samples, phase, profile=None, allowed_idle=(), history=()):
             reasons.append(f"background above resting ceiling {thresholds['maximum_background_cores_two_samples']:.4f} core twice")
     if thresholds and maximum_average([s['background_cores'] for s in activity]) > thresholds['maximum_background_cores_average']:
         reasons.append(f"background average above resting allowance {thresholds['maximum_background_cores_average']:.4f} core")
+    if thresholds and phase != 'run':
+        idle = trimmed_mean([s['idle_percent'] for s in samples])
+        if idle < thresholds['minimum_idle_percent']:
+            reasons.append(f"{phase} idle trimmed mean {idle:.2f}% below resting floor {thresholds['minimum_idle_percent']:.2f}%")
     for sample in samples:
         if sample.get('error'):
             reasons.append('monitor failure')
         if sample['thermal_throttled']:
             reasons.append('thermal throttling')
-        if thresholds and phase != 'run' and sample['idle_percent'] < thresholds['minimum_idle_percent']:
-            reasons.append(f"{phase} idle below resting floor {thresholds['minimum_idle_percent']:.2f}%")
         if sample['idle_age_seconds'] > POLICY['maximum_gap_seconds']:
             reasons.append('CPU telemetry gap')
         if 'processes' not in sample:
@@ -233,6 +276,35 @@ def replay(samples, allowed_idle=()):
     return {'quiet_protocol_version':VERSION, 'quiet_valid':not reasons, 'reasons':reasons,
             'timing_valid':False, 'usable_intervals':len(corrected), 'resting_profile':profile,
             'scope':'Retrospective quiet check only: first snapshot is the CPU baseline; remaining intervals are reused as the resting reference. No independent calibration or benchmark was recorded.'}
+
+def replay_attempt(samples, record=None):
+    record = record or {}
+    allowed = record.get('allowed_idle_services', [])
+    corrected = recalculate(samples)
+    resting = [s for s in corrected if s['phase']=='resting']
+    if not resting:
+        return {'quiet_valid':False, 'complete':False, 'reasons':['missing resting telemetry']}
+    profile = resting_profile(resting, allowed)
+    reasons = process_activity(samples[:1], 'baseline', allowed)[1]
+    phase_reasons = {}
+    for phase in ['resting', 'preflight', 'run', 'postflight']:
+        selected = [s for s in corrected if s['phase']==phase]
+        if not selected:
+            continue
+        before = [s for s in corrected if s['monotonic'] < selected[0]['monotonic']]
+        phase_reasons[phase] = sample_reasons(selected, phase, profile, allowed,
+                                             before if phase != 'resting' else [])
+        reasons.extend(phase_reasons[phase])
+    complete = (record.get('exit_code') == 0 and
+                all(any(s['phase']==phase for s in corrected) for phase in ['preflight','run','postflight']))
+    if not complete:
+        reasons.append('benchmark not completed; no full quiet run')
+    reasons = sorted(set(reasons))
+    return {'quiet_protocol_version':VERSION, 'quiet_valid':not reasons, 'complete':complete,
+            'reasons':reasons, 'phase_reasons':phase_reasons, 'resting_profile':profile,
+            'timing_valid':False, 'usable_intervals':len(corrected),
+            'scope':'Retrospective telemetry verdict; timing artifacts and reservation are not re-admitted.'}
+
 
 def spread(values):
     if len(values) != 5 or any(not isinstance(v, (int,float)) or v <= 0 for v in values):
@@ -330,21 +402,22 @@ def quiet(args):
     try:
         monitor = Monitor(args.allowed_idle)
         with (out/'telemetry.jsonl').open('w') as stream:
+            next_sample = time.monotonic()+2
             def take(phase):
-                deadline = time.monotonic()+1
+                nonlocal next_sample
+                time.sleep(max(0, next_sample-time.monotonic()))
+                next_sample = time.monotonic()+POLICY['sample_period_seconds']
                 sample = monitor.take(phase)
                 samples.append(sample)
                 stream.write(json.dumps(sample)+'\n')
                 stream.flush()
-                time.sleep(max(0,deadline-time.monotonic()))
-            time.sleep(2)
             take('baseline')
             baseline_reasons = process_activity(samples, 'baseline', args.allowed_idle)[1]
             for _ in range(POLICY['resting_seconds']):
                 take('resting')
             resting = [s for s in samples if s['phase']=='resting']
             profile = resting_profile(resting, args.allowed_idle)
-            profile['reasons'] = sample_reasons(resting, 'resting', allowed_idle=args.allowed_idle)
+            profile['reasons'] = sorted(set(profile['reasons'] + sample_reasons(resting, 'resting', allowed_idle=args.allowed_idle)))
             (out/'resting-profile.json').write_text(json.dumps(profile,indent=2))
             record['resting_profile'] = {'path':str(out/'resting-profile.json'), 'sha256':sha(out/'resting-profile.json'),
                                          'thresholds':profile['thresholds'], 'idle_processes':profile['idle_processes']}
@@ -411,10 +484,12 @@ def main():
         parser.add_argument('--telemetry', type=Path, required=True)
         parser.add_argument('--out', type=Path, required=True)
         parser.add_argument('--allowed-idle', action='append', default=[])
+        parser.add_argument('--run', type=Path, help='Replay phase-aware attempt telemetry with its original run.json')
         args = parser.parse_args(sys.argv[2:])
         opener = gzip.open if args.telemetry.suffix == '.gz' else open
         with opener(args.telemetry, 'rt') as stream:
-            result = replay([json.loads(line) for line in stream], args.allowed_idle)
+            samples = [json.loads(line) for line in stream]
+        result = replay_attempt(samples, json.loads(args.run.read_text())) if args.run else replay(samples, args.allowed_idle)
         result.update(policy=POLICY, allowed_idle_services=args.allowed_idle,
                       source={'path':str(args.telemetry), 'sha256':sha(args.telemetry)})
         with args.out.open('x') as stream:
