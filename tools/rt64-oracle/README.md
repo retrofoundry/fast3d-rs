@@ -4,6 +4,11 @@ This compares fast3d replay with rt64's native framebuffer written back to RDRAM
 It needs the separately built rt64 static library and an SDL/Metal session. The C++
 project is outside the Cargo workspace; normal Cargo CI does not build it.
 
+[F0 framebuffer-load evidence](../../docs/framebuffer-load-evidence.md) uses a
+dedicated writer that asserts fast3d's expected rejection before exporting the
+authored IMAGE commands. Its rectangle/triangle packing and snapshot gates are
+separate from supported-fixture comparisons below; hardware results are pending.
+
 Run these commands from the fast3d worktree. The reference build on ci4 is
 `/Volumes/DS Vault/hub/wt/rt64-reference`, revision
 `43373749dac9bbc1b653e6a02aed40a9e1783bed`, configured with `RT64_STATIC=ON`.
