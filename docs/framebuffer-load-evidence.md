@@ -216,3 +216,12 @@ This is the refutation the acceptance section anticipates. The derived expectati
 hardware model; the rt64 comparison is a recorded reference disagreement, not a passing gate, for
 non-grid texels. Which convention a future framebuffer-load implementation should follow is an
 accuracy decision outside this fixture's scope, and F1 remains deferred until it is made.
+
+### Decision (2026-09-12)
+
+Framebuffer loads follow rt64: a load from a rendered target reads the full-precision render
+target, not a quantised RGBA16 copy. fast3d renders on modern hardware and, like rt64, upscales
+and enhances rather than reproducing 5-bit dithered banding. The derived RGBA16 expectations above
+remain the hardware model and the record of the difference; they are not the target. Any future
+framebuffer-load support (F1) implements the rt64 convention, and the existing exact-base shortcut
+already matches it.
