@@ -111,13 +111,6 @@ async fn replay() {
                 u32::from(case != Case::ShortcutRect)
             );
             assert_eq!(output.rgba8.len(), 320 * 240 * 4);
-            if case == Case::ShortcutRect {
-                // Known renderer defect: one-pixel shaded quads drawn into the 32-wide producer do
-                // not rasterise, so the first consumer group samples the fill colour. The
-                // prediction is unchanged and asserted by `f0_shortcut_prediction_known_failing`.
-                // See ~/hub/scratch/fast3d/f0-finding.md, finding #2.
-                continue;
-            }
             for (i, pixel) in output.rgba8.as_chunks::<4>().0.iter().enumerate() {
                 let (x, y) = (i as u32 % 320, i as u32 / 320);
                 assert_eq!(
@@ -145,8 +138,7 @@ async fn f0_framebuffer_load_replay() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-#[ignore = "known renderer defect: small draws on a narrow offscreen target; see f0-finding.md #2"]
-fn f0_shortcut_prediction_known_failing() {
+fn f0_shortcut_samples_texture_coordinates() {
     pollster::block_on(async {
         let fixture = Fixture::from_bytes(Case::ShortcutRect.fixture_bytes()).unwrap();
         let output = fixture.replay_headless().await.unwrap();

@@ -6,7 +6,8 @@ LoadTile or LoadBlock semantics and must not be exported as an rt64 agreement te
 
 The render tile must have no TMEM load provenance. Its format and texel size must
 match the source. SETTIMG must match the stored colour image layout. The tile
-line addresses TMEM and does not set the stride of this load-free GPU view. The
+line addresses TMEM and does not set the stride of this load-free GPU view; the rectangle's
+texel coordinates are scaled by the source extent, not the tile's. The
 requested extent must fit the source. Prepared draws identify
 the source generation, layout and extent; submission validates the stored view.
 Successfully loaded TMEM remains independent of subsequent SETTIMG commands.
@@ -36,6 +37,6 @@ that comparison because capture recording excludes diagnostic depth-reset polici
 General range ownership, offset copies, triangle framebuffer textures, same-target
 snapshots, bit reinterpretation, CPU/GPU coherence and GPU write-back remain
 unsupported. The existing offscreen-then-sample golden is a compatibility test for
-the convenience only. [F0's authored real-load fixtures](framebuffer-load-evidence.md)
+the convenience only. [The authored real-load fixtures](framebuffer-load-evidence.md)
 pin this rejection and provide independent offset, packing and snapshot probes
 for rt64. They add no support; hardware agreement remains a separate gate.
