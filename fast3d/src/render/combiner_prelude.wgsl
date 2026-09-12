@@ -20,7 +20,11 @@ struct VsOut {
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
-    out.clip_position = in.position; // GPU does the perspective divide
+    out.clip_position = in.position;
+    if combiner.is_rect == 0u {
+        out.clip_position.x += in.position.w / f32(combiner.frame.z);
+        out.clip_position.y -= in.position.w / f32(combiner.frame.w);
+    }
     out.color = in.color;
     out.uv = in.uv;
     return out;
@@ -53,7 +57,11 @@ struct Combiner {
                                 // by compute_lod under DETAIL/SHARPEN. .w = detail_mode bits (bit0 =
                                 // SHARPEN, bit1 = DETAIL — DETAIL set only when a real tile was
                                 // decoded). In LOCKSTEP with the Rust CombinerUniform.
-    frame:           vec4<u32>, // serial, seed, framebuffer width, framebuffer height
+    frame:           vec4<u32>, // serial, seed, raster viewport width and height
+    is_rect:         u32,
+    _pad0:           u32,
+    _pad1:           u32,
+    _pad2:           u32,
 };
 
 @group(0) @binding(0) var tex0:  texture_2d<f32>;
@@ -420,14 +428,7 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     // tcScale is needed).
     let ddx_uv = dpdx(in.uv);
     let ddy_uv = dpdy(in.uv);
-    // rt64's half-pixel screen offset evaluates triangle ST at the pixel corner.
-    let uvw = vec3<f32>(in.uv * in.clip_position.w, in.clip_position.w);
-    let corner = uvw - 0.5 * (dpdx(uvw) + dpdy(uvw));
-    var sample_uv = in.uv;
-    if combiner.inv_tex_size.z == 0.0 {
-        sample_uv = corner.xy / corner.z;
-    }
-    let uv = sample_uv * combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
+    let uv = in.uv * combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
 
     let l = combiner.combine_l;
     let h = combiner.combine_h;

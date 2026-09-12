@@ -166,12 +166,12 @@ mod coverage_replay;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn coverage_parent_matches_a() {
+fn coverage_matches_b() {
     pollster::block_on(coverage_replay::replay());
 }
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test::wasm_bindgen_test]
-async fn coverage_parent_matches_a() {
+async fn coverage_matches_b() {
     coverage_replay::replay().await;
 }

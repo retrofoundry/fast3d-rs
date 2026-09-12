@@ -1,4 +1,4 @@
-"""Check a coverage fixture against A (parent) or B (rt64), including dither statistics."""
+"""Check a coverage fixture against B (current renderer and rt64), or archived A, including dither statistics."""
 
 import argparse
 import csv
@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 
 
-def check(directory, scene, actual, rt64, allow_rt64_f3d_quirk=False):
+def check(directory, scene, actual, rt64, allow_rt64_f3d_quirk=False, parent=False):
+    if parent and rt64:
+        raise ValueError("rt64 uses B")
     if allow_rt64_f3d_quirk and (not rt64 or scene != "coverage-slopes-f3d"):
         raise ValueError("the 4337374 F3D quirk only applies to rt64 coverage-slopes-f3d")
     with (directory / "coverage-manifest.tsv").open() as manifest:
@@ -43,7 +45,7 @@ def check(directory, scene, actual, rt64, allow_rt64_f3d_quirk=False):
                     bands.append(1 - sum(p[axis] == value for p in survivors) / total)
         passed = not unexpected and b_only_survivors > 0 and abs(fraction - 128 / 255) <= 0.05 and max(bands) <= 0.8
         return {"passed": passed, "survivor_fraction": fraction, "b_only_edge_survivors": b_only_survivors, "maximum_discarded_band_fraction": max(bands), "unexpected_pixels": len(unexpected)}
-    rule = "b" if rt64 else "a"
+    rule = "a" if parent else "b"
     expected = (directory / f"{scene}.expected-{rule}.rgba8").read_bytes()
     assert len(expected) == len(actual)
     channels = 3 if rt64 else 4
@@ -85,10 +87,11 @@ if __name__ == "__main__":
     parser.add_argument("scene")
     parser.add_argument("rgba8", type=Path)
     parser.add_argument("--rt64", action="store_true")
+    parser.add_argument("--parent", action="store_true", help="check archived fast3d output against A")
     parser.add_argument("--allow-rt64-f3d-quirk", action="store_true",
                         help="require the pinned 4337374 F3D omission and exact RGB everywhere else")
     args = parser.parse_args()
     result = check(args.expectations, args.scene, args.rgba8.read_bytes(), args.rt64,
-                   args.allow_rt64_f3d_quirk)
+                   args.allow_rt64_f3d_quirk, args.parent)
     print(json.dumps(result, indent=2))
     raise SystemExit(0 if result["passed"] else 1)

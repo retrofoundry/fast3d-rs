@@ -465,9 +465,12 @@ impl<'a> RenderInputs<'a> {
                                     draw = DrawInputs::Rejected;
                                 }
                             }
-                            if !matches!(operation.draw, SceneOp::FillRect { .. }) {
-                                uniform.frame = [frame[0], frame[1], w, h];
-                            }
+                            debug_assert_eq!(
+                                uniform.is_rect != 0,
+                                !matches!(operation.draw, SceneOp::Tris(_))
+                            );
+                            debug_assert!(w > 0 && h > 0);
+                            uniform.frame = [frame[0], frame[1], w, h];
                             let bytes = bytemuck::bytes_of(&uniform);
                             inputs.uniforms[slot * 256..slot * 256 + bytes.len()]
                                 .copy_from_slice(bytes);
@@ -519,5 +522,70 @@ impl<T> std::ops::Deref for BufferData<T> {
 impl<T> std::ops::DerefMut for BufferData<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hle::{gbi::GbiUcode, interp::interpret, mem::GbiDataFormat};
+
+    #[test]
+    fn coverage_target_extent_and_draw_kind() {
+        let mut seen = [false; 3];
+        for name in [
+            "high-poly--empty-texture",
+            "hud-over-3d",
+            "fill-texrect",
+            "offscreen-then-sample",
+        ] {
+            let (bytes, entry) = crate::tests::fixtures::fixture(name);
+            let scene = interpret(
+                crate::RdramImage::new(bytes),
+                entry,
+                GbiUcode::F3dex2,
+                GbiDataFormat::Fixed,
+                None,
+            )
+            .scene;
+            if let Some(mat) = scene.materials.first() {
+                assert_eq!(
+                    CombinerUniform::from_rect(mat, &Default::default(), [0; 4]).is_rect,
+                    1
+                );
+            }
+            for extent in [(96, 64), (193, 132)] {
+                let inputs = RenderInputs::new(&scene, extent, [17, 29]).unwrap();
+                for target in &inputs.targets {
+                    let (w, h) = match target.id {
+                        TargetId::Legacy => extent,
+                        TargetId::Guest(_) => target.logical_extent,
+                    };
+                    for (slot, operation) in target.operations.iter().enumerate() {
+                        let uniform: CombinerUniform = bytemuck::pod_read_unaligned(
+                            &target.uniforms
+                                [slot * 256..slot * 256 + std::mem::size_of::<CombinerUniform>()],
+                        );
+                        assert_eq!(uniform.frame, [17, 29, w, h], "{name}");
+                        let kind = match operation.draw {
+                            DrawInputs::Tris { .. } => 0,
+                            DrawInputs::Rectangle {
+                                material_index: Some(_),
+                                ..
+                            } => 1,
+                            DrawInputs::Rectangle {
+                                material_index: None,
+                                ..
+                            } => 2,
+                            DrawInputs::DepthFill { .. } => continue,
+                            DrawInputs::Rejected => panic!("{name}: rejected draw"),
+                        };
+                        seen[kind] = true;
+                        assert_eq!(uniform.is_rect, u32::from(kind != 0), "{name}");
+                    }
+                }
+            }
+        }
+        assert_eq!(seen, [true; 3]);
     }
 }

@@ -253,7 +253,9 @@ fn render_and_read_center_channel(
         blender_mux: 0,
         force_blend: 0,
         alpha_flags: 0,
-        frame: [0; 4],
+        frame: [0, 0, W, H],
+        is_rect: 0,
+        _pad: [0; 3],
         alpha_threshold: 0.0,
         prim: [1.0, 1.0, 1.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],
@@ -567,7 +569,9 @@ fn renders_red_triangle_center_and_clear_corner() {
         blender_mux: 0,
         force_blend: 0,
         alpha_flags: 0,
-        frame: [0; 4],
+        frame: [0, 0, W, H],
+        is_rect: 0,
+        _pad: [0; 3],
         alpha_threshold: 0.0,
         prim: [1.0, 1.0, 1.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],
@@ -775,7 +779,9 @@ fn depth_test_hides_the_farther_triangle() {
         blender_mux: 0,
         force_blend: 0,
         alpha_flags: 0,
-        frame: [0; 4],
+        frame: [0, 0, W, H],
+        is_rect: 0,
+        _pad: [0; 3],
         alpha_threshold: 0.0,
         prim: [1.0, 1.0, 1.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],
@@ -1454,7 +1460,9 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
         blender_mux: 0,
         force_blend: 0,
         alpha_flags: 0,
-        frame: [0; 4],
+        frame: [0, 0, W, H],
+        is_rect: 0,
+        _pad: [0; 3],
         alpha_threshold: 0.0,
         prim: [1.0, 1.0, 1.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],
@@ -1705,7 +1713,8 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
     );
 
     // Build CombinerUniform from the real scene material (not hand-constructed).
-    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
+    let mut u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
+    u.frame = [0, 0, W, H];
 
     // Run the RSP-process compute pass to get GPU-transformed OutVertex positions, colors, and UVs.
     let gpu_verts = run_compute_outputs(&device, &queue, &r.scene);
@@ -1895,7 +1904,8 @@ fn flat_color_prim_pixel_equals_gsdpsetprimcolor() {
     let mat = &r.scene.materials[0];
 
     // Build CombinerUniform from the real scene material.
-    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
+    let mut u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
+    u.frame = [0, 0, W, H];
 
     // Run the RSP-process compute pass to get GPU-transformed OutVertex positions and colors.
     let gpu_verts = run_compute_outputs(&device, &queue, &r.scene);
@@ -2098,7 +2108,8 @@ fn cycle_type_1_two_cycle_combiner_pixel() {
     let mat = &r.scene.materials[0];
 
     // Build CombinerUniform from the scene's material — NOT a hand-constructed uniform.
-    let u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
+    let mut u = CombinerUniform::from_run(mat, &crate::hle::RenderMode::default(), [0; 4]);
+    u.frame = [0, 0, W, H];
 
     // Primary assertion: the scene must have set 2-cycle mode.
     assert_eq!(
@@ -2354,7 +2365,9 @@ fn render_fixture_to_rgba8(name: &str, w: u32, h: u32) -> Vec<u8> {
         mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         ..Default::default()
     });
-    let combiner = CombinerUniform::from_run(material, &crate::hle::RenderMode::default(), [0; 4]);
+    let mut combiner =
+        CombinerUniform::from_run(material, &crate::hle::RenderMode::default(), [0; 4]);
+    combiner.frame = [0, 0, w, h];
     let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("smoke-uniform"),
         contents: bytemuck::bytes_of(&combiner),
@@ -3675,7 +3688,9 @@ fn render_two_texture_center(
         blender_mux: 0,
         force_blend: 0,
         alpha_flags: 0,
-        frame: [0; 4],
+        frame: [0, 0, W, H],
+        is_rect: 0,
+        _pad: [0; 3],
         alpha_threshold: 0.0,
         prim,
         env: [0.0, 0.0, 0.0, 1.0],
@@ -4111,7 +4126,9 @@ fn render_lod_center(
         blender_mux: 0,
         force_blend: 0,
         alpha_flags: 0,
-        frame: [0; 4],
+        frame: [0, 0, W, H],
+        is_rect: 0,
+        _pad: [0; 3],
         alpha_threshold: 0.0,
         prim: [0.0, 0.0, 0.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],

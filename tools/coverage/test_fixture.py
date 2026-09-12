@@ -81,6 +81,14 @@ class F3dOracleQuirk(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.result()
 
+    def test_native_requires_b_and_archived_parent_requires_a(self):
+        a = self.expected.copy()
+        a[0] = 255
+        (self.directory / f"{self.scene}.expected-a.rgba8").write_bytes(a)
+        self.assertTrue(self.result(self.expected, rt64=False, quirk=False)["passed"])
+        self.assertFalse(self.result(a, rt64=False, quirk=False)["passed"])
+        self.assertTrue(check(self.directory, self.scene, a, False, parent=True)["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
