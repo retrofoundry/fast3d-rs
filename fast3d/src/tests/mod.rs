@@ -11,6 +11,12 @@ mod browser_fixtures;
 mod capture_fixture;
 mod conditional_control;
 mod convert_key;
+#[cfg(feature = "capture")]
+mod coverage_fixtures;
+#[cfg(feature = "capture")]
+#[allow(dead_code)]
+#[path = "../../tests/common/coverage_semantics.rs"]
+mod coverage_semantics;
 mod culling;
 mod decode;
 mod depth_persistence;

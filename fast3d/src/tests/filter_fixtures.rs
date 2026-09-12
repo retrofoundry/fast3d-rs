@@ -240,3 +240,22 @@ pub(super) fn castle_fixture() -> Fixture {
         "levels/castle_inside/areas/1/1/model.inc.c: inside_castle_seg7_dl_07023DB0",
     )
 }
+
+#[test]
+#[ignore = "writes existing filter IMAGE captures to FAST3D_WRITE_FIXTURES"]
+fn write_rt64_filter_fixtures() {
+    let dir = std::path::PathBuf::from(
+        std::env::var_os("FAST3D_WRITE_FIXTURES").expect("set FAST3D_WRITE_FIXTURES"),
+    );
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, fixture) in [
+        ("sm64-power-meter-point", power_meter_fixture()),
+        ("sm64-castle-trilerp", castle_fixture()),
+    ] {
+        std::fs::write(
+            dir.join(format!("{name}.f3dcap")),
+            fixture.to_bytes().unwrap(),
+        )
+        .unwrap();
+    }
+}
