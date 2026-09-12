@@ -276,3 +276,95 @@ fn texrect_coverage_pixels() {
         }
     }
 }
+
+#[test]
+fn coverage_rect_sampling_origin() {
+    use crate::hle::{ColorImage, FramebufferPair, Scissor};
+    use crate::tests::common::{pixel, render_to_pixels, scene_from_fixture};
+
+    let (device, queue) = headless_device_forced_fallback();
+    let mut renderer = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, false);
+    for cycle in [0, 1, 2] {
+        for flip in [false, true] {
+            let mut scene = scene_from_fixture("framebuffer-extent--white1");
+            let mat = &mut scene.materials[0];
+            mat.tex_enable = true;
+            mat.tex_w = 16;
+            mat.tex_h = 16;
+            mat.cycle_type = cycle;
+            mat.filter_mode = 0;
+            mat.texture = (0..16)
+                .flat_map(|y| (0..16).flat_map(move |x| [x * 8, y * 8, 64, 255]))
+                .collect();
+            mat.sampling = crate::hle::tile_sampling::TileSampling::from_tile(
+                &crate::hle::rdp::TileDescriptor {
+                    width: 16,
+                    height: 16,
+                    cms: 2,
+                    cmt: 2,
+                    ..Default::default()
+                },
+                0,
+            );
+            let color = |d| CcPass {
+                a: 31,
+                b: 31,
+                c: 31,
+                d,
+            };
+            let alpha = |d| CcPass {
+                a: 7,
+                b: 7,
+                c: 7,
+                d,
+            };
+            let (combine_l, combine_h) = gdp_set_combine_lerp(
+                color(1),
+                alpha(1),
+                color(u32::from(cycle == 0)),
+                alpha(u32::from(cycle == 0)),
+            );
+            mat.selectors = crate::hle::combiner::decode_combine(combine_l, combine_h);
+            let end = if cycle == 2 { 60 } else { 64 };
+            let step = if cycle == 2 { 4096 } else { 1024 };
+            scene.framebuffer_pairs = vec![FramebufferPair {
+                color_image: ColorImage {
+                    fmt: 0,
+                    siz: 3,
+                    width: 64,
+                    addr: 0x10000,
+                },
+                ops: vec![decode(
+                    [32, 32, end, end],
+                    [24, 24],
+                    [step, 1024],
+                    cycle,
+                    flip,
+                )],
+                active_scissor: Scissor {
+                    lrx: 64,
+                    lry: 64,
+                    ..Default::default()
+                },
+                size_extent: (64, 64),
+                ..Default::default()
+            }];
+            let pixels = render_to_pixels(&device, &queue, &mut renderer, &scene, 64, 64);
+            for y in 0..64 {
+                for x in 0..64 {
+                    let expected = if (8..16).contains(&x) && (8..16).contains(&y) {
+                        let (s, t) = if flip { (y - 7, x - 7) } else { (x - 7, y - 7) };
+                        [(s * 8) as u8, (t * 8) as u8, 64, 255]
+                    } else {
+                        [13, 13, 20, 255]
+                    };
+                    assert_eq!(
+                        pixel(&pixels, 64, x, y),
+                        expected,
+                        "cycle {cycle}, flip {flip}, ({x},{y})"
+                    );
+                }
+            }
+        }
+    }
+}

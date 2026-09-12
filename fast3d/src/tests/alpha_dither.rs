@@ -227,7 +227,7 @@ fn alpha_dither_copy_uses_texel_alpha_and_framebuffer_extent() {
 
 #[test]
 fn alpha_frame_uniform_fits_slot() {
-    assert_eq!(std::mem::size_of::<CombinerUniform>(), 176);
+    assert_eq!(std::mem::size_of::<CombinerUniform>(), 192);
     assert!(std::mem::size_of::<CombinerUniform>() <= 256);
 }
 

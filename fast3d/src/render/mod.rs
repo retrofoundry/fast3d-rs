@@ -188,10 +188,12 @@ pub struct CombinerUniform {
     /// this `[1, 1, 0, 0]`, byte-identical to the prior tail. Grows the struct by exactly one
     /// std140 row (144 -> 160). Must stay in LOCKSTEP with the WGSL `Combiner.inv_detail_size`.
     pub inv_detail_size: [f32; 4],
-    /// Low 32 bits of frame serial, dither seed, framebuffer width and height.
+    /// Low 32 bits of frame serial, dither seed, raster viewport width and height.
     pub frame: [u32; 4],
+    pub is_rect: u32,
+    pub _pad: [u32; 3],
 }
-const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 176);
+const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 192);
 
 impl CombinerUniform {
     fn alpha_flags(rm: &crate::hle::RenderMode) -> u32 {
@@ -286,6 +288,8 @@ impl CombinerUniform {
                 [dw, dh, mat.prim_min_level, sharpen_bit + detail_bit]
             },
             frame: [0; 4],
+            is_rect: 0,
+            _pad: [0; 3],
         }
     }
 
@@ -297,6 +301,7 @@ impl CombinerUniform {
         let mut uniform = Self::from_run(mat, rm, fog_color);
         uniform.inv_tex_size = triangle_inv_tex_size(mat);
         uniform.inv_tex_size[2] = 1.0;
+        uniform.is_rect = 1;
         uniform
     }
 
@@ -370,6 +375,8 @@ impl CombinerUniform {
             // No DETAIL tile on the fill path.
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
             frame: [0; 4],
+            is_rect: 1,
+            _pad: [0; 3],
         }
     }
 
@@ -404,6 +411,8 @@ impl CombinerUniform {
             // No DETAIL tile on the COPY-mode TexRect path.
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
             frame: [0; 4],
+            is_rect: 1,
+            _pad: [0; 3],
         }
     }
 }
@@ -414,7 +423,7 @@ mod tests {
 
     #[test]
     fn tile_sampling_uniform_and_shaders_fit_webgpu() {
-        assert_eq!(std::mem::size_of::<CombinerUniform>(), 176);
+        assert_eq!(std::mem::size_of::<CombinerUniform>(), 192);
         assert_eq!(std::mem::size_of::<TileSamplingArray>(), 960);
         let limits = wgpu::Limits::default();
         assert!(
@@ -941,7 +950,7 @@ impl TexturedPipeline {
             label: Some("textured-group1-bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,

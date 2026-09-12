@@ -307,7 +307,7 @@ fn expected(case: Case, x: u32, y: u32) -> [u8; 4] {
                     for (left, visible, color) in [(40, red, RED), (176, green, GREEN)] {
                         if visible
                             && (left..left + 64).contains(&x)
-                            && 3 * (2 * (x - left) + 1) + 4 * (2 * (y - top) + 1) < 384
+                            && 3 * (x - left) + 4 * (y - top) < 192
                         {
                             return color;
                         }

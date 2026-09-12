@@ -1,15 +1,21 @@
 # Triangle coverage witnesses
 
-The current renderer tests triangle coverage at `(x + 0.5, y + 0.5)` (A), while
-its UV correction reconstructs the owning triangle's UV at `(x, y)` using
-fragment derivatives. The arithmetic A expectation evaluates that UV exactly;
-the reconstruction can differ across backends. These tests also
-calculate B, whose coverage and attributes use `(x, y)`. Both expectations stay
-in the arithmetic module. The renderer conformance test currently requires A
-on all 38 fixtures. Scanout uses the VI row count from origin when an IMAGE VI
-selects a stored framebuffer. Without VI, it uses the selected target's retained
-logical height, so a final pair with a smaller scissor does not crop the display.
-There is no renderer setting for selecting B.
+Triangle coverage and interpolated attributes use the integer framebuffer sample
+`(x, y)` (B). The shared raster vertex shader translates triangle positions by
+`(w/W, -w/H)` in clip space, using each draw's raster viewport dimensions. UVs
+use ordinary interpolation at that same sample. Shade, alpha, fog and depth
+follow the translated geometry; LOD uses its UV derivatives. Dither and decal
+depth reads retain their integer destination pixel addresses.
+
+Every draw carries a rectangle flag. Fills, textured rectangles and COPY keep
+their existing position and sampling rules. Compute RSP positions, including
+MODIFYVTX overrides, retain guest coordinates. The native/browser conformance
+test requires B on all 38 fixtures. The arithmetic module also retains A's
+half-integer coverage expectation as a counterexample.
+
+Scanout uses the VI row count from origin when an IMAGE VI selects a stored
+framebuffer. Without VI, it uses the selected target's retained logical height,
+so a final pair with a smaller scissor does not crop the display.
 
 `fast3d/tests/common/coverage_semantics.rs` uses literal quarter-pixel vertices,
 signed integer edge equations and full-frame expectations. It imports no
@@ -46,32 +52,8 @@ the authored output height. They use F3D and F3DEX2, including direct XY
 modifications. An encoder test checks literal matrix, viewport and command words and independently
 recovers screen coordinates from the stored vertex bytes. Capture bytes are
 checked against regeneration. The shared native/browser replay requires a real
-adapter and compares each selected full frame with A. Primary-color pixels are exact
-except for the WARP UV boundary policy below;
+adapter and compares each selected full frame with B. Primary-color pixels are exact;
 interpolated scalar output permits one UNORM rounding step at covered pixels.
-
-The DX12 CPU adapter named `Microsoft Basic Render Driver` has a separate
-band-boundary comparison for `coverage-uv-perspective` and
-`coverage-uv-perspective-negative`. It accepts only exact RGBA palette colors
-reachable by perturbing each arithmetic corner-UV component by at most
-`1/128` texel before the existing 1/128-texel rounding and four-texel band
-selection. This permits another band at 97 and 124 A-covered pixels respectively.
-Background, coverage, scissor and alpha remain exact, and the test reports the
-number of accepted differences per fixture. Every other adapter and fixture,
-including `coverage-shared-uv` and `coverage-lod-perspective`, keeps its existing
-comparison. The A/B images and saved-output checker remain unchanged.
-
-At `(174,48)`, the positive-gradient fixture's exact V is `1231/308`, only
-`13/19712` texel above the band transition at `4 - 1/256`. WARP selects blue
-there while arithmetic A, Metal and Chrome select green. The UV allowance is
-a comparison cap of one coordinate-quantization step, not a proven backend
-error bound. Fragment
-[`position.w`](https://www.w3.org/TR/WGSL/#position-builtin-value) interpolates
-reciprocal clip W, so `(uv * position.w, position.w)` is affine in real
-arithmetic. Subtracting its half-pixel derivatives is exact before division;
-there is no rational-function truncation term. Backend interpolation and
-floating-point evaluation remain relevant, and WGSL supplies
-[no finite derivative accuracy bound](https://www.w3.org/TR/WGSL/#floating-point-accuracy).
 
 Run CPU checks without an adapter:
 
@@ -79,7 +61,6 @@ Run CPU checks without an adapter:
 cargo test -p fast3d --test coverage_arithmetic
 cargo test -p fast3d --features capture --lib coverage_encoded_coordinates_and_commands
 cargo test -p fast3d --features capture --lib coverage_fixture_bytes_match_builders
-cargo test -p fast3d --features capture --test browser_sm64_fixture_replay coverage_warp_
 python3 -m unittest discover -s tools/coverage -p 'test_*.py'
 ```
 
@@ -95,18 +76,25 @@ manifest. Ties fixtures additionally produce every primitive's eight-bit RDP
 sample mask, edge words and a table of all integer ties. No rendered output or
 existing binary golden is written by these commands.
 
-With a working GPU, run `coverage_parent_matches_a` in
+With a working GPU, run `coverage_matches_b` in
 `browser_sm64_fixture_replay`; on wasm it requires BrowserWebGpu. It is also
 registered as a native test. The captures disable dual-source blending.
 The gate includes the retained-height capture: a 256-row allocation followed by
 a 128-row pair at the same address presents the first 128 rows through its
 recorded VI. All 38 captures exercise VI scanout. No ignored-test flag is needed
 on native or wasm.
+`coverage_rect_sampling_origin` supplements the flat rectangle controls with a
+16×16 two-axis ramp, ST origin `(0.75, 0.75)`, one texel per pixel, and both flip
+states in one-cycle, two-cycle and COPY. Every pixel of the 64×64 output is
+asserted. The first rectangle sample is `(1.25, 1.25)`; applying the triangle
+translation would sample `(0.75, 0.75)` and select the wrong texel.
+
 The odd-width RGBA32 fixture uses a 193×132 VI. The near-plane fixture's clipped
 edge is `x+y=144.25`, which misses both A and B sample lattices.
 The same captures export through `export_capture_rdram` for the pinned rt64
-oracle. `tools/coverage/check_fixture.py` checks saved parent output against A
-or, with `--rt64`, saved oracle output against B. It keeps exact background and
+oracle. `tools/coverage/check_fixture.py` checks saved renderer output against B.
+`--parent` selects archived A output; `--rt64` checks B with the oracle channel
+policy. It keeps exact background and
 primary-color gates, explicit RGB quantization bounds for scalar interactions,
 and a statistical oracle check for the dither fixture. Native dither remains
 an exact destination-index expectation.
@@ -116,15 +104,18 @@ The strict rt64 check reports the F3D slope atlas's missing first column. With
 omission: exactly 256 B-covered pixels must be black, and all remaining RGB
 pixels must match B. The mask's SHA-256 is fixed; the output still reports the
 raw 256-pixel discrepancy. Restored pixels also fail this quirk check. The
-manifest names this exception and requires every parent fixture. The quirk
+manifest names this exception and requires every fixture. The quirk
 option changes neither A/B expectations nor the native/browser comparison.
 
 `tools/coverage/predict.py` decodes the three frozen IMAGE inputs for sphere,
 metal-butt and shadow-decal. It writes separate silhouette and owner-change
 masks. It rejects unknown input hashes because its command and value-identity
 assumptions have only been derived for those inputs. `ledger.py` emits the eight
-specified golden-change masks and nineteen empty control masks, and can verify
-the archived QUAD/TRI2 evidence. `compare_three_way.py` requires every parent to
+specified golden-change masks and nineteen empty control masks, freezes before
+bytes and predicted values, and can verify the archived QUAD/TRI2 evidence. Its
+`compare` command records exact and tolerance-two deltas, rejects missing or
+out-of-mask changes, and checks independently predicted values. It never writes
+repository goldens. `compare_three_way.py` requires every parent to
 candidate byte change, including alpha, to fall in a supplied explanation mask;
 the candidate's oracle maximum cannot exceed the smaller of the measured parent
 maximum and its frozen gate. Those masks and value explanations require review;
