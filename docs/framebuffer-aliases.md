@@ -36,5 +36,6 @@ that comparison because capture recording excludes diagnostic depth-reset polici
 General range ownership, offset copies, triangle framebuffer textures, same-target
 snapshots, bit reinterpretation, CPU/GPU coherence and GPU write-back remain
 unsupported. The existing offscreen-then-sample golden is a compatibility test for
-the convenience only. Real-load oracle fixtures require a separate implementation
-and evidence; none is claimed here.
+the convenience only. [F0's authored real-load fixtures](framebuffer-load-evidence.md)
+pin this rejection and provide independent offset, packing and snapshot probes
+for rt64. They add no support; hardware agreement remains a separate gate.
