@@ -190,6 +190,18 @@ pub fn dl_2d_fill_rect(
     x1: u32,
     y1: u32,
 ) -> crate::hle::Scene {
+    dl_2d_fill_rect_with_scissor_height(addr, fill5551, x0, y0, x1, y1, 64)
+}
+
+pub fn dl_2d_fill_rect_with_scissor_height(
+    addr: u64,
+    fill5551: u32,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+    scissor_height: u32,
+) -> crate::hle::Scene {
     use n64_gbi::encode::*; // gdp_set_color_image / gdp_set_scissor / gdp_set_fill_color /
                             // gdp_fill_rectangle / gsp_enddl  (encode.rs:387/399/405/409/242)
     let mut rdram: Vec<u8> = Vec::new();
@@ -203,7 +215,7 @@ pub fn dl_2d_fill_rect(
         64,
         addr as u32,
     ));
-    push(gdp_set_scissor(0, 0, 0, 64 * 4, 64 * 4)); // → size_extent.1 = scissor.lry = 64 (M1)
+    push(gdp_set_scissor(0, 0, 0, 64 * 4, scissor_height * 4));
     push(gdp_set_fill_color(fill5551));
     push(gdp_fill_rectangle(x0 * 4, y0 * 4, x1 * 4, y1 * 4));
     push(gsp_enddl());

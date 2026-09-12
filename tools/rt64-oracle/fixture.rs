@@ -1,5 +1,7 @@
 use crate::capture::{Fixture, Frame, Provenance, RecordingHardware};
-use crate::{ClearPolicy, DataFormat, Hardware, Microcode, Rdram, RdramImage, RendererConfig};
+use crate::{
+    ClearPolicy, DataFormat, Hardware, Microcode, Rdram, RdramImage, RendererConfig, ViRegisters,
+};
 use n64_gbi::encode::{
     gdp_fill_rectangle, gdp_set_color_image, gdp_set_cycle_type_f3d, gdp_set_fill_color,
     gdp_set_scissor, gsp_clear_geometrymode_f3d, gsp_displaylist_f3d, gsp_enddl_f3d,
@@ -79,7 +81,9 @@ pub(super) fn make(
     provenance: Provenance,
 ) -> Fixture {
     let entry = wrapper(&mut bytes, scene_entry, width, height);
-    make_image(bytes, entry, Microcode::F3d, width, height, provenance)
+    let mut fixture = make_image(bytes, entry, Microcode::F3d, width, height, provenance);
+    fixture.frame.vi = None;
+    fixture
 }
 
 pub(super) fn make_image(
@@ -108,6 +112,7 @@ pub(super) fn make_image(
     assert_eq!(color_image.width, u16::try_from(width).unwrap());
     assert_eq!(color_image.fmt, 0);
     assert!(matches!(color_image.siz, 2 | 3));
+    assert!((1..=511).contains(&height));
     let fixture = Fixture {
         frame: Frame {
             serial: 0,
@@ -122,7 +127,16 @@ pub(super) fn make_image(
             },
             width,
             height,
-            vi: None,
+            vi: Some(ViRegisters {
+                status: u32::from(color_image.siz),
+                origin: FRAMEBUFFER_ADDRESS,
+                width,
+                h_start: width,
+                v_start: 2 * height,
+                x_scale: 1024,
+                y_scale: 1024,
+                ..Default::default()
+            }),
             dual_source_blending: false,
         },
         tasks: vec![task],

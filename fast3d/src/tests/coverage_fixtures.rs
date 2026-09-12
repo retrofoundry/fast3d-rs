@@ -447,6 +447,11 @@ fn coverage_encoded_coordinates_and_commands() {
         assert_eq!(commands[commands.len() - 2], (0xe900_0000, 0));
         let fixture = fixture(&case);
         assert_eq!(fixture.tasks.len(), 1);
+        let vi = fixture.frame.vi.expect("authored display VI");
+        assert_eq!(vi.origin, 0x0010_0000);
+        assert_eq!(vi.width, case.width);
+        assert_eq!(vi.scanout_height(), Some(case.height));
+        assert_eq!(vi.status & 3, if case.width % 2 == 1 { 3 } else { 2 });
     }
 }
 
@@ -547,7 +552,7 @@ fn write_rt64_coverage_fixtures() {
             std::fs::write(dir.join(format!("{}.ties.tsv", case.name)), ties).unwrap();
         }
         manifest.push_str(&format!(
-            "{}\t{}\t{}\tRGB\t{}\t0\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\tRGB\t{}\t0\t{}\trequired\t{}\n",
             case.name,
             case.width,
             case.height,
@@ -562,11 +567,6 @@ fn write_rt64_coverage_fixtures() {
                 "0"
             },
             changes,
-            if case.name == "coverage-retained-height" {
-                "held-scanout"
-            } else {
-                "required"
-            },
             if case.name == "coverage-slopes-f3d" {
                 "rt64-4337374-f3d-left-column"
             } else {

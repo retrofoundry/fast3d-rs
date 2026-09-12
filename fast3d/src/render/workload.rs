@@ -651,7 +651,7 @@ impl SceneRenderer {
             label: Some("workload-present"),
         });
         if let Some(source) = source {
-            self.scanout(&mut encoder, target, source);
+            self.scanout(device, &mut encoder, target, source, None);
         } else {
             clear_color(&mut encoder, target, wgpu::LoadOp::Clear(CLEAR_COLOR));
         }

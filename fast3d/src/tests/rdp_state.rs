@@ -42,7 +42,7 @@ fn triangles_inherit_color_image_including_zero_across_tasks_and_frames() {
                 Some(TargetId::Guest(address.into()))
             );
             assert!(!renderer.inner.has_fb(TargetId::Legacy));
-            assert!(store_pixels(&renderer, address.into())
+            assert!(store_pixels(&mut renderer, address.into())
                 .as_chunks::<4>()
                 .0
                 .contains(&[64, 200, 255, 255]));
@@ -83,7 +83,7 @@ fn inherited_fill_and_scissor_respect_clear_policy() {
                 );
                 assert!(diags.is_empty(), "{diags:?}");
                 assert!(summary.renderable);
-                let pixels = store_pixels(&renderer, address.into());
+                let pixels = store_pixels(&mut renderer, address.into());
                 assert_eq!(&pixels[(32 * 64 + 16) * 4..][..4], [0, 255, 0, 255]);
                 let right = if task == 2 && policy == ClearPolicy::PerFrame {
                     [13, 13, 20, 255]
@@ -171,7 +171,7 @@ fn tmem_tiles_and_registers_survive_without_reloading_guest_memory() {
             assert!(diags.is_empty(), "{diags:?}");
             assert!(summary.renderable);
             assert_eq!(renderer.rdp, expected);
-            assert_eq!(&store_pixels(&renderer, 0)[4..8], [255, 0, 0, 255]);
+            assert_eq!(&store_pixels(&mut renderer, 0)[4..8], [255, 0, 0, 255]);
         }
     }
 }
@@ -278,7 +278,7 @@ fn cancelled_and_faulted_tasks_discard_register_changes() {
     );
     let before = renderer.rdp.clone();
     let scenes = renderer.frame_scenes.clone();
-    let pixels = store_pixels(&renderer, 0);
+    let pixels = store_pixels(&mut renderer, 0);
     let changed = hw([
         gdp_set_color_image(0, 2, 32, 0x200000),
         gdp_set_fill_color(0x07c107c1),
@@ -304,7 +304,7 @@ fn cancelled_and_faulted_tasks_discard_register_changes() {
     assert!(!summary.renderable);
     assert_eq!(renderer.rdp, before);
     assert_eq!(renderer.frame_scenes, scenes);
-    assert_eq!(store_pixels(&renderer, 0), pixels);
+    assert_eq!(store_pixels(&mut renderer, 0), pixels);
     let summary = renderer.process_dl(
         &hw([gdp_set_fill_color(0x07c107c1)]),
         0,
@@ -319,7 +319,7 @@ fn cancelled_and_faulted_tasks_discard_register_changes() {
         Microcode::F3dex2,
         &mut NopSink,
     );
-    assert_eq!(store_pixels(&renderer, 0), pixels);
+    assert_eq!(store_pixels(&mut renderer, 0), pixels);
 }
 
 #[test]
@@ -354,8 +354,8 @@ fn prefixes_start_from_defaults_without_changing_live_registers() {
         assert_eq!(renderer.rdp, before);
         if expected.renderable {
             assert_eq!(
-                super::target_pixels(&renderer, TargetId::Legacy),
-                super::target_pixels(&fresh, TargetId::Legacy)
+                super::target_pixels(&mut renderer, TargetId::Legacy),
+                super::target_pixels(&mut fresh, TargetId::Legacy)
             );
         }
     }

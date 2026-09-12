@@ -143,7 +143,7 @@ fn zero_preserves_pixels_scenes_scanout_backend_format_and_frame_serial_without_
     r.set_data_format(DataFormat::Float);
     r.inner.dither_seed = 37;
     let scenes = r.frame_scenes.clone();
-    let before = store_pixels(&r, A.into());
+    let before = store_pixels(&mut r, A.into());
     let serial = r.inner.frame_serial;
     let mut diags = vec![Diagnostic {
         at: 99,
@@ -165,7 +165,7 @@ fn zero_preserves_pixels_scenes_scanout_backend_format_and_frame_serial_without_
         assert_eq!(r.inner.frame_serial, serial);
         assert_eq!(r.inner.dither_seed, 37);
         assert_eq!(diags, saved_diags);
-        assert_eq!(store_pixels(&r, A.into()), before);
+        assert_eq!(store_pixels(&mut r, A.into()), before);
     }
     r.set_data_format(DataFormat::Fixed);
     r.process_dl_prefix(
@@ -181,7 +181,7 @@ fn zero_preserves_pixels_scenes_scanout_backend_format_and_frame_serial_without_
         &mut NopSink,
         4,
     );
-    let after = store_pixels(&r, A.into());
+    let after = store_pixels(&mut r, A.into());
     assert_eq!(
         &after[(32 * 64 + 48) * 4..][..4],
         &before[(32 * 64 + 48) * 4..][..4]
@@ -345,8 +345,8 @@ fn compare_prefix(
         );
         if expected.inner.has_fb(u64::from(addr)) {
             assert_eq!(
-                store_pixels(&prefix, addr.into()),
-                store_pixels(&expected, addr.into()),
+                store_pixels(&mut prefix, addr.into()),
+                store_pixels(&mut expected, addr.into()),
                 "target {addr:#x}"
             );
         }
@@ -357,8 +357,8 @@ fn compare_prefix(
     );
     if expected.inner.has_fb(TargetId::Legacy) {
         assert_eq!(
-            target_pixels(&prefix, TargetId::Legacy),
-            target_pixels(&expected, TargetId::Legacy)
+            target_pixels(&mut prefix, TargetId::Legacy),
+            target_pixels(&mut expected, TargetId::Legacy)
         );
     }
     prefix
@@ -394,10 +394,10 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
         gdp_fill_rectangle(0, 0, 124, 252),
         gsp_enddl(),
     ]);
-    let r = compare_prefix(&full, &middle, 0, 4, &[A, B]);
+    let mut r = compare_prefix(&full, &middle, 0, 4, &[A, B]);
     assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
-    assert_eq!(pixel(&r, A, 16, 32), [255, 0, 0, 255]);
-    assert_ne!(pixel(&r, A, 48, 32), [0, 255, 0, 255]);
+    assert_eq!(pixel(&mut r, A, 16, 32), [255, 0, 0, 255]);
+    assert_ne!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]);
     let switched = hw([
         gdp_set_color_image(0, 2, 64, A),
         gdp_set_scissor(0, 0, 0, 256, 256),
@@ -408,10 +408,10 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
         gdp_set_color_image(0, 2, 64, B),
         gsp_enddl(),
     ]);
-    let r = compare_prefix(&full, &switched, 0, 7, &[A, B]);
+    let mut r = compare_prefix(&full, &switched, 0, 7, &[A, B]);
     assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
     assert!(!r.inner.has_fb(u64::from(B)));
-    assert_eq!(pixel(&r, A, 48, 32), [0, 255, 0, 255]);
+    assert_eq!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]);
 }
 
 #[test]
@@ -441,11 +441,11 @@ fn depth_only_prefix_matches_shorter_list_and_keeps_prior_color_scanout() {
     assert!(r.frame_scenes[0].framebuffer_pairs[0].is_depth_clear);
     assert_eq!(r.last_scanout_addr, None);
     r.process_dl(&fill_hw(A, 0xf801f801), 0, Microcode::F3dex2, &mut NopSink);
-    let before = store_pixels(&r, A.into());
+    let before = store_pixels(&mut r, A.into());
     let s = r.process_dl_prefix(&full, 0, Microcode::F3dex2, &mut NopSink, 6);
     assert!(!s.renderable);
     assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
-    assert_eq!(store_pixels(&r, A.into()), before);
+    assert_eq!(store_pixels(&mut r, A.into()), before);
     assert_eq!(r.frame_scenes.len(), 3);
 }
 
@@ -487,13 +487,13 @@ fn offscreen_then_sample_prefix_matches_independent_shorter_list() {
         0, 0, 256, 256, 0, 0, 0, 1024, 1024, false,
     ))
     .chain([gsp_enddl()]));
-    let r = compare_prefix(&full, &short, 0, 10, &[A, B]);
+    let mut r = compare_prefix(&full, &short, 0, 10, &[A, B]);
     assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(B.into())));
-    assert_eq!(pixel(&r, B, 32, 32), [255, 0, 0, 255]);
+    assert_eq!(pixel(&mut r, B, 32, 32), [255, 0, 0, 255]);
     assert!(r.frame_scenes[0].framebuffer_pairs[1].ops.iter().any(|op| matches!(op, crate::scene::SceneOp::TexRect { fb_source: Some(addr), .. } if *addr == A as u64)));
 }
 
-fn pixel(r: &Renderer, addr: u32, x: usize, y: usize) -> [u8; 4] {
+fn pixel(r: &mut Renderer, addr: u32, x: usize, y: usize) -> [u8; 4] {
     store_pixels(r, addr.into())[(y * 64 + x) * 4..][..4]
         .try_into()
         .unwrap()
@@ -506,10 +506,10 @@ fn backward_replay_clears_touched_targets_per_frame_and_retains_color_with_persi
         r.config.clear_policy = policy;
         r.begin_frame();
         r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 9);
-        let b = store_pixels(&r, B.into());
-        assert_eq!(pixel(&r, A, 48, 32), [0, 255, 0, 255]);
+        let b = store_pixels(&mut r, B.into());
+        assert_eq!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]);
         r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 4);
-        assert_eq!(pixel(&r, A, 48, 32), [0, 255, 0, 255]);
+        assert_eq!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]);
         r.begin_frame();
         let serial = r.inner.frame_serial;
         let s = r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 4);
@@ -517,8 +517,8 @@ fn backward_replay_clears_touched_targets_per_frame_and_retains_color_with_persi
         assert_eq!(r.inner.frame_serial, serial);
         assert_eq!(r.frame_scenes.len(), 1);
         assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
-        assert_eq!(pixel(&r, A, 16, 32), [255, 0, 0, 255]);
-        assert_eq!(store_pixels(&r, B.into()), b);
+        assert_eq!(pixel(&mut r, A, 16, 32), [255, 0, 0, 255]);
+        assert_eq!(store_pixels(&mut r, B.into()), b);
         match policy {
             ClearPolicy::PerFrame => {
                 let mut expected = headless_renderer();
@@ -536,17 +536,17 @@ fn backward_replay_clears_touched_targets_per_frame_and_retains_color_with_persi
                     &mut NopSink,
                 );
                 assert_eq!(
-                    store_pixels(&r, A.into()),
-                    store_pixels(&expected, A.into())
+                    store_pixels(&mut r, A.into()),
+                    store_pixels(&mut expected, A.into())
                 );
             }
-            ClearPolicy::Persist => assert_eq!(pixel(&r, A, 48, 32), [0, 255, 0, 255]),
+            ClearPolicy::Persist => assert_eq!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]),
         }
-        let before = store_pixels(&r, A.into());
+        let before = store_pixels(&mut r, A.into());
         let s = r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 1);
         assert!(!s.renderable);
         assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
-        assert_eq!(store_pixels(&r, A.into()), before);
+        assert_eq!(store_pixels(&mut r, A.into()), before);
     }
 }
 
@@ -577,7 +577,7 @@ fn full_length_and_max_prefixes_equal_ordinary_rendering() {
             assert_eq!(actual_diags, diags);
             assert_eq!(r.frame_scenes, ordinary.frame_scenes);
             assert_eq!(r.last_scanout_addr, ordinary.last_scanout_addr);
-            let scene = &ordinary.frame_scenes[0];
+            let scene = ordinary.frame_scenes[0].clone();
             let targets = (!scene.draw_runs.is_empty())
                 .then_some(TargetId::Legacy)
                 .into_iter()
@@ -592,8 +592,8 @@ fn full_length_and_max_prefixes_equal_ordinary_rendering() {
                 assert!(r.inner.has_fb(addr));
                 assert!(ordinary.inner.has_fb(addr));
                 assert_eq!(
-                    target_pixels(&r, addr),
-                    target_pixels(&ordinary, addr),
+                    target_pixels(&mut r, addr),
+                    target_pixels(&mut ordinary, addr),
                     "{name}: {count}: {addr:?}"
                 );
             }
@@ -678,21 +678,21 @@ fn merged_triangle_prefixes_match_independently_authored_shorter_lists() {
         let (short, short_entry) =
             triangle_list(&[gsp_1triangle(0, 1, 2), gsp_enddl()], paired, true);
         assert_eq!(entry, short_entry);
-        let r = compare_prefix(&full, &short, entry, setup_count + 1, &[0, A]);
+        let mut r = compare_prefix(&full, &short, entry, setup_count + 1, &[0, A]);
         assert_eq!(r.frame_scenes[0].indices.len(), 3);
         let target = if paired {
             TargetId::Guest(A.into())
         } else {
             TargetId::Legacy
         };
-        let half = target_pixels(&r, target);
+        let half = target_pixels(&mut r, target);
         assert!(half.as_chunks::<4>().0.contains(&[255, 0, 0, 255]));
         let (short, _) = triangle_list(
             &[gsp_1triangle(0, 1, 2), gsp_1triangle(0, 2, 3), gsp_enddl()],
             paired,
             true,
         );
-        let r = compare_prefix(&full, &short, entry, setup_count + 2, &[0, A]);
+        let mut r = compare_prefix(&full, &short, entry, setup_count + 2, &[0, A]);
         let scene = &r.frame_scenes[0];
         assert_eq!(scene.indices.len(), 6);
         let runs: Vec<_> = if paired {
@@ -709,7 +709,7 @@ fn merged_triangle_prefixes_match_independently_authored_shorter_lists() {
         };
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].index_count, 6);
-        assert_ne!(target_pixels(&r, target), half);
+        assert_ne!(target_pixels(&mut r, target), half);
     }
 }
 
@@ -799,7 +799,7 @@ fn pre_cimg_flat_prefix_keeps_its_legacy_target_as_the_walk_grows() {
         false,
         true,
     );
-    let r = compare_prefix(&full, &short, entry, 7, &[0, A, B]);
+    let mut r = compare_prefix(&full, &short, entry, 7, &[0, A, B]);
     assert!(r.frame_scenes[0].framebuffer_pairs.is_empty());
     assert_eq!(r.last_scanout_addr, Some(TargetId::Legacy));
     let mut ordinary = headless_renderer();
@@ -813,8 +813,8 @@ fn pre_cimg_flat_prefix_keeps_its_legacy_target_as_the_walk_grows() {
         }
     }
     assert_eq!(
-        target_pixels(&r, TargetId::Legacy),
-        target_pixels(&ordinary, TargetId::Legacy)
+        target_pixels(&mut r, TargetId::Legacy),
+        target_pixels(&mut ordinary, TargetId::Legacy)
     );
     for count in [6, 8, 9, u32::MAX] {
         let mut prefix = headless_renderer();
@@ -825,8 +825,8 @@ fn pre_cimg_flat_prefix_keeps_its_legacy_target_as_the_walk_grows() {
             assert!(!prefix.inner.has_fb(u64::from(addr)));
         }
         assert_eq!(
-            target_pixels(&prefix, TargetId::Legacy),
-            target_pixels(&ordinary, TargetId::Legacy)
+            target_pixels(&mut prefix, TargetId::Legacy),
+            target_pixels(&mut ordinary, TargetId::Legacy)
         );
     }
 }
@@ -853,19 +853,22 @@ fn culled_draw_opens_a_clear_only_pair_without_triangle_emission() {
         true,
         true,
     );
-    let empty = compare_prefix(&full, &short, entry, 9, &[A]);
+    let mut empty = compare_prefix(&full, &short, entry, 9, &[A]);
     assert!(empty.frame_scenes[0].indices.is_empty());
     assert_eq!(empty.frame_scenes[0].framebuffer_pairs.len(), 1);
     assert_eq!(empty.last_scanout_addr, Some(TargetId::Guest(A.into())));
     let mut r = headless_renderer();
     r.process_dl(&fill_hw(A, 0xf801f801), 0, Microcode::F3dex2, &mut NopSink);
-    let before = store_pixels(&r, A.into());
+    let before = store_pixels(&mut r, A.into());
     r.begin_frame();
     let s = r.process_dl_prefix(&full, entry, Microcode::F3dex2, &mut NopSink, 9);
     assert_eq!(s.tris, 0);
     assert!(s.renderable);
-    assert_ne!(store_pixels(&r, A.into()), before);
-    assert_eq!(store_pixels(&r, A.into()), store_pixels(&empty, A.into()));
+    assert_ne!(store_pixels(&mut r, A.into()), before);
+    assert_eq!(
+        store_pixels(&mut r, A.into()),
+        store_pixels(&mut empty, A.into())
+    );
 }
 
 #[test]
