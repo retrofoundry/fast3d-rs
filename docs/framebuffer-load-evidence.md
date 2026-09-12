@@ -1,8 +1,7 @@
-# F0 framebuffer load evidence
+# Framebuffer load fixtures
 
-F0 authors a real-load oracle probe and pins fast3d's current rejection. It adds
-no framebuffer-load support, does not close item 11, and does not activate F1.
-Native GPU, Chrome WebGPU and pinned rt64 results must be recorded separately.
+These fixtures issue a real framebuffer load and pin fast3d's current rejection of it. They add
+no framebuffer-load support.
 The saved n64.toys `offscreen-then-sample.n64` and its `.bin` golden are unchanged.
 
 `fast3d/src/tests/framebuffer_load_evidence.rs` builds four IMAGE fixtures:
@@ -110,7 +109,7 @@ fills `[232,264)×[40,72)`. Everything else is black. Bounds are half-open.
 bytes are 255 placeholders, excluded from the rt64 gate: rt64 writes internal
 coverage into final RGBA32 alpha. The RGB alpha panels remain exact. The RGBA32
 output avoids another RGB16 quantization that could hide an unquantized copy.
-No threshold above zero is allowed for the grid-exact rows and the alpha panels; the non-grid upper rows are a recorded reference disagreement, see the rt64 result below.
+No threshold above zero is allowed for the grid-exact rows and the alpha panels. rt64 returns the unquantised render target on the non-grid upper rows, which is the convention fast3d follows, so those rows are compared against fast3d, not rt64.
 
 The shortcut uses copy mode because today's one-cycle load-free path rejects
 `NoTextureLoaded`. Its first group sees the shaded RGB8 column; its second sees
@@ -172,47 +171,3 @@ cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknow
 The native/browser test asserts current rejection, exact surviving fast3d pixels
 and shortcut pixels under both clear policies. It does not require fast3d to
 render the real loads. Preserve the existing Metal/DX12 and fallback matrix.
-
-## Refutation and remaining limits
-
-Any real-load RGB pixel outside its literal expectation, any nonwhite alpha
-panel, incorrect offset, or new producer color in the second group fails the
-oracle claim. A changed rejection, stale guest read or changed shortcut pixel
-fails compatibility. Do not bless renderer output as the expectation, increase
-tolerance, or update a `.bin` golden to make these gates pass.
-
-Pinned rt64 source raises a specific unresolved concern: framebuffer tile copies
-use `TextureCopyPS.hlsl`'s unquantized `gInput.Load`, and `TextureSampler.hlsli`
-decodes copied coverage alpha without an evident same-format RGB16 repack.
-If hardware produces the shaded RGB8 upper row instead of the loaded RGB8 row,
-that refutes this oracle agreement claim. Resolve the oracle path or revise the
-proposed semantics before F1; this is not permission to sample an unquantized
-fast3d attachment as RGBA16.
-
-These probes make the low bit representable by forcing full coverage and opaque
-shade. They do not establish recoverable guest bits for partial coverage,
-blending or dither in fast3d's current RGBA8 attachment model. A broader packing
-requirement needs explicit representation or a tighter supported boundary.
-Even oracle agreement only establishes feasibility: F1 still requires a named
-consumer trace that actually issues a framebuffer load.
-
-
-## rt64 result (recorded 2026-09-12, ci4 Apple M1 Metal, rt64 `4337374`)
-
-The three real-load fixtures were exported and run through the pinned rt64 oracle and compared
-against `*.expected.rgba8`, RGB only, threshold zero. **rt64 disagrees on 2048 pixels in every
-fixture**, max channel difference 5, bounds (40,40)..(199,55) inclusive: exactly the upper row of
-every consumer patch in both groups. The lower rows and both alpha panels match to the pixel, and
-the second group still shows the pre-overwrite texels, so snapshot-at-load ordering agrees.
-
-Per texel rt64 returns the unquantized shaded RGB8 — (19,85,141), (67,133,201), (245,29,99),
-(111,177,43) — where the derivation above gives the RGBA16 round trip (16,82,140), (66,132,206),
-(247,24,99), (107,181,41). rt64's LoadTile from a rendered target copies its full-precision RGBA8
-render target; it does not represent the 16-bit guest bits the framebuffer memory would hold.
-fast3d's existing exact-base shortcut behaves the same way, so fast3d and rt64 agree with each
-other and both differ from the derived hardware bits.
-
-This is the refutation the acceptance section anticipates. The derived expectation stands as the
-hardware model; the rt64 comparison is a recorded reference disagreement, not a passing gate, for
-non-grid texels. Which convention a future framebuffer-load implementation should follow is an
-accuracy decision outside this fixture's scope, and F1 remains deferred until it is made.

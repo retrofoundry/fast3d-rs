@@ -341,7 +341,19 @@ impl<'a> RenderInputs<'a> {
                                             *fog_color,
                                         )
                                     };
-                                    uniform.inv_tex_size = super::triangle_inv_tex_size(mat);
+                                    let fb_source = fb_source
+                                        .and_then(|address| descriptors.get(address, false));
+                                    // A load-free framebuffer view is bound at the source's own extent, so
+                                    // texel coordinates must scale by that extent rather than the tile's.
+                                    uniform.inv_tex_size = match fb_source {
+                                        Some(source) => [
+                                            1.0 / source.layout.width.max(1) as f32,
+                                            1.0 / source.height.max(1) as f32,
+                                            0.0,
+                                            0.0,
+                                        ],
+                                        None => super::triangle_inv_tex_size(mat),
+                                    };
                                     uniform.inv_tex_size[2] = 1.0;
                                     inputs.rectangles.extend_from_slice(&super::texrect_quad(
                                         rect,
@@ -354,9 +366,7 @@ impl<'a> RenderInputs<'a> {
                                     (
                                         DrawInputs::Rectangle {
                                             material_index: Some(*material_index),
-                                            fb_source: fb_source.and_then(|address| {
-                                                descriptors.get(address, false)
-                                            }),
+                                            fb_source,
                                             blend_class: if *copy_mode {
                                                 BlendClass::Replace
                                             } else {
