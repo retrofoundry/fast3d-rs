@@ -23,6 +23,7 @@ pub(super) struct Framebuffer {
     pub sampled: wgpu::TextureView,
     pub present_bg: wgpu::BindGroup,
     pub present_extent: wgpu::BindGroup,
+    pub present_height: u32,
     pub height: u32,
     pub sampling: wgpu::Buffer,
     pub layout: ImageLayout,
@@ -333,16 +334,9 @@ impl SceneRenderer {
             height
         };
         if compatible && old.unwrap().color.height() >= attachment_height {
-            if old.unwrap().height != height {
-                let group = self.make_present_extent(
-                    device,
-                    layout.width,
-                    height,
-                    old.unwrap().color.height(),
-                );
-                let old = self.framebuffers.get_mut(&id).unwrap();
+            let old = self.framebuffers.get_mut(&id).unwrap();
+            if old.height != height {
                 old.height = height;
-                old.present_extent = group;
                 old.sampling = color_sampling(device, layout.width, height);
                 self.profiling.buffer(
                     "uniforms",

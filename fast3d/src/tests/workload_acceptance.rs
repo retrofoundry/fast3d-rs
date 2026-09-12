@@ -117,7 +117,7 @@ fn target(paired: bool) -> TargetId {
 fn scanout(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    renderer: &SceneRenderer,
+    renderer: &mut SceneRenderer,
     target: TargetId,
     width: u32,
     height: u32,
@@ -125,7 +125,7 @@ fn scanout(
     pixels_from_render(device, queue, width, height, FORMAT, |view| {
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        renderer.scanout(&mut encoder, view, target);
+        renderer.scanout(device, &mut encoder, view, target, None);
         queue.submit(Some(encoder.finish()));
     })
 }
@@ -193,7 +193,7 @@ fn paired_pairless_clear_policy_equivalence() {
                     renderer.render_into_store(&device, &queue, &scene, policy),
                     Some(target(paired))
                 );
-                let pixels = scanout(&device, &queue, &renderer, target(paired), 320, 240);
+                let pixels = scanout(&device, &queue, &mut renderer, target(paired), 320, 240);
                 assert_pixels(&pixels, 320, 240, |x, y| {
                     if task == 2 && in_rect(x, y, [208, 144, 280, 208]) {
                         GREEN
@@ -238,7 +238,7 @@ fn paired_pairless_scissor_equivalence() {
                 renderer.render_into_store(&device, &queue, &scene, policy),
                 Some(target(paired))
             );
-            let pixels = scanout(&device, &queue, &renderer, target(paired), 320, 240);
+            let pixels = scanout(&device, &queue, &mut renderer, target(paired), 320, 240);
             assert_pixels(&pixels, 320, 240, |x, y| {
                 if in_rect(x, y, [96, 80, 224, 176]) {
                     GREEN
@@ -390,7 +390,7 @@ fn opaque_decal_rect_order_is_preserved() {
                 renderer.render_into_store(&device, &queue, &scene, policy),
                 Some(target(paired))
             );
-            let pixels = scanout(&device, &queue, &renderer, target(paired), 320, 240);
+            let pixels = scanout(&device, &queue, &mut renderer, target(paired), 320, 240);
             assert_pixels(&pixels, 320, 240, interleaving_expected);
             outputs.push(pixels);
         }
@@ -413,7 +413,7 @@ fn legacy_draws_before_cimg_are_retained() {
             renderer.render_into_store(&device, &queue, &scene, policy),
             Some(TargetId::Guest(0))
         );
-        let legacy = scanout(&device, &queue, &renderer, TargetId::Legacy, 320, 240);
+        let legacy = scanout(&device, &queue, &mut renderer, TargetId::Legacy, 320, 240);
         assert_pixels(&legacy, 320, 240, |x, y| {
             if in_rect(x, y, [24, 32, 136, 176]) {
                 RED
@@ -421,7 +421,7 @@ fn legacy_draws_before_cimg_are_retained() {
                 BACKGROUND
             }
         });
-        let guest = scanout(&device, &queue, &renderer, TargetId::Guest(0), 320, 240);
+        let guest = scanout(&device, &queue, &mut renderer, TargetId::Guest(0), 320, 240);
         assert_pixels(&guest, 320, 240, |x, y| {
             if in_rect(x, y, [184, 64, 296, 208]) {
                 BLUE
@@ -450,7 +450,7 @@ fn decal_first_initializes_depth() {
                 renderer.render_into_store(&device, &queue, &scene, policy),
                 Some(target(paired))
             );
-            let pixels = scanout(&device, &queue, &renderer, target(paired), 320, 240);
+            let pixels = scanout(&device, &queue, &mut renderer, target(paired), 320, 240);
             assert_pixels(&pixels, 320, 240, |x, y| {
                 if in_rect(x, y, [176, 80, 224, 128]) {
                     BLUE
@@ -506,7 +506,7 @@ fn logical_extent_survives_canvas_resize() {
                 let pixels = scanout(
                     &device,
                     &queue,
-                    &renderer,
+                    &mut renderer,
                     target(paired),
                     read_width,
                     read_height,
@@ -531,12 +531,14 @@ fn logical_extent_survives_canvas_resize() {
 #[cfg(feature = "capture")]
 fn interleaving_fixture() -> crate::capture::Fixture {
     let built = interleaving_scene(true);
-    super::capture_fixture::make_image(built.rdram, built.entry, crate::Microcode::F3dex2, 320, 240, crate::capture::Provenance {
+    let mut fixture = super::capture_fixture::make_image(built.rdram, built.entry, crate::Microcode::F3dex2, 320, 240, crate::capture::Provenance {
         decomp_revision: "libultra gbi.h; authored library-contract PR 6".into(),
         source_symbols: "gsSP2Triangles, gsDPFillRectangle, gsDPSetRenderMode, gsDPSetColorImage".into(),
         command_vector: "Blue opaque [32,288)x[32,208) z=32; red decal [48,160)x[48,160) z=32; green fill [112,224)x[64,112); yellow opaque [144,272)x[80,192) z=0; magenta decal [128,240)x[128,200) z=0; cyan fill [192,256)x[144,176); alpha-zero depth writer [64,96)x[64,96) z=0; white decal [72,88)x[72,88) z=0. Projection Z=1/128, viewport Z scale/translation=511. No draw may read later depth writes.".into(),
         synthetic_data: "IMAGE BE F3DEX2 commands, authored integer-edge geometry and flat primary colors, dither disabled; RGBA16 color at 0x100000, cleared depth at 0x200000. Expected RGB and overlap mask are exported from literal rectangular coverage, independently of rendering. No game capture.".into(),
-    })
+    });
+    fixture.frame.vi = None;
+    fixture
 }
 
 #[cfg(feature = "capture")]
@@ -620,13 +622,13 @@ fn culled_target_applies_first_touch_clear() {
     for policy in POLICIES {
         let mut renderer = SceneRenderer::new(&device, FORMAT, 320, 240, false);
         renderer.render_into_store(&device, &queue, &culled, policy);
-        let pixels = scanout(&device, &queue, &renderer, target(true), 320, 240);
+        let pixels = scanout(&device, &queue, &mut renderer, target(true), 320, 240);
         assert_pixels(&pixels, 320, 240, |_, _| BACKGROUND);
         renderer.render_into_store(&device, &queue, &color_task(true, 0), policy);
         renderer.begin_frame();
         renderer.render_into_store(&device, &queue, &culled, policy);
         renderer.render_into_store(&device, &queue, &color_task(true, 1), policy);
-        let pixels = scanout(&device, &queue, &renderer, target(true), 320, 240);
+        let pixels = scanout(&device, &queue, &mut renderer, target(true), 320, 240);
         assert_pixels(&pixels, 320, 240, |x, y| {
             if in_rect(x, y, [24, 40, 88, 96]) {
                 BLUE

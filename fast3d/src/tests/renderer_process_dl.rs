@@ -84,20 +84,22 @@ fn process_dl_of_out_of_bounds_entry_reports_error_without_panic() {
     );
 }
 
-fn store_pixels(r: &Renderer, addr: u64) -> Vec<u8> {
+fn store_pixels(r: &mut Renderer, addr: u64) -> Vec<u8> {
     target_pixels(r, TargetId::Guest(addr))
 }
 
-fn target_pixels(r: &Renderer, target: TargetId) -> Vec<u8> {
+fn target_pixels(r: &mut Renderer, target: TargetId) -> Vec<u8> {
+    let device = r.device().clone();
+    let queue = r.queue().clone();
     super::common::pixels_from_render(
-        r.device(),
-        r.queue(),
+        &device,
+        &queue,
         64,
         64,
         wgpu::TextureFormat::Rgba8Unorm,
         |view| {
             let mut encoder = r.device().create_command_encoder(&Default::default());
-            r.inner.scanout(&mut encoder, view, target);
+            r.inner.scanout(&device, &mut encoder, view, target, None);
             r.queue().submit(Some(encoder.finish()));
         },
     )
@@ -149,7 +151,7 @@ fn observed_render_matches_summary_scenes_and_every_framebuffer() {
         assert_eq!(observed_diags, ordinary_diags);
         assert_eq!(observed.frame_scenes, ordinary.frame_scenes);
         assert_eq!(observed.last_scanout_addr, ordinary.last_scanout_addr);
-        for scene in &ordinary.frame_scenes {
+        for scene in &ordinary.frame_scenes.clone() {
             let targets = (!scene.draw_runs.is_empty())
                 .then_some(TargetId::Legacy)
                 .into_iter()
@@ -164,8 +166,8 @@ fn observed_render_matches_summary_scenes_and_every_framebuffer() {
                 assert!(ordinary.inner.has_fb(addr));
                 assert!(observed.inner.has_fb(addr));
                 assert_eq!(
-                    target_pixels(&observed, addr),
-                    target_pixels(&ordinary, addr),
+                    target_pixels(&mut observed, addr),
+                    target_pixels(&mut ordinary, addr),
                     "{name}: {addr:?}"
                 );
             }
@@ -210,7 +212,10 @@ fn cancelled_render_preserves_previous_dls_and_does_not_create_framebuffers() {
     );
     r.last_backend_was_image = false;
     let scenes = r.frame_scenes.clone();
-    let before = [store_pixels(&r, 0x100000), store_pixels(&r, 0x200000)];
+    let before = [
+        store_pixels(&mut r, 0x100000),
+        store_pixels(&mut r, 0x200000),
+    ];
     assert_ne!(before[0], before[1]);
     for addr in [0x100000, 0x300000] {
         let mut count = 0;
@@ -239,8 +244,8 @@ fn cancelled_render_preserves_previous_dls_and_does_not_create_framebuffers() {
         assert_eq!(r.frame_scenes, scenes);
         assert!(!r.last_backend_was_image);
         assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(0x200000)));
-        assert_eq!(store_pixels(&r, 0x100000), before[0]);
-        assert_eq!(store_pixels(&r, 0x200000), before[1]);
+        assert_eq!(store_pixels(&mut r, 0x100000), before[0]);
+        assert_eq!(store_pixels(&mut r, 0x200000), before[1]);
         assert!(!r.inner.has_fb(0x300000));
     }
     r.process_dl(
@@ -249,7 +254,7 @@ fn cancelled_render_preserves_previous_dls_and_does_not_create_framebuffers() {
         Microcode::F3dex2,
         &mut crate::NopSink,
     );
-    assert_ne!(store_pixels(&r, 0x100000), before[0]);
+    assert_ne!(store_pixels(&mut r, 0x100000), before[0]);
 }
 
 #[test]

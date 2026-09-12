@@ -2514,6 +2514,7 @@ impl SceneRenderer {
             height: logical_height,
             sampling,
             present_extent,
+            present_height: logical_height,
             color,
             attach,
             sampled,
@@ -2529,18 +2530,30 @@ impl SceneRenderer {
 
     /// VI scanout (D2): blit the stored FB at `src_addr` to `target` via the present pipeline
     /// (Clamp/Linear — identity at 1:1, sampler-stretch otherwise). Records into the CALLER's
-    /// `encoder` (present owns acquire+submit). No device handle needed (uses the prebuilt
-    /// `present_bg`). Panics on a missing key — callers gate on `has_fb`.
+    /// `encoder` (present owns acquire+submit). Without a VI row count, uses the target's
+    /// retained logical height. Panics on a missing key — callers gate on `has_fb`.
     pub fn scanout(
-        &self,
+        &mut self,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         src_addr: impl Into<workload::TargetId>,
+        height: Option<u32>,
     ) {
+        let src_addr = src_addr.into();
         let fb = self
             .framebuffers
-            .get(&src_addr.into())
+            .get(&src_addr)
             .expect("scanout: src_addr not in the store (gate on has_fb)");
+        let height = height.unwrap_or(fb.height);
+        if height != fb.present_height {
+            let extent =
+                self.make_present_extent(device, fb.layout.width, height, fb.color.height());
+            let fb = self.framebuffers.get_mut(&src_addr).unwrap();
+            fb.present_extent = extent;
+            fb.present_height = height;
+        }
+        let fb = &self.framebuffers[&src_addr];
         self.blit_to(encoder, target, &fb.present_bg, &fb.present_extent);
     }
 

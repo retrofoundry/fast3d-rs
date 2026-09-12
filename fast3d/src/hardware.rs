@@ -6,8 +6,7 @@ pub use crate::hle::mem::{
 };
 
 /// Raw VI register words, exactly as the N64 VI presents them; `fast3d` owns the bit-decode
-/// (spec §3.3). v1 scanout uses only `origin` (FB-select) and `width`; the rest are carried so
-/// the struct is stable as scanout grows overscan-crop / interlace.
+/// (spec §3.3). Scanout selects `origin` and decodes the row count from `v_start` and `y_scale`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViRegisters {
     pub status: u32,
@@ -18,6 +17,15 @@ pub struct ViRegisters {
     pub h_start: u32,
     pub v_start: u32,
     pub v_current: u32,
+}
+
+impl ViRegisters {
+    pub(crate) fn scanout_height(self) -> Option<u32> {
+        let start = (self.v_start >> 16) & 0x3ff;
+        let end = self.v_start & 0x3ff;
+        let height = end.saturating_sub(start) * (self.y_scale & 0xfff) / 2048;
+        (height != 0).then_some(height)
+    }
 }
 
 /// Consumer-implemented N64-machine boundary (spec §3.2). `rdram` returns an owned reader that
@@ -38,6 +46,31 @@ pub trait Hardware {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scanout_rows_decode_half_lines_and_fixed_point_scale() {
+        for (v_start, y_scale, height) in [
+            ((32 << 16) | 288, 1024, Some(128)),
+            ((34 << 16) | 514, 1024, Some(240)),
+            (0x0025_01ff, 1024, Some(237)),
+            ((34 << 16) | 514, 512, Some(120)),
+            ((32 << 16) | 289, 1024, Some(128)),
+            (0xfc20_fd20, 0xffff_f400, Some(128)),
+            ((288 << 16) | 32, 1024, None),
+            ((32 << 16) | 288, 0, None),
+            (0, 1024, None),
+        ] {
+            assert_eq!(
+                ViRegisters {
+                    v_start,
+                    y_scale,
+                    ..Default::default()
+                }
+                .scanout_height(),
+                height
+            );
+        }
+    }
 
     #[test]
     fn rdram_image_reports_is_rdram_image_true() {

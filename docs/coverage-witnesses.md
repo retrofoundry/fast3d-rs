@@ -6,8 +6,9 @@ fragment derivatives. The arithmetic A expectation evaluates that UV exactly;
 the reconstruction can differ across backends. These tests also
 calculate B, whose coverage and attributes use `(x, y)`. Both expectations stay
 in the arithmetic module. The renderer conformance test currently requires A
-on 37 fixtures. The separate retained-height replay is ignored because scanout
-presents the retained framebuffer height rather than the VI height.
+on all 38 fixtures. Scanout uses the VI row count from origin when an IMAGE VI
+selects a stored framebuffer. Without VI, it uses the selected target's retained
+logical height, so a final pair with a smaller scissor does not crop the display.
 There is no renderer setting for selecting B.
 
 `fast3d/tests/common/coverage_semantics.rs` uses literal quarter-pixel vertices,
@@ -39,8 +40,10 @@ model arbitrary overflow, scissor clipping, interpolation, Z correction or VI.
 AA render modes still have binary coverage in these native-resolution HLE tests.
 
 The IMAGE builders initialize color/depth memory, set viewport/scissor and end
-with FullSync. They use F3D and F3DEX2, including direct XY modifications. An
-encoder test checks literal matrix, viewport and command words and independently
+with FullSync. Captures record the final color-image origin and width, vertical
+endpoints `0..2*height` and unit X/Y scales (`1024`). The decoded VI height equals
+the authored output height. They use F3D and F3DEX2, including direct XY
+modifications. An encoder test checks literal matrix, viewport and command words and independently
 recovers screen coordinates from the stored vertex bytes. Capture bytes are
 checked against regeneration. The shared native/browser replay requires a real
 adapter and compares each selected full frame with A. Primary-color pixels are exact
@@ -95,9 +98,10 @@ existing binary golden is written by these commands.
 With a working GPU, run `coverage_parent_matches_a` in
 `browser_sm64_fixture_replay`; on wasm it requires BrowserWebGpu. It is also
 registered as a native test. The captures disable dual-source blending.
-`coverage_retained_height_matches_a -- --ignored --exact --nocapture` runs the
-held 256-row attachment / 128-row VI regression separately with the same exact
-A expectation; the wasm runner needs `--include-ignored` instead of `--ignored`. Its capture, arithmetic and regeneration checks remain active.
+The gate includes the retained-height capture: a 256-row allocation followed by
+a 128-row pair at the same address presents the first 128 rows through its
+recorded VI. All 38 captures exercise VI scanout. No ignored-test flag is needed
+on native or wasm.
 The odd-width RGBA32 fixture uses a 193×132 VI. The near-plane fixture's clipped
 edge is `x+y=144.25`, which misses both A and B sample lattices.
 The same captures export through `export_capture_rdram` for the pinned rt64
@@ -112,8 +116,8 @@ The strict rt64 check reports the F3D slope atlas's missing first column. With
 omission: exactly 256 B-covered pixels must be black, and all remaining RGB
 pixels must match B. The mask's SHA-256 is fixed; the output still reports the
 raw 256-pixel discrepancy. Restored pixels also fail this quirk check. The
-manifest names this exception and the held parent scanout cell. Neither option
-changes A/B expectations or the native/browser comparison.
+manifest names this exception and requires every parent fixture. The quirk
+option changes neither A/B expectations nor the native/browser comparison.
 
 `tools/coverage/predict.py` decodes the three frozen IMAGE inputs for sphere,
 metal-butt and shadow-decal. It writes separate silhouette and owner-change

@@ -42,7 +42,7 @@ fn warp_uv_boundary_matches(case: &semantics::Case, x: u32, y: u32, got: &[u8; 4
     })
 }
 
-pub async fn replay(retained_height: bool) {
+pub async fn replay() {
     let captures: &[(&str, &[u8])] = &[
         (
             "coverage-slopes-f3d",
@@ -201,9 +201,6 @@ pub async fn replay(retained_height: bool) {
     assert_eq!(captures.len(), cases.len());
     for (name, bytes) in captures {
         let case = cases.iter().find(|c| c.name == *name).unwrap();
-        if (name == &"coverage-retained-height") != retained_height {
-            continue;
-        }
         let fixture = fast3d::capture::Fixture::from_bytes(bytes).unwrap();
         assert!(!fixture.frame.dual_source_blending);
         let output = fixture

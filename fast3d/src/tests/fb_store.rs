@@ -9,6 +9,114 @@ use common::{dl_2d_fill, dl_2d_fill_rect, pixel, scene_from_fixture}; // B1: no 
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+#[test]
+fn scanout_reuses_ntsc_extent_across_frames() {
+    let (device, queue, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 64, 240, dual);
+    let address = 0x10_0000_u64;
+    let green =
+        common::dl_2d_fill_rect_with_scissor_height(address, 0x07c1_07c1, 0, 0, 64, 240, 240);
+    let bottom =
+        common::dl_2d_fill_rect_with_scissor_height(address, 0xf801_f801, 0, 237, 64, 240, 240);
+    renderer.render_into_store(&device, &queue, &green, ClearPolicy::Persist);
+    let height = crate::ViRegisters {
+        v_start: 0x0025_01ff,
+        y_scale: 1024,
+        ..Default::default()
+    }
+    .scanout_height();
+    assert_eq!(height, Some(237));
+    let profiling = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+    renderer.profiling = profiling.clone();
+    for allocations in [1, 0, 0] {
+        profiling.drain();
+        renderer.begin_frame();
+        renderer.render_into_store(&device, &queue, &green, ClearPolicy::Persist);
+        renderer.render_into_store(&device, &queue, &bottom, ClearPolicy::Persist);
+        let pixels = common::pixels_from_render(&device, &queue, 64, 237, FORMAT, |view| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            renderer.scanout(&device, &mut encoder, view, address, height);
+            queue.submit([encoder.finish()]);
+        });
+        assert_eq!(
+            profiling
+                .snapshot()
+                .counters
+                .get("buffer.presentation.creations")
+                .copied()
+                .unwrap_or(0),
+            allocations
+        );
+        for pixel in pixels.as_chunks::<4>().0 {
+            assert_eq!(*pixel, [0, 255, 0, 255]);
+        }
+    }
+}
+
+#[test]
+fn scanout_rows_leave_retained_pixels_available() {
+    let (device, queue, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 64, 64, dual);
+    let address = 0x10_0000_u64;
+    renderer.render_into_store(
+        &device,
+        &queue,
+        &dl_2d_fill(address, 0x07c1_07c1),
+        ClearPolicy::Persist,
+    );
+    let shorter =
+        common::dl_2d_fill_rect_with_scissor_height(address, 0xf801_f801, 0, 0, 64, 32, 32);
+    assert_eq!(
+        crate::render::workload::Workload::new(&shorter).targets[0].logical_extent,
+        (64, 32)
+    );
+    let profiling = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+    renderer.profiling = profiling.clone();
+    for (height, allocations) in [
+        (None, 0),
+        (Some(32), 1),
+        (Some(32), 0),
+        (Some(16), 1),
+        (Some(16), 0),
+        (Some(64), 1),
+        (None, 0),
+        (Some(32), 1),
+        (None, 1),
+    ] {
+        profiling.drain();
+        renderer.begin_frame();
+        renderer.render_into_store(&device, &queue, &shorter, ClearPolicy::Persist);
+        let output_height = height.unwrap_or(64);
+        let pixels =
+            common::pixels_from_render(&device, &queue, 64, output_height, FORMAT, |view| {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                renderer.scanout(&device, &mut encoder, view, address, height);
+                queue.submit([encoder.finish()]);
+            });
+        assert_eq!(
+            profiling
+                .snapshot()
+                .counters
+                .get("buffer.presentation.creations")
+                .copied()
+                .unwrap_or(0),
+            allocations,
+            "height {height:?}"
+        );
+        for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(
+                *pixel,
+                if i / 64 < 32 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 255, 0, 255]
+                },
+                "height {height:?}, pixel {i}"
+            );
+        }
+    }
+}
+
 /// Render `scene` into the store, scan the returned FB out to a fresh (w×h) target, read it back.
 fn store_to_pixels(
     device: &wgpu::Device,
@@ -44,7 +152,7 @@ fn store_to_pixels(
     let mut encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     if let Some(a) = addr {
-        sr.scanout(&mut encoder, &view, a); // records the blit into the caller's encoder
+        sr.scanout(device, &mut encoder, &view, a, None); // records the blit into the caller's encoder
     }
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("store-readback"),

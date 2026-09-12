@@ -102,13 +102,19 @@ fn interpret(built: &Built) -> crate::hle::Scene {
 fn scanout(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    renderer: &SceneRenderer,
+    renderer: &mut SceneRenderer,
     address: u32,
 ) -> Vec<u8> {
     pixels_from_render(device, queue, 320, 240, FORMAT, |view| {
         let mut encoder =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        renderer.scanout(&mut encoder, view, TargetId::Guest(address.into()));
+        renderer.scanout(
+            device,
+            &mut encoder,
+            view,
+            TargetId::Guest(address.into()),
+            None,
+        );
         queue.submit(Some(encoder.finish()));
     })
 }
@@ -153,10 +159,10 @@ fn depth_shared_across_color_switches() {
         let mut renderer = SceneRenderer::new(&device, FORMAT, 320, 240, false);
         renderer.render_into_store(&device, &queue, &scene, policy);
         assert_pixels(
-            &scanout(&device, &queue, &renderer, A),
+            &scanout(&device, &queue, &mut renderer, A),
             shared_depth_expected,
         );
-        assert_pixels(&scanout(&device, &queue, &renderer, B), |x, y| {
+        assert_pixels(&scanout(&device, &queue, &mut renderer, B), |x, y| {
             if inside(x, y, [176, 32, 288, 208]) {
                 GREEN
             } else {
@@ -180,7 +186,9 @@ fn depth_survives_task_boundary() {
         let mut renderer = SceneRenderer::new(&device, FORMAT, 320, 240, false);
         renderer.render_into_store(&device, &queue, &draw_task(A, Z, 0, RED), policy);
         renderer.render_into_store(&device, &queue, &draw_task(B, Z, 64, BLUE), policy);
-        assert_pixels(&scanout(&device, &queue, &renderer, B), |_, _| BACKGROUND);
+        assert_pixels(&scanout(&device, &queue, &mut renderer, B), |_, _| {
+            BACKGROUND
+        });
     }
 }
 
@@ -207,7 +215,9 @@ fn depth_legacy_opaque_write_reaches_later_guest_task() {
             }
         });
         renderer.render_into_store(&device, &queue, &draw_task(B, Z, 64, BLUE), policy);
-        assert_pixels(&scanout(&device, &queue, &renderer, B), |_, _| BACKGROUND);
+        assert_pixels(&scanout(&device, &queue, &mut renderer, B), |_, _| {
+            BACKGROUND
+        });
     }
 }
 
@@ -220,7 +230,7 @@ fn depth_persist_vs_perframe() {
         renderer.render_into_store(&device, &queue, &draw_task(A, Z, 0, RED), policy);
         renderer.begin_frame();
         renderer.render_into_store(&device, &queue, &draw_task(B, Z, 64, BLUE), policy);
-        assert_pixels(&scanout(&device, &queue, &renderer, B), |x, y| {
+        assert_pixels(&scanout(&device, &queue, &mut renderer, B), |x, y| {
             if policy == ClearPolicy::PerFrame && inside(x, y, [32, 32, 288, 208]) {
                 BLUE
             } else {
@@ -228,7 +238,7 @@ fn depth_persist_vs_perframe() {
             }
         });
         renderer.render_into_store(&device, &queue, &draw_task(A, Z, 96, GREEN), policy);
-        assert_pixels(&scanout(&device, &queue, &renderer, A), |x, y| {
+        assert_pixels(&scanout(&device, &queue, &mut renderer, A), |x, y| {
             if policy == ClearPolicy::Persist && inside(x, y, [32, 32, 288, 208]) {
                 RED
             } else {
@@ -390,7 +400,9 @@ fn depth_address_zero_is_valid() {
         &draw_task(B, 0, 64, BLUE),
         ClearPolicy::Persist,
     );
-    assert_pixels(&scanout(&device, &queue, &renderer, B), |_, _| BACKGROUND);
+    assert_pixels(&scanout(&device, &queue, &mut renderer, B), |_, _| {
+        BACKGROUND
+    });
     assert!(renderer.depthbuffers.contains_key(&TargetId::Guest(0)));
     renderer.render_into_store(
         &device,
@@ -631,7 +643,7 @@ fn depth_clear_before_and_after_draws_is_ordered() {
             }
         });
         renderer.render_into_store(&device, &queue, &draw_task(A, Z, 64, BLUE), policy);
-        assert_pixels(&scanout(&device, &queue, &renderer, A), |x, y| {
+        assert_pixels(&scanout(&device, &queue, &mut renderer, A), |x, y| {
             if inside(x, y, [64, 64, 128, 128]) {
                 BLUE
             } else if inside(x, y, [32, 32, 288, 208]) {
@@ -646,7 +658,7 @@ fn depth_clear_before_and_after_draws_is_ordered() {
 #[cfg(feature = "capture")]
 fn shared_depth_fixture() -> crate::capture::Fixture {
     let built = shared_depth_scene();
-    super::capture_fixture::make_image(
+    let mut fixture = super::capture_fixture::make_image(
         built.rdram, built.entry, crate::Microcode::F3dex2, 320, 240,
         crate::capture::Provenance {
             decomp_revision: "libultra gbi.h; authored library-contract PR 7".into(),
@@ -654,7 +666,9 @@ fn shared_depth_fixture() -> crate::capture::Fixture {
             command_vector: "Clear Z=0x200000 with packed fffc. Clear A=0x100000 black; draw red [32,144)x[32,208) z=0. Switch to B=0x300000 sharing Z; clear B black; draw green [176,288)x[32,208) z=0, then blue [32,144)x[32,208) z=64 (occluded). Switch back to A/Z; draw blue [32,288)x[32,208) z=64, visible only in [144,176)x[32,208). Projection Z=1/128, viewport Z scale/translation=511.".into(),
             synthetic_data: "IMAGE BE F3DEX2 commands, integer-edge flat primary geometry, RGBA16 color targets, dither disabled. Expected final A pixels and the PersistentDepthByAddress mask are independently enumerated rectangles. Shared-Z authored acceptance only; no game capture or live sm64 claim.".into(),
         },
-    )
+    );
+    fixture.frame.vi = None;
+    fixture
 }
 
 #[cfg(feature = "capture")]
@@ -755,14 +769,14 @@ fn shallow_color_target_uses_taller_stored_depth() {
         renderer.render_into_store(&device, &queue, &shallow, policy);
         assert!(pollster::block_on(scope.pop()).is_none());
         renderer.render_into_store(&device, &queue, &draw_task(B, Z, 64, GREEN), policy);
-        assert_pixels(&scanout(&device, &queue, &renderer, B), |x, y| {
+        assert_pixels(&scanout(&device, &queue, &mut renderer, B), |x, y| {
             if inside(x, y, [32, 32, 288, 120]) {
                 BLUE
             } else {
                 BACKGROUND
             }
         });
-        assert_pixels(&scanout(&device, &queue, &renderer, A), |x, y| {
+        assert_pixels(&scanout(&device, &queue, &mut renderer, A), |x, y| {
             if inside(x, y, [32, 32, 288, 208]) {
                 RED
             } else {
@@ -891,20 +905,23 @@ fn depth_legacy_draws_snapshot_selected_address() {
     for policy in POLICIES {
         let mut renderer = SceneRenderer::new(&device, FORMAT, 320, 240, false);
         renderer.render_into_store(&device, &queue, &scene, policy);
-        assert_pixels(&scanout(&device, &queue, &renderer, A), |x, y| {
+        assert_pixels(&scanout(&device, &queue, &mut renderer, A), |x, y| {
             if inside(x, y, [144, 32, 288, 208]) {
                 BLUE
             } else {
                 BACKGROUND
             }
         });
-        assert_pixels(&scanout(&device, &queue, &renderer, 0x0040_0000), |x, y| {
-            if inside(x, y, [32, 32, 176, 208]) {
-                RED
-            } else {
-                BACKGROUND
-            }
-        });
+        assert_pixels(
+            &scanout(&device, &queue, &mut renderer, 0x0040_0000),
+            |x, y| {
+                if inside(x, y, [32, 32, 176, 208]) {
+                    RED
+                } else {
+                    BACKGROUND
+                }
+            },
+        );
         assert_depth(&device, &queue, &renderer, Z.into(), [320, 240], |x, y| {
             if inside(x, y, [32, 32, 144, 208]) {
                 511.0 / 1024.0
@@ -955,7 +972,7 @@ fn depth_attachment_height_does_not_change_color_presentation() {
             ];
             fill(&mut dl, 0xf801_f801, [0, 0, 319, 119]);
             renderer.render_into_store(&device, &queue, &interpret(&finish(b, dl)), policy);
-            assert_pixels(&scanout(&device, &queue, &renderer, B), |_, _| RED);
+            assert_pixels(&scanout(&device, &queue, &mut renderer, B), |_, _| RED);
             let b = DlBuilder::new();
             let mut dl = vec![
                 gdp_set_depth_image(Z),
@@ -964,7 +981,7 @@ fn depth_attachment_height_does_not_change_color_presentation() {
             ];
             fill(&mut dl, 0x003f_003f, [0, 200, 319, 239]);
             renderer.render_into_store(&device, &queue, &interpret(&finish(b, dl)), policy);
-            assert_pixels(&scanout(&device, &queue, &renderer, B), |_, y| {
+            assert_pixels(&scanout(&device, &queue, &mut renderer, B), |_, y| {
                 if y < 120 {
                     RED
                 } else if y >= 200 {
@@ -1023,7 +1040,7 @@ fn depth_legacy_extent_mismatch_preserves_guest_storage() {
                 }
             });
             renderer.render_into_store(&device, &queue, &draw_task(B, Z, 64, BLUE), policy);
-            assert_pixels(&scanout(&device, &queue, &renderer, B), |x, y| {
+            assert_pixels(&scanout(&device, &queue, &mut renderer, B), |x, y| {
                 if inside(x, y, [32, 32, 288, 208]) {
                     BLUE
                 } else {
@@ -1084,7 +1101,12 @@ fn depth_legacy_extent_diagnostic_reaches_process_dl_and_allows_guest_draws() {
     assert_eq!(renderer.last_scanout_addr, Some(TargetId::Guest(B.into())));
     assert!(!renderer.inner.has_fb(TargetId::Legacy));
     assert_pixels(
-        &scanout(renderer.device(), renderer.queue(), &renderer.inner, B),
+        &scanout(
+            &renderer.device.clone(),
+            &renderer.queue.clone(),
+            &mut renderer.inner,
+            B,
+        ),
         |x, y| {
             if inside(x, y, [32, 32, 288, 208]) {
                 BLUE
@@ -1141,7 +1163,7 @@ fn depth_attachment_height_does_not_change_framebuffer_sampling() {
             renderer.render_into_store(&device, &queue, &scene, policy);
             let pixels = pixels_from_render(&device, &queue, 64, 32, FORMAT, |view| {
                 let mut encoder = device.create_command_encoder(&Default::default());
-                renderer.scanout(&mut encoder, view, TargetId::Guest(A.into()));
+                renderer.scanout(&device, &mut encoder, view, TargetId::Guest(A.into()), None);
                 queue.submit(Some(encoder.finish()));
             });
             assert_eq!(pixels.len(), 64 * 32 * 4);
@@ -1195,7 +1217,7 @@ fn color_format_change_preserves_independent_depth() {
         crate::DiagKind::UnsupportedImageReinterpretation { address, depth: false } if address == u64::from(A)));
     let pixels = pixels_from_render(&device, &queue, 6, 4, FORMAT, |view| {
         let mut encoder = device.create_command_encoder(&Default::default());
-        renderer.scanout(&mut encoder, view, u64::from(A));
+        renderer.scanout(&device, &mut encoder, view, u64::from(A), None);
         queue.submit(Some(encoder.finish()));
     });
     for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {

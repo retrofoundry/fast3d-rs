@@ -30,14 +30,14 @@ fn pair(scene: &Scene, addr: u64, width: u32, height: u32) -> FramebufferPair {
 fn scanout_pixels(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    renderer: &SceneRenderer,
+    renderer: &mut SceneRenderer,
     addr: impl Into<crate::render::workload::TargetId>,
     width: u32,
     height: u32,
 ) -> Vec<u8> {
     pixels_from_render(device, queue, width, height, FORMAT, |view| {
         let mut encoder = device.create_command_encoder(&Default::default());
-        renderer.scanout(&mut encoder, view, addr);
+        renderer.scanout(device, &mut encoder, view, addr, None);
         queue.submit(Some(encoder.finish()));
     })
 }
@@ -102,7 +102,8 @@ fn framebuffer_640x480_triangles_align_with_texrect() {
                 addr,
                 Some(crate::render::workload::TargetId::Guest(0x0010_0000))
             );
-            let pixels = scanout_pixels(&device, &queue, &renderer, addr.unwrap(), width, height);
+            let pixels =
+                scanout_pixels(&device, &queue, &mut renderer, addr.unwrap(), width, height);
             assert_coverage(&pixels, width, height, [80, 60, 160, 120]);
         }
     }
@@ -129,7 +130,7 @@ fn framebuffer_mixed_extents_reuses_vertices() {
             let pixels = scanout_pixels(
                 &device,
                 &queue,
-                &renderer,
+                &mut renderer,
                 pair.color_image.addr,
                 width,
                 height,
@@ -196,7 +197,7 @@ fn framebuffer_modify_xy_uses_pair_extent() {
     let pixels = render_to_pixels(&device, &queue, &mut renderer, &scene, 640, 480);
     assert_coverage(&pixels, 640, 480, [400, 300, 480, 360]);
     renderer.render_into_store(&device, &queue, &scene, crate::ClearPolicy::PerFrame);
-    let pixels = scanout_pixels(&device, &queue, &renderer, 0x0010_0000, 640, 480);
+    let pixels = scanout_pixels(&device, &queue, &mut renderer, 0x0010_0000, 640, 480);
     assert_coverage(&pixels, 640, 480, [400, 300, 480, 360]);
 }
 
@@ -219,7 +220,7 @@ fn framebuffer_pairless_logical_extent_is_unchanged() {
         let pixels = scanout_pixels(
             &device,
             &queue,
-            &renderer,
+            &mut renderer,
             crate::render::workload::TargetId::Legacy,
             width,
             height,
