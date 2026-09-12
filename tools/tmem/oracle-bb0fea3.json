@@ -1,0 +1,1373 @@
+{
+  "source_sha": "bb0fea399793eb2aeb1ae93d5972763b9761da98",
+  "validated_tree_sha": "db04908a8e7659ab3ccdac9a034a6090b5c33c8c",
+  "rt64_sha": "43373749dac9bbc1b653e6a02aed40a9e1783bed",
+  "backend": "Metal Apple M1",
+  "evidence": "coverage-checks/c2/oracle; coverage-claude-facts.md C2 round 1",
+  "parent_candidate_policy": "exact RGBA, threshold 0",
+  "residual_encoding": "signed fast3d-minus-rt64 i16 little endian; row-major selected channels; mask is one byte 0/1 per pixel",
+  "rows": [
+    {
+      "scene": "mario-metal-butt",
+      "channels": "RGB",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/mario-metal-butt.i16le.gz",
+      "residual_sha256": "91d2d62a5700cbf9404e3c575c3b6fc19e1e31c24c6fcfc0a2cf70d41314b447",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "cb0241c30c43cf49914f109c54ad8b72570a7a71aa716f979ddd6a8b2f2e257d",
+      "rt64_sha256": "cb0241c30c43cf49914f109c54ad8b72570a7a71aa716f979ddd6a8b2f2e257d",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "mario-metal-butt.f3dcap": "0c886d42640a650fe490e83d3983279d26cdf850554c1fdcb427b4c4e3e1839a"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "sm64-power-meter-point",
+      "channels": "RGB",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/sm64-power-meter-point.i16le.gz",
+      "residual_sha256": "91d2d62a5700cbf9404e3c575c3b6fc19e1e31c24c6fcfc0a2cf70d41314b447",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "7f80a4b206bef6de7fd1b990752bdd6b336888a861094ebd27ec81f7c65b67f0",
+      "rt64_sha256": "7f80a4b206bef6de7fd1b990752bdd6b336888a861094ebd27ec81f7c65b67f0",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "sm64-power-meter-point.f3dcap": "a1644a5ba9a0bf1420638a96596f546bb5dbc7bcef94af685a748493aed296af"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "shared-depth",
+      "channels": "RGB",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/shared-depth.i16le.gz",
+      "residual_sha256": "91d2d62a5700cbf9404e3c575c3b6fc19e1e31c24c6fcfc0a2cf70d41314b447",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "81bfd8a0b409ed2c327278ca5dfae43e53d328da9c84dc960921fdea20474f8b",
+      "rt64_sha256": "81bfd8a0b409ed2c327278ca5dfae43e53d328da9c84dc960921fdea20474f8b",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "shared-depth.f3dcap": "3a5627dec301b18e26e8434c2d97fe10068832b69f554f3a025131211c3cf686"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "sm64-shadow-decal",
+      "channels": "RGB",
+      "maximum": 6,
+      "channel_maxima_rgba": [
+        2,
+        4,
+        6,
+        127
+      ],
+      "changed_pixels": 76800,
+      "residual_file": "residuals/sm64-shadow-decal.i16le.gz",
+      "residual_sha256": "7cf2934732d521fd846e5a90e82780e79d860d41599f11e39dc8d77fdc58c6dd",
+      "mask_sha256": "50fd63727a86bcfdbe64059d9859f70639948c105cac0f0e7111023bcaee3516",
+      "fast3d_sha256": "8ded7f5dd3829ba2b9237172ce0dc52481cccb311b3c5aae432d28f73e743ee1",
+      "rt64_sha256": "2e2f74aeaae760a8926564a23776dcf70f4372cf95d8e5c6a05a7e17b4491d63",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "sm64-shadow-decal.f3dcap": "d17f911f0c085ce5bdd800bcf79e365cd3ffbb6a1227137b24dcf6ec8f7e03dd"
+      },
+      "limit": 6
+    },
+    {
+      "scene": "jrb-mixed-fog",
+      "channels": "RGB",
+      "maximum": 7,
+      "channel_maxima_rgba": [
+        4,
+        7,
+        6,
+        0
+      ],
+      "changed_pixels": 76800,
+      "residual_file": "residuals/jrb-mixed-fog.i16le.gz",
+      "residual_sha256": "7d5ad56db25c8fa3cbbf115975650b3923be1c0ace29c9c6b42d8874778507b2",
+      "mask_sha256": "50fd63727a86bcfdbe64059d9859f70639948c105cac0f0e7111023bcaee3516",
+      "fast3d_sha256": "f294cbc60d0da7826977ea9267bf314031391bfbd8bf1841c51e14f7847a93f3",
+      "rt64_sha256": "80da1fdaf8921feade83f39c1c244f4cec90786bf493082a45e897436b78f79d",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "jrb-mixed-fog.f3dcap": "b25230290389602e19a879c79ba132f8ad3a34ebf19cc3b622998bb30cc265ff"
+      },
+      "limit": 7
+    },
+    {
+      "scene": "sm64-water-translucency",
+      "channels": "RGB",
+      "maximum": 7,
+      "channel_maxima_rgba": [
+        2,
+        6,
+        7,
+        127
+      ],
+      "changed_pixels": 76800,
+      "residual_file": "residuals/sm64-water-translucency.i16le.gz",
+      "residual_sha256": "ee03bbe15bab66def227eb9cede5a3d762cce68723319cd2d6ce53aeb546a236",
+      "mask_sha256": "50fd63727a86bcfdbe64059d9859f70639948c105cac0f0e7111023bcaee3516",
+      "fast3d_sha256": "2321c030529301eddce111896467689a2b6b051e2456fa0fb02b1e661a960823",
+      "rt64_sha256": "214dd930f69e4b27471090acb3bc10642a0b63aa15edb9ae9ccc05d88e1f50dd",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "sm64-water-translucency.f3dcap": "798ea47bc9f7726edf21ec61263405019bc4a07bca12ff3540d36a3eb8da95d0"
+      },
+      "limit": 7
+    },
+    {
+      "scene": "sm64-cutout-foliage",
+      "channels": "RGB",
+      "maximum": 6,
+      "channel_maxima_rgba": [
+        2,
+        4,
+        6,
+        127
+      ],
+      "changed_pixels": 75899,
+      "residual_file": "residuals/sm64-cutout-foliage.i16le.gz",
+      "residual_sha256": "85f3543bdc019ece00fb44232ecfad50a8781b7045283a3a8a3a2ac175fb8b86",
+      "mask_sha256": "8012cdce5511eec9d7c7413cb5ced79c0ac13ff9d7e7d20d8fa4960876f78cd5",
+      "fast3d_sha256": "b22d703f05961e76afd0cf1c9a86367adcc9413bc2431948be0b3a806b3b9672",
+      "rt64_sha256": "2e49da2072b59a0284b58cac9e4a74384c2014fe8f6b4a3497ffee2e8700f8d7",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "sm64-cutout-foliage.f3dcap": "8c8fbdaaa1ed05bf3cdd1ec8cd1124c3f81e919c5243422d4e18ea5e87c7feb3"
+      },
+      "limit": 6
+    },
+    {
+      "scene": "sm64-castle-trilerp",
+      "channels": "RGB",
+      "maximum": 4,
+      "channel_maxima_rgba": [
+        4,
+        4,
+        4,
+        0
+      ],
+      "changed_pixels": 1024,
+      "residual_file": "residuals/sm64-castle-trilerp.i16le.gz",
+      "residual_sha256": "77b51a3f2d61cb442a77066811d1e71201622d66baa561e6ac52d50074bb3f2a",
+      "mask_sha256": "cee8825618cdbac2e0ee485d8c351ad5d703c0a408c0e7ea0c3806f795a55ee3",
+      "fast3d_sha256": "3415f3feb085e44dd5eef746aa3b7dc86f40725a5a1bf744e40d3e49e49697c9",
+      "rt64_sha256": "daeff3342d405a2a2f9f552577baf2d6ca2c09b37a0f66b02520f26d085295cd",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "sm64-castle-trilerp.f3dcap": "7d9df574c8e61997795dc1caca028fa2984aad33354466685706da90b99db02f"
+      },
+      "limit": 4
+    },
+    {
+      "scene": "sm64-hud-us-copy",
+      "channels": "RGB",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/sm64-hud-us-copy.i16le.gz",
+      "residual_sha256": "91d2d62a5700cbf9404e3c575c3b6fc19e1e31c24c6fcfc0a2cf70d41314b447",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "e12e588469d6cae30b40eb698ee3ea1fef121fdfc807c6776c744837707e3382",
+      "rt64_sha256": "e12e588469d6cae30b40eb698ee3ea1fef121fdfc807c6776c744837707e3382",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "sm64-hud-us-copy.f3dcap": "20a8fbf958b2386d5ee37553fc4af1621bbb1f770ac5608390737665f614c17b"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "sm64-hud-eu-point",
+      "channels": "RGB",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/sm64-hud-eu-point.i16le.gz",
+      "residual_sha256": "91d2d62a5700cbf9404e3c575c3b6fc19e1e31c24c6fcfc0a2cf70d41314b447",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "e12e588469d6cae30b40eb698ee3ea1fef121fdfc807c6776c744837707e3382",
+      "rt64_sha256": "e12e588469d6cae30b40eb698ee3ea1fef121fdfc807c6776c744837707e3382",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "sm64-hud-eu-point.f3dcap": "b9e8b523cbc79813ac8e241a38c68f98c6365ef3bdbf0e280c664233c93c2cde"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "workload-interleaving",
+      "channels": "RGB",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        255
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/workload-interleaving.i16le.gz",
+      "residual_sha256": "91d2d62a5700cbf9404e3c575c3b6fc19e1e31c24c6fcfc0a2cf70d41314b447",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "aa6332b15bbcf4dff0d4408f84297ec108c0348d933ce2c0231dd70ee9d27925",
+      "rt64_sha256": "d4c478b0f23d74c9c048b7f0d6945d1cd9ca599b4e2efb6e5ac8fdbd6e56a9d0",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "workload-interleaving.f3dcap": "b7e8b12e0d2473e5667c2ba8c7c3bdd04b4aa01d11929bd5e5a0157a38f73331"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "f3dex2-modify-rgba",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/f3dex2-modify-rgba.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "732614eb44f2de0a4963646f632fddc114901e9d0ea01228ab7f55339ae89c3d",
+      "rt64_sha256": "732614eb44f2de0a4963646f632fddc114901e9d0ea01228ab7f55339ae89c3d",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "f3dex2-modify-rgba.f3dcap": "55244ce4b8646c7ebcf02a357d156fcc1d94e82a3a989d9a3ac9e291b86760dd"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "f3dex2-modify-st",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/f3dex2-modify-st.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "732614eb44f2de0a4963646f632fddc114901e9d0ea01228ab7f55339ae89c3d",
+      "rt64_sha256": "732614eb44f2de0a4963646f632fddc114901e9d0ea01228ab7f55339ae89c3d",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "f3dex2-modify-st.f3dcap": "20aae6872496e4814d529e3e9fddd4360e9b8ec88464cfbdf98fe4f37633c1f6"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "f3dex2-modify-xy",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/f3dex2-modify-xy.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "53324530acd7af94567820d0d6c6974f838ad9aad54faa2a1232e938f3d9723f",
+      "rt64_sha256": "53324530acd7af94567820d0d6c6974f838ad9aad54faa2a1232e938f3d9723f",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "f3dex2-modify-xy.f3dcap": "d48364135c1e71087fefc2c6d7af60dede69083e9ae521756e5011b0535a61ef"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "f3dex2-modify-z",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/f3dex2-modify-z.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "e2e41893b5c335dc862d80eec0b4cf1f243045841f828f8047ceb0a980052994",
+      "rt64_sha256": "e2e41893b5c335dc862d80eec0b4cf1f243045841f828f8047ceb0a980052994",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "f3dex2-modify-z.f3dcap": "4ad51625a666dee66abdb57b6b284957952535e4ca523c706285efb228cb5f10"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "tlut-ci4-rgba16-banks",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/tlut-ci4-rgba16-banks.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "4c9fc1ab1d915cb08fbefdefacf5aac22d6ee4c9d4ba9afb1744a63714591166",
+      "rt64_sha256": "4c9fc1ab1d915cb08fbefdefacf5aac22d6ee4c9d4ba9afb1744a63714591166",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "tlut-ci4-rgba16-banks.f3dcap": "2b04cb1eeda160f10626b244b229b98f6a0456dfcbb4022f8903009517eb4da9"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "tlut-ci4-ia16-banks",
+      "channels": "RGBA",
+      "maximum": 4,
+      "channel_maxima_rgba": [
+        4,
+        4,
+        4,
+        0
+      ],
+      "changed_pixels": 448,
+      "residual_file": "residuals/tlut-ci4-ia16-banks.i16le.gz",
+      "residual_sha256": "18d40003e8cbaf4a2bd9a0c17b2869b4d9eb5ad11651a078d7cd83d5f08e291a",
+      "mask_sha256": "3179f6781983006edc379b24b9f3c2ca4455c200128133a790046e272876454f",
+      "fast3d_sha256": "97486a21d64e7186d68fe566f7d98f4cd85873e16bd96875cf3dbcf5051d231a",
+      "rt64_sha256": "e2ef5f82eaed34e1d2a85a2a6b505a90c8d16d6200ca0a273e6d8ec6be7f29d6",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "tlut-ci4-ia16-banks.f3dcap": "c0ac49a92afb865e888f1dd3fbd477121bd355e75eb44468d2838bb65e6d064a"
+      },
+      "limit": 4
+    },
+    {
+      "scene": "f3dex2-branchz-below",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/f3dex2-branchz-below.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "fd58cae7f0132e228c7518f5ac574793757f5ffdac5c2064bf6698f413fe8dc2",
+      "rt64_sha256": "fd58cae7f0132e228c7518f5ac574793757f5ffdac5c2064bf6698f413fe8dc2",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "f3dex2-branchz-below.f3dcap": "0ae597ed3acddee22c32c6027e7980b72edf6efb7a2d163fec7de9794c5a477c"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "f3dex2-branchz-above",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/f3dex2-branchz-above.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "d01e4ab6109a54d6cb0d0aeb8719c8799eab2e72e495e8c9e16e938c3c6e77f3",
+      "rt64_sha256": "d01e4ab6109a54d6cb0d0aeb8719c8799eab2e72e495e8c9e16e938c3c6e77f3",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "f3dex2-branchz-above.f3dcap": "3d96e0ffdcc87535612233390fc4ea6c2f8fc6dfa7779df75c93ed770098840a"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "triangle-pixel-corner-point",
+      "channels": "RGB",
+      "maximum": 6,
+      "channel_maxima_rgba": [
+        2,
+        4,
+        6,
+        0
+      ],
+      "changed_pixels": 72704,
+      "residual_file": "residuals/triangle-pixel-corner-point.i16le.gz",
+      "residual_sha256": "3cf9c3804e212bf845568cab3e29bedf69af56df06e5c99037c53e5a105c6f60",
+      "mask_sha256": "bb1a6fa5183f496f19cbc5531a956544ebcdf0aca5c6dbe39d2ee6414fe86073",
+      "fast3d_sha256": "c793dbec1472349130b3cb2030c596527dc6d7750c0a3cf701a8c0726fdb6996",
+      "rt64_sha256": "81d76064c174ce8be02d8467aa484077aef3cb8782df27021265200eb371c6b7",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "triangle-pixel-corner-point.f3dcap": "d194bdbda27ca803b2f3d0145d6bccb3f19ecd835ad1cafc1bf0f7a50329b461"
+      },
+      "limit": 6
+    },
+    {
+      "scene": "sm64-transparent-mario",
+      "channels": "RGB",
+      "maximum": 132,
+      "channel_maxima_rgba": [
+        132,
+        0,
+        0,
+        127
+      ],
+      "changed_pixels": 756,
+      "residual_file": "residuals/sm64-transparent-mario.i16le.gz",
+      "residual_sha256": "55eefe5d1453db4c86d5bc0deb11ef11c5a2b54ac9e1ddbdeb0dfd893145acb9",
+      "mask_sha256": "c5a0432b35be0d8c3e4a8e56d66e85938352f4b048bd2f9bf908d0b02bdd8aba",
+      "fast3d_sha256": "7673a3bee0b4e002899d654d8304823ce2fe6962f9eebcbf59fe2b36c00dba82",
+      "rt64_sha256": "bcbda05a94b2247987e47821a51185e580ba455575527ff4bce599303c0445a5",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "sm64-transparent-mario.f3dcap": "a9e180fe4f37d733cdbe806019ac7c147e0e11b7ed4c364c9474b13c8af0e611"
+      },
+      "policy": {
+        "kind": "statistical",
+        "exact_rgb_outside": [
+          144,
+          104,
+          32,
+          32
+        ],
+        "survivor_fraction_difference_max": 0.05,
+        "discarded_row_column_fraction_max": 0.8
+      }
+    },
+    {
+      "scene": "f3dex2-quad-winding",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/f3dex2-quad-winding.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "f5bcc574a7f02d6b74c6e50d201a2f3dc13a180545079749d2e1a8c3d95b3e7b",
+      "rt64_sha256": "f5bcc574a7f02d6b74c6e50d201a2f3dc13a180545079749d2e1a8c3d95b3e7b",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "f3dex2-quad-winding.f3dcap": "890b7d3831794d83dabcf2728c8e5675feb28c9764516e95f20c1021ad5185a7"
+      },
+      "limit": 0
+    },
+    {
+      "scene": "coverage-alpha-threshold",
+      "channels": "RGBA",
+      "maximum": 126,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        126
+      ],
+      "changed_pixels": 3160,
+      "residual_file": "residuals/coverage-alpha-threshold.i16le.gz",
+      "residual_sha256": "95b2d98c5345248d6eff6e5ffa03e251f4c9c808f86fc1e2759181efcd6259cd",
+      "mask_sha256": "afb74da2df7588ea492e16e0fe3d40a57e6beb41783de079475b181cd5206dac",
+      "fast3d_sha256": "469e3a117a71d56c056a27bf38226e0df2c0cf1900989e5bffea1a8c495d53a5",
+      "rt64_sha256": "2c9cc44cb8507dc39b7934815ee46e3dba3312474d6665920ac6c4db45332aa9",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-alpha-threshold.f3dcap": "6ed22b773bc8cec24315fcfa94f85246bb2d9391013b65b441c4b11173cf09f3"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-clip-scissor",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-clip-scissor.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "2f6b280b24848ecb87ef06f40626f495098f814b8aa3319892b7a6943328b9ac",
+      "rt64_sha256": "2f6b280b24848ecb87ef06f40626f495098f814b8aa3319892b7a6943328b9ac",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-clip-scissor.f3dcap": "f389a14d0002f33b01c123bd6b414c62b59782f127f8f0cc95cf8db0f1f85944"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-cull-back",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-cull-back.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "e24695a677defad059aa2d07372a8f2dbeef3a1a9da81b123f170deb0edf46c5",
+      "rt64_sha256": "e24695a677defad059aa2d07372a8f2dbeef3a1a9da81b123f170deb0edf46c5",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-cull-back.f3dcap": "8990fe47581e817a5f364878a9f2770a6a49dafeb424881d0c92a650996e3987"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-cull-back-f3d",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-cull-back-f3d.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "e24695a677defad059aa2d07372a8f2dbeef3a1a9da81b123f170deb0edf46c5",
+      "rt64_sha256": "e24695a677defad059aa2d07372a8f2dbeef3a1a9da81b123f170deb0edf46c5",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-cull-back-f3d.f3dcap": "4d2a3a524aa09c97337df8b4c967d831c866ba7df2c5de01e0d6ae53de704844"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-cull-front",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-cull-front.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "a0c179ab3caf1f0977ed0025cd099f38f461f102ad6e7ab31d65582d7ff03237",
+      "rt64_sha256": "a0c179ab3caf1f0977ed0025cd099f38f461f102ad6e7ab31d65582d7ff03237",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-cull-front.f3dcap": "2246bd8c517e957d22c74d9bf2573eb18942266eca49730c2505c71d79c7fc4b"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-cull-front-f3d",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-cull-front-f3d.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "a0c179ab3caf1f0977ed0025cd099f38f461f102ad6e7ab31d65582d7ff03237",
+      "rt64_sha256": "a0c179ab3caf1f0977ed0025cd099f38f461f102ad6e7ab31d65582d7ff03237",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-cull-front-f3d.f3dcap": "320beada18ebb009fc85c683d02b1a6d5ebe73ba248ee572bfb67ad2afdfeffd"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-decal-depth",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-decal-depth.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "9383de10b9fc28576f4937ae99d7b1fd800a1c590d6bb5955a31387e2f9bff03",
+      "rt64_sha256": "9383de10b9fc28576f4937ae99d7b1fd800a1c590d6bb5955a31387e2f9bff03",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-decal-depth.f3dcap": "ee38eaa37a0f4d484429a7252bd1ce0c8c974bc4e39efab82ad81e911e73e0cc"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-dither",
+      "channels": "RGBA",
+      "maximum": 255,
+      "channel_maxima_rgba": [
+        255,
+        0,
+        0,
+        127
+      ],
+      "changed_pixels": 9576,
+      "residual_file": "residuals/coverage-dither.i16le.gz",
+      "residual_sha256": "a0e034f946f24df3a057137b83b87104307bc3bf6e1f871f860fd42a9a039b9c",
+      "mask_sha256": "3ceefdfdae20884a45b95e5e9606b678ee646fc19122dc344d758ae2831a39d5",
+      "fast3d_sha256": "cb0b645e661551fe6b187ae30a648e758c30b956fc5b9af9987d475c1aecefcd",
+      "rt64_sha256": "3fd77bbf5c882dd518c7bd6636d24d9ec53be252686b846bcd40a24d7402b0e5",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-dither.f3dcap": "da45d32da3dc4cbebbdd6cdcc6c5274399c57f8009e9ced2ee4c00faed8eff45"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-extent-192x128",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-extent-192x128.i16le.gz",
+      "residual_sha256": "3381de4ca9f3a477f25989dfc8b744e7916046b7aa369f61a9a2f7dc0963ec9e",
+      "mask_sha256": "de676bae28a480011d3d012db14bef539324e62a841a9627863c689bea168af3",
+      "fast3d_sha256": "bf27c3ee4b53ee8ffddbcb82be8365bfa91a3aa11861f68f6633ccaab2ba8204",
+      "rt64_sha256": "bf27c3ee4b53ee8ffddbcb82be8365bfa91a3aa11861f68f6633ccaab2ba8204",
+      "rgba_bytes": 98304,
+      "input_sha256": {
+        "coverage-extent-192x128.f3dcap": "5112c65d14b8f5c12188e28c3027faaa1f422cb466871f247e9a2c6573b7249e"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-extent-193x132",
+      "channels": "RGBA",
+      "maximum": 248,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        248
+      ],
+      "changed_pixels": 2016,
+      "residual_file": "residuals/coverage-extent-193x132.i16le.gz",
+      "residual_sha256": "c20f8a8a76150b9d36da5693bc57c56b91ea0f6e891d78dad1ae9aff5b12be49",
+      "mask_sha256": "9b957a5f2443ddbe641a084cfb96b965d82c7fda79e7d857be10a89ae7bbedf2",
+      "fast3d_sha256": "544920758bea00f37624a959e1f386e221765f84f4925cd1acd1a5909dd9f5d8",
+      "rt64_sha256": "a99f17ccd7cf7bba93533ec2cc458c782e33a9da887b94e46ef64d419b481556",
+      "rgba_bytes": 101904,
+      "input_sha256": {
+        "coverage-extent-193x132.f3dcap": "da079dc01075cb355f4672757e462f49c0ab0aaeb8cce4dad7e4d36b719ac076"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-fog",
+      "channels": "RGBA",
+      "maximum": 7,
+      "channel_maxima_rgba": [
+        7,
+        7,
+        0,
+        0
+      ],
+      "changed_pixels": 11300,
+      "residual_file": "residuals/coverage-fog.i16le.gz",
+      "residual_sha256": "f7519a64afecec89e01250c28d9e1e3a403ac0f04233acf4c12ad1c5cef7e93d",
+      "mask_sha256": "0971178d6b25ba9c589d4ec9295fdaa458bbdb8c21ab1103f46da71febf0bd5f",
+      "fast3d_sha256": "b21500dc8b3e768bcc673f6ab168f843623bfdbe079c23cb3d57e53aeda24a53",
+      "rt64_sha256": "0a3bdbc025ce3edbbb090c9492de5f740c992d95858b96ba60c62c10abc79dc3",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-fog.f3dcap": "7abceb3892f76d02d4091ba512b86dae1f027ddd7d5f3ad9b8fd503573bfc4ad"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-lod-perspective",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-lod-perspective.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "3f6f9470705f1d253fb59b76776f57450f920b730d318b7441345c5af3d839ca",
+      "rt64_sha256": "3f6f9470705f1d253fb59b76776f57450f920b730d318b7441345c5af3d839ca",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-lod-perspective.f3dcap": "d2460a0892720954cf9e094fbe537916e914d20e77f890dd7c9a1809ead7cead"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-near-plane",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-near-plane.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "c35364965f629742c1cde0bc369b8a33c8e69f1b05836bffcde5b477889b0454",
+      "rt64_sha256": "c35364965f629742c1cde0bc369b8a33c8e69f1b05836bffcde5b477889b0454",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-near-plane.f3dcap": "b44f30e26a6bdbe9e20c08db693d8c27d0929ec7b66d4eb142ccef05ae40d1df"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-rect-controls",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-rect-controls.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "6ac3ff63d1307189aec86df29b026f423354d24f5418bb48554d793f42cb2354",
+      "rt64_sha256": "6ac3ff63d1307189aec86df29b026f423354d24f5418bb48554d793f42cb2354",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-rect-controls.f3dcap": "fd1708e7e3469913207f3fbc05f7b354c35ead8d15809732d39b6251ef5f8e1c"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-retained-height",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-retained-height.i16le.gz",
+      "residual_sha256": "8a39d2abd3999ab73c34db2476849cddf303ce389b35826850f9a700589b4a90",
+      "mask_sha256": "c35020473aed1b4642cd726cad727b63fff2824ad68cedd7ffb73c7cbd890479",
+      "fast3d_sha256": "e36698f35a52b9751a9245c4658315d89dcfc332b24a6ffd3c6ce8daeadc4542",
+      "rt64_sha256": "e36698f35a52b9751a9245c4658315d89dcfc332b24a6ffd3c6ce8daeadc4542",
+      "rgba_bytes": 131072,
+      "input_sha256": {
+        "coverage-retained-height.f3dcap": "d767926cfe585ef29e8eef23b942e8a4a7d7817ff2c08c644f757fecabdc8c21"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shade",
+      "channels": "RGBA",
+      "maximum": 6,
+      "channel_maxima_rgba": [
+        6,
+        6,
+        0,
+        0
+      ],
+      "changed_pixels": 12604,
+      "residual_file": "residuals/coverage-shade.i16le.gz",
+      "residual_sha256": "431f1738079eaa81eff2d74cdc8f109b5b7aa571fc0dcaf372e6dec8b6728df4",
+      "mask_sha256": "1c9669d1632829dc66b3c93297f653cdc64c6ce010ab5411db14d71711c07402",
+      "fast3d_sha256": "7cb87144c2515cc553f5803520b98e852f573152f389f7f53521b5696f8f7ca2",
+      "rt64_sha256": "979d0bc75e3d352bc2cb662864f971785c5472da2d222e259a4eeb48699b0adf",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shade.f3dcap": "50ca09dbc49ca4b7142efbb21d8aabb22aa2ebbacfa82a93e6925cd0b62969bd"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-0-0",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-shared-0-0.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "12628ffa987abb409adbe71bde3a9b2b280aa14647d468fad74af11a0bffbd89",
+      "rt64_sha256": "12628ffa987abb409adbe71bde3a9b2b280aa14647d468fad74af11a0bffbd89",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-0-0.f3dcap": "697597a6c5d834cc8922fe7804615d5633e5469c58be4e0220fbde7789a1058e"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-0-0-alpha",
+      "channels": "RGBA",
+      "maximum": 127,
+      "channel_maxima_rgba": [
+        4,
+        4,
+        0,
+        127
+      ],
+      "changed_pixels": 1024,
+      "residual_file": "residuals/coverage-shared-0-0-alpha.i16le.gz",
+      "residual_sha256": "61ce33782880a2377da27e969f8ba388b8faf5d782e2ce4eb6fbfd4f10c31f4c",
+      "mask_sha256": "73a2935c847ef62a1c5da8c31578512d2b3c307e728440e960d2e68c69b70364",
+      "fast3d_sha256": "40398ae8750cc0a8f6634f313a7ff1f7ad4046d639b9b26c7c4aae75e404fa2f",
+      "rt64_sha256": "30fef53483dbe4d0b88510304bf708d9c158f1f6489e8dce119e274152538726",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-0-0-alpha.f3dcap": "4c287043597045aa641c692ab0c4be404cbe139fd7c37f4e273ebe0905065fc1"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-0-1",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-shared-0-1.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "12628ffa987abb409adbe71bde3a9b2b280aa14647d468fad74af11a0bffbd89",
+      "rt64_sha256": "12628ffa987abb409adbe71bde3a9b2b280aa14647d468fad74af11a0bffbd89",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-0-1.f3dcap": "88640ae92e2cd25d350bab731e9d3da755e89ed2bbef23b6576690561fea3f9d"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-0-1-alpha",
+      "channels": "RGBA",
+      "maximum": 127,
+      "channel_maxima_rgba": [
+        4,
+        4,
+        0,
+        127
+      ],
+      "changed_pixels": 1024,
+      "residual_file": "residuals/coverage-shared-0-1-alpha.i16le.gz",
+      "residual_sha256": "61ce33782880a2377da27e969f8ba388b8faf5d782e2ce4eb6fbfd4f10c31f4c",
+      "mask_sha256": "73a2935c847ef62a1c5da8c31578512d2b3c307e728440e960d2e68c69b70364",
+      "fast3d_sha256": "40398ae8750cc0a8f6634f313a7ff1f7ad4046d639b9b26c7c4aae75e404fa2f",
+      "rt64_sha256": "30fef53483dbe4d0b88510304bf708d9c158f1f6489e8dce119e274152538726",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-0-1-alpha.f3dcap": "f68bdbe13661ace0be9286798be31ace0c35f04d87bff13bf86fa176e788f92a"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-1-0",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-shared-1-0.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "54513cb349d250a802a1fe29620e177ec5fc9d49f519fe8cd5a1fea260fde121",
+      "rt64_sha256": "54513cb349d250a802a1fe29620e177ec5fc9d49f519fe8cd5a1fea260fde121",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-1-0.f3dcap": "b032e0032b66ff5ae50b5aec4240c0f897a31b898ed12b8675d09ff7036ace95"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-1-0-alpha",
+      "channels": "RGBA",
+      "maximum": 127,
+      "channel_maxima_rgba": [
+        4,
+        4,
+        0,
+        127
+      ],
+      "changed_pixels": 1024,
+      "residual_file": "residuals/coverage-shared-1-0-alpha.i16le.gz",
+      "residual_sha256": "c2204d791ff0a3e11f9cd1042a20c25beea8fa4ffe16440b4e47b8f8a40007d2",
+      "mask_sha256": "73a2935c847ef62a1c5da8c31578512d2b3c307e728440e960d2e68c69b70364",
+      "fast3d_sha256": "fce325db61ccedba320da40985b6e4805b0525ea0c9640f6abc2fc759c70096c",
+      "rt64_sha256": "ed055815217dd678529597198a14643614c0e7b240ce38fd91970644f3316907",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-1-0-alpha.f3dcap": "f73eaca86b4a5a0fb97204cb9d522d1227edc0708113af5ed7019ee6611298f8"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-1-1",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-shared-1-1.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "54513cb349d250a802a1fe29620e177ec5fc9d49f519fe8cd5a1fea260fde121",
+      "rt64_sha256": "54513cb349d250a802a1fe29620e177ec5fc9d49f519fe8cd5a1fea260fde121",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-1-1.f3dcap": "59340ed726ad58d0a811c46c2c6c0366a3014e828f931ce126f0d6a5582f9a46"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-1-1-alpha",
+      "channels": "RGBA",
+      "maximum": 127,
+      "channel_maxima_rgba": [
+        4,
+        4,
+        0,
+        127
+      ],
+      "changed_pixels": 1024,
+      "residual_file": "residuals/coverage-shared-1-1-alpha.i16le.gz",
+      "residual_sha256": "c2204d791ff0a3e11f9cd1042a20c25beea8fa4ffe16440b4e47b8f8a40007d2",
+      "mask_sha256": "73a2935c847ef62a1c5da8c31578512d2b3c307e728440e960d2e68c69b70364",
+      "fast3d_sha256": "fce325db61ccedba320da40985b6e4805b0525ea0c9640f6abc2fc759c70096c",
+      "rt64_sha256": "ed055815217dd678529597198a14643614c0e7b240ce38fd91970644f3316907",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-1-1-alpha.f3dcap": "01b65bb708b6dee00dec4540aea3d5e0c75cf7a077c148b92010f25a7ff4df63"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-shared-uv",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-shared-uv.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "76d6f063e783c46fbcdbff55a6e3b61a092306c6a164c33327dc29ca8017cf6e",
+      "rt64_sha256": "76d6f063e783c46fbcdbff55a6e3b61a092306c6a164c33327dc29ca8017cf6e",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-shared-uv.f3dcap": "d728587ec8f023561ca8e6fc726964efcf62e4d54260b22a3107385d8120d809"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-slopes-f3d",
+      "channels": "RGBA",
+      "maximum": 255,
+      "channel_maxima_rgba": [
+        255,
+        255,
+        0,
+        0
+      ],
+      "changed_pixels": 256,
+      "residual_file": "residuals/coverage-slopes-f3d.i16le.gz",
+      "residual_sha256": "591ebc85bae183fcec0c46c597e6c2146ab6ab585f6b2f3e445ddb43eb054fff",
+      "mask_sha256": "e29b31a9d1707f19f8c7423580f189ac2b42b9e2df37b37bbc3331fae357ba3e",
+      "fast3d_sha256": "cf8a71f60b4e4e9ebb4055d451b68a3d0a8dffec84756b63edb55ec1c49e820e",
+      "rt64_sha256": "9c0c73ddc408be0290e301e3594e6d8dd185321605e5b8e07f5359add7bdffd0",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "coverage-slopes-f3d.f3dcap": "457f9fa84d8721e4825bff449e4b8c57618067320a27994271cd00d0392eeb45"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-slopes-f3dex2",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-slopes-f3dex2.i16le.gz",
+      "residual_sha256": "34c69899504b36f13e8b22120cf0fd894e61fcd6b046fb8535b79cc491fa3b3f",
+      "mask_sha256": "e2cc2a1fa6131cf4d86faa3baf78851f35a36853e2467c257b3df9d89e85cce5",
+      "fast3d_sha256": "cf8a71f60b4e4e9ebb4055d451b68a3d0a8dffec84756b63edb55ec1c49e820e",
+      "rt64_sha256": "cf8a71f60b4e4e9ebb4055d451b68a3d0a8dffec84756b63edb55ec1c49e820e",
+      "rgba_bytes": 307200,
+      "input_sha256": {
+        "coverage-slopes-f3dex2.f3dcap": "d666502561fa6abedff0830d6e0e06646e33adc5f581fbbd468dd1ef529e7a1b"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-subpixel-f3d",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-subpixel-f3d.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "5a1a5b67c0bf8b047b1a591c04b225b0f5be5dd75cc1d3cc7483e7a938339ade",
+      "rt64_sha256": "5a1a5b67c0bf8b047b1a591c04b225b0f5be5dd75cc1d3cc7483e7a938339ade",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-subpixel-f3d.f3dcap": "5b7f40517dc801cd09db6819595add4ff40938d8c361e6f46d6161d269f50155"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-subpixel-half",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-subpixel-half.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "67cfea0078c189f6d42800b2d21f9bc705cda7ac97cac11774ed74ad9b8d55cc",
+      "rt64_sha256": "67cfea0078c189f6d42800b2d21f9bc705cda7ac97cac11774ed74ad9b8d55cc",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-subpixel-half.f3dcap": "6d77dd7999268633b87d852e69f5cad20b2d4b08795be7161139fc6eeb779441"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-subpixel-x",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-subpixel-x.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "1c2f6156f64775141caa197964196089ff78a4f3cb5dd7855a758114ce7c9d46",
+      "rt64_sha256": "1c2f6156f64775141caa197964196089ff78a4f3cb5dd7855a758114ce7c9d46",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-subpixel-x.f3dcap": "0ee658d757df0d761c9043a1e7ea43b13c2c316328d32e3524b168c3b55c4368"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-subpixel-xy",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-subpixel-xy.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "5a1a5b67c0bf8b047b1a591c04b225b0f5be5dd75cc1d3cc7483e7a938339ade",
+      "rt64_sha256": "5a1a5b67c0bf8b047b1a591c04b225b0f5be5dd75cc1d3cc7483e7a938339ade",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-subpixel-xy.f3dcap": "906abd1fd287e6ff11e36b3660052126051331349eda24aebb6461434057bd6a"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-subpixel-y",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-subpixel-y.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "fbec832744d3e8e445e6393574f0f6412a56f9c03dd2a7af9d0d43927dafd2f7",
+      "rt64_sha256": "fbec832744d3e8e445e6393574f0f6412a56f9c03dd2a7af9d0d43927dafd2f7",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-subpixel-y.f3dcap": "073c8c1150ba154504f2a5296e22a6f18427e04a8b9ce79c88edb8eb83144afb"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-subpixel-yx",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-subpixel-yx.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "fe4cdac13b8f30635a3e64dc5b8316a389a259fee95786ae1e9785232ac8776c",
+      "rt64_sha256": "fe4cdac13b8f30635a3e64dc5b8316a389a259fee95786ae1e9785232ac8776c",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-subpixel-yx.f3dcap": "07085aa0da06f8c8d16a69bf168f999bf718a07c950b46adf52281e591b9bb0e"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-ties-aa",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-ties-aa.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "a02ffc8008db5ad951b4534bffd62fcc3aa4ce8eaad08b0c08dbfa588c1e202e",
+      "rt64_sha256": "a02ffc8008db5ad951b4534bffd62fcc3aa4ce8eaad08b0c08dbfa588c1e202e",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-ties-aa.f3dcap": "cf3557d13eed79797a399676d365262e8e00a5c726dd5f64c3406a65bcf94959"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-ties-f3d",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-ties-f3d.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "a02ffc8008db5ad951b4534bffd62fcc3aa4ce8eaad08b0c08dbfa588c1e202e",
+      "rt64_sha256": "a02ffc8008db5ad951b4534bffd62fcc3aa4ce8eaad08b0c08dbfa588c1e202e",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-ties-f3d.f3dcap": "f040631dfc73d75075bb13868905f587527a981d70bc21a0e445b36d629b4829"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-ties-f3dex2",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-ties-f3dex2.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "a02ffc8008db5ad951b4534bffd62fcc3aa4ce8eaad08b0c08dbfa588c1e202e",
+      "rt64_sha256": "a02ffc8008db5ad951b4534bffd62fcc3aa4ce8eaad08b0c08dbfa588c1e202e",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-ties-f3dex2.f3dcap": "748cec18c4b94ad5906350634aebfc6d12a5d01c519bc9ad6b8e21f06f019e7d"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-uv-perspective",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-uv-perspective.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "aca1905561d4a5f9946cb42b63e76f7663097c4c6e2d6a7a4b85d9f3a88440e1",
+      "rt64_sha256": "aca1905561d4a5f9946cb42b63e76f7663097c4c6e2d6a7a4b85d9f3a88440e1",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-uv-perspective.f3dcap": "8cd8b6f358e00dc095133991a8419304f79b0cf820ccb1c4a50b2e3fefa353be"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    },
+    {
+      "scene": "coverage-uv-perspective-negative",
+      "channels": "RGBA",
+      "maximum": 0,
+      "channel_maxima_rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "changed_pixels": 0,
+      "residual_file": "residuals/coverage-uv-perspective-negative.i16le.gz",
+      "residual_sha256": "07854d2fef297a06ba81685e660c332de36d5d18d546927d30daad6d7fda1541",
+      "mask_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+      "fast3d_sha256": "7befa904ee3c2dcdb250d69fc4a0e10aa7f2d5f9bc3dc7fd377603d2b0049c01",
+      "rt64_sha256": "7befa904ee3c2dcdb250d69fc4a0e10aa7f2d5f9bc3dc7fd377603d2b0049c01",
+      "rgba_bytes": 262144,
+      "input_sha256": {
+        "coverage-uv-perspective-negative.f3dcap": "ecaffb88c91199f89c357fb2eae94ba4dc7a322863f5cf42824584ea5b79b644"
+      },
+      "policy": "existing coverage B/UV/LOD/shade/fog/depth/dither/rectangle expectations; rt64 F3D left-column quirk only where recorded"
+    }
+  ],
+  "excluded": [
+    {
+      "scene": "fbload-exact-rect",
+      "policy": "F0 real GPU-source load rejection and surviving fast3d pixels; generic IMAGE export fails"
+    },
+    {
+      "scene": "fbload-offset-rect",
+      "policy": "F0 real GPU-source load rejection and surviving fast3d pixels; generic IMAGE export fails"
+    },
+    {
+      "scene": "fbload-offset-triangle",
+      "policy": "F0 real GPU-source load rejection and surviving fast3d pixels; generic IMAGE export fails"
+    },
+    {
+      "scene": "fbload-shortcut-rect",
+      "policy": "fast3d-only compatibility, never an rt64 agreement claim"
+    }
+  ],
+  "controls": [
+    {
+      "scene": "f3dex2-quad-winding-tri2",
+      "equivalent_to": "f3dex2-quad-winding",
+      "channels": "RGBA",
+      "maximum": 0,
+      "changed_pixels": 0,
+      "rt64_sha256": "f5bcc574a7f02d6b74c6e50d201a2f3dc13a180545079749d2e1a8c3d95b3e7b",
+      "inputs": {
+        "f3dex2-quad-winding-tri2.rdram": "9447144e204d346558b32fe6ec116f110ffdfb305dd2b44cf8eafc227cf9811e",
+        "f3dex2-quad-winding-tri2.json": "8b6eff360050f22648c4504aca813301cac16ee40dd90cc34caec56e23482dd1"
+      }
+    }
+  ]
+}

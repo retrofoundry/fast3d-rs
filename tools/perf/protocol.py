@@ -4,6 +4,7 @@ import copy
 import gzip
 import hashlib
 import json
+import math
 import os
 import re
 import statistics
@@ -15,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 VERSION = 'b2-quiet-v3'
+V4 = 'b2-quiet-v4'
 GPU_PRODUCERS = r'(Google Chrome|Chromium|chrome_crashpad_handler|Safari|Firefox|WebKit|MTLCompilerService|Metal|blender|OBS|QuickTime|VLC|Unity|Unreal|Godot|replay|sm64|helix)'
 AGENTS = r'(^|/)(codex|claude)([ /]|$)|/claude/versions/|ChatGPT|Codex Framework'
 PROHIBITED = r'(^|/)(cargo|rustc|rustup|ninja|make|cmake|clang(?:\+\+)?|cc1|ld|swiftc|wasm-bindgen|ffmpeg|rsync|curl|wget|replay_capture|sm64|helix)( |$)'
@@ -38,6 +40,35 @@ POLICY = {'resting_seconds': 30, 'preflight_seconds': 30, 'postflight_seconds': 
           'first_observation': 'Initial inventory is CPU baseline only and archived; identity checks still apply. Later new PIDs are charged CPU since birth; start identity distinguishes PID reuse.',
           'monitor_version': VERSION,
           'gpu_activity': 'No portable per-process GPU utilization counter. Idle browser admission requires the operator attestation of no unrelated GPU work.'}
+V4_POLICY = {**POLICY, 'monitor_version': V4,
+             'scope': 'native.demo1-dense.coarse',
+             'reference_limits': POLICY['reference_limits'] + '; v4 overrides the preflight/run/postflight background burst, sustained and idle thresholds with fixed values; every other ceiling with a fixed 0.75 core',
+             'measurement_background_two_samples_max': .75,
+             # Fixed like the burst ceiling and for the same reason: these were derived from each
+             # invocation's own resting calibration, so the quieter the host, the stricter the gate
+             # its own run then had to meet. Window 5 on ci8 rejected three invocations that way,
+             # against thresholds of 0.0774/0.0801 core and a 96.80% idle floor, while every spread
+             # passed. Accepted by David 2026-09-13.
+             'measurement_background_average_max': .15,
+             'measurement_minimum_idle_percent': 96.0,
+             'observed_spread_limits': {'cpu_ms': .25, 'emission_interval_ms': .15},
+             'cold_spread_limit': .05, 'absolute_floor_ms_per_frame': .01,
+             'pairs': 5, 'pair_order': ['AB', 'BA', 'AB', 'BA', 'AB'],
+             'throwaway_full_prefix_warmups': 1, 'settle_seconds': 90,
+             'component_spreads': 'diagnostic',
+             'directional_rule': 'All five candidate-minus-parent deltas positive and median > max(parent range, candidate range, floor) blocks admission; all negative with savings median > uncertainty resolves a speedup. Identical-binary validation rejects either direction.'}
+
+
+def timing_policy(version=VERSION, backend=None, workload=None, configuration=None):
+    if version == V4:
+        if (backend, workload, configuration) != ('native', 'demo1-dense', 'coarse'):
+            raise ValueError('b2-quiet-v4 applies only to native.demo1-dense coarse timing')
+        return V4_POLICY
+    if version != VERSION:
+        raise ValueError(f'unknown timing policy: {version}')
+    return POLICY
+
+
 COMMANDS = {'processes': ['ps', '-ww', '-axo', 'pid=,ppid=,lstart=,time=,comm='],
             'cpu': ['top', '-l', '0', '-s', '1', '-n', '0'],
             'memory': ['vm_stat'], 'thermal': ['pmset', '-g', 'therm'],
@@ -220,7 +251,7 @@ def resting_profile(samples, allowed_idle=()):
             'process_activity':processes, 'reasons':reasons}
 
 
-def sample_reasons(samples, phase, profile=None, allowed_idle=(), history=()):
+def sample_reasons(samples, phase, profile=None, allowed_idle=(), history=(), version=VERSION):
     reasons = []
     if not samples:
         return ['missing telemetry']
@@ -228,7 +259,11 @@ def sample_reasons(samples, phase, profile=None, allowed_idle=(), history=()):
     if seconds and (len(samples) < seconds or samples[-1]['monotonic'] - samples[0]['monotonic'] < seconds-1-(POLICY['maximum_gap_seconds']-POLICY['sample_period_seconds'])):
         reasons.append(f'incomplete {seconds}-second {phase}')
     activity = list(history[-(POLICY['activity_window_samples']-1):]) + samples
-    thresholds = profile['thresholds'] if profile else None
+    thresholds = dict(profile['thresholds']) if profile else None
+    if thresholds and version == V4 and phase in ['preflight', 'run', 'postflight']:
+        thresholds['maximum_background_cores_two_samples'] = V4_POLICY['measurement_background_two_samples_max']
+        thresholds['maximum_background_cores_average'] = V4_POLICY['measurement_background_average_max']
+        thresholds['minimum_idle_percent'] = V4_POLICY['measurement_minimum_idle_percent']
     if phase != 'resting' and thresholds is None:
         reasons.append('missing resting profile')
     if profile:
@@ -277,13 +312,16 @@ def replay(samples, allowed_idle=()):
             'timing_valid':False, 'usable_intervals':len(corrected), 'resting_profile':profile,
             'scope':'Retrospective quiet check only: first snapshot is the CPU baseline; remaining intervals are reused as the resting reference. No independent calibration or benchmark was recorded.'}
 
-def replay_attempt(samples, record=None):
+def replay_attempt(samples, record=None, version=VERSION, backend=None):
     record = record or {}
+    timing_policy(version, backend or record.get('backend'), record.get('workload'), record.get('configuration'))
     allowed = record.get('allowed_idle_services', [])
     corrected = recalculate(samples)
     resting = [s for s in corrected if s['phase']=='resting']
     if not resting:
-        return {'quiet_valid':False, 'complete':False, 'reasons':['missing resting telemetry']}
+        return {'quiet_protocol_version':version, 'quiet_valid':False, 'complete':False,
+                'timing_valid':False, 'usable_intervals':len(corrected),
+                'phase_reasons':{}, 'reasons':['missing resting telemetry']}
     profile = resting_profile(resting, allowed)
     reasons = process_activity(samples[:1], 'baseline', allowed)[1]
     phase_reasons = {}
@@ -293,26 +331,27 @@ def replay_attempt(samples, record=None):
             continue
         before = [s for s in corrected if s['monotonic'] < selected[0]['monotonic']]
         phase_reasons[phase] = sample_reasons(selected, phase, profile, allowed,
-                                             before if phase != 'resting' else [])
+                                             before if phase != 'resting' else [], version)
         reasons.extend(phase_reasons[phase])
     complete = (record.get('exit_code') == 0 and
                 all(any(s['phase']==phase for s in corrected) for phase in ['preflight','run','postflight']))
     if not complete:
         reasons.append('benchmark not completed; no full quiet run')
     reasons = sorted(set(reasons))
-    return {'quiet_protocol_version':VERSION, 'quiet_valid':not reasons, 'complete':complete,
+    return {'quiet_protocol_version':version, 'quiet_valid':not reasons, 'complete':complete,
             'reasons':reasons, 'phase_reasons':phase_reasons, 'resting_profile':profile,
             'timing_valid':False, 'usable_intervals':len(corrected),
             'scope':'Retrospective telemetry verdict; timing artifacts and reservation are not re-admitted.'}
 
 
-def spread(values):
-    if len(values) != 5 or any(not isinstance(v, (int,float)) or v <= 0 for v in values):
-        return {'valid':False, 'reason':'requires five positive totals', 'values':values}
+def spread(values, limit=.05):
+    if not values or any(not isinstance(v, (int,float)) or not math.isfinite(v) or v <= 0 for v in values):
+        return {'valid':False, 'reason':'requires five finite positive totals', 'values':values, 'limit':limit}
     middle = statistics.median(values)
     width = max(values) - min(values)
     ratio = width / middle
-    return {'valid':ratio <= .05, 'values':values, 'median':middle, 'absolute_range':width, 'relative_spread':ratio}
+    return {'valid':len(values) == 5 and (ratio <= limit or math.isclose(ratio, limit, rel_tol=1e-12)), 'values':values, 'median':middle,
+            'absolute_range':width, 'relative_spread':ratio, 'limit':limit}
 
 def invalidate_pairs(runs):
     invalid = {r['pair'] for r in runs if not r['valid']}
@@ -386,12 +425,14 @@ class Monitor:
         self.top.stderr.close()
 
 def quiet(args):
+    version = getattr(args, 'policy', VERSION)
+    policy = timing_policy(version, getattr(args, 'backend', None), args.workload, args.configuration)
     out = args.out
     out.mkdir(parents=True, exist_ok=False)
-    record = {'quiet_protocol_version':VERSION, 'scheduled_utc_interval':[args.scheduled_start,args.scheduled_end],
+    record = {'quiet_protocol_version':version, 'backend':getattr(args, 'backend', None), 'scheduled_utc_interval':[args.scheduled_start,args.scheduled_end],
               'monitoring_utc_interval':[utc(),None], 'actual_utc_interval':[None,None],
               'operator_attestation':args.attestation, 'allowed_idle_services':args.allowed_idle,
-              'policy':POLICY, 'monitor_commands':COMMANDS, 'command':args.command, 'pair':args.pair, 'revision':args.revision, 'workload':args.workload, 'configuration':args.configuration,
+              'policy':policy, 'monitor_commands':COMMANDS, 'command':args.command, 'pair':args.pair, 'revision':args.revision, 'workload':args.workload, 'configuration':args.configuration,
               'monitor_environment':{'LC_ALL':'C'}, 'valid':False, 'reasons':[], 'exit_code':None, 'resting_profile':None}
     samples = []
     monitor = None
@@ -424,7 +465,7 @@ def quiet(args):
             record['reasons'] = sorted(set(profile['reasons'] + baseline_reasons))
             def validate(phase):
                 phase_samples, before = phase_context(phase)
-                return sample_reasons(phase_samples, phase, profile, args.allowed_idle, before)
+                return sample_reasons(phase_samples, phase, profile, args.allowed_idle, before, version)
             if not record['reasons']:
                 record['actual_utc_interval'][0] = utc()
                 for _ in range(POLICY['preflight_seconds']):
@@ -475,7 +516,7 @@ def quiet(args):
         record['valid'] = not record['reasons'] and record['exit_code'] == 0
         record['telemetry'] = [{'path':str(out/name), 'sha256':sha(out/name)} for name in ['telemetry.jsonl','top.json','resting-profile.json'] if (out/name).exists()]
         (out/'run.json').write_text(json.dumps(record,indent=2))
-    print(json.dumps({'valid':record['valid'],'reasons':record['reasons']}))
+    print(json.dumps({'quiet_protocol_version':version, 'valid':record['valid'],'reasons':record['reasons']}))
     return 0 if record['valid'] else 1
 
 def main():
@@ -485,12 +526,17 @@ def main():
         parser.add_argument('--out', type=Path, required=True)
         parser.add_argument('--allowed-idle', action='append', default=[])
         parser.add_argument('--run', type=Path, help='Replay phase-aware attempt telemetry with its original run.json')
+        parser.add_argument('--policy', choices=[VERSION, V4], default=VERSION)
+        parser.add_argument('--backend', choices=['native', 'chrome'])
         args = parser.parse_args(sys.argv[2:])
         opener = gzip.open if args.telemetry.suffix == '.gz' else open
         with opener(args.telemetry, 'rt') as stream:
             samples = [json.loads(line) for line in stream]
-        result = replay_attempt(samples, json.loads(args.run.read_text())) if args.run else replay(samples, args.allowed_idle)
-        result.update(policy=POLICY, allowed_idle_services=args.allowed_idle,
+        if args.policy == V4 and not args.run:
+            parser.error('v4 replay requires a scoped run record')
+        record = json.loads(args.run.read_text()) if args.run else {}
+        result = replay_attempt(samples, record, args.policy, args.backend) if args.run else replay(samples, args.allowed_idle)
+        result.update(policy=timing_policy(args.policy, args.backend or record.get('backend'), record.get('workload'), record.get('configuration')), allowed_idle_services=args.allowed_idle,
                       source={'path':str(args.telemetry), 'sha256':sha(args.telemetry)})
         with args.out.open('x') as stream:
             json.dump(result, stream, indent=2)
@@ -506,6 +552,8 @@ def main():
     parser.add_argument('--revision',required=True)
     parser.add_argument('--workload',required=True)
     parser.add_argument('--configuration',required=True)
+    parser.add_argument('--policy', choices=[VERSION, V4], default=VERSION)
+    parser.add_argument('--backend', choices=['native', 'chrome'])
     parser.add_argument('command',nargs=argparse.REMAINDER)
     args=parser.parse_args()
     if args.command[:1]==['--']:

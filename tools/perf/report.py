@@ -6,7 +6,7 @@ import math
 import statistics
 import zipfile
 from pathlib import Path
-from protocol import POLICY, VERSION, command, invalidate_pairs, sha, spread
+from protocol import POLICY, VERSION, V4, V4_POLICY, command, invalidate_pairs, sha, spread, timing_policy
 
 CAPTURES = {
     'demo1-dense': {'frames':1519,'warmup':1399,'observed':[1400,1519],'route':'demo1','sha256':'2467ff249136182d2ad6a837f17f9dad4b405dfe45af10a5c8956dd3685328fa'},
@@ -43,7 +43,13 @@ def validate_manifest(manifest, require_quiet=True):
     if require_quiet:
         if any(isinstance(v,dict) and 'unavailable' in v for v in manifest.get('host',{}).values()):
             reasons.append('host probes unavailable')
-        if manifest.get('quiet_protocol_version')!=VERSION or manifest.get('quiet_policy')!=POLICY:
+        scope = manifest.get('batch_scope', {})
+        try:
+            expected_policy = timing_policy(manifest.get('quiet_protocol_version'),
+                scope.get('backend'), scope.get('workload'), scope.get('configuration'))
+        except ValueError:
+            expected_policy = None
+        if expected_policy is None or manifest.get('quiet_policy') != expected_policy:
             reasons.append('incomplete quiet policy')
         if not manifest.get('batch_valid'):
             reasons.append('missing or rejected complete paired batch')
@@ -62,7 +68,7 @@ def validate_manifest(manifest, require_quiet=True):
                 path=Path(evidence['path'])
                 if not path.exists() or sha(path)!=evidence['sha256']:
                     reasons.append('missing or changed telemetry')
-        if not manifest.get('spreads') or any(not s['valid'] for s in manifest['spreads'].values()):
+        if not manifest.get('spreads') or any(not s['valid'] for s in manifest['spreads'].values() if s.get('gating', True)):
             reasons.append('missing or unstable five-run spreads')
     return sorted(set(reasons))
 
@@ -120,6 +126,10 @@ def manifest(args):
         value['pair_order']=batch['pair_order']
         value['batch_valid']=batch['valid']
         value['pair_rejections']=batch['pair_rejections']
+        value['quiet_protocol_version']=batch['quiet_protocol_version']
+        value['quiet_policy']=batch.get('quiet_policy', POLICY)
+        value['batch_scope']=batch.get('scope', {})
+        value['lost_sensitivity']=batch.get('lost_sensitivity')
     value['artifacts']=[{'directory':str(directory),'files':[{'path':str(path),'sha256':sha(path)} for path in directory.iterdir() if path.name in ['input.json','setup.json','driver.json','summary.json','admission.json','cases.json','hash-inputs.json','costs.jsonl','break-even.json','browser-capabilities.json','frames.jsonl','requests.jsonl','hits.jsonl','result.json','result.jsonl','env.rgba8','env.rgba16']]} for directory in args.artifacts]
     binary=build/'target/release/b1-perf'
     value['build']['native_binary']=str(binary)
@@ -293,18 +303,100 @@ def cost_report(args):
         'boundary_policy':'Authored classes have no workload frequency. Keep representations and hashes separate; no monotonic cutoff or activation decision.'},indent=2))
 
 
+def metric_verdict(parent, candidate, floor, version=VERSION, limit=.05, identical=False):
+    spreads = {revision: spread(values, limit) for revision, values in
+               [('parent', parent), ('candidate', candidate)]}
+    result = {'policy': version, 'valid': False, 'spreads': spreads,
+              'absolute_floor_ms': floor, 'lost_sensitivity': None}
+    if not math.isfinite(floor) or floor <= 0:
+        return {**result, 'reason': 'predeclared positive finite floor required'}
+    if not all('absolute_range' in s for s in spreads.values()):
+        return {**result, 'reason': 'missing finite positive timing values'}
+    uncertainty = max(floor, *(s['absolute_range'] for s in spreads.values()))
+    result.update(effective_uncertainty_ms=uncertainty, lost_sensitivity={
+        'ms_per_frame': uncertainty,
+        'fraction_of_parent_median': uncertainty / spreads['parent']['median'],
+        'parent_range_ms_per_frame': spreads['parent']['absolute_range'],
+        'candidate_range_ms_per_frame': spreads['candidate']['absolute_range'],
+        'sample_counts': {'parent': len(parent), 'candidate': len(candidate)},
+        'scope': 'This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only.'})
+    if not all(s['valid'] for s in spreads.values()):
+        return {**result, 'reason': f'five complete repetitions with spread <= {limit} required'}
+    deltas = [b-a for a, b in zip(parent, candidate)]
+    median = statistics.median(deltas)
+    above = abs(median) > uncertainty and not math.isclose(abs(median), uncertainty, rel_tol=1e-12)
+    regression = all(d > 0 for d in deltas) and above
+    speedup = all(d < 0 for d in deltas) and above
+    valid = not regression and not (identical and speedup)
+    result.update(valid=valid, candidate_minus_parent_ms=deltas, median_delta_ms=median,
+                  repeatable_regression=regression, resolved_speedup=speedup,
+                  spurious_directional_change=identical and (regression or speedup),
+                  conclusion='inconclusive' if not valid else 'resolved speedup' if speedup else
+                  'no regression resolved above U')
+    return result
+
+
+def normalized_metric(summary, window, metric):
+    data = summary.get(window, {})
+    denominator = data.get('frames' if metric == 'cpu_ms' else 'emission_intervals', 0)
+    value = data.get(metric)
+    if (not isinstance(denominator, (int, float)) or denominator <= 0 or
+            not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0):
+        return None
+    return value / denominator
+
+
+def batch_metrics(plan, runs, summaries, version, admitted_only=False):
+    groups = collections.defaultdict(list)
+    for run in runs:
+        cell = '.'.join(str(run.get(key) or 'unspecified') for key in ['backend','workload','configuration'])
+        groups[cell].append(run)
+    if len(groups) > 1:
+        return {f'{cell}.{metric}':value for cell, members in groups.items()
+                for metric, value in batch_metrics(plan, members, summaries, version, admitted_only).items()}
+    metrics = {}
+    for window in ['cold', 'observed']:
+        for metric in ['cpu_ms', 'emission_interval_ms']:
+            values = {'parent': [], 'candidate': []}
+            for run in runs:
+                if admitted_only and not run['valid']:
+                    continue
+                summary = summaries.get(run['artifacts'].get('summary'), {})
+                value = normalized_metric(summary, window, metric)
+                if value is not None and run['revision'] in values:
+                    values[run['revision']].append(value)
+            limit = V4_POLICY['observed_spread_limits'][metric] if version == V4 and window == 'observed' else .05
+            floor = plan.get('floors_ms', {}).get(metric, .01)
+            metrics[f'{window}.{metric}'] = metric_verdict(values['parent'], values['candidate'], floor,
+                version, limit, identical=plan.get('same_binary_for_both_labels', False))
+    return metrics
+
+
 def batch_report(args):
     plan=json.loads(args.input.read_text())
+    version = plan.get('policy', VERSION)
+    policy = timing_policy(version, plan.get('backend'), plan.get('workload'), plan.get('configuration'))
     runs=[]
     totals=collections.defaultdict(list)
     for entry in plan['attempts']:
-        run=json.loads(Path(entry['quiet_run']).read_text())
+        path = Path(entry['quiet_run'])
+        run=json.loads(path.read_text()) if path.exists() else {
+            **entry, 'valid':False, 'reasons':['interrupted or unlaunched protocol invocation'],
+            'actual_utc_interval':[None,None]}
         run['artifacts']=entry
-        if run.get('quiet_protocol_version') != VERSION:
+        if run.get('quiet_protocol_version') != version:
             run['valid'] = False
             run['reasons'] = sorted(set(run['reasons'] + ['quiet protocol version differs']))
+        if version == V4 and (run.get('backend'), run['workload'], run['configuration']) != ('native', 'demo1-dense', 'coarse'):
+            run['valid'] = False
+            run['reasons'].append('run is outside v4 scope')
         runs.append(run)
-    runs.sort(key=lambda run: run['actual_utc_interval'][0] if run['actual_utc_interval'][0] is not None else run.get('monitoring_utc_interval',[''])[0])
+    def execution_order(run):
+        start = run['actual_utc_interval'][0]
+        if start is None:
+            start = run.get('monitoring_utc_interval', [None])[0]
+        return (start is None, start)
+    runs.sort(key=execution_order)
     summaries = {}
     for run in runs:
         entry = run['artifacts']
@@ -327,12 +419,41 @@ def batch_report(args):
                 errors.append('missing observed CPU timing')
             if run['configuration'] in ['coarse','counters'] and (not observed.get('emission_interval_ms') or observed.get('emission_intervals') != observed.get('frames')):
                 errors.append('missing observed emission timing')
+            if version == V4:
+                for window, frames, intervals in [('cold',1399,1398), ('observed',120,120)]:
+                    data = summary.get(window, {})
+                    if (data.get('frames') != frames or data.get('emission_intervals') != intervals or
+                            not data.get('library_timing_available') or any(
+                                normalized_metric(summary, window, metric) is None
+                                for metric in ['cpu_ms', 'emission_interval_ms'])):
+                        errors.append(f'missing or incomplete v4 {window} aggregate timing')
         if errors:
             run['valid'] = False
             run['reasons'] = sorted(set(run['reasons'] + errors))
     invalidate_pairs(runs)
     comparison=plan.get('comparison',True)
     pair_reasons=validate_pair_order(runs) if comparison else []
+    if version == V4:
+        pairs = list(dict.fromkeys(r['pair'] for r in runs))
+        order = [r['revision'] for r in runs]
+        if (len(pairs) != 5 or order != ['parent','candidate','candidate','parent','parent',
+                                       'candidate','candidate','parent','parent','candidate'] or
+                any([r['pair'] for r in runs].count(pair) != 2 for pair in pairs) or
+                any(runs[i]['pair'] != runs[i+1]['pair'] for i in range(0, len(runs)-1, 2))):
+            pair_reasons.append('v4 requires exactly five complete pairs in AB, BA, AB, BA, AB order')
+        if plan.get('floors_ms') != {'cpu_ms':.01, 'emission_interval_ms':.01}:
+            pair_reasons.append('v4 requires frozen 0.01 ms per-frame CPU and elapsed floors')
+        if plan.get('same_binary_for_both_labels') is not True:
+            try:
+                proof = plan['validation_verdict']
+                path = Path(proof['path'])
+                validation = json.loads(path.read_text())
+                if (sha(path) != proof['sha256'] or not validation['valid'] or
+                        validation['policy'] != V4 or validation['cell'] != 'native.demo1-dense' or
+                        validation.get('same_binary_for_both_labels') is not True):
+                    raise ValueError('validation verdict differs or failed')
+            except (OSError, ValueError, KeyError, TypeError):
+                pair_reasons.append('v4 code comparison requires the hashed passing parent/parent validation verdict')
     if not comparison and any('costs' not in r['artifacts'] for r in runs):
         pair_reasons.append('unpaired batches are only supported for cache-cost components')
     for run in runs:
@@ -345,7 +466,8 @@ def batch_report(args):
             for window in ['cold','observed']:
                 for metric in ['cpu_ms','assembly_ms','emission_interval_ms']:
                     if summary[window].get(metric) is not None and summary[window][metric]>0:
-                        totals[f'{prefix}.{window}.{metric}'].append(summary[window][metric])
+                        value = normalized_metric(summary, window, metric) if version == V4 and metric in ['cpu_ms','emission_interval_ms'] else summary[window][metric]
+                        totals[f'{prefix}.{window}.{metric}'].append(value)
                 for phase,value in summary[window]['timings'].items():
                     if value>0:
                         totals[f'{prefix}.{window}.{phase}'].append(value)
@@ -353,7 +475,19 @@ def batch_report(args):
             for row in rows(entry['costs']):
                 for component,values in row['components_ns'].items():
                     totals[f"{prefix}.{row['hash_version']}.{row['class']}.{row['set']}.{component}"].append(statistics.median(values))
-    result={'quiet_protocol_version':VERSION,'attempts':runs,'pair_order':[{'pair':r['pair'],'revision':r['revision']} for r in runs],'spreads':{key:spread(values) for key,values in totals.items()},'spread_limit':.05,'comparison':comparison}
+    spreads = {}
+    for key, values in totals.items():
+        aggregate = any(key.endswith('.'+window+'.'+metric) for window in ['cold','observed'] for metric in ['cpu_ms','emission_interval_ms'])
+        limit = next((bound for metric, bound in V4_POLICY['observed_spread_limits'].items()
+                      if version == V4 and key.endswith('.observed.'+metric)), .05)
+        spreads[key] = {**spread(values, limit), 'gating': version != V4 or aggregate,
+                        'policy':version}
+    result={'quiet_protocol_version':version,'policy':version,'quiet_policy':policy,'attempts':runs,'pair_order':[{'pair':r['pair'],'revision':r['revision']} for r in runs],'spreads':spreads,'comparison':comparison}
+    result['scope'] = {key:plan.get(key) for key in ['backend','workload','configuration']}
+    result['metrics'] = batch_metrics(plan, runs, summaries, version, admitted_only=True) if version == V4 else {}
+    result['lost_sensitivity'] = {key:value['lost_sensitivity'] for key,value in
+                                 batch_metrics(plan, runs, summaries, version).items()}
+    result['sensitivity_scope'] = 'All available recorded timings, including rejected runs; no missing member is imputed.'
     result['pair_rejections']=pair_reasons
     cells = {}
     expected_cells = plan.get('cells') or sorted({f"{r['revision']}.{r['workload']}.{r['configuration']}" for r in runs})
@@ -362,9 +496,9 @@ def batch_report(args):
         metrics = {k:v for k,v in result['spreads'].items() if k.startswith(key+'.')}
         cells[key] = {'attempts':len(members),'valid_runs':sum(r['valid'] for r in members),
                       'metrics':list(metrics),
-                      'valid':len(members)==5 and all(r['valid'] for r in members) and bool(metrics) and all(v['valid'] for v in metrics.values())}
+                      'valid':len(members)==5 and all(r['valid'] for r in members) and bool(metrics) and all(v['valid'] for v in metrics.values() if v['gating'])}
     result['cells'] = cells
-    result['valid']=bool(cells) and not pair_reasons and all(value['valid'] for value in cells.values())
+    result['valid']=bool(cells) and not pair_reasons and all(value['valid'] for value in cells.values()) and all(value['valid'] for value in result['metrics'].values())
     args.out.write_text(json.dumps(result,indent=2))
 
 

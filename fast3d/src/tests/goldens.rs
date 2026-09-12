@@ -4,9 +4,40 @@
 //! (`.bin` raw-RGBA8 file).  Running with `UPDATE_GOLDENS=1` writes a new golden instead of
 //! comparing.
 //!
-use crate::render::{headless_device, headless_device_forced_fallback, CLEAR_COLOR};
+use crate::render::CLEAR_COLOR;
 
 use crate::tests::common;
+
+use super::readback_export;
+
+thread_local! {
+    static READBACK_DEVICE: std::cell::RefCell<Option<wgpu::Device>> = const { std::cell::RefCell::new(None) };
+    static READBACK_INPUT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn headless_device() -> (wgpu::Device, wgpu::Queue, bool) {
+    let (device, queue, dual) = crate::render::headless_device();
+    READBACK_DEVICE.with_borrow_mut(|value| *value = Some(device.clone()));
+    (device, queue, dual)
+}
+
+fn headless_device_forced_fallback() -> (wgpu::Device, wgpu::Queue) {
+    let (device, queue) = crate::render::headless_device_forced_fallback();
+    READBACK_DEVICE.with_borrow_mut(|value| *value = Some(device.clone()));
+    (device, queue)
+}
+
+fn fixture(name: &str) -> (&'static [u8], u64) {
+    let (rdram, entry) = crate::tests::fixtures::fixture(name);
+    if std::env::var_os("FAST3D_GOLDEN_OUTPUT").is_some() {
+        READBACK_INPUT.with_borrow_mut(|input| {
+            input.extend_from_slice(&(rdram.len() as u64).to_le_bytes());
+            input.extend_from_slice(&entry.to_le_bytes());
+            input.extend_from_slice(rdram);
+        });
+    }
+    (rdram, entry)
+}
 
 /// Maps an N64 wrap mode (cms/cmt: 0=WRAP, 1=MIRROR, 2+=CLAMP) to a wgpu `AddressMode`.
 /// Mirrors `crate::render::address_mode` (private) so golden tests can select the correct sampler.
@@ -56,7 +87,7 @@ fn render_scene_with_device(
     device: wgpu::Device,
     queue: wgpu::Queue,
 ) -> Vec<u8> {
-    let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
+    let (rdram, entry_addr) = fixture(name);
     let mut result = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert!(result.diags.is_empty(), "HLE diags: {:?}", result.diags);
     for material in &mut result.scene.materials {
@@ -129,13 +160,33 @@ fn render_scene_to_rgba8(name: &str, w: u32, h: u32) -> Vec<u8> {
 /// The comparison tolerates a max per-channel absolute difference of `TOL` to absorb
 /// platform-specific rounding in GPU rasterisation.
 fn compare_or_write(name: &str, actual: &[u8], w: u32, h: u32) {
-    if let Ok(dir) = std::env::var("FAST3D_GOLDEN_OUTPUT") {
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(
-            std::path::Path::new(&dir).join(format!("{name}.bin")),
-            actual,
-        )
-        .unwrap();
+    if std::env::var_os("FAST3D_GOLDEN_OUTPUT").is_some() {
+        let thread = std::thread::current();
+        let id = thread.name().unwrap().rsplit("::").next().unwrap();
+        let blend = if id.ends_with("_forced_fallback") {
+            "forced-fallback"
+        } else {
+            "primary"
+        };
+        READBACK_INPUT.with_borrow(|input| {
+            let mut witness = include_bytes!("goldens.rs").to_vec();
+            witness.extend_from_slice(include_bytes!("common.rs"));
+            witness.extend_from_slice(input);
+            READBACK_DEVICE.with_borrow(|device| {
+                readback_export::write_row(
+                    "FAST3D_GOLDEN_OUTPUT",
+                    id,
+                    "final",
+                    "render",
+                    blend,
+                    actual,
+                    w,
+                    h,
+                    &witness,
+                    device.as_ref(),
+                );
+            });
+        });
     }
     let path = format!("{}/goldens/{name}.bin", env!("CARGO_MANIFEST_DIR"));
     if std::env::var("UPDATE_GOLDENS").is_ok() {
@@ -238,7 +289,7 @@ fn golden_address_modes_reach_tile_sampling() {
             (format!("{scene}--white4"), 4usize, 0),
             (scene.to_owned(), 32, 5),
         ] {
-            let (rdram, entry_addr) = crate::tests::fixtures::fixture(&name);
+            let (rdram, entry_addr) = fixture(&name);
             let interp = crate::hle::interpret_rdram(rdram, entry_addr as u32);
             assert!(interp.diags.is_empty(), "{:?}", interp.diags);
             let mat = &interp.scene.materials[0];
@@ -1152,7 +1203,7 @@ fn golden_2d_offscreen_then_sample() {
 // ── Alpha-blended TexRect regression golden (alpha HUD blend fix) ─────────────────────────────────
 
 fn scene_from_fixture(name: &str) -> crate::hle::Scene {
-    let (rdram, entry_addr) = crate::tests::fixtures::fixture(name);
+    let (rdram, entry_addr) = fixture(name);
     let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
     assert!(r.diags.is_empty(), "unexpected HLE diags: {:?}", r.diags);
     r.scene
@@ -1739,7 +1790,7 @@ fn lod_selectors_unreferenced_in_every_non_lod_scene() {
     let mut violations = Vec::new();
     for scene in crate::tests::fixtures::scenes() {
         let name = format!("{scene}--white64");
-        let (rdram, entry_addr) = crate::tests::fixtures::fixture(&name);
+        let (rdram, entry_addr) = fixture(&name);
         let r = crate::hle::interpret_rdram(rdram, entry_addr as u32);
         scene_count += 1;
 
