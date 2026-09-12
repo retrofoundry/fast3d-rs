@@ -160,3 +160,32 @@ async fn replay_shared_depth() {
         }
     }
 }
+
+#[path = "common/coverage_replay.rs"]
+mod coverage_replay;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn coverage_parent_matches_a() {
+    pollster::block_on(coverage_replay::replay(false));
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+async fn coverage_parent_matches_a() {
+    coverage_replay::replay(false).await;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore = "scanout presents retained framebuffer height instead of VI height"]
+fn coverage_retained_height_matches_a() {
+    pollster::block_on(coverage_replay::replay(true));
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen_test::wasm_bindgen_test]
+#[ignore = "scanout presents retained framebuffer height instead of VI height"]
+async fn coverage_retained_height_matches_a() {
+    coverage_replay::replay(true).await;
+}

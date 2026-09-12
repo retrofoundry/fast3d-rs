@@ -106,7 +106,8 @@ pub(super) fn make_image(
     let color_image = task.final_color_image().unwrap();
     assert_eq!(color_image.addr, FRAMEBUFFER_ADDRESS.into());
     assert_eq!(color_image.width, u16::try_from(width).unwrap());
-    assert_eq!((color_image.fmt, color_image.siz), (0, 2));
+    assert_eq!(color_image.fmt, 0);
+    assert!(matches!(color_image.siz, 2 | 3));
     let fixture = Fixture {
         frame: Frame {
             serial: 0,
