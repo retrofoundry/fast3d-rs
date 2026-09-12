@@ -1,7 +1,9 @@
 # Triangle coverage witnesses
 
 The current renderer tests triangle coverage at `(x + 0.5, y + 0.5)` (A), while
-its UV correction evaluates the owning triangle at `(x, y)`. These tests also
+its UV correction reconstructs the owning triangle's UV at `(x, y)` using
+fragment derivatives. The arithmetic A expectation evaluates that UV exactly;
+the reconstruction can differ across backends. These tests also
 calculate B, whose coverage and attributes use `(x, y)`. Both expectations stay
 in the arithmetic module. The renderer conformance test currently requires A
 on 37 fixtures. The separate retained-height replay is ignored because scanout
@@ -41,8 +43,32 @@ with FullSync. They use F3D and F3DEX2, including direct XY modifications. An
 encoder test checks literal matrix, viewport and command words and independently
 recovers screen coordinates from the stored vertex bytes. Capture bytes are
 checked against regeneration. The shared native/browser replay requires a real
-adapter and compares each selected full frame with A. Primary-color pixels are exact;
+adapter and compares each selected full frame with A. Primary-color pixels are exact
+except for the WARP UV boundary policy below;
 interpolated scalar output permits one UNORM rounding step at covered pixels.
+
+The DX12 CPU adapter named `Microsoft Basic Render Driver` has a separate
+band-boundary comparison for `coverage-uv-perspective` and
+`coverage-uv-perspective-negative`. It accepts only exact RGBA palette colors
+reachable by perturbing each arithmetic corner-UV component by at most
+`1/128` texel before the existing 1/128-texel rounding and four-texel band
+selection. This permits another band at 97 and 124 A-covered pixels respectively.
+Background, coverage, scissor and alpha remain exact, and the test reports the
+number of accepted differences per fixture. Every other adapter and fixture,
+including `coverage-shared-uv` and `coverage-lod-perspective`, keeps its existing
+comparison. The A/B images and saved-output checker remain unchanged.
+
+At `(174,48)`, the positive-gradient fixture's exact V is `1231/308`, only
+`13/19712` texel above the band transition at `4 - 1/256`. WARP selects blue
+there while arithmetic A, Metal and Chrome select green. The UV allowance is
+a comparison cap of one coordinate-quantization step, not a proven backend
+error bound. Fragment
+[`position.w`](https://www.w3.org/TR/WGSL/#position-builtin-value) interpolates
+reciprocal clip W, so `(uv * position.w, position.w)` is affine in real
+arithmetic. Subtracting its half-pixel derivatives is exact before division;
+there is no rational-function truncation term. Backend interpolation and
+floating-point evaluation remain relevant, and WGSL supplies
+[no finite derivative accuracy bound](https://www.w3.org/TR/WGSL/#floating-point-accuracy).
 
 Run CPU checks without an adapter:
 
@@ -50,6 +76,7 @@ Run CPU checks without an adapter:
 cargo test -p fast3d --test coverage_arithmetic
 cargo test -p fast3d --features capture --lib coverage_encoded_coordinates_and_commands
 cargo test -p fast3d --features capture --lib coverage_fixture_bytes_match_builders
+cargo test -p fast3d --features capture --test browser_sm64_fixture_replay coverage_warp_
 python3 -m unittest discover -s tools/coverage -p 'test_*.py'
 ```
 
