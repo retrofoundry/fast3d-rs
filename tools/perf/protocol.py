@@ -50,7 +50,12 @@ V4_POLICY = {**POLICY, 'monitor_version': V4,
              # against thresholds of 0.0774/0.0801 core and a 96.80% idle floor, while every spread
              # passed. Accepted by David 2026-09-13.
              'measurement_background_average_max': .15,
-             'measurement_minimum_idle_percent': 96.0,
+             # Lowered from 96.0 on 2026-09-13 with David's acceptance. Across windows 9-11 every
+             # idle rejection sat at 95.78-96.00% and came from postflight PerfPowerServices and
+             # runningboardd bursts — macOS housekeeping the moment a benchmark stops, which no
+             # operator quiesce can remove. Genuinely degraded invocations measured 92.40 and
+             # 94.78%, so 95.0 separates the two populations and stops costing a pair per window.
+             'measurement_minimum_idle_percent': 95.0,
              'observed_spread_limits': {'cpu_ms': .25, 'emission_interval_ms': .15},
              'cold_spread_limit': .05, 'absolute_floor_ms_per_frame': .01,
              'pairs': 5, 'pair_order': ['AB', 'BA', 'AB', 'BA', 'AB'],

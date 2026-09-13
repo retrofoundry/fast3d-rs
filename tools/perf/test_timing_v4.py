@@ -171,14 +171,40 @@ class TimingV4Tests(unittest.TestCase):
             root = Path(directory)
             plan = self.batch(root)
             plan['same_binary_for_both_labels'] = False
-            self.assertFalse(self.verdict(root, plan)['valid'])
+            with self.assertRaisesRegex(ValueError, 'window6'):
+                self.verdict(root, plan)
+            self.assertFalse((root/'batch.json').exists())
             proof = root/'validation.json'
-            proof.write_text(json.dumps({'valid':True, 'policy':protocol.V4,
-                'cell':'native.demo1-dense', 'same_binary_for_both_labels':True}))
-            plan['validation_verdict'] = {'path':str(proof), 'sha256':protocol.sha(proof)}
+            proof.write_bytes((Path(__file__).with_name('fixtures')/'window6-verdict.json').read_bytes())
+            plan['validation_verdict'] = {'path':str(proof), 'source_path':report.VALIDATION_PATH,
+                                          'sha256':report.VALIDATION_SHA256}
             self.assertTrue(self.verdict(root, plan)['valid'])
             proof.write_text(proof.read_text()+'\n')
-            self.assertFalse(self.verdict(root, plan)['valid'])
+            with self.assertRaisesRegex(ValueError, 'window6'):
+                self.verdict(root, plan)
+
+    def test_code_change_five_pair_outcomes(self):
+        for delta, status, valid in [(1, 'regression', False), (-1, 'resolved speedup', True),
+                                     (.005, 'no regression resolved above U', True),
+                                     (None, 'inconclusive', False)]:
+            with self.subTest(delta=delta), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                def change(values, window, entry, i):
+                    if entry['revision'] == 'candidate':
+                        values['cpu_ms'] += delta or 0
+                plan = self.batch(root, change)
+                plan.update(same_binary_for_both_labels=False, validation_verdict={
+                    'path':str(Path(__file__).with_name('fixtures')/'window6-verdict.json'),
+                    'source_path':report.VALIDATION_PATH, 'sha256':report.VALIDATION_SHA256})
+                if delta is None:
+                    Path(plan['attempts'][0]['quiet_run']).unlink()
+                result = self.verdict(root, plan)
+                self.assertEqual(result['valid'], valid)
+                self.assertEqual(result['status'], status)
+                self.assertIsNotNone(result['lost_sensitivity']['observed.cpu_ms'])
+                if delta == -1:
+                    self.assertTrue(result['metrics']['observed.cpu_ms']['resolved_speedup'])
+                    self.assertEqual(result['metrics']['observed.cpu_ms']['conclusion'], status)
 
     def samples(self, phase, count, start=0):
         return [{'phase':phase, 'monotonic':start+i, 'idle_percent':99, 'idle_age_seconds':.1,
@@ -276,6 +302,35 @@ class TimingV4Tests(unittest.TestCase):
 
 
 class RecordedWindowTests(unittest.TestCase):
+    def test_window6_retains_the_exact_validation_metrics_and_admission(self):
+        fixtures = Path(__file__).with_name('fixtures')
+        original = fixtures/'window6-verdict.json'
+        self.assertEqual(protocol.sha(original), report.VALIDATION_SHA256)
+        expected = json.loads(original.read_text())
+        fixture = json.loads(gzip.decompress((fixtures/'timing-window-6.json.gz').read_bytes()))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = t1.native_plan(root, root)
+            plan['floors_ms'] = {'cpu_ms':.01, 'emission_interval_ms':.01}
+            for attempt in fixture['attempts']:
+                record = attempt['record']
+                for sample in attempt['samples']:
+                    sample['processes'] = [dict(zip(['pid','started','command'], attempt['process_identities'][index]),
+                        cpu_seconds=cpu, exemption=exemption, cores=None)
+                        for index, cpu, exemption in sample['processes']]
+                replay = protocol.replay_attempt(attempt['samples'], record, protocol.V4, 'native')
+                self.assertTrue(replay['quiet_valid'])
+                self.assertTrue(replay['complete'])
+                entry = next(a for a in plan['attempts'] if a['pair'] == record['pair'] and a['revision'] == record['revision'])
+                for path, value in [(Path(entry['quiet_run']), record), (Path(entry['summary']), attempt['summary'])]:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(value))
+            result = TimingV4Tests().verdict(root, plan)
+            self.assertEqual(result['valid'], expected['valid'])
+            self.assertEqual(result['metrics'], expected['metrics'])
+            self.assertEqual(result['lost_sensitivity'], expected['lost_sensitivity'])
+            self.assertEqual(result['pair_rejections'], expected['reasons'])
+
     def test_both_recorded_windows_under_both_versions(self):
         for label in ['a', 'b']:
             path = Path(__file__).with_name('fixtures')/f'timing-window-{label}.json.gz'
@@ -374,3 +429,51 @@ class FixedMeasurementThresholds(unittest.TestCase):
                  'monitor_elapsed_ms': 1, 'raw': ''} for i in range(5)]
         reasons = protocol.sample_reasons(loud, 'run', profile=profile, version=protocol.V4)
         self.assertTrue(any('ceiling' in r or 'allowance' in r or 'idle' in r for r in reasons), reasons)
+
+
+class IdleFloorAmendment(unittest.TestCase):
+    """David accepted lowering the v4 idle floor to 95.0% on 2026-09-13. Replays the real
+    window-11 invocation that 96.0% rejected: postflight idle 95.94% from PerfPowerServices and
+    runningboardd, which no operator quiesce can remove."""
+
+    REJECTED = Path('/Volumes/DS Vault/hub/scratch/fast3d/tmem-checks/T1/windows/window11-t2fix'
+                    '/native-demo1-dense/quiet/demo1-dense-coarse-2-parent')
+
+    def phase_reasons(self, directory, floor):
+        record = json.loads((directory/'run.json').read_text())
+        samples = [json.loads(line) for line in (directory/'telemetry.jsonl').read_text().splitlines() if line.strip()]
+        profile = {**record['resting_profile'], 'reasons': record['resting_profile'].get('reasons', [])}
+        original = protocol.V4_POLICY['measurement_minimum_idle_percent']
+        protocol.V4_POLICY['measurement_minimum_idle_percent'] = floor
+        try:
+            reasons = []
+            for phase in ['preflight', 'run', 'postflight']:
+                phase_samples = [s for s in samples if s.get('phase') == phase]
+                if not phase_samples:
+                    continue
+                first = samples.index(phase_samples[0])
+                reasons += protocol.sample_reasons(phase_samples, phase, profile=profile,
+                                                   allowed_idle=record.get('allowed_idle_services', ()),
+                                                   history=samples[:first], version=protocol.V4)
+            return reasons
+        finally:
+            protocol.V4_POLICY['measurement_minimum_idle_percent'] = original
+
+    def test_amended_floor_admits_the_postflight_housekeeping_rejection(self):
+        if not self.REJECTED.exists():
+            self.skipTest('window11 evidence not present')
+        self.assertTrue(any('idle' in r for r in self.phase_reasons(self.REJECTED, 96.0)),
+                        'the old floor is what rejected this invocation')
+        self.assertEqual(self.phase_reasons(self.REJECTED, 95.0), [],
+                         'the accepted floor must admit it')
+
+    def test_amended_floor_still_rejects_genuinely_degraded_idle(self):
+        profile = {'thresholds': {'maximum_background_cores_average': .5,
+                                  'maximum_background_cores_two_samples': .9,
+                                  'minimum_idle_percent': 99.0}, 'reasons': []}
+        degraded = [{'phase': 'postflight', 'monotonic': float(i), 'background_cores': .1,
+                     'idle_percent': 94.78, 'processes': [], 'disallowed': [], 'swapouts': 0,
+                     'thermal_throttled': False, 'power': 'AC', 'power_mode': 'normal',
+                     'idle_age_seconds': 0, 'monitor_elapsed_ms': 1, 'raw': ''} for i in range(10)]
+        reasons = protocol.sample_reasons(degraded, 'postflight', profile=profile, version=protocol.V4)
+        self.assertTrue(any('idle' in r for r in reasons), reasons)

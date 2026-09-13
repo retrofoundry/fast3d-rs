@@ -5,10 +5,16 @@ import json
 from pathlib import Path
 
 from protocol import VERSION, V4, replay_attempt, sha, timing_policy
-from report import batch_metrics
+from report import batch_metrics, verify_validation
 
 
-def replay_directory(attempt, out, version=VERSION, backend=None):
+def replay_directory(attempt, out, version=VERSION, backend=None, validation_verdict=None):
+    plan_path = attempt/'attempts.json'
+    plan = json.loads(plan_path.read_text()) if plan_path.exists() else {'same_binary_for_both_labels':True}
+    if validation_verdict is not None:
+        plan['validation_verdict'] = {**plan.get('validation_verdict', {}),
+                                      'path':str(validation_verdict.resolve())}
+    verify_validation({**plan, 'policy': version})
     out.mkdir(parents=True, exist_ok=False)
     results = []
     runs = []
@@ -32,7 +38,7 @@ def replay_directory(attempt, out, version=VERSION, backend=None):
             runs.append({**record, 'artifacts':{'summary':str(summary_path)}})
         print(f"{result['run']}: quiet={result['quiet_valid']}; complete={result['complete']}", flush=True)
     policy = timing_policy(version, backend, 'demo1-dense', 'coarse')
-    metrics = batch_metrics({'same_binary_for_both_labels':True}, runs, summaries, version)
+    metrics = batch_metrics(plan, runs, summaries, version)
     (out/'replay.json').write_text(json.dumps({'policy':version, 'quiet_policy':policy,
         'timing_valid':False, 'valid':False, 'attempts':results, 'metrics':metrics,
         'lost_sensitivity':{key:value['lost_sensitivity'] for key,value in metrics.items()},
@@ -48,5 +54,6 @@ if __name__ == '__main__':
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--policy',choices=[VERSION,V4],default=VERSION)
     parser.add_argument('--backend',choices=['native','chrome'])
+    parser.add_argument('--validation-verdict',type=Path)
     args = parser.parse_args()
-    replay_directory(args.attempt, args.out, args.policy, args.backend)
+    replay_directory(args.attempt, args.out, args.policy, args.backend, args.validation_verdict)

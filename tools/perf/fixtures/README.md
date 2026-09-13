@@ -19,3 +19,13 @@ them before replay. No samples, process identities or failed invocations are
 removed. Raw command output, cached disallowed lists, process parent IDs and
 monitor-cost fields are omitted because replay does not read them. The original
 full artifacts remain in the scratch paths recorded in each fixture.
+
+`timing-window-6.json.gz` retains all ten window-6 runs using the same compact
+process encoding. It omits raw monitor output, cached disallowed lists,
+monitor costs and cached resting/process activity reports; replay recomputes
+admission from every sample and process identity. The original telemetry hashes
+and physical source path are retained. `window6-verdict.json` is the unmodified
+accepted verdict, SHA-256
+`742b5d57041448d00ebb937bb844bdf8dff5dab148f69782cae1dfc3a88f8133`.
+The test requires ten complete quiet admissions and exact equality of every
+metric, lost-sensitivity record and batch rejection with that verdict.
