@@ -91,6 +91,11 @@ translation would sample `(0.75, 0.75)` and select the wrong texel.
 
 The odd-width RGBA32 fixture uses a 193×132 VI. The near-plane fixture's clipped
 edge is `x+y=144.25`, which misses both A and B sample lattices.
+The clip-scissor fixture uses fractional intercepts on its four boundary-crossing
+triangles so vertex snapping after clipping cannot decide an exact edge tie.
+Arithmetic regressions keep those edges off both sample lattices and their
+target/scissor intersections fractional. The dedicated unclipped tie and shared-edge
+witnesses retain their exact ownership checks.
 The same captures export through `export_capture_rdram` for the pinned rt64
 oracle. `tools/coverage/check_fixture.py` checks saved renderer output against B.
 `--parent` selects archived A output; `--rt64` checks B with the oracle channel

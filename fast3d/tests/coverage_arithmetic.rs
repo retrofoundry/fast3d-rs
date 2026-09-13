@@ -164,6 +164,71 @@ fn coverage_extents_are_vi_legal() {
 }
 
 #[test]
+fn coverage_clip_edges_miss_both_sample_lattices() {
+    let case = cases()
+        .into_iter()
+        .find(|c| c.name == "coverage-clip-scissor")
+        .unwrap();
+    for (i, draw) in case.draws.iter().enumerate().filter(|(_, d)| d.survives()) {
+        for e in 0..3 {
+            let a = draw.triangle[e];
+            let b = draw.triangle[(e + 1) % 3];
+            for d in [0, 2] {
+                for y in 0..i64::from(case.height) {
+                    for x in 0..i64::from(case.width) {
+                        assert_ne!(
+                            edge(a, b, [4 * x + d, 4 * y + d]),
+                            0,
+                            "draw {i} edge {e} sample ({x},{y}) offset {d}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn coverage_clip_boundary_intersections_are_fractional() {
+    let case = cases()
+        .into_iter()
+        .find(|c| c.name == "coverage-clip-scissor")
+        .unwrap();
+    for (i, draw) in case.draws.iter().enumerate().filter(|(_, d)| d.survives()) {
+        for e in 0..3 {
+            let a = draw.triangle[e];
+            let b = draw.triangle[(e + 1) % 3];
+            for (axis, bounds) in [
+                (0, [0, case.scissor[0], case.scissor[2], case.width]),
+                (1, [0, case.scissor[1], case.scissor[3], case.height]),
+            ] {
+                let delta = b[axis] - a[axis];
+                if delta == 0 {
+                    continue;
+                }
+                for shift in [0, 2] {
+                    for bound in bounds {
+                        let coordinate = 4 * i64::from(bound) - shift;
+                        if !(a[axis].min(b[axis])..=a[axis].max(b[axis])).contains(&coordinate) {
+                            continue;
+                        }
+                        let n = a[1 - axis] * delta
+                            + (coordinate - a[axis]) * (b[1 - axis] - a[1 - axis]);
+                        for translation in [0, shift] {
+                            assert_ne!(
+                                (n + translation * delta) % (4 * delta),
+                                0,
+                                "draw {i} edge {e} axis {axis} bound {bound} shift {shift} translation {translation}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn coverage_near_intersection_misses_both_sample_lattices() {
     let case = cases().into_iter().find(|c| c.kind == Kind::Near).unwrap();
     let t = case.draws[0].triangle;
