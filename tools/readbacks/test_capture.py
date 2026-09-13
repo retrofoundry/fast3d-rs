@@ -33,9 +33,11 @@ class CaptureFailures(unittest.TestCase):
         if command == ["git", "rev-parse", "HEAD"]:
             return "a" * 40
         if command == ["rustc", "-Vv"]:
-            return "rustc test"
+            return "rustc test\nhost: aarch64-apple-darwin"
         if command[:2] == ["cargo", "tree"]:
             return "fast3d v1.0.0"
+        if command[:2] == ["cargo", "metadata"]:
+            return json.dumps({"resolve": {"nodes": [{"id": "fast3d", "features": [], "deps": []}]}})
         raise AssertionError(command)
 
     def capture(self, runner):
@@ -81,6 +83,21 @@ class CaptureFailures(unittest.TestCase):
         manifest = json.loads((self.output / "manifest.json").read_text())
         self.assertEqual(manifest["source_sha"], "a" * 40)
         self.assertIsNone(manifest["configurations"]["default"]["exit_code"])
+
+    def test_dependency_artifacts_are_authenticated(self):
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(command, 0, stdout="")
+        self.capture(runner)
+        for name, replacement, error in [
+                ("dependencies.txt", "changed tree", "full dependency graph hash mismatch"),
+                ("test-dependencies.json", "[]", "test dependency graph hash mismatch")]:
+            with self.subTest(name=name):
+                path = self.output / name
+                original = path.read_text()
+                path.write_text(replacement)
+                with self.assertRaisesRegex(ValueError, error):
+                    ci.load_capture(self.output, ci.INVENTORY, "a" * 40, "1")
+                path.write_text(original)
 
     def test_existing_evidence_is_unchanged_by_a_rejected_capture(self):
         self.output.mkdir()

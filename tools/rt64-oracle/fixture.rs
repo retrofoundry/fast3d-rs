@@ -108,7 +108,7 @@ pub(super) fn make_image(
         .finish(entry.into(), microcode, DataFormat::Fixed, 0)
         .unwrap();
     let color_image = task.final_color_image().unwrap();
-    assert_eq!(color_image.addr, FRAMEBUFFER_ADDRESS.into());
+    assert_eq!(color_image.addr, u64::from(FRAMEBUFFER_ADDRESS));
     assert_eq!(color_image.width, u16::try_from(width).unwrap());
     assert_eq!(color_image.fmt, 0);
     assert!(matches!(color_image.siz, 2 | 3));

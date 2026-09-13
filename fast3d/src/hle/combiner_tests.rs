@@ -31,7 +31,7 @@ fn filter_mode_is_captured_in_material_and_uniform() {
         assert_ne!(materials[0], materials[1]);
         assert_ne!(materials[1], materials[2]);
         assert_eq!(materials[0], materials[3]);
-        assert_eq!(materials[0].texture, materials[1].texture);
+        assert_eq!(materials[0].texture.decode(), materials[1].texture.decode());
     }
 }
 
@@ -303,7 +303,7 @@ fn combiner_cycle1_texel1_reads_only_physical0() {
                 );
                 assert_eq!(mat.tile_count, 1);
                 assert!(mat.tex1.is_none());
-                assert_eq!(mat.texture, [32, 48, 64, 112].repeat(2));
+                assert_eq!(mat.texture.decode(), [32, 48, 64, 112].repeat(2));
             }
         }
     }
@@ -318,14 +318,17 @@ fn combiner_cycle1_texel1_reads_only_physical0() {
                 let physical0 = [(0, 1), (1, 2)].contains(&(cycle, token));
                 assert_eq!(mat.tex_enable, physical0);
                 if physical0 {
-                    assert_eq!(mat.texture, [32, 48, 64, 112].repeat(2));
+                    assert_eq!(mat.texture.decode(), [32, 48, 64, 112].repeat(2));
                 } else {
                     assert_eq!(
-                        mat.texture,
+                        mat.texture.decode(),
                         vec![0; 4],
                         "unused physical 0 must not be decoded"
                     );
-                    assert_eq!(mat.tex1.unwrap().texture, [176, 192, 208, 240].repeat(2));
+                    assert_eq!(
+                        mat.tex1.unwrap().texture.decode(),
+                        [176, 192, 208, 240].repeat(2)
+                    );
                 }
             }
         }

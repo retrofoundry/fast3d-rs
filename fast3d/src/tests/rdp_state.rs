@@ -36,7 +36,10 @@ fn triangles_inherit_color_image_including_zero_across_tasks_and_frames() {
             let scene = renderer.frame_scenes.last().unwrap();
             assert!(scene.draw_runs.is_empty());
             assert_eq!(scene.framebuffer_pairs.len(), 1);
-            assert_eq!(scene.framebuffer_pairs[0].color_image.addr, address.into());
+            assert_eq!(
+                scene.framebuffer_pairs[0].color_image.addr,
+                u64::from(address)
+            );
             assert_eq!(
                 renderer.last_scanout_addr,
                 Some(TargetId::Guest(address.into()))

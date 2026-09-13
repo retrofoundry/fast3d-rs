@@ -99,7 +99,16 @@ async fn check_upload_accounting() {
         assert_eq!(first.counters[&format!("texture.{role}.creations")], 1);
         assert_eq!(first.counters[&format!("texture.{role}.upload_bytes")], 4);
     }
-    assert!(second.counters.is_empty());
+    // A repeat upload must do no GPU work. Since T2 the positional cache compares each role's
+    // serialized request witness instead of expanded pixels, so witness comparisons are the only
+    // work it may record: no creations, uploads or capacity growth.
+    let mut repeated: Vec<&str> = second.counters.keys().map(String::as_str).collect();
+    repeated.sort_unstable();
+    assert_eq!(
+        repeated,
+        ["tmem.bytes_compared", "tmem.witness_comparisons"]
+    );
+    assert_eq!(second.counters["tmem.witness_comparisons"], 6);
 }
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

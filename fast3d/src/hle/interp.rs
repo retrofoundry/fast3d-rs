@@ -1246,7 +1246,7 @@ mod task8_tests {
         assert_eq!(m.env, [0, 0, 0, 255]);
         assert_eq!(m.tex_w, 32);
         assert_eq!(m.tex_h, 32);
-        assert_eq!(m.texture.len(), 32 * 32 * 4); // decoded RGBA8
+        assert_eq!(m.texture.decode().len(), 32 * 32 * 4); // decoded RGBA8
         assert!(m.tex_enable);
         // FOUR corners: s/t in S10.5 (0 and 1024 = 32<<5), sc=tc=0xFFFF. No V-flip.
         // uv now lives on the GPU OutVertex; rederive from raw s/t + texcoord table for the assert.

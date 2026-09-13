@@ -99,3 +99,13 @@ exercise an alpha-only mutation, truncated and missing rows, overwritten
 configurations, incorrect SHAs/run IDs, input corruption, independent decode
 literals and unchanged captures. These CPU checks do not establish the Metal or
 WARP hardware cells; the workflow must complete against the actual base.
+
+The `native-test-graph-v1` dependency fingerprint compares the resolved package
+IDs, features, targets and dependency edges for the host's native test build.
+Normal and dev edges to the same dependency are one test edge; build edges remain
+separate. This permits promoting an existing test dependency to production when
+the compiled test graph is unchanged. Both the complete Cargo feature tree and
+its SHA-256 remain in the artifact, alongside `test-dependencies.json`; the loader
+authenticates both. A package, feature, target, build-edge or dependency change
+still makes the runtime incompatible. Older artifacts require the same-run base
+bootstrap with this harness.

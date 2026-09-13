@@ -159,7 +159,7 @@ fn alpha_dither_copy_uses_texel_alpha_and_framebuffer_extent() {
         scene.draw_runs.clear();
         scene.render_modes[0].cvg_x_alpha = coverage;
         let mat = &mut scene.materials[0];
-        mat.texture = vec![255, 0, 0, alpha];
+        mat.texture = vec![255, 0, 0, alpha].into();
         mat.tex_w = 1;
         mat.tex_h = 1;
         mat.tex_enable = true;

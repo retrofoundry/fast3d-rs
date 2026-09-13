@@ -163,6 +163,7 @@ impl Request {
     }
 
     pub fn decode_prepared(&self, linear: &[u8]) -> Result<Vec<u8>, crate::DiagKind> {
+        self.prepare()?;
         match self.representation {
             Representation::Tile => {
                 Tmem::from_profile(&self.bank).sample_tile(&self.tile, self.tlut)
@@ -220,6 +221,25 @@ pub struct DecodeExecutor {
 }
 
 impl Request {
+    /// Rebuild the owned production request for an untimed trace/identity inspection.
+    pub fn encoded_identity(&self) -> Result<(u64, Vec<u8>), crate::DiagKind> {
+        self.prepare()?;
+        let rdp = Rdp {
+            tmem_bank: Tmem::from_profile(&self.bank),
+            ..Default::default()
+        };
+        let binding = crate::hle::texture_request::prepare(
+            &rdp,
+            &self.tile,
+            self.tlut,
+            &crate::profiling::Recorder::default(),
+        )?;
+        let crate::hle::texture_request::TextureSource::Encoded(request) = binding.source else {
+            unreachable!()
+        };
+        Ok((request.key().xxh3_64, request.witness().to_vec()))
+    }
+
     pub fn diagnostic_variant(&self, xor: u8) -> Self {
         let mut bank = self.bank.clone();
         for byte in &mut bank.bytes {
@@ -229,16 +249,14 @@ impl Request {
             tmem_bank: Tmem::from_profile(&bank),
             ..Default::default()
         };
-        let output = combiner::decode_sampling_texture(&rdp, &self.tile, self.tlut);
+        let output = combiner::decode_sampling_texture(&rdp, &self.tile, self.tlut)
+            .map(|v| v.texture.decode().into_owned());
         Self::capture(
             &rdp,
             &self.tile,
             self.tlut,
             &self.role,
-            output
-                .as_ref()
-                .map(|v| v.texture.as_slice())
-                .map_err(|e| *e),
+            output.as_ref().map(|v| v.as_slice()).map_err(|e| *e),
         )
     }
 
@@ -267,7 +285,7 @@ impl DecodeExecutor {
             return Err(diag.kind);
         }
         combiner::decode_sampling_texture(&self.rdp, &self.tile, self.tlut)
-            .map(|level| level.texture)
+            .map(|level| level.texture.decode().into_owned())
     }
     pub fn prepare(&self) -> Result<Vec<u8>, crate::DiagKind> {
         self.validate()?;
@@ -314,6 +332,7 @@ impl DecodeExecutor {
     }
 
     pub fn decode(&self, linear: &[u8]) -> Result<Vec<u8>, crate::DiagKind> {
+        self.validate()?;
         match self.representation {
             Representation::Tile => self.rdp.tmem_bank.sample_tile(&self.tile, self.tlut),
             Representation::Lookup => self.rdp.tmem_bank.sampling_lookup(&self.tile, self.tlut),
@@ -417,16 +436,14 @@ pub fn authored_requests() -> Vec<Request> {
                     rdp.tmem_bank.write_tlut(&data[..512], 256, 256);
                 }
                 for tlut in if fmt == 2 { vec![2, 3] } else { vec![0] } {
-                    let output = combiner::decode_sampling_texture(&rdp, &tile, tlut);
+                    let output = combiner::decode_sampling_texture(&rdp, &tile, tlut)
+                        .map(|v| v.texture.decode().into_owned());
                     requests.push(Request::capture(
                         &rdp,
                         &tile,
                         tlut,
                         "authored",
-                        output
-                            .as_ref()
-                            .map(|v| v.texture.as_slice())
-                            .map_err(|e| *e),
+                        output.as_ref().map(|v| v.as_slice()).map_err(|e| *e),
                     ));
                 }
             }

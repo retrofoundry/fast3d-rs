@@ -199,7 +199,7 @@ fn tile_large_mask_uses_bounded_tmem_lookup() {
         });
         assert_eq!(mat.sampling.image[2], 1);
         assert_eq!(mat.sampling.allocation_extent(), [4096, 4]);
-        assert_eq!(mat.texture.len(), 65536);
+        assert_eq!(mat.texture.decode().len(), 65536);
         assert_eq!(
             mat.sampling.tmem,
             [4088, 4088, if siz == 3 { 0 } else { 3 }, u32::from(siz)]
@@ -263,6 +263,6 @@ fn lod_tiles_apply_independent_origin_and_shift() {
     rdp.other_mode_h |= 1 << 20;
     let mat = build_material(&rdp, &rsp, &mut Vec::new(), 0).unwrap();
     assert_eq!((mat.tex_w, mat.tex_h), (32, 32));
-    assert_eq!(mat.texture, mat.mip_levels[0].texture);
+    assert_eq!(mat.texture.decode(), mat.mip_levels[0].texture.decode());
     assert_eq!(mat.sampling, mat.mip_levels[0].sampling);
 }

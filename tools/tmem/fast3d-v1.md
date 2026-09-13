@@ -1,6 +1,6 @@
 # Fast3dV1 preimage freeze
 
-This test-only format freezes Fast3dV1 preimages and XXH3 vectors at fast3d
+This format freezes Fast3dV1 preimages and XXH3 vectors at fast3d
 `bb0fea399793eb2aeb1ae93d5972763b9761da98`. The serializer lives in
 `fast3d/tests/common/tmem_preimage.rs` and serializes explicitly supplied selected
 bytes. It contains no footprint discovery, HLE validation, decoder or runtime

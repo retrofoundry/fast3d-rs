@@ -5,6 +5,7 @@
 //! decode_combine validates support and texture dependencies; the shader receives
 //! raw combine_l/combine_h words (one source of truth).
 
+use super::texture_request::{TextureBindingInput, TextureSource};
 use super::tile_sampling::TileSampling;
 #[cfg(test)]
 #[path = "combiner_tests.rs"]
@@ -314,14 +315,12 @@ pub struct CombinerSelectors {
     pub cyc1: CycleSel,
 }
 
-/// The second texture (TEXEL1) for a 2-cycle two-texture combiner. Built by `build_material` only
-/// when `tile_count == 2`; mirrors the tex0 fields carried directly on `Material` (decoded RGBA8
-/// bytes + dims + wrap/format).
-#[derive(Clone, Debug, PartialEq)]
+/// The independent TEXEL1 source and draw sampling state for a two-texture combiner.
+#[derive(Clone, Debug)]
 pub struct Tex1 {
     pub sampling: TileSampling,
-    /// RGBA8 payload sized by `sampling.allocation_extent()`; tex_w/tex_h remain logical extents.
-    pub texture: Vec<u8>,
+    /// Owned encoded input; tex_w/tex_h remain logical extents.
+    pub texture: TextureSource,
     pub tex_w: u32,
     pub tex_h: u32,
     /// Wrap mode from the TEXEL1 tile (cms/cmt): 0=WRAP 1=MIRROR 2=CLAMP.
@@ -337,27 +336,24 @@ pub struct Tex1 {
 /// fixed per-level bindings. Kept in sync with `render::MAX_LOD`.
 pub const MAX_LOD_LEVELS: u32 = 8;
 
-/// One decoded LOD level. `texture` is an image or bounded TMEM lookup for a single
-/// independent LOD level; `mip_levels[0]` mirrors the `Material.texture` / `tex_w` / `tex_h` level-0
-/// fields. Levels are NOT required to halve — each carries its own `(w, h)`. Also used for the DETAIL
-/// tile (`Material.detail_tex`).
-#[derive(Clone, Debug, PartialEq)]
+/// One independent LOD or detail source. Levels need not halve; level zero shares
+/// the material's request.
+#[derive(Clone, Debug)]
 pub struct MipLevel {
     pub sampling: TileSampling,
-    /// RGBA8 payload sized by `sampling.allocation_extent()`; w/h remain logical extents.
-    pub texture: Vec<u8>,
+    /// Owned encoded input; w/h remain logical extents.
+    pub texture: TextureSource,
     pub w: u32,
     pub h: u32,
 }
 
 /// The complete material produced by the HLE from the display list.
-/// Carries decoded texture (RGBA8), combiner selectors (for diagnostic), raw combine
-/// words (for the shader), cycle type, prim/env, and whether texture is enabled.
-#[derive(Clone, Debug, PartialEq)]
+/// Owns texture requests and draw state. CPU expansion is deferred to upload or inspection.
+#[derive(Clone, Debug)]
 pub struct Material {
     pub sampling: TileSampling,
-    /// RGBA8 payload sized by `sampling.allocation_extent()`; tex_w/tex_h remain logical extents.
-    pub texture: Vec<u8>,
+    /// Owned encoded input; tex_w/tex_h remain logical extents.
+    pub texture: TextureSource,
     pub tex_w: u32,
     pub tex_h: u32,
     /// Decoded selectors for validation and texture dependencies; shader gets raw words.
@@ -393,22 +389,16 @@ pub struct Material {
     /// Primitive min LOD level (lodMin/32). Floors `maxDst` under DETAIL/SHARPEN
     /// in the shader (see `compute_lod`). Default 0.0.
     pub prim_min_level: f32,
-    /// True when G_TL_LOD (othermode_h bit 16) is set and a faithful per-level texture set was decoded.
+    /// True when G_TL_LOD (othermode_h bit 16) is set and a validated per-level texture set was prepared.
     pub lod: bool,
-    /// LOD level count: 1 for non-LOD materials, else the decoded level count (`min(level + 1,
+    /// LOD level count: 1 for non-LOD materials, else the prepared level count (`min(level + 1,
     /// MAX_LOD_LEVELS)`).
     pub num_levels: u8,
     /// G_MDSFT_TEXTDETAIL bits (sharpen=bit0, detail=bit1) from othermode. 0 for non-LOD materials.
     pub text_detail: u8,
-    /// Decoded per-level textures (N64-faithful, INDEPENDENT levels — no halving constraint). Empty
-    /// for non-LOD materials (the renderer then uploads a single level from `texture`). When `lod` is
-    /// true this holds exactly `num_levels` entries: `mip_levels[k]` is level k with its own dims
-    /// `(w, h)` decoded from tile `tiles[(base+k)&7]`; `mip_levels[0]` mirrors `texture`/`tex_w`/`tex_h`.
-    /// The renderer uploads each as its own wgpu texture (level 0 → `tex0`, levels 1.. → `tex_lod*`).
+    /// Independent per-level sources; level zero aliases `texture`. Empty without LOD.
     pub mip_levels: Vec<MipLevel>,
-    /// The DETAIL tile (tiles index 0), decoded independently under DETAIL mode (`text_detail`
-    /// bit1). `Some` only when LOD is active AND the detail tile takes the faithful decode path
-    /// and is sampled by the shader under DETAIL mode. `None` otherwise.
+    /// Tile zero when DETAIL is active; validated independently from the LOD sources.
     pub detail_tex: Option<MipLevel>,
 }
 
@@ -658,47 +648,27 @@ fn texture_at_draw<T>(
     }
 }
 
-fn decode_tile_texture(
-    rdp: &crate::hle::rdp::Rdp,
-    tile: &crate::hle::rdp::TileDescriptor,
-    tex_w: u32,
-    tex_h: u32,
-    tlut_fmt: u8,
-) -> Result<Vec<u8>, crate::diag::DiagKind> {
-    validate_tile_texture(rdp, tile)?;
-    if tile_takes_faithful_path(rdp, tile, tex_w) {
-        return rdp.tmem_bank.sample_tile(tile, tlut_fmt);
-    }
-
-    let tlut = rdp.tmem_bank.palette();
-    let fi = crate::hle::texdec::FormatInfo {
-        fmt: tile.fmt,
-        siz: tile.siz,
-    };
-    let needed = fi.tmem_bytes(tex_w, tex_h);
-    let bytes = rdp.tmem_bank.linear_bytes(tile, needed)?;
-    fi.decode(&bytes, tex_w, tex_h, tlut, tile.palette, tlut_fmt)
-}
-
+#[cfg(any(test, feature = "profiling"))]
 pub(crate) fn decode_sampling_texture(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
-    tlut_fmt: u8,
+    tlut: u8,
 ) -> Result<MipLevel, crate::diag::DiagKind> {
-    validate_tile_texture(rdp, tile)?;
-    let sampling = TileSampling::from_tile(tile, tlut_fmt);
-    let w = u32::from(tile.width.max(1));
-    let h = u32::from(tile.height.max(1));
-    let texture = if sampling.image[2] == 1 {
-        rdp.tmem_bank.sampling_lookup(tile, tlut_fmt)?
-    } else {
-        decode_tile_texture(rdp, tile, w, h, tlut_fmt)?
-    };
+    request_profiled(rdp, tile, tlut, &Default::default())
+}
+
+fn request_profiled(
+    rdp: &crate::hle::rdp::Rdp,
+    tile: &crate::hle::rdp::TileDescriptor,
+    tlut: u8,
+    profiling: &crate::profiling::Recorder,
+) -> Result<MipLevel, crate::DiagKind> {
+    let binding = super::texture_request::prepare(rdp, tile, tlut, profiling)?;
     Ok(MipLevel {
-        sampling,
-        texture,
-        w,
-        h,
+        sampling: binding.sampling,
+        texture: binding.source,
+        w: u32::from(tile.width.max(1)),
+        h: u32::from(tile.height.max(1)),
     })
 }
 
@@ -709,29 +679,21 @@ fn decode_profiled(
     rsp: &crate::hle::rsp::Rsp,
     role: &str,
 ) -> Result<MipLevel, crate::DiagKind> {
-    let _span = rsp.profiling.span("decode");
-    let output = decode_sampling_texture(rdp, tile, tlut);
+    let output = request_profiled(rdp, tile, tlut, &rsp.profiling);
     #[cfg(any(test, feature = "profiling"))]
     if rsp.profiling.active() {
-        let representation = crate::profiling::representation(rdp, tile, tlut);
-        let extent = TileSampling::from_tile(tile, tlut).allocation_extent();
-        rsp.profiling.decode(
-            format!(
-                "{representation:?}.{}-{}.tlut{tlut}.{}x{}.{role}",
-                tile.fmt, tile.siz, extent[0], extent[1]
-            ),
-            output.as_ref().ok().map(|v| v.texture.len()),
-        );
+        rsp.profiling.count("tmem.requests", 1);
+        if output.is_err() {
+            rsp.profiling.count("tmem.rejected_requests", 1);
+        }
         if rsp.profiling.tracing() {
+            let pixels = output.as_ref().map(|v| v.texture.decode());
             rsp.profiling.request(crate::profiling::Request::capture(
                 rdp,
                 tile,
                 tlut,
                 role,
-                output
-                    .as_ref()
-                    .map(|v| v.texture.as_slice())
-                    .map_err(|e| *e),
+                pixels.as_ref().map(|v| v.as_ref()).map_err(|e| **e),
             ));
         }
     }
@@ -740,16 +702,29 @@ fn decode_profiled(
     output
 }
 
+impl MipLevel {
+    pub(crate) fn binding(&self) -> TextureBindingInput {
+        TextureBindingInput {
+            source: self.texture.clone(),
+            sampling: self.sampling,
+        }
+    }
+}
+impl Tex1 {
+    pub(crate) fn binding(&self) -> TextureBindingInput {
+        TextureBindingInput {
+            source: self.texture.clone(),
+            sampling: self.sampling,
+        }
+    }
+}
+
 impl Material {
-    pub(crate) fn owned_texture_bytes(&self) -> usize {
-        self.texture.len()
-            + self.tex1.as_ref().map_or(0, |v| v.texture.len())
-            + self
-                .mip_levels
-                .iter()
-                .map(|v| v.texture.len())
-                .sum::<usize>()
-            + self.detail_tex.as_ref().map_or(0, |v| v.texture.len())
+    pub(crate) fn texture_sources(&self) -> impl Iterator<Item = &TextureSource> {
+        std::iter::once(&self.texture)
+            .chain(self.tex1.iter().map(|t| &t.texture))
+            .chain(self.mip_levels.iter().map(|t| &t.texture))
+            .chain(self.detail_tex.iter().map(|t| &t.texture))
     }
 }
 
@@ -835,7 +810,7 @@ fn build_material_inner(
     } else {
         MipLevel {
             sampling: TileSampling::default(),
-            texture: vec![0; 4],
+            texture: vec![0; 4].into(),
             w: 1,
             h: 1,
         }
@@ -908,15 +883,7 @@ fn build_material_inner(
         (false, 1u8, Vec::new(), 0u8, None)
     };
 
-    let decoded = if lod {
-        rsp.profiling.count(
-            "owned_copy.level_zero_bytes",
-            mip_levels[0].texture.len() as u64,
-        );
-        mip_levels[0].clone()
-    } else {
-        decoded
-    };
+    let decoded = if lod { mip_levels[0].clone() } else { decoded };
     Some(Material {
         sampling: decoded.sampling,
         texture: decoded.texture,
@@ -960,6 +927,87 @@ pub fn build_rect_material(
     pc: u64,
 ) -> Option<Material> {
     build_material_inner(rdp, rsp, diags, pc, Some(tile))
+}
+
+impl Tex1 {
+    pub(crate) fn matches(&self, other: &Self, profiling: &crate::profiling::Recorder) -> bool {
+        self.sampling == other.sampling
+            && self.texture.matches(&other.texture, profiling)
+            && self.tex_w == other.tex_w
+            && self.tex_h == other.tex_h
+            && self.wrap_s == other.wrap_s
+            && self.wrap_t == other.wrap_t
+            && self.fmt == other.fmt
+            && self.siz == other.siz
+    }
+}
+impl PartialEq for Tex1 {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(other, &Default::default())
+    }
+}
+
+impl MipLevel {
+    pub(crate) fn matches(&self, other: &Self, profiling: &crate::profiling::Recorder) -> bool {
+        self.sampling == other.sampling
+            && self.texture.matches(&other.texture, profiling)
+            && self.w == other.w
+            && self.h == other.h
+    }
+}
+impl PartialEq for MipLevel {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(other, &Default::default())
+    }
+}
+
+impl Material {
+    pub(crate) fn matches(&self, other: &Self, profiling: &crate::profiling::Recorder) -> bool {
+        self.sampling == other.sampling
+            && self.texture.matches(&other.texture, profiling)
+            && self.tex_w == other.tex_w
+            && self.tex_h == other.tex_h
+            && self.selectors == other.selectors
+            && self.cycle_type == other.cycle_type
+            && self.filter_mode == other.filter_mode
+            && self.prim == other.prim
+            && self.env == other.env
+            && self.convert == other.convert
+            && self.key == other.key
+            && self.tex_enable == other.tex_enable
+            && self.wrap_s == other.wrap_s
+            && self.wrap_t == other.wrap_t
+            && self.fmt == other.fmt
+            && self.siz == other.siz
+            && self.blend_color == other.blend_color
+            && self.tile_count == other.tile_count
+            && (match (&self.tex1, &other.tex1) {
+                (Some(a), Some(b)) => a.matches(b, profiling),
+                (None, None) => true,
+                _ => false,
+            })
+            && self.prim_lod_frac == other.prim_lod_frac
+            && self.prim_min_level == other.prim_min_level
+            && self.lod == other.lod
+            && self.num_levels == other.num_levels
+            && self.text_detail == other.text_detail
+            && self.mip_levels.len() == other.mip_levels.len()
+            && self
+                .mip_levels
+                .iter()
+                .zip(&other.mip_levels)
+                .all(|(a, b)| a.matches(b, profiling))
+            && (match (&self.detail_tex, &other.detail_tex) {
+                (Some(a), Some(b)) => a.matches(b, profiling),
+                (None, None) => true,
+                _ => false,
+            })
+    }
+}
+impl PartialEq for Material {
+    fn eq(&self, other: &Self) -> bool {
+        self.matches(other, &Default::default())
+    }
 }
 
 #[cfg(test)]
@@ -1144,7 +1192,11 @@ mod tests {
         let line_bytes = ((rdp.tiles[0].width as usize) << rdp.tiles[0].siz) >> 1;
         assert_eq!(line_bytes, 3, "precondition: sub-word row (not 8-aligned)");
 
-        let got = decode_tile_texture(&rdp, &rdp.tiles[0], 3, 3, 0).unwrap();
+        let got = decode_sampling_texture(&rdp, &rdp.tiles[0], 0)
+            .unwrap()
+            .texture
+            .decode()
+            .into_owned();
         assert_eq!(got.len(), 3 * 3 * 4);
 
         // Hand-computed expectation: I8 texel (r, c) = 0x10 + r*16 + c → RGBA [v, v, v, v].
@@ -1227,16 +1279,25 @@ mod tests {
 
         let tex1 = mat.tex1.as_ref().expect("tex1 built when tileCount == 2");
         // tex1 is the decode of tiles[(base+1)&7] = tiles[1] ...
-        let expect1 = decode_tile_texture(&rdp, &rdp.tiles[1], 4, 1, 0).unwrap();
-        assert_eq!(tex1.texture, expect1);
+        let expect1 = decode_sampling_texture(&rdp, &rdp.tiles[1], 0)
+            .unwrap()
+            .texture
+            .decode()
+            .into_owned();
+        assert_eq!(tex1.texture.decode(), expect1);
         // ... and it genuinely differs from tex0 (tiles[0]), proving two distinct tiles were decoded.
         assert_ne!(
-            mat.texture, tex1.texture,
+            mat.texture.decode(),
+            tex1.texture.decode(),
             "tex0 (tiles[0]) must differ from tex1 (tiles[1])"
         );
         assert_eq!(
-            mat.texture,
-            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 1, 0).unwrap()
+            mat.texture.decode(),
+            decode_sampling_texture(&rdp, &rdp.tiles[0], 0)
+                .unwrap()
+                .texture
+                .decode()
+                .into_owned()
         );
     }
 
@@ -1336,7 +1397,7 @@ mod tests {
         let mut diags = Vec::new();
         let mat = build_material(&rdp, &rsp, &mut diags, 0).unwrap();
         assert!(diags.is_empty());
-        let texture = mat.tex1.unwrap().texture;
+        let texture = mat.tex1.unwrap().texture.decode().into_owned();
         assert_eq!(
             texture,
             [64, 65, 66, 67]
@@ -1453,16 +1514,22 @@ mod tests {
 
         // Each buffer is exactly w*h*4 bytes.
         for lvl in &mat.mip_levels {
-            assert_eq!(lvl.texture.len(), (lvl.w * lvl.h * 4) as usize);
+            assert_eq!(lvl.texture.decode().len(), (lvl.w * lvl.h * 4) as usize);
         }
 
         // Level 0 mirrors the flat `texture`/`tex_w`/`tex_h` fields.
         assert_eq!((mat.tex_w, mat.tex_h), (4, 4));
-        assert_eq!(mat.mip_levels[0].texture, mat.texture);
+        assert_eq!(mat.mip_levels[0].texture.decode(), mat.texture.decode());
 
         // Distinct content between the three levels (they read different TMEM regions).
-        assert_ne!(mat.mip_levels[0].texture, mat.mip_levels[1].texture);
-        assert_ne!(mat.mip_levels[1].texture, mat.mip_levels[2].texture);
+        assert_ne!(
+            mat.mip_levels[0].texture.decode(),
+            mat.mip_levels[1].texture.decode()
+        );
+        assert_ne!(
+            mat.mip_levels[1].texture.decode(),
+            mat.mip_levels[2].texture.decode()
+        );
 
         // No DETAIL bit → no detail tile.
         assert!(mat.detail_tex.is_none());
@@ -1491,8 +1558,12 @@ mod tests {
             .expect("DETAIL mode carries a detail tile");
         assert_eq!((detail.w, detail.h), (4, 4));
         assert_eq!(
-            detail.texture,
-            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 4, 0).unwrap(),
+            detail.texture.decode(),
+            decode_sampling_texture(&rdp, &rdp.tiles[0], 0)
+                .unwrap()
+                .texture
+                .decode()
+                .into_owned(),
             "detail tile is the independent decode of tiles[0]"
         );
     }
@@ -1535,7 +1606,10 @@ mod tests {
             "level 1 is SAME size as level 0 — non-halving, previously rejected"
         );
         // Distinct content (levels read different TMEM word offsets), so a shader blend is meaningful.
-        assert_ne!(mat.mip_levels[0].texture, mat.mip_levels[1].texture);
+        assert_ne!(
+            mat.mip_levels[0].texture.decode(),
+            mat.mip_levels[1].texture.decode()
+        );
     }
 
     #[test]
@@ -1711,8 +1785,12 @@ mod tests {
         // Level 0 is the base tile itself (tiles[7], 2×2).
         assert_eq!((mat.mip_levels[0].w, mat.mip_levels[0].h), (2, 2));
         assert_eq!(
-            mat.mip_levels[0].texture,
-            decode_tile_texture(&rdp, &rdp.tiles[7], 2, 2, 0).unwrap(),
+            mat.mip_levels[0].texture.decode(),
+            decode_sampling_texture(&rdp, &rdp.tiles[7], 0)
+                .unwrap()
+                .texture
+                .decode()
+                .into_owned(),
             "level 0 is the decode of the base tile tiles[7]"
         );
 
@@ -1720,14 +1798,19 @@ mod tests {
         // clamp to tiles[7] would instead re-decode the base tile here.
         assert_eq!((mat.mip_levels[1].w, mat.mip_levels[1].h), (4, 4));
         assert_eq!(
-            mat.mip_levels[1].texture,
-            decode_tile_texture(&rdp, &rdp.tiles[0], 4, 4, 0).unwrap(),
+            mat.mip_levels[1].texture.decode(),
+            decode_sampling_texture(&rdp, &rdp.tiles[0], 0)
+                .unwrap()
+                .texture
+                .decode()
+                .into_owned(),
             "level 1 wraps to tiles[0] (`% RDP_TILES`), not clamp to tiles[7]"
         );
 
         // A clamp would make level 1 == level 0; the wrap yields distinct per-level content.
         assert_ne!(
-            mat.mip_levels[0].texture, mat.mip_levels[1].texture,
+            mat.mip_levels[0].texture.decode(),
+            mat.mip_levels[1].texture.decode(),
             "wrap gives distinct level content; a clamp would duplicate level 0"
         );
     }

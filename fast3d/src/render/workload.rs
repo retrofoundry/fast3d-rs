@@ -231,21 +231,14 @@ impl SceneRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        textures: &[TextureInputs<'_>],
+        textures: &[TextureInputs],
     ) {
         self.tex_caches.truncate(textures.len());
         for (i, mat) in textures.iter().enumerate() {
-            let rebuild = self.tex_caches.get(i).is_none_or(|cache| {
-                cache.sampling != mat.sampling
-                    || cache.w != mat.tex_w
-                    || cache.h != mat.tex_h
-                    || cache.bytes != mat.texture
-                    || cache.wrap_s != mat.wrap_s
-                    || cache.wrap_t != mat.wrap_t
-                    || &cache.tex1 != mat.tex1
-                    || cache.mip_levels != mat.mip_levels
-                    || &cache.detail_tex != mat.detail_tex
-            });
+            let rebuild = self
+                .tex_caches
+                .get(i)
+                .is_none_or(|cache| !cache.inputs.matches(mat, &self.profiling));
             if rebuild {
                 let entry = build_tex_entry(
                     device,

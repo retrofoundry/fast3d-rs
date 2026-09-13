@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use super::common::TexturePixels;
+
 use super::dl_builder::{Built, DlBuilder};
 use crate::{capture::Provenance, DataFormat, RdramImage};
 use n64_gbi::encode::*;
@@ -278,8 +281,8 @@ fn tmem_image_inputs_have_literal_draw_snapshots() {
                     .flat_map(|f| [f.clone(), f]),
             ) {
                 assert_eq!((mat.tex_w, mat.tex_h), (16, 3));
-                assert_eq!(mat.texture.len(), 16 * 3 * 4);
-                for (i, pixel) in mat.texture.as_chunks::<4>().0.iter().enumerate() {
+                assert_eq!(mat.texture.decode().len(), 16 * 3 * 4);
+                for (i, pixel) in mat.texture.decode().as_chunks::<4>().0.iter().enumerate() {
                     assert_eq!(*pixel, f.pixels[i % 4], "{} pixel{i}", f.name);
                 }
             }
@@ -300,7 +303,7 @@ fn tmem_image_inputs_have_literal_draw_snapshots() {
                 .collect();
             assert_eq!(materials.len(), 5);
             for (material, color) in materials.into_iter().zip(semantics::TLUT_COLORS) {
-                assert_eq!(material.texture, color.repeat(32));
+                assert_eq!(material.texture.decode(), color.repeat(32));
             }
         } else {
             for (i, mat) in result.scene.materials.iter().enumerate() {
@@ -308,11 +311,11 @@ fn tmem_image_inputs_have_literal_draw_snapshots() {
                 let heights = [4, 5, 2, 2];
                 let values = [37, 91, 173, 211];
                 assert_eq!(mat.mip_levels.len(), 2);
-                assert_eq!(mat.texture, mat.mip_levels[0].texture);
+                assert_eq!(mat.texture.decode(), mat.mip_levels[0].texture.decode());
                 for (j, level) in mat.mip_levels.iter().enumerate() {
                     assert_eq!((level.w, level.h), (widths[i + j], heights[i + j]));
                     assert_eq!(
-                        level.texture,
+                        level.texture.decode(),
                         vec![values[i + j]; (level.w * level.h * 4) as usize]
                     );
                 }

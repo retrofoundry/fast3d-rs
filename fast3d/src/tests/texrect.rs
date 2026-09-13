@@ -95,21 +95,26 @@ fn texrect_uses_command_tile_three() {
         let mat = &result.scene.materials[0];
         assert_eq!(mat.sampling.bounds, [16, 24, 76, 84]);
         assert_eq!(mat.sampling.tmem, [512, 32, 0, 2]);
-        assert_eq!(&mat.texture[..8], &[8, 8, 255, 0, 24, 8, 255, 255]);
+        assert_eq!(&mat.texture.decode()[..8], &[8, 8, 255, 0, 24, 8, 255, 255]);
         let mut rsp = crate::hle::rsp::Rsp::default();
         rsp.set_texture(0, 0, true, 65535, 65535);
         let wrong =
             crate::hle::combiner::build_material(&result.rdp, &rsp, &mut Vec::new(), 0).unwrap();
-        assert_eq!(&wrong.texture[..8], &[255, 0, 0, 255, 255, 0, 0, 255]);
-        assert_ne!(mat.texture, wrong.texture);
+        assert_eq!(
+            &wrong.texture.decode()[..8],
+            &[255, 0, 0, 255, 255, 0, 0, 255]
+        );
+        assert_ne!(mat.texture.decode(), wrong.texture.decode());
         let ops = &result.scene.framebuffer_pairs[0].ops;
         assert!(matches!(ops[0], SceneOp::TexRect { tile: 3, .. }));
         let SceneOp::Tris(run) = ops.last().unwrap() else {
             panic!("expected trailing triangle")
         };
         assert_eq!(
-            result.scene.materials[run.material_index as usize].texture,
-            wrong.texture
+            result.scene.materials[run.material_index as usize]
+                .texture
+                .decode(),
+            wrong.texture.decode()
         );
     }
 }
@@ -123,7 +128,7 @@ fn texrect_nonzero_origin_matches_triangle_sampling_material() {
         crate::hle::combiner::build_material(&result.rdp, &rsp, &mut Vec::new(), 0).unwrap();
     let rect = &result.scene.materials[0];
     assert_eq!(rect.sampling, triangle.sampling);
-    assert_eq!(rect.texture, triangle.texture);
+    assert_eq!(rect.texture.decode(), triangle.texture.decode());
 }
 
 #[cfg(feature = "capture")]

@@ -497,7 +497,7 @@ mod tests {
         material.num_levels = 3;
         let level = crate::hle::combiner::MipLevel {
             sampling: Default::default(),
-            texture: vec![255; 4],
+            texture: vec![255; 4].into(),
             w: 1,
             h: 1,
         };
@@ -505,7 +505,7 @@ mod tests {
         material.detail_tex = Some(level);
         material.tex1 = Some(crate::hle::combiner::Tex1 {
             sampling: Default::default(),
-            texture: vec![255; 4],
+            texture: vec![255; 4].into(),
             tex_w: 1,
             tex_h: 1,
             wrap_s: 0,
@@ -532,7 +532,7 @@ mod tests {
             convert: Default::default(),
             key: Default::default(),
             sampling: Default::default(),
-            texture: vec![255u8; 4],
+            texture: vec![255u8; 4].into(),
             tex_w: 1,
             tex_h: 1,
             selectors: crate::hle::combiner::decode_combine(0x00_00_00_00, 0x00_00_00_00),
@@ -1783,23 +1783,7 @@ fn address_mode(wrap: u8) -> wgpu::AddressMode {
 }
 
 struct TexCache {
-    sampling: TileSamplingArray,
-    w: u32,
-    h: u32,
-    bytes: Vec<u8>,
-    wrap_s: u8,
-    wrap_t: u8,
-    /// The material's second texture (TEXEL1), part of the cache key so a change to the second
-    /// tile's content/dims/wrap rebuilds the bind group. `None` for single-texture materials — the
-    /// bind group then points binding 2/3 at the shared dummy.
-    tex1: Option<crate::hle::combiner::Tex1>,
-    /// The material's decoded mip chain (hardware-faithful LOD), part of the cache key so a change
-    /// to any level's content/dims rebuilds the uploaded mip-level texture. Empty for non-LOD
-    /// materials (a single level is uploaded from `bytes`).
-    mip_levels: Vec<crate::hle::MipLevel>,
-    /// The material's DETAIL tile, part of the cache key so a change rebuilds. `None` binds
-    /// the shared 1×1 dummy at binding 4/5.
-    detail_tex: Option<crate::hle::MipLevel>,
+    inputs: inputs::TextureInputs,
     bind_group: wgpu::BindGroup,
 }
 
@@ -1814,47 +1798,52 @@ fn build_tex_entry(
     bgl: &wgpu::BindGroupLayout,
     samplers: &[[wgpu::Sampler; 3]; 3],
     dummy_view: &wgpu::TextureView,
-    mat: &inputs::TextureInputs<'_>,
+    mat: &inputs::TextureInputs,
     profiling: &crate::profiling::Recorder,
 ) -> TexCache {
     let _span = profiling.span("resources");
     // Upload one decoded RGBA8 texture (tex0, or the tex1 second texture) to a fresh GPU texture,
     // returning its view. The view keeps the texture alive via the bind group's strong ref.
-    let upload =
-        |role: &'static str, label: &str, w: u32, h: u32, bytes: &[u8]| -> wgpu::TextureView {
-            let size = wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            };
-            let tex = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                bytes,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(w * 4),
-                    rows_per_image: Some(h),
-                },
-                size,
-            );
-            profiling.texture(role, u64::from(w) * u64::from(h) * 4, bytes.len() as u64);
-            tex.create_view(&wgpu::TextureViewDescriptor::default())
+    let upload = |role: &'static str,
+                  label: &str,
+                  w: u32,
+                  h: u32,
+                  binding: &crate::hle::texture_request::TextureBindingInput|
+     -> wgpu::TextureView {
+        let bytes = binding.source.decode_profiled(profiling, role);
+        let size = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
         };
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            size,
+        );
+        profiling.texture(role, u64::from(w) * u64::from(h) * 4, bytes.len() as u64);
+        tex.create_view(&wgpu::TextureViewDescriptor::default())
+    };
     // tex0: LOD level 0 as its OWN single-level texture (`upload` uses mip_level_count = 1). Non-LOD
     // materials upload only this from `mat.texture` — byte-identical to the pre-LOD single
     // `write_texture`. When LOD is active, level 0 is `mat.texture` (== `mip_levels[0]`).
@@ -1868,7 +1857,7 @@ fn build_tex_entry(
         "n64-tex",
         w,
         h,
-        mat.texture,
+        &mat.texture,
     );
     // Levels 1..MAX_LOD as INDEPENDENT per-level textures (hardware-faithful — NO halving constraint),
     // bound at bindings 6..=12. `uploaded_level_count` caps the real count at MAX_LOD. A slot beyond
@@ -1888,7 +1877,7 @@ fn build_tex_entry(
                         &format!("n64-tex-lod{k}"),
                         w,
                         h,
-                        &lvl.texture,
+                        lvl,
                     );
                 }
             }
@@ -1900,12 +1889,14 @@ fn build_tex_entry(
     let tex1_view = match &mat.tex1 {
         Some(t) => {
             let [w, h] = t.sampling.allocation_extent();
-            upload("texture1", "n64-tex1", w, h, &t.texture)
+            upload("texture1", "n64-tex1", w, h, t)
         }
         None => dummy_view.clone(),
     };
     let samp1 = match &mat.tex1 {
-        Some(t) => &samplers[(t.wrap_s as usize).min(2)][(t.wrap_t as usize).min(2)],
+        Some(t) => {
+            &samplers[(t.sampling.modes[0] as usize).min(2)][(t.sampling.modes[1] as usize).min(2)]
+        }
         None => &samplers[2][2],
     };
     // Binding 4/5: the DETAIL tile when present (LOD DETAIL mode), else the shared 1×1 dummy.
@@ -1913,7 +1904,7 @@ fn build_tex_entry(
     let detail_view = match &mat.detail_tex {
         Some(d) => {
             let [w, h] = d.sampling.allocation_extent();
-            upload("detail", "n64-tex-detail", w, h, &d.texture)
+            upload("detail", "n64-tex-detail", w, h, d)
         }
         None => dummy_view.clone(),
     };
@@ -1964,27 +1955,8 @@ fn build_tex_entry(
         layout: bgl,
         entries: &entries,
     });
-    profiling.count(
-        "owned_copy.upload_cache_bytes",
-        (mat.texture.len()
-            + mat.tex1.as_ref().map_or(0, |v| v.texture.len())
-            + mat
-                .mip_levels
-                .iter()
-                .map(|v| v.texture.len())
-                .sum::<usize>()
-            + mat.detail_tex.as_ref().map_or(0, |v| v.texture.len())) as u64,
-    );
     TexCache {
-        sampling,
-        w: mat.tex_w,
-        h: mat.tex_h,
-        bytes: mat.texture.to_vec(),
-        wrap_s: mat.wrap_s,
-        wrap_t: mat.wrap_t,
-        tex1: mat.tex1.clone(),
-        mip_levels: mat.mip_levels.to_vec(),
-        detail_tex: mat.detail_tex.clone(),
+        inputs: mat.clone(),
         bind_group,
     }
 }
@@ -2001,8 +1973,7 @@ pub struct SceneRenderer {
     present_extent_layout: wgpu::BindGroupLayout,
     rsp: RspProcessPipeline,
     samplers: [[wgpu::Sampler; 3]; 3],
-    /// Content-keyed GPU texture + `@group(0)` bind group — one per `scene.materials[i]`.
-    /// Rebuilt only when a material's texture bytes, dims, or wrap mode change.
+    /// Positional GPU bindings, compared against encoded witnesses and draw sampling state.
     tex_caches: Vec<TexCache>,
     /// A 1×1 white `@group(0)` (tex + sampler) bind group used as the texture binding for
     /// `FillRect` draws (which carry no material, but the pipeline layout still requires group 0).
@@ -2036,35 +2007,39 @@ pub struct SceneRenderer {
 
 impl SceneRenderer {
     fn profile_resident_resources(&self) {
+        let allocation = |binding: &crate::hle::texture_request::TextureBindingInput| {
+            let [w, h] = binding.sampling.allocation_extent();
+            u64::from(w) * u64::from(h) * 4
+        };
         self.profiling.gauge(
             "gpu_decoded_texture_bytes",
             self.tex_caches
                 .iter()
-                .map(|c| {
-                    (c.bytes.len()
-                        + c.tex1.as_ref().map_or(0, |t| t.texture.len())
-                        + c.mip_levels
-                            .iter()
-                            .skip(1)
-                            .map(|m| m.texture.len())
-                            .sum::<usize>()
-                        + c.detail_tex.as_ref().map_or(0, |t| t.texture.len()))
-                        as u64
+                .map(|cache| {
+                    let c = &cache.inputs;
+                    allocation(&c.texture)
+                        + c.tex1.as_ref().map_or(0, allocation)
+                        + c.mip_levels.iter().skip(1).map(allocation).sum::<u64>()
+                        + c.detail_tex.as_ref().map_or(0, allocation)
                 })
                 .sum(),
         );
+        let mut memory = crate::hle::texture_request::TextureMemory::default();
+        for cache in &self.tex_caches {
+            let c = &cache.inputs;
+            for binding in std::iter::once(&c.texture)
+                .chain(c.tex1.iter())
+                .chain(c.mip_levels.iter())
+                .chain(c.detail_tex.iter())
+            {
+                memory.include(&binding.source);
+            }
+        }
+        self.profiling
+            .gauge("cpu_upload_cache_bytes", memory.payload_bytes as u64);
         self.profiling.gauge(
-            "cpu_upload_cache_bytes",
-            self.tex_caches
-                .iter()
-                .map(|c| {
-                    (c.bytes.len()
-                        + c.tex1.as_ref().map_or(0, |t| t.texture.len())
-                        + c.mip_levels.iter().map(|m| m.texture.len()).sum::<usize>()
-                        + c.detail_tex.as_ref().map_or(0, |t| t.texture.len()))
-                        as u64
-                })
-                .sum(),
+            "cpu_upload_cache_allocation_overhead_bytes",
+            memory.overhead_bytes as u64,
         );
         self.profiling.gauge(
             "gpu_framebuffer_bytes",

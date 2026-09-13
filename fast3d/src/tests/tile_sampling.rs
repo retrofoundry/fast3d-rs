@@ -273,7 +273,7 @@ fn tile_large_mask_uses_bounded_tmem_lookup_pixels() {
         }
         state.tmem_bank.write_block(&bytes, 0, 0, 0, 512, 1);
         let scene = scene(&state, [32767.5, 1.5], 0);
-        assert_eq!(scene.materials[0].texture.len(), 65536);
+        assert_eq!(scene.materials[0].texture.decode().len(), 65536);
         assert_probe(&scene, expected);
     }
 }
@@ -331,7 +331,7 @@ fn lod_texel1_only_preserves_texel_coordinates() {
     assert_eq!(tiles[3].bounds, [8, 12, 132, 136]);
     assert_eq!(tiles[3].shift_mask, [1, 15, 5, 5]);
     assert_eq!(
-        pixel(&mat.mip_levels[1].texture, 32, 4, 14),
+        pixel(&mat.mip_levels[1].texture.decode(), 32, 4, 14),
         [60, 60, 60, 60]
     );
 }

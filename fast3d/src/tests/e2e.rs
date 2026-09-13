@@ -53,7 +53,7 @@ fn e2e_textured_quad_pipeline() {
     assert!(m.tex_enable, "expected tex_enable");
 
     assert_eq!(
-        m.texture.len(),
+        m.texture.decode().len(),
         32 * 32 * 4,
         "decoded texture must be 32*32*4 bytes"
     );

@@ -331,6 +331,7 @@ fn retained_tmem_ignores_unrelated_framebuffer_texture_image() {
         .last()
         .unwrap()
         .texture
+        .decode()
         .iter()
         .all(|byte| *byte == 255));
 }

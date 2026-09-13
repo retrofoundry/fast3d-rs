@@ -894,13 +894,16 @@ pub(crate) fn snapshot_run(
         // Rebuild: build_material borrows rdp + rsp immutably; ? early-exits (None) on failure.
         let m = crate::hle::combiner::build_material(rdp, rsp, diags, pc)?;
         rsp.material_dirty = false;
-        if rsp.last_material.as_ref() == Some(&m) {
+        if rsp
+            .last_material
+            .as_ref()
+            .is_some_and(|last| last.matches(&m, &rsp.profiling))
+        {
             // Identical material: reuse the existing index (dedup).
             rsp.last_material_index.unwrap()
         } else {
             let idx = scene.materials.len() as u32;
-            rsp.profiling
-                .count("owned_copy.material_bytes", m.owned_texture_bytes() as u64);
+            rsp.profiling.count("owned_copy.material_bytes", 0);
             scene.materials.push(m.clone());
             rsp.last_material = Some(m);
             rsp.last_material_index = Some(idx);
@@ -914,8 +917,7 @@ pub(crate) fn snapshot_run(
         let m = crate::hle::combiner::build_material(rdp, rsp, diags, pc)?;
         rsp.material_dirty = false;
         let idx = scene.materials.len() as u32;
-        rsp.profiling
-            .count("owned_copy.material_bytes", m.owned_texture_bytes() as u64);
+        rsp.profiling.count("owned_copy.material_bytes", 0);
         scene.materials.push(m.clone());
         rsp.last_material = Some(m);
         rsp.last_material_index = Some(idx);
@@ -1041,7 +1043,7 @@ pub(crate) fn snapshot_rect_run(
     validate_depth_source(rdp, diags, pc)?;
     let m = crate::hle::combiner::build_rect_material(rdp, rsp, tile, diags, pc)?;
     let material_index = match scene.materials.last() {
-        Some(last) if *last == m => (scene.materials.len() - 1) as u32,
+        Some(last) if last.matches(&m, &rsp.profiling) => (scene.materials.len() - 1) as u32,
         _ => {
             scene.materials.push(m);
             (scene.materials.len() - 1) as u32
