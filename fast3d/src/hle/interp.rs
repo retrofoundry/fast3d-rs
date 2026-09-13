@@ -309,6 +309,7 @@ pub(crate) fn interpret_profiled<M: Rdram>(
     mut observer: Option<&mut dyn crate::inspect::WalkObserver>,
     profiling: crate::profiling::Recorder,
 ) -> InterpResult {
+    rdp.tmem_bank.profiling = profiling.clone();
     let mut mem = mem;
     let gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
     let mut rsp = crate::hle::rsp::Rsp::new(gbi.consts, gbi.data_format);
