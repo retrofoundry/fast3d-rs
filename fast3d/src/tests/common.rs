@@ -226,3 +226,14 @@ pub fn dl_2d_fill_rect_with_scissor_height(
 pub fn dl_2d_fill(addr: u64, fill5551: u32) -> crate::hle::Scene {
     dl_2d_fill_rect(addr, fill5551, 0, 0, 64, 64)
 }
+
+// The exact-base bootstrap also compiles these witnesses against the parent's Vec payloads.
+#[allow(dead_code)]
+pub trait TexturePixels {
+    fn decode(&self) -> std::borrow::Cow<'_, [u8]>;
+}
+impl TexturePixels for Vec<u8> {
+    fn decode(&self) -> std::borrow::Cow<'_, [u8]> {
+        std::borrow::Cow::Borrowed(self)
+    }
+}

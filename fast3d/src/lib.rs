@@ -734,13 +734,21 @@ impl Renderer {
 
         // Retained for the frame (P4 debugger reads all of them; cleared at begin_frame).
         self.frame_scenes.push(result.scene);
+        let mut memory = hle::texture_request::TextureMemory::default();
+        for source in self
+            .frame_scenes
+            .iter()
+            .flat_map(|s| &s.materials)
+            .flat_map(|m| m.texture_sources())
+        {
+            memory.include(source);
+        }
+        self.inner
+            .profiling
+            .gauge("scene_owned_texture_bytes", memory.payload_bytes as u64);
         self.inner.profiling.gauge(
-            "scene_owned_texture_bytes",
-            self.frame_scenes
-                .iter()
-                .flat_map(|s| &s.materials)
-                .map(|m| m.owned_texture_bytes() as u64)
-                .sum(),
+            "scene_texture_allocation_overhead_bytes",
+            memory.overhead_bytes as u64,
         );
 
         summary

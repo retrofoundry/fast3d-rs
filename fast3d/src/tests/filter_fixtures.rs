@@ -212,11 +212,11 @@ fn filter_fixture_commands_preserve_load_order_and_lod_storage() {
             assert_eq!(mat.mip_levels[0].sampling.tmem[0], 0);
             assert_eq!(mat.mip_levels[1].sampling.tmem[0], 2048);
             assert_eq!(
-                &mat.mip_levels[0].texture[..8],
+                &mat.mip_levels[0].texture.decode()[..8],
                 &[255, 0, 0, 255, 0, 255, 0, 255]
             );
             assert_eq!(
-                &mat.mip_levels[1].texture[..8],
+                &mat.mip_levels[1].texture.decode()[..8],
                 &[0, 0, 0, 255, 0, 0, 255, 255]
             );
         } else {

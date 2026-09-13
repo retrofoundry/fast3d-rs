@@ -1,8 +1,9 @@
 # TMEM validation fixtures
 
-Production rendering decodes TMEM on the CPU. These tools freeze its current
-bytes and test the validation boundaries without adding a cache or GPU decoder.
-The Fast3dV1 serializer is test-only; its contract is in [fast3d-v1.md](fast3d-v1.md).
+Production rendering decodes owned TMEM requests on the CPU at upload. These tools
+freeze the byte contract and test the request memo and validation boundaries.
+Fast3dV1 is specified in [fast3d-v1.md](fast3d-v1.md); the internal T2 boundary
+and counter definitions are in [owned-requests.md](owned-requests.md).
 
 ## Frozen baselines
 

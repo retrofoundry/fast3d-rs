@@ -1,3 +1,6 @@
+#[allow(unused_imports)]
+use super::common::TexturePixels;
+
 use crate::hle::{rdp::TileDescriptor, tmem::Tmem};
 
 use super::readback_export;
@@ -374,7 +377,7 @@ fn tmem_poison_then_reload_checks_rejection_before_reuse() {
         );
         (material, diags)
     };
-    assert_eq!(get(&state).0.unwrap().texture, [61; 4]);
+    assert_eq!(get(&state).0.unwrap().texture.decode().as_ref(), [61; 4]);
     let diagnostic = crate::Diagnostic {
         at: 0x40,
         kind: crate::DiagKind::TextureBytesUnavailable { tmem_addr: 0 },
@@ -387,7 +390,7 @@ fn tmem_poison_then_reload_checks_rejection_before_reuse() {
     assert!(get(&state).0.is_none());
     assert_eq!(get(&state).1, [diagnostic]);
     state.tmem_bank.write_tile(&[61; 8], 0, 1, 1, 1, 8, 1);
-    assert_eq!(get(&state).0.unwrap().texture, [61; 4]);
+    assert_eq!(get(&state).0.unwrap().texture.decode().as_ref(), [61; 4]);
     state.tiles[0].cms = 0;
     state.tiles[0].masks = 4;
     state.tmem_bank.reject_load(diagnostic, |tmem| {
@@ -456,12 +459,18 @@ fn tmem_roles_keep_independent_pixels_after_sources_are_destroyed() {
     let mut rsp = crate::hle::rsp::Rsp::default();
     rsp.set_texture(0, 0, true, 65535, 65535);
     let first = make(&state, &rsp);
-    assert_eq!(first.texture, vec![37; 8 * 4 * 4]);
-    assert_eq!(first.tex1.as_ref().unwrap().texture, vec![91; 3 * 5 * 4]);
+    assert_eq!(first.texture.decode(), vec![37; 8 * 4 * 4]);
+    assert_eq!(
+        first.tex1.as_ref().unwrap().texture.decode(),
+        vec![91; 3 * 5 * 4]
+    );
     state.tmem_bank.write_tile(&[137; 40], 16, 1, 5, 1, 8, 1);
     let second = make(&state, &rsp);
-    assert_eq!(first.texture, second.texture);
-    assert_eq!(second.tex1.as_ref().unwrap().texture, vec![137; 3 * 5 * 4]);
+    assert_eq!(first.texture.decode(), second.texture.decode());
+    assert_eq!(
+        second.tex1.as_ref().unwrap().texture.decode(),
+        vec![137; 3 * 5 * 4]
+    );
     state.other_mode_h |= (1 << 16) | (2 << 17);
     rsp.set_texture(1, 2, true, 65535, 65535);
     let lod = make(&state, &rsp);
@@ -472,39 +481,42 @@ fn tmem_roles_keep_independent_pixels_after_sources_are_destroyed() {
             .collect::<Vec<_>>(),
         [(3, 5), (5, 2), (2, 2)]
     );
-    assert_eq!(lod.texture, lod.mip_levels[0].texture);
+    assert_eq!(lod.texture.decode(), lod.mip_levels[0].texture.decode());
     assert_eq!(
-        lod.detail_tex.as_ref().unwrap().texture,
+        lod.detail_tex.as_ref().unwrap().texture.decode(),
         vec![37; 8 * 4 * 4]
     );
     state.tmem_bank.write_tile(&[61; 40], 0, 1, 4, 1, 8, 1);
     let detail_changed = make(&state, &rsp);
-    assert_eq!(lod.texture, detail_changed.texture);
+    assert_eq!(lod.texture.decode(), detail_changed.texture.decode());
     for (a, b) in lod.mip_levels.iter().zip(&detail_changed.mip_levels) {
-        assert_eq!(a.texture, b.texture);
+        assert_eq!(a.texture.decode(), b.texture.decode());
     }
     assert_eq!(
-        detail_changed.detail_tex.as_ref().unwrap().texture,
+        detail_changed.detail_tex.as_ref().unwrap().texture.decode(),
         vec![61; 8 * 4 * 4]
     );
     state.tmem_bank.write_tile(&[199; 40], 32, 1, 2, 1, 8, 1);
     let level_changed = make(&state, &rsp);
     assert_eq!(
-        detail_changed.mip_levels[0].texture,
-        level_changed.mip_levels[0].texture
+        detail_changed.mip_levels[0].texture.decode(),
+        level_changed.mip_levels[0].texture.decode()
     );
     assert_ne!(
-        detail_changed.mip_levels[1].texture,
-        level_changed.mip_levels[1].texture
+        detail_changed.mip_levels[1].texture.decode(),
+        level_changed.mip_levels[1].texture.decode()
     );
     assert_eq!(
-        detail_changed.mip_levels[2].texture,
-        level_changed.mip_levels[2].texture
+        detail_changed.mip_levels[2].texture.decode(),
+        level_changed.mip_levels[2].texture.decode()
     );
     drop(state);
     drop(rsp);
-    assert_eq!(first.tex1.unwrap().texture, vec![91; 3 * 5 * 4]);
-    assert_eq!(lod.detail_tex.unwrap().texture, vec![37; 8 * 4 * 4]);
+    assert_eq!(first.tex1.unwrap().texture.decode(), vec![91; 3 * 5 * 4]);
+    assert_eq!(
+        lod.detail_tex.unwrap().texture.decode(),
+        vec![37; 8 * 4 * 4]
+    );
 }
 
 #[test]
@@ -645,7 +657,11 @@ fn tmem_gpu_source_poison_rejects_draw_then_guest_reload_restores_it() {
         .flat_map(|p| &p.ops)
         .filter_map(|op| {
             if let crate::scene::SceneOp::TexRect { material_index, .. } = op {
-                Some(&result.scene.materials[*material_index as usize].texture)
+                Some(
+                    result.scene.materials[*material_index as usize]
+                        .texture
+                        .decode(),
+                )
             } else {
                 None
             }

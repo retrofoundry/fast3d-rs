@@ -19,6 +19,7 @@
   "tools/readbacks/inventory.json",
   "tools/readbacks/readbacks.py",
   "tools/readbacks/test_capture.py",
+  "tools/readbacks/test_dependencies.py",
   "tools/readbacks/test_fetch.py",
   "tools/readbacks/test_readbacks.py",
   "tools/tmem/vectors.json"

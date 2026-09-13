@@ -84,6 +84,20 @@ def save_manifest(output, manifest):
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
+def test_dependency_graph(metadata, checkout):
+    # Native tests compile normal and dev dependencies together; build edges stay distinct.
+    normalized = json.dumps(metadata).replace(checkout.as_uri(), "file://<checkout>").replace(str(checkout), "<checkout>")
+    nodes = json.loads(normalized)["resolve"]["nodes"]
+    return sorted([{
+        "id": node["id"], "features": sorted(node["features"]),
+        "dependencies": sorted([{
+            "name": dep["name"], "package": dep["pkg"],
+            "uses": sorted({("build" if use["kind"] == "build" else "test", use["target"] or "")
+                            for use in dep["dep_kinds"]}),
+        } for dep in node["deps"]], key=lambda dep: (dep["name"], dep["package"])),
+    } for node in nodes], key=lambda node: node["id"])
+
+
 def capture(checkout, output, base_sha, harness_checkout):
     checkout, output = checkout.resolve(), output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -101,6 +115,11 @@ def capture(checkout, output, base_sha, harness_checkout):
     dependencies = command_output(["cargo", "tree", "--locked", "--workspace", "--all-features", "-e", "features"], checkout)
     dependencies = dependencies.replace(str(checkout), "<checkout>")
     (output / "dependencies.txt").write_text(dependencies, encoding="utf-8")
+    rustc = command_output(["rustc", "-Vv"], checkout)
+    host = next(line.removeprefix("host: ") for line in rustc.splitlines() if line.startswith("host: "))
+    metadata = json.loads(command_output(["cargo", "metadata", "--locked", "--all-features", "--format-version", "1", "--filter-platform", host], checkout))
+    graph = test_dependency_graph(metadata, checkout)
+    (output / "test-dependencies.json").write_text(json.dumps(graph, indent=2) + "\n", encoding="utf-8")
     manifest = {
         "schema": 1, "source_sha": source_sha, "tested_sha": source_sha, "base_sha": base_sha,
         "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
@@ -109,13 +128,13 @@ def capture(checkout, output, base_sha, harness_checkout):
         "harness_source_sha": command_output(["git", "rev-parse", "HEAD"], harness_checkout),
         "harness_sha256": json_hash(harness), "harness_files": harness,
         "inventory_sha256": json_hash(INVENTORY), "checkout": str(checkout), "output": str(output),
-        "goldens": goldens,
+        "goldens": goldens, "full_dependency_graph_sha256": file_hash(output / "dependencies.txt"),
         "runtime": {
             "os": platform.system(), "release": platform.release(), "version": platform.version(),
             "machine": platform.machine(), "image_os": os.environ.get("ImageOS", "local"),
             "image_version": os.environ.get("ImageVersion", "local"),
-            "rustc": command_output(["rustc", "-Vv"], checkout),
-            "dependencies": file_hash(output / "dependencies.txt"), "lock_sha256": file_hash(checkout / "Cargo.lock"),
+            "rustc": rustc, "dependency_comparison": "native-test-graph-v1",
+            "dependencies": json_hash(graph), "lock_sha256": file_hash(checkout / "Cargo.lock"),
             "backend": os.environ.get("WGPU_BACKEND", ""),
             "compiler": os.environ.get("WGPU_DX12_COMPILER", ""),
             "test_threads": os.environ.get("RUST_TEST_THREADS", ""),

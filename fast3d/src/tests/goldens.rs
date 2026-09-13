@@ -296,14 +296,14 @@ fn golden_address_modes_reach_tile_sampling() {
             let mut sampling = crate::render::material_sampling(mat);
             assert_eq!(sampling[0].image, [extent as u32, extent as u32, 0, 0]);
             assert_eq!(sampling[0].shift_mask, [0, 0, mask, mask]);
-            assert_eq!(sampling[0].modes[..2], [mode.into(); 2]);
+            assert_eq!(sampling[0].modes[..2], [u32::from(mode); 2]);
             let inv_size = crate::render::triangle_inv_tex_size(mat);
             assert_eq!(inv_size[0] * extent as f32, 1.0);
             assert_eq!(inv_size[1] * extent as f32, 1.0);
             set_address_modes(&mut sampling[0], address_mode(mode), address_mode(mode));
             let expected_mask = extent.ilog2();
             assert_eq!(sampling[0].shift_mask, [0, 0, expected_mask, expected_mask]);
-            assert_eq!(sampling[0].modes[..2], [mode.into(); 2]);
+            assert_eq!(sampling[0].modes[..2], [u32::from(mode); 2]);
             set_address_modes(
                 &mut sampling[0],
                 wgpu::AddressMode::ClampToEdge,
@@ -882,7 +882,7 @@ fn fill_rect_scene(
 fn tex1x1_material(rgba: [u8; 4]) -> crate::hle::Material {
     crate::hle::Material {
         sampling: Default::default(),
-        texture: rgba.to_vec(),
+        texture: rgba.to_vec().into(),
         tex_w: 1,
         tex_h: 1,
         selectors: crate::hle::combiner::decode_combine(0, 0),
@@ -1304,7 +1304,7 @@ fn copy_alpha_keyed_scene() -> crate::hle::Scene {
             },
             0,
         ),
-        texture,
+        texture: texture.into(),
         tex_w: 2,
         tex_h: 2,
         selectors: crate::hle::combiner::decode_combine(0, 0),
@@ -1436,7 +1436,7 @@ fn build_decal_scene() -> crate::hle::Scene {
     let selectors = crate::hle::combiner::decode_combine(0x0000_0000, 0x0000_00C3);
     let mat = |prim: [u8; 4]| crate::hle::Material {
         sampling: Default::default(),
-        texture: vec![255u8, 255, 255, 255],
+        texture: vec![255u8, 255, 255, 255].into(),
         tex_w: 1,
         tex_h: 1,
         selectors: selectors.clone(),

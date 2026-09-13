@@ -351,9 +351,13 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
     let mat = &res.scene.materials[0];
     assert!(mat.tex_enable, "MODULATE combiner must enable texturing");
     // decode_rgba16(0xF801) = R255 G0 B0 A255 ; decode_rgba16(0x003F) = R0 G0 B255 A255.
-    assert_eq!(&mat.texture[0..4], &[0xFF, 0x00, 0x00, 0xFF], "texel 0 red");
     assert_eq!(
-        &mat.texture[4..8],
+        &mat.texture.decode()[0..4],
+        &[0xFF, 0x00, 0x00, 0xFF],
+        "texel 0 red"
+    );
+    assert_eq!(
+        &mat.texture.decode()[4..8],
         &[0x00, 0x00, 0xFF, 0xFF],
         "texel 1 blue"
     );

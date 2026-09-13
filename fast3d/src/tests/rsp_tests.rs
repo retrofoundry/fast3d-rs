@@ -251,7 +251,7 @@ fn culled_triangle_does_not_make_later_modify_clone_vertex() {
 fn phase4_prim_material(prim: [u8; 4]) -> crate::hle::Material {
     crate::hle::Material {
         sampling: Default::default(),
-        texture: vec![255, 255, 255, 255],
+        texture: vec![255, 255, 255, 255].into(),
         tex_w: 1,
         tex_h: 1,
         selectors: crate::hle::combiner::decode_combine(0, 0xC3),

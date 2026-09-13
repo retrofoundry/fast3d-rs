@@ -366,7 +366,7 @@ fn combiner_uniform_packs_raw_words() {
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: vec![128u8; 4],
+        texture: vec![128u8; 4].into(),
         tex_w: 1,
         tex_h: 1,
         selectors,
@@ -1776,7 +1776,7 @@ fn chrome_icosphere_decal_pixel_is_env_texel_not_black() {
     });
 
     // Use the decoded texture from the material (RGBA8, already decoded by the HLE from RGBA16).
-    let tex_rgba8 = &mat.texture;
+    let tex_rgba8 = &mat.texture.decode();
     let tex_w = mat.tex_w;
     let tex_h = mat.tex_h;
 
@@ -2346,7 +2346,7 @@ fn render_fixture_to_rgba8(name: &str, w: u32, h: u32) -> Vec<u8> {
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        &material.texture,
+        &material.texture.decode(),
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(upload_w * 4),
@@ -2690,7 +2690,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: white_tex.clone(),
+        texture: white_tex.clone().into(),
         tex_w: 1,
         tex_h: 1,
         selectors: selectors.clone(),
@@ -2718,7 +2718,7 @@ fn build_two_material_two_run_scene() -> crate::hle::Scene {
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: white_tex,
+        texture: white_tex.into(),
         tex_w: 1,
         tex_h: 1,
         selectors,
@@ -2874,7 +2874,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: red_tex,
+        texture: red_tex.into(),
         tex_w: 1,
         tex_h: 1,
         selectors: selectors.clone(),
@@ -2902,7 +2902,7 @@ fn build_two_material_two_run_textured_scene() -> crate::hle::Scene {
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: blue_tex,
+        texture: blue_tex.into(),
         tex_w: 1,
         tex_h: 1,
         selectors,
@@ -3041,7 +3041,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: white.clone(),
+        texture: white.clone().into(),
         tex_w: 1,
         tex_h: 1,
         selectors: selectors.clone(),
@@ -3069,7 +3069,7 @@ fn build_dualsrc_over_green_scene(mux_low: u32, red_alpha: u8) -> crate::hle::Sc
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: white,
+        texture: white.into(),
         tex_w: 1,
         tex_h: 1,
         selectors,
@@ -3414,7 +3414,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: white.clone(),
+        texture: white.clone().into(),
         tex_w: 1,
         tex_h: 1,
         selectors: selectors.clone(),
@@ -3442,7 +3442,7 @@ fn build_decal_smoke_scene() -> crate::hle::Scene {
         convert: Default::default(),
         key: Default::default(),
         sampling: Default::default(),
-        texture: white,
+        texture: white.into(),
         tex_w: 1,
         tex_h: 1,
         selectors,

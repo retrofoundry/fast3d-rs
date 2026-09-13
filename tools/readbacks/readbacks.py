@@ -69,6 +69,12 @@ def load_capture(root, inventory, source_sha, run_id, *, allow_incomplete=False)
     if windows and any(manifest["runtime"].get(field) != value for field, value in
                        [("backend", "dx12"), ("compiler", "staticdxc"), ("test_threads", "1")]):
         raise ValueError("WARP requires dx12/staticdxc and one test thread")
+    if manifest["runtime"].get("dependency_comparison") == "native-test-graph-v1":
+        if file_hash(artifact_file(root, "dependencies.txt")) != manifest["full_dependency_graph_sha256"]:
+            raise ValueError("full dependency graph hash mismatch")
+        graph = json.loads(artifact_file(root, "test-dependencies.json").read_text(encoding="utf-8"))
+        if json_hash(graph) != manifest["runtime"]["dependencies"]:
+            raise ValueError("test dependency graph hash mismatch")
     if manifest["source_sha"] != source_sha or manifest["tested_sha"] != source_sha:
         raise ValueError("source SHA does not match exact requested revision")
     if str(manifest["run_id"]) != str(run_id):

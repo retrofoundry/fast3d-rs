@@ -133,8 +133,15 @@ fn tlut_two_palettes_in_one_list() {
             .collect();
         assert_eq!(materials.len(), 2);
         for (bank, material) in materials.into_iter().enumerate() {
-            assert_eq!(material.texture.len(), 16 * 16 * 4);
-            for (i, pixel) in material.texture.as_chunks::<4>().0.iter().enumerate() {
+            assert_eq!(material.texture.decode().len(), 16 * 16 * 4);
+            for (i, pixel) in material
+                .texture
+                .decode()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .enumerate()
+            {
                 assert_eq!(
                     *pixel,
                     expected(ia16, bank, i % 16),

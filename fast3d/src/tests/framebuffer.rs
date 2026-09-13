@@ -69,7 +69,7 @@ fn framebuffer_640x480_triangles_align_with_texrect() {
         scene.framebuffer_pairs = vec![pair(&scene, 0x0010_0000, width, height)];
         let mut rect_scene = scene.clone();
         rect_scene.materials[0].tex_enable = true;
-        rect_scene.materials[0].texture = vec![255; 4];
+        rect_scene.materials[0].texture = vec![255; 4].into();
         rect_scene.materials[0].tex_w = 1;
         rect_scene.materials[0].tex_h = 1;
         rect_scene.framebuffer_pairs[0].ops = vec![SceneOp::TexRect {

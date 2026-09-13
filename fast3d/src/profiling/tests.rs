@@ -106,20 +106,14 @@ fn profiling_does_not_change_summaries() {
         assert_eq!(diags, plain_diags);
         let snapshot = rsp.profiling.drain();
         assert_eq!(snapshot.counters["material.builds"], 1);
-        assert_eq!(
-            snapshot.decodes.values().map(|r| r.executions).sum::<u64>(),
-            1
-        );
+        assert_eq!(snapshot.counters["tmem.requests"], 1);
         assert_eq!(snapshot.requests.len(), usize::from(mode == Mode::Trace));
     }
     rdp.tiles[0].fmt = 1;
     rsp.profiling = Recorder::new(Mode::Trace);
     assert!(combiner::build_material(&rdp, &rsp, &mut Vec::new(), 0).is_none());
     let snapshot = rsp.profiling.drain();
-    assert_eq!(
-        snapshot.decodes.values().map(|r| r.rejected).sum::<u64>(),
-        1
-    );
+    assert_eq!(snapshot.counters["tmem.rejected_requests"], 1);
     assert!(snapshot.requests[0].rejection.is_some());
 }
 

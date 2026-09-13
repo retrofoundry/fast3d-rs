@@ -437,7 +437,7 @@ fn f0_same_load_commands_decode_literal_ram_control() {
             .collect();
         assert!(!textured.is_empty());
         for material in textured {
-            assert_eq!(material.texture, UNPACKED.concat());
+            assert_eq!(material.texture.decode(), UNPACKED.concat());
         }
     }
 }

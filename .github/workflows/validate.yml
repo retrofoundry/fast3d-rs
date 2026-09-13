@@ -134,6 +134,9 @@ jobs:
           echo "WASM_BINDGEN_TEST_WEBDRIVER_JSON=$PWD/fast3d/webdriver.json" >> "$GITHUB_ENV"
       - name: browser TMEM preimages
         run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test tmem_preimage -- --nocapture
+      - name: browser owned texture requests
+        if: ${{ !cancelled() }}
+        run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test owned_texture_requests -- --nocapture
       - name: browser TMEM IMAGE replay
         if: ${{ !cancelled() }}
         run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test tmem_fixture_replay -- --nocapture

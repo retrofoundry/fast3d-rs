@@ -1,4 +1,5 @@
 use super::{rsp_buffers as rb, workload::TargetId, CombinerUniform, OutVertex};
+use crate::hle::texture_request::TextureBindingInput;
 use crate::hle::{BlendClass, Material, ZMode};
 use crate::scene::{CullKind, Scene, SceneOp};
 
@@ -7,41 +8,70 @@ use crate::scene::{CullKind, Scene, SceneOp};
 pub(crate) struct RenderInputs<'a> {
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     pub(crate) dropped_runs: u32,
-    pub(super) textures: Vec<TextureInputs<'a>>,
+    pub(super) textures: Vec<TextureInputs>,
     pub(super) rsp: Option<RspInputs<'a>>,
     pub(super) targets: Vec<TargetInputs>,
 }
 
-#[derive(Debug, PartialEq)]
-pub(super) struct TextureInputs<'a> {
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct TextureInputs {
     pub sampling: super::TileSamplingArray,
     pub allocation_extent: [u32; 2],
     pub tex_w: u32,
     pub tex_h: u32,
-    pub texture: &'a [u8],
+    pub texture: TextureBindingInput,
     pub wrap_s: u8,
     pub wrap_t: u8,
     pub num_levels: u8,
-    pub tex1: &'a Option<crate::hle::combiner::Tex1>,
-    pub mip_levels: &'a [crate::hle::MipLevel],
-    pub detail_tex: &'a Option<crate::hle::MipLevel>,
+    pub tex1: Option<TextureBindingInput>,
+    pub mip_levels: Vec<TextureBindingInput>,
+    pub detail_tex: Option<TextureBindingInput>,
 }
 
-impl<'a> From<&'a Material> for TextureInputs<'a> {
-    fn from(mat: &'a Material) -> Self {
+impl From<&Material> for TextureInputs {
+    fn from(mat: &Material) -> Self {
         Self {
             sampling: super::material_sampling(mat),
             allocation_extent: mat.sampling.allocation_extent(),
             tex_w: mat.tex_w,
             tex_h: mat.tex_h,
-            texture: &mat.texture,
+            texture: TextureBindingInput {
+                source: mat.texture.clone(),
+                sampling: mat.sampling,
+            },
             wrap_s: mat.wrap_s,
             wrap_t: mat.wrap_t,
             num_levels: mat.num_levels,
-            tex1: &mat.tex1,
-            mip_levels: &mat.mip_levels,
-            detail_tex: &mat.detail_tex,
+            tex1: mat.tex1.as_ref().map(|t| t.binding()),
+            mip_levels: mat.mip_levels.iter().map(|t| t.binding()).collect(),
+            detail_tex: mat.detail_tex.as_ref().map(|t| t.binding()),
         }
+    }
+}
+
+impl TextureInputs {
+    pub(super) fn matches(&self, other: &Self, profiling: &crate::profiling::Recorder) -> bool {
+        let optional =
+            |a: &Option<TextureBindingInput>, b: &Option<TextureBindingInput>| match (a, b) {
+                (Some(a), Some(b)) => a.matches(b, profiling),
+                (None, None) => true,
+                _ => false,
+            };
+        self.sampling == other.sampling
+            && self.tex_w == other.tex_w
+            && self.tex_h == other.tex_h
+            && self.wrap_s == other.wrap_s
+            && self.wrap_t == other.wrap_t
+            && self.num_levels == other.num_levels
+            && self.texture.matches(&other.texture, profiling)
+            && optional(&self.tex1, &other.tex1)
+            && optional(&self.detail_tex, &other.detail_tex)
+            && self.mip_levels.len() == other.mip_levels.len()
+            && self
+                .mip_levels
+                .iter()
+                .zip(&other.mip_levels)
+                .all(|(a, b)| a.matches(b, profiling))
     }
 }
 

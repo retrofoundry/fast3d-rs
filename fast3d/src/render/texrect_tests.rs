@@ -239,7 +239,7 @@ fn texrect_coverage_pixels() {
     ] {
         let mut scene = scene_from_fixture("framebuffer-extent--white1");
         scene.materials[0].tex_enable = true;
-        scene.materials[0].texture = vec![255; 4];
+        scene.materials[0].texture = vec![255; 4].into();
         scene.materials[0].tex_w = 1;
         scene.materials[0].tex_h = 1;
         scene.framebuffer_pairs = vec![FramebufferPair {
@@ -295,7 +295,8 @@ fn coverage_rect_sampling_origin() {
             mat.filter_mode = 0;
             mat.texture = (0..16)
                 .flat_map(|y| (0..16).flat_map(move |x| [x * 8, y * 8, 64, 255]))
-                .collect();
+                .collect::<Vec<_>>()
+                .into();
             mat.sampling = crate::hle::tile_sampling::TileSampling::from_tile(
                 &crate::hle::rdp::TileDescriptor {
                     width: 16,

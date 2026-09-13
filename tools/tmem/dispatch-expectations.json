@@ -1,20 +1,193 @@
 {
-  "status": "CPU-side expectations; execution assertions belong to cache/replacement deliveries",
-  "roles_fixture": {"fixture": "tmem-roles-lifetime.f3dcap", "draw_roles": [["r0", "r1"], ["r1", "r2"], ["r2", "r3"]], "level_zero_aliases": ["r0", "r1", "r2"], "cold_dispatches": 4, "cold_output_uploads": 0, "warm_dispatches": 0, "reordered_dispatches": 0, "prim_env_filter_only_dispatches": 0},
+  "status": "T2 memo gates are executable; compute/residency dispatch gates remain for T4",
+  "roles_fixture": {
+    "fixture": "tmem-roles-lifetime.f3dcap",
+    "draw_roles": [
+      [
+        "r0",
+        "r1"
+      ],
+      [
+        "r1",
+        "r2"
+      ],
+      [
+        "r2",
+        "r3"
+      ]
+    ],
+    "level_zero_aliases": [
+      "r0",
+      "r1",
+      "r2"
+    ],
+    "cold_dispatches": 4,
+    "cold_output_uploads": 0,
+    "warm_dispatches": 0,
+    "reordered_dispatches": 0,
+    "prim_env_filter_only_dispatches": 0
+  },
   "changes": [
-    {"case": "tex1 only", "new_requests": ["tex1-new"], "dispatches": 1},
-    {"case": "detail only", "new_requests": ["detail-new"], "dispatches": 1},
-    {"case": "one independent non-halving LOD", "new_requests": ["lod1-new"], "dispatches": 1},
-    {"case": "level-zero alias", "new_requests": [], "dispatches": 0}
+    {
+      "case": "tex1 only",
+      "new_requests": [
+        "tex1-new"
+      ],
+      "dispatches": 1
+    },
+    {
+      "case": "detail only",
+      "new_requests": [
+        "detail-new"
+      ],
+      "dispatches": 1
+    },
+    {
+      "case": "one independent non-halving LOD",
+      "new_requests": [
+        "lod1-new"
+      ],
+      "dispatches": 1
+    },
+    {
+      "case": "level-zero alias",
+      "new_requests": [],
+      "dispatches": 0
+    }
   ],
   "lifetime": [
-    {"case": "same four requests in two tasks before completion", "dispatches": 4},
-    {"case": "retained replay while resident", "dispatches": 0},
-    {"case": "prefix walk while resident", "dispatches": 0},
-    {"case": "cross-frame reuse while resident", "dispatches": 0},
-    {"case": "new device epoch with same four requests", "dispatches": 4},
-    {"case": "one-entry cache, A completed and evictable, then B completed and evictable, then A", "dispatches": 3},
-    {"case": "one-entry cache, A pinned, B bypassed twice in separate completed tasks", "dispatches": 3, "A_retained_pixels_unchanged": true}
+    {
+      "case": "same four requests in two tasks before completion",
+      "dispatches": 4
+    },
+    {
+      "case": "retained replay while resident",
+      "dispatches": 0
+    },
+    {
+      "case": "prefix walk while resident",
+      "dispatches": 0
+    },
+    {
+      "case": "cross-frame reuse while resident",
+      "dispatches": 0
+    },
+    {
+      "case": "new device epoch with same four requests",
+      "dispatches": 4
+    },
+    {
+      "case": "one-entry cache, A completed and evictable, then B completed and evictable, then A",
+      "dispatches": 3
+    },
+    {
+      "case": "one-entry cache, A pinned, B bypassed twice in separate completed tasks",
+      "dispatches": 3,
+      "A_retained_pixels_unchanged": true
+    }
   ],
-  "invariants": {"residency_hit_raw_upload_bytes": 0, "residency_hit_dispatches": 0, "pending_reuse_dispatches": 0, "level_zero_alias_extra_uploads": 0}
+  "invariants": {
+    "residency_hit_raw_upload_bytes": 0,
+    "residency_hit_dispatches": 0,
+    "pending_reuse_dispatches": 0,
+    "level_zero_alias_extra_uploads": 0
+  },
+  "t2": {
+    "memo_entries": 256,
+    "memo_payload_bytes": 1048576,
+    "payload_rule": "Count each retained bank allocation once, plus owned linear streams and exact serialized witnesses; metadata/control-block storage is reported separately.",
+    "cases": {
+      "first-i8-1x1": {
+        "snapshot_allocations": 1,
+        "snapshot_bytes": 4096,
+        "hashes_computed": 1,
+        "bytes_hashed": 59,
+        "linear_reconstruction_bytes": 0,
+        "memo_misses": 1
+      },
+      "unchanged-frame": {
+        "snapshot_allocations": 0,
+        "snapshot_bytes": 0,
+        "hashes_computed": 0,
+        "bytes_hashed": 0,
+        "linear_reconstruction_bytes": 0,
+        "memo_hits": 1,
+        "witness_comparisons": 1,
+        "bytes_compared": 59
+      },
+      "second-recipe-i8-2x1": {
+        "snapshot_allocations": 0,
+        "snapshot_bytes": 0,
+        "hashes_computed": 1,
+        "bytes_hashed": 62,
+        "linear_reconstruction_bytes": 0,
+        "memo_misses": 1
+      },
+      "sampling-only": {
+        "snapshot_allocations": 0,
+        "snapshot_bytes": 0,
+        "hashes_computed": 0,
+        "bytes_hashed": 0,
+        "linear_reconstruction_bytes": 0,
+        "memo_hits": 1
+      },
+      "equal-byte-reload": {
+        "snapshot_allocations": 1,
+        "snapshot_bytes": 4096,
+        "hashes_computed": 1,
+        "bytes_hashed": 59,
+        "linear_reconstruction_bytes": 0,
+        "memo_misses": 1,
+        "witness_comparisons": 1,
+        "bytes_compared": 59
+      },
+      "rejected-load-or-format": {
+        "snapshot_allocations": 0,
+        "snapshot_bytes": 0,
+        "hashes_computed": 0,
+        "bytes_hashed": 0,
+        "linear_reconstruction_bytes": 0,
+        "memo_hits": 0,
+        "memo_misses": 0
+      },
+      "linear-first-3x3": {
+        "snapshot_allocations": 1,
+        "snapshot_bytes": 4096,
+        "hashes_computed": 1,
+        "bytes_hashed": 65,
+        "linear_reconstruction_bytes": 9,
+        "memo_misses": 1
+      },
+      "linear-warm": {
+        "snapshot_allocations": 0,
+        "snapshot_bytes": 0,
+        "hashes_computed": 0,
+        "bytes_hashed": 0,
+        "linear_reconstruction_bytes": 0,
+        "memo_hits": 1
+      },
+      "provenance-only-rejection": {
+        "snapshot_allocations": 0,
+        "snapshot_bytes": 0,
+        "hashes_computed": 0,
+        "bytes_hashed": 0,
+        "linear_reconstruction_bytes": 0,
+        "memo_hits": 0,
+        "memo_misses": 0
+      },
+      "roles-fixture": {
+        "snapshot_allocations": 1,
+        "snapshot_bytes": 4096,
+        "hashes_computed": 4,
+        "bytes_hashed": 407,
+        "linear_reconstruction_bytes": 0,
+        "memo_misses": 4,
+        "memo_hits": 5,
+        "cpu_decode_executions": 0,
+        "cpu_decode_output_bytes": 0
+      }
+    },
+    "counted_workloads": "All ten frozen native/Chrome primary/control rows report tmem.* counters and memo/retained/cache memory gauges; untimed counter-off and counter-on controls quantify instrumentation cost.",
+    "cpu_bridge": "CPU expansion occurs on positional upload misses and explicit pixel inspection. No decoded CPU result cache. T4 tightens supported-TMEM production CPU expansion to zero."
+  }
 }

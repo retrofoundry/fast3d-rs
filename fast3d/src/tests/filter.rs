@@ -248,5 +248,5 @@ fn filter_texel1_and_detail_use_selected_mode() {
 #[test]
 fn filter_asymmetric_texture_survives_tmem_decode() {
     let scene = scene(&state(0), [0.0; 2], 0, 0);
-    assert_eq!(scene.materials[0].texture, TEXELS.as_flattened());
+    assert_eq!(scene.materials[0].texture.decode(), TEXELS.as_flattened());
 }

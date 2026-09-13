@@ -58,13 +58,16 @@ fn intensities(bytes: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-fn rect_texture(result: &crate::hle::InterpResult, index: usize) -> &[u8] {
+fn rect_texture(result: &crate::hle::InterpResult, index: usize) -> Vec<u8> {
     let crate::scene::SceneOp::TexRect { material_index, .. } =
         result.scene.framebuffer_pairs[0].ops[index]
     else {
         panic!("expected rectangle")
     };
-    &result.scene.materials[material_index as usize].texture
+    result.scene.materials[material_index as usize]
+        .texture
+        .decode()
+        .into_owned()
 }
 
 #[test]
@@ -78,8 +81,11 @@ fn load_provenance_disjoint_block_preserves_loadtile() {
         .sample_tile(&result.rdp.tiles[0], 0)
         .unwrap();
     assert_eq!(intensities(&bank), expected);
-    assert_eq!(intensities(&result.scene.materials[0].texture), expected);
-    assert_eq!(intensities(rect_texture(&result, 1)), expected);
+    assert_eq!(
+        intensities(&result.scene.materials[0].texture.decode()),
+        expected
+    );
+    assert_eq!(intensities(&rect_texture(&result, 1)), expected);
 }
 
 #[test]
@@ -98,7 +104,7 @@ fn load_provenance_disjoint_loads_preserve_both_layouts() {
                 (16..25).collect()
             };
             assert_eq!(
-                intensities(rect_texture(&result, 1)),
+                intensities(&rect_texture(&result, 1)),
                 expected,
                 "{first}/{second}"
             );
@@ -117,7 +123,7 @@ fn load_provenance_overwriting_loads_replace_both_layouts() {
                 result.diags
             );
             assert_eq!(
-                intensities(rect_texture(&result, 1)),
+                intensities(&rect_texture(&result, 1)),
                 [0xee; 9],
                 "{first}/{second}"
             );
@@ -174,7 +180,10 @@ fn load_provenance_recovers_gapped_block_at_its_base() {
         0,
     )
     .unwrap();
-    assert_eq!(intensities(&material.texture), (16..25).collect::<Vec<_>>());
+    assert_eq!(
+        intensities(&material.texture.decode()),
+        (16..25).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -194,13 +203,13 @@ fn load_provenance_second_texture_and_lod_use_retained_linear_bytes() {
         let material = crate::hle::combiner::build_material(&state, &rsp, &mut diags, 0)
             .unwrap_or_else(|| panic!("{lod}: {diags:?}"));
         assert_eq!(
-            intensities(&material.tex1.unwrap().texture),
+            intensities(&material.tex1.unwrap().texture.decode()),
             (16..25).collect::<Vec<_>>()
         );
         if lod {
             assert!(material.lod);
             assert_eq!(
-                intensities(&material.mip_levels[1].texture),
+                intensities(&material.mip_levels[1].texture.decode()),
                 (16..25).collect::<Vec<_>>()
             );
         }
@@ -229,7 +238,7 @@ fn narrow_state(base: u16) -> crate::hle::rdp::Rdp {
 fn decode(state: &crate::hle::rdp::Rdp) -> Result<Vec<u8>, crate::DiagKind> {
     let mut diags = Vec::new();
     crate::hle::combiner::build_rect_material(state, &Default::default(), 0, &mut diags, 0x80)
-        .map(|material| material.texture)
+        .map(|material| material.texture.decode().into_owned())
         .ok_or_else(|| diags[0].kind)
 }
 
@@ -434,7 +443,7 @@ fn load_provenance_survives_task_boundaries_without_original_rdram() {
             } else {
                 (16..25).collect()
             };
-            assert_eq!(intensities(rect_texture(&result, 0)), expected);
+            assert_eq!(intensities(&rect_texture(&result, 0)), expected);
         }
     }
 }

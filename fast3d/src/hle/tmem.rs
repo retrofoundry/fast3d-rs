@@ -38,13 +38,14 @@ pub const DXT_SWAP: u32 = 0x800;
 const SWAP_BIT: usize = 0x4;
 
 /// Byte-addressable RDP texture memory (4 KiB).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Tmem {
     bytes: Box<[u8; TMEM_BYTES]>,
     sources: Box<[ByteSource; TMEM_BYTES]>,
     blocks: Vec<BlockLoad>,
     rejected: Box<[Option<crate::Diagnostic>; TMEM_BYTES]>,
     rejecting: Option<crate::Diagnostic>,
+    pub(super) requests: std::cell::RefCell<super::texture_request::RequestMemo>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -82,6 +83,7 @@ impl Default for Tmem {
             blocks: Vec::new(),
             rejected: Box::new([None; TMEM_BYTES]),
             rejecting: None,
+            requests: Default::default(),
         }
     }
 }
@@ -238,11 +240,19 @@ impl Tmem {
         false
     }
 
-    pub(crate) fn linear_bytes(
+    pub(crate) fn validate_linear(
         &self,
         tile: &TileDescriptor,
         needed: usize,
-    ) -> Result<Vec<u8>, DiagKind> {
+    ) -> Result<(), DiagKind> {
+        self.linear_source(tile, needed).map(|_| ())
+    }
+
+    fn linear_source(
+        &self,
+        tile: &TileDescriptor,
+        needed: usize,
+    ) -> Result<(u16, usize), DiagKind> {
         let error = DiagKind::TextureBytesUnavailable {
             tmem_addr: tile.tmem_addr,
         };
@@ -268,20 +278,34 @@ impl Tmem {
         if start >= TMEM_BYTES {
             return Err(error);
         }
+        let found = self
+            .sources
+            .iter()
+            .filter(|source| {
+                source.load == load && (start..start + needed).contains(&usize::from(source.offset))
+            })
+            .count();
+        if found == needed {
+            Ok((load, start))
+        } else {
+            Err(error)
+        }
+    }
+
+    pub(crate) fn linear_bytes(
+        &self,
+        tile: &TileDescriptor,
+        needed: usize,
+    ) -> Result<Vec<u8>, DiagKind> {
+        let (load, start) = self.linear_source(tile, needed)?;
         let mut bytes = vec![0; needed];
-        let mut found = 0;
         for (addr, source) in self.sources.iter().enumerate() {
             let offset = usize::from(source.offset);
             if source.load == load && (start..start + needed).contains(&offset) {
                 bytes[offset - start] = self.bytes[addr];
-                found += 1;
             }
         }
-        if found == needed {
-            Ok(bytes)
-        } else {
-            Err(error)
-        }
+        Ok(bytes)
     }
 
     /// The odd-line 32-bit word swap, shared by the write and read paths. When `odd`, flips bit
@@ -320,6 +344,7 @@ impl Tmem {
         word_count: usize,
         siz: u8,
     ) {
+        self.requests.get_mut().invalidate();
         let rgba32 = siz == 3;
         let mask = if rgba32 { MASK16 } else { MASK8 };
         let advance = if rgba32 { 4 } else { 8 };
@@ -420,6 +445,7 @@ impl Tmem {
         src_stride_bytes: usize,
         siz: u8,
     ) {
+        self.requests.get_mut().invalidate();
         let rgba32 = siz == 3;
         let mask = if rgba32 { MASK16 } else { MASK8 };
         let advance = if rgba32 { 4 } else { 8 };
@@ -469,6 +495,7 @@ impl Tmem {
     /// Load packed BE halfwords, repeating each across its destination word.
     /// `dst_word` is a 64-bit TMEM word address; writes wrap at 4 KiB.
     pub fn write_tlut(&mut self, entries_be: &[u8], count: usize, dst_word: usize) {
+        self.requests.get_mut().invalidate();
         let base = (dst_word << 3) & MASK8;
         for i in 0..count {
             let entry = &entries_be[i * 2..i * 2 + 2];
@@ -484,10 +511,81 @@ impl Tmem {
     /// Single source of truth for palette bytes: both the faithful CI sampler
     /// ([`sample_tile`](Self::sample_tile)) and the legacy linear `texdec::decode_ci*` fallback
     /// read from here. Entry `i` of palette 0 lives at byte `i*8` of this slice.
+    #[cfg(any(test, feature = "profiling"))]
     pub fn palette(&self) -> &[u8] {
         &self.bytes[PALETTE_BASE..]
     }
 
+    pub(crate) fn encoded_bank(&self) -> &[u8; TMEM_BYTES] {
+        &self.bytes
+    }
+
+    #[cfg(any(test, feature = "profiling"))]
+    pub fn sample_tile(&self, tile: &TileDescriptor, tlut: u8) -> Result<Vec<u8>, DiagKind> {
+        BankDecoder::new(&self.bytes).sample_tile(tile, tlut)
+    }
+
+    #[cfg(any(test, feature = "profiling"))]
+    pub fn sampling_lookup(&self, tile: &TileDescriptor, tlut: u8) -> Result<Vec<u8>, DiagKind> {
+        BankDecoder::new(&self.bytes).sampling_lookup(tile, tlut)
+    }
+
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) fn sample_tile_observed(
+        &self,
+        tile: &TileDescriptor,
+        tlut: u8,
+        reads: &mut impl FnMut(usize),
+    ) -> Result<Vec<u8>, DiagKind> {
+        BankDecoder::new(&self.bytes).sample_tile_observed(tile, tlut, reads)
+    }
+
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) fn sampling_lookup_observed(
+        &self,
+        tile: &TileDescriptor,
+        tlut: u8,
+        reads: &mut impl FnMut(usize),
+    ) -> Result<Vec<u8>, DiagKind> {
+        BankDecoder::new(&self.bytes).sampling_lookup_observed(tile, tlut, reads)
+    }
+
+    #[cfg(test)]
+    fn raw(&self, i: usize) -> u8 {
+        self.bytes[i]
+    }
+
+    /// Raw byte write into TMEM (for hand-computed tests that place bytes at exact addresses).
+    #[cfg(test)]
+    fn raw_set(&mut self, i: usize, v: u8) {
+        self.requests.get_mut().invalidate();
+        self.bytes[i] = v;
+    }
+}
+
+// ── round-trip property tests ───────────────────────────────────────────────────────────────────
+//
+// Every test synthesizes a well-formed LoadBlock (load tile line = 0, CALC_DXT dxt), writes it,
+// then samples through the render tile — proving the write/read swaps cancel and stride is right.
+
+impl PartialEq for Tmem {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes == other.bytes
+            && self.sources == other.sources
+            && self.blocks == other.blocks
+            && self.rejected == other.rejected
+            && self.rejecting == other.rejecting
+    }
+}
+
+pub(crate) struct BankDecoder<'a> {
+    bytes: &'a [u8; TMEM_BYTES],
+}
+
+impl<'a> BankDecoder<'a> {
+    pub(crate) fn new(bytes: &'a [u8; TMEM_BYTES]) -> Self {
+        Self { bytes }
+    }
     /// Read one TMEM byte at row-relative address `rel`, honoring the odd-line swap, masking the
     /// final address with `mask`. Mirrors `implLoadTMEM`: on an odd row the row-relative address
     /// has its word swapped (bit `0x4`) before adding `base`, then the sum is masked.
@@ -504,7 +602,7 @@ impl Tmem {
         mask: usize,
         reads: &mut impl FnMut(usize),
     ) -> u8 {
-        let addr = (base + Self::swap_odd_line(rel, odd_row)) & mask;
+        let addr = (base + Tmem::swap_odd_line(rel, odd_row)) & mask;
         reads(addr);
         self.bytes[addr]
     }
@@ -534,7 +632,7 @@ impl Tmem {
         or_addr: usize,
         reads: &mut impl FnMut(usize),
     ) -> u8 {
-        let addr = ((base + Self::swap_odd_line(rel, odd_row)) & MASK16) | or_addr;
+        let addr = ((base + Tmem::swap_odd_line(rel, odd_row)) & MASK16) | or_addr;
         reads(addr);
         self.bytes[addr]
     }
@@ -745,24 +843,7 @@ impl Tmem {
             (fmt, siz) => return Err(DiagKind::UnsupportedTextureFormat { fmt, siz }),
         })
     }
-
-    /// Raw byte access into TMEM (for tests / diagnostics).
-    #[cfg(test)]
-    fn raw(&self, i: usize) -> u8 {
-        self.bytes[i]
-    }
-
-    /// Raw byte write into TMEM (for hand-computed tests that place bytes at exact addresses).
-    #[cfg(test)]
-    fn raw_set(&mut self, i: usize, v: u8) {
-        self.bytes[i] = v;
-    }
 }
-
-// ── round-trip property tests ───────────────────────────────────────────────────────────────────
-//
-// Every test synthesizes a well-formed LoadBlock (load tile line = 0, CALC_DXT dxt), writes it,
-// then samples through the render tile — proving the write/read swaps cancel and stride is right.
 
 #[cfg(test)]
 mod tests {
@@ -797,7 +878,7 @@ mod tests {
                     for parity in 0..2 {
                         for rel in 0..4096 {
                             let offset = ((odd * 2 + parity) * 4096 + rel) * 4;
-                            let expected = tmem
+                            let expected = BankDecoder::new(&tmem.bytes)
                                 .decode_texel(
                                     fmt,
                                     siz,
