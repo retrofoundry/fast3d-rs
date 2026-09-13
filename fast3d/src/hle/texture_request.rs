@@ -1,4 +1,7 @@
-use std::{borrow::Cow, collections::VecDeque, sync::Arc};
+use std::{
+    borrow::Cow,
+    sync::{Arc, OnceLock},
+};
 
 use super::{
     combiner::{tile_takes_faithful_path, validate_tile_texture},
@@ -9,9 +12,7 @@ use super::{
 };
 use crate::{profiling::Recorder, DiagKind};
 
-pub(crate) const MEMO_ENTRIES: usize = 256;
-pub(crate) const MEMO_BYTES: usize = 1024 * 1024;
-
+#[cfg_attr(not(any(test, feature = "profiling")), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextureKeyScheme {
     Fast3dV1,
@@ -81,8 +82,51 @@ pub enum EncodedInput {
 pub struct EncodedTextureRequest {
     input: EncodedInput,
     recipe: DecodeRecipe,
+    identity: OnceLock<TextureIdentity>,
+}
+
+#[cfg_attr(not(any(test, feature = "profiling")), allow(dead_code))]
+#[derive(Debug)]
+struct TextureIdentity {
     key: TextureKey,
     witness: Box<[u8]>,
+}
+
+// Rendering starts consuming content identity with T4 residency.
+#[cfg_attr(not(any(test, feature = "profiling")), allow(dead_code))]
+impl EncodedTextureRequest {
+    pub fn key(&self) -> TextureKey {
+        self.key_profiled(&Default::default())
+    }
+    pub fn witness(&self) -> &[u8] {
+        &self.identity(&Default::default()).witness
+    }
+
+    pub(crate) fn key_profiled(&self, profiling: &Recorder) -> TextureKey {
+        self.identity(profiling).key
+    }
+
+    fn identity(&self, profiling: &Recorder) -> &TextureIdentity {
+        self.identity.get_or_init(|| {
+            let (bank, linear) = match self.input() {
+                EncodedInput::Tmem(bank) => (bank, &[][..]),
+                EncodedInput::LinearCompat {
+                    bytes,
+                    palette_bank,
+                } => (palette_bank, &bytes[..]),
+            };
+            let witness = serialize(&self.recipe, bank, linear);
+            profiling.count("tmem.hashes_computed", 1);
+            profiling.count("tmem.bytes_hashed", witness.len() as u64);
+            TextureIdentity {
+                key: TextureKey {
+                    scheme: TextureKeyScheme::Fast3dV1,
+                    xxh3_64: twox_hash::XxHash3_64::oneshot(&witness),
+                },
+                witness: witness.into_boxed_slice(),
+            }
+        })
+    }
 }
 
 impl EncodedTextureRequest {
@@ -92,24 +136,33 @@ impl EncodedTextureRequest {
     pub fn recipe(&self) -> &DecodeRecipe {
         &self.recipe
     }
-    pub fn key(&self) -> TextureKey {
-        self.key
-    }
-    pub fn witness(&self) -> &[u8] {
-        &self.witness
-    }
-
     fn matches(&self, other: &Self, profiling: &Recorder) -> bool {
-        if self.key() != other.key() {
+        if self.recipe != other.recipe {
             return false;
         }
-        profiling.count("tmem.witness_comparisons", 1);
-        if self.witness().len() != other.witness().len() {
-            return false;
+        profiling.count("tmem.encoded_comparisons", 1);
+        let equal = |a: &[u8], b: &[u8]| {
+            if a.len() != b.len() {
+                return false;
+            }
+            profiling.count("tmem.bytes_compared", a.len() as u64);
+            a == b
+        };
+        // Positional reuse can conservatively compare complete owned inputs without content keys.
+        match (&self.input, &other.input) {
+            (EncodedInput::Tmem(a), EncodedInput::Tmem(b)) => equal(&a[..], &b[..]),
+            (
+                EncodedInput::LinearCompat {
+                    bytes: a,
+                    palette_bank: pa,
+                },
+                EncodedInput::LinearCompat {
+                    bytes: b,
+                    palette_bank: pb,
+                },
+            ) => equal(a, b) && (self.recipe.fmt != 2 || equal(&pa[2048..], &pb[2048..])),
+            _ => false,
         }
-        // Count the full slice passed to equality, independent of its SIMD/early-exit implementation.
-        profiling.count("tmem.bytes_compared", self.witness().len() as u64);
-        self.witness() == other.witness()
     }
 
     pub fn decode(&self) -> Vec<u8> {
@@ -139,14 +192,6 @@ impl EncodedTextureRequest {
             ),
         };
         result.expect("owned texture requests are validated before construction")
-    }
-
-    fn payload_bytes(&self) -> usize {
-        self.witness().len()
-            + match self.input() {
-                EncodedInput::Tmem(_) => 0,
-                EncodedInput::LinearCompat { bytes, .. } => bytes.len(),
-            }
     }
 }
 
@@ -222,81 +267,6 @@ impl TextureBindingInput {
     }
 }
 
-#[derive(Clone, Debug)]
-struct MemoEntry {
-    recipe: DecodeRecipe,
-    provenance_revision: u64,
-    request: Arc<EncodedTextureRequest>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(super) struct RequestMemo {
-    // Entries belong to this owned bank version. No numeric generation selects content.
-    snapshot: Option<Arc<[u8; TMEM_BYTES]>>,
-    provenance_revision: u64,
-    entries: VecDeque<MemoEntry>,
-}
-
-impl RequestMemo {
-    pub(super) fn invalidate(&mut self) {
-        self.snapshot = None;
-        self.entries.clear();
-        // Clearing entries first prevents wrap or an equal-byte reload from aliasing an old version.
-        self.provenance_revision = self.provenance_revision.wrapping_add(1);
-    }
-
-    fn payload_bytes(&self) -> usize {
-        usize::from(self.snapshot.is_some()) * TMEM_BYTES
-            + self
-                .entries
-                .iter()
-                .map(|entry| entry.request.payload_bytes())
-                .sum::<usize>()
-    }
-
-    fn admit(&mut self, request: Arc<EncodedTextureRequest>, profiling: &Recorder) {
-        if request.payload_bytes() + TMEM_BYTES <= MEMO_BYTES {
-            while self.entries.len() >= MEMO_ENTRIES
-                || self.payload_bytes() + request.payload_bytes() > MEMO_BYTES
-            {
-                self.entries.pop_front();
-                profiling.count("tmem.memo_evictions", 1);
-            }
-            let provenance_revision = self.provenance_revision;
-            let recipe = request.recipe.clone();
-            self.entries.push_back(MemoEntry {
-                recipe,
-                provenance_revision,
-                request: request.clone(),
-            });
-        } else {
-            profiling.count("tmem.memo_bypasses", 1);
-        }
-    }
-
-    fn report(&self, profiling: &Recorder) {
-        profiling.gauge("tmem.memo_entries", self.entries.len() as u64);
-        profiling.gauge("tmem.memo_payload_bytes", self.payload_bytes() as u64);
-        profiling.gauge(
-            "tmem.memo_allocation_overhead_bytes",
-            (self.entries.capacity() * std::mem::size_of::<MemoEntry>()
-                + self.entries.len()
-                    * (std::mem::size_of::<EncodedTextureRequest>()
-                        + 2 * std::mem::size_of::<usize>())
-                + usize::from(self.snapshot.is_some()) * 2 * std::mem::size_of::<usize>()
-                + self
-                    .entries
-                    .iter()
-                    .filter(|entry| {
-                        matches!(entry.request.input, EncodedInput::LinearCompat { .. })
-                    })
-                    .count()
-                    * 2
-                    * std::mem::size_of::<usize>()) as u64,
-        );
-    }
-}
-
 pub(crate) fn prepare(
     rdp: &Rdp,
     tile: &TileDescriptor,
@@ -341,31 +311,6 @@ pub(crate) fn prepare(
         siz: tile.siz,
     }
     .tmem_bytes(logical[0], logical[1]);
-    if representation == Representation::LinearCompat {
-        rdp.tmem_bank.validate_linear(tile, needed)?;
-    }
-    let mut memo = rdp.tmem_bank.requests.borrow_mut();
-    if let Some(index) = memo.entries.iter().position(|entry| {
-        entry.recipe == recipe
-            && (representation != Representation::LinearCompat
-                || entry.provenance_revision == memo.provenance_revision)
-    }) {
-        let entry = memo.entries.remove(index).unwrap();
-        let source = TextureSource::Encoded(entry.request.clone());
-        memo.entries.push_back(entry);
-        profiling.count("tmem.memo_hits", 1);
-        memo.report(profiling);
-        return Ok(TextureBindingInput { source, sampling });
-    }
-    profiling.count("tmem.memo_misses", 1);
-    let bank = memo
-        .snapshot
-        .get_or_insert_with(|| {
-            profiling.count("tmem.snapshot_allocations", 1);
-            profiling.count("tmem.snapshot_bytes", TMEM_BYTES as u64);
-            Arc::new(*rdp.tmem_bank.encoded_bank())
-        })
-        .clone();
     let linear = if representation == Representation::LinearCompat {
         let bytes = rdp.tmem_bank.linear_bytes(tile, needed)?;
         profiling.count("tmem.linear_reconstruction_bytes", bytes.len() as u64);
@@ -373,13 +318,7 @@ pub(crate) fn prepare(
     } else {
         Vec::new()
     };
-    let witness = serialize(&recipe, &bank, &linear);
-    profiling.count("tmem.hashes_computed", 1);
-    profiling.count("tmem.bytes_hashed", witness.len() as u64);
-    let key = TextureKey {
-        scheme: TextureKeyScheme::Fast3dV1,
-        xxh3_64: twox_hash::XxHash3_64::oneshot(&witness),
-    };
+    let bank = rdp.tmem_bank.share_bank();
     let input = if representation == Representation::LinearCompat {
         EncodedInput::LinearCompat {
             bytes: linear.into(),
@@ -390,18 +329,16 @@ pub(crate) fn prepare(
     };
     let request = Arc::new(EncodedTextureRequest {
         input,
-        recipe: recipe.clone(),
-        key,
-        witness: witness.into_boxed_slice(),
+        recipe,
+        identity: OnceLock::new(),
     });
-    memo.admit(request.clone(), profiling);
-    memo.report(profiling);
     Ok(TextureBindingInput {
         source: TextureSource::Encoded(request),
         sampling,
     })
 }
 
+#[cfg_attr(not(any(test, feature = "profiling")), allow(dead_code))]
 fn serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], linear: &[u8]) -> Vec<u8> {
     let mut selected = [false; TMEM_BYTES];
     let mut palette = [false; TMEM_BYTES];
@@ -527,7 +464,10 @@ impl TextureMemory {
             TextureSource::Encoded(request) => {
                 if !self.allocation(
                     Arc::as_ptr(request) as usize,
-                    request.witness().len(),
+                    request
+                        .identity
+                        .get()
+                        .map_or(0, |identity| identity.witness.len()),
                     std::mem::size_of::<EncodedTextureRequest>() + arc_header,
                 ) {
                     return;

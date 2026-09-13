@@ -14,6 +14,8 @@
 //! 2 KiB of this same array (loaded via [`Tmem::write_tlut`]); and RGBA32 (0,3), the dual-bank
 //! format whose 32-bit texel is split R,G → low bank / B,A → high bank across the two 2 KiB halves.
 
+use std::sync::Arc;
+
 use crate::diag::DiagKind;
 use crate::hle::rdp::TileDescriptor;
 use crate::hle::texdec::{decode_ia16_entry, decode_rgba16_entry, FormatInfo};
@@ -40,12 +42,12 @@ const SWAP_BIT: usize = 0x4;
 /// Byte-addressable RDP texture memory (4 KiB).
 #[derive(Clone, Debug)]
 pub struct Tmem {
-    bytes: Box<[u8; TMEM_BYTES]>,
+    bytes: Arc<[u8; TMEM_BYTES]>,
     sources: Box<[ByteSource; TMEM_BYTES]>,
     blocks: Vec<BlockLoad>,
     rejected: Box<[Option<crate::Diagnostic>; TMEM_BYTES]>,
     rejecting: Option<crate::Diagnostic>,
-    pub(super) requests: std::cell::RefCell<super::texture_request::RequestMemo>,
+    pub(super) profiling: crate::profiling::Recorder,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -78,12 +80,12 @@ struct BlockLoad {
 impl Default for Tmem {
     fn default() -> Self {
         Tmem {
-            bytes: Box::new([0u8; TMEM_BYTES]),
+            bytes: Arc::new([0u8; TMEM_BYTES]),
             sources: Box::new([ByteSource::default(); TMEM_BYTES]),
             blocks: Vec::new(),
             rejected: Box::new([None; TMEM_BYTES]),
             rejecting: None,
-            requests: Default::default(),
+            profiling: Default::default(),
         }
     }
 }
@@ -112,7 +114,7 @@ impl Tmem {
     #[cfg(any(test, feature = "profiling"))]
     pub(crate) fn from_profile(bank: &crate::profiling::Bank) -> Self {
         let mut tmem = Self::default();
-        tmem.bytes.copy_from_slice(&bank.bytes);
+        Arc::make_mut(&mut tmem.bytes).copy_from_slice(&bank.bytes);
         for (dst, src) in tmem.sources.iter_mut().zip(&bank.sources) {
             *dst = ByteSource {
                 load: src[0],
@@ -131,16 +133,31 @@ impl Tmem {
         tmem
     }
 
-    fn store_byte(&mut self, addr: usize, value: u8, source: ByteSource) {
-        if let Some(previous) = self.sources[addr].block() {
-            self.blocks[previous].live_bytes -= 1;
+    fn writer(&mut self) -> impl FnMut(usize, u8, ByteSource) + '_ {
+        if Arc::strong_count(&self.bytes) > 1 {
+            self.profiling.count("tmem.bank_cow_allocations", 1);
+            self.profiling
+                .count("tmem.bank_cow_bytes", TMEM_BYTES as u64);
         }
-        if let Some(block) = source.block() {
-            self.blocks[block].live_bytes += 1;
+        let bytes = Arc::make_mut(&mut self.bytes);
+        let Self {
+            sources,
+            blocks,
+            rejected,
+            rejecting,
+            ..
+        } = self;
+        move |addr, value, source| {
+            if let Some(previous) = sources[addr].block() {
+                blocks[previous].live_bytes -= 1;
+            }
+            if let Some(block) = source.block() {
+                blocks[block].live_bytes += 1;
+            }
+            rejected[addr] = *rejecting;
+            sources[addr] = source;
+            bytes[addr] = value;
         }
-        self.rejected[addr] = self.rejecting;
-        self.sources[addr] = source;
-        self.bytes[addr] = value;
     }
 
     pub(crate) fn reject_load(
@@ -240,14 +257,6 @@ impl Tmem {
         false
     }
 
-    pub(crate) fn validate_linear(
-        &self,
-        tile: &TileDescriptor,
-        needed: usize,
-    ) -> Result<(), DiagKind> {
-        self.linear_source(tile, needed).map(|_| ())
-    }
-
     fn linear_source(
         &self,
         tile: &TileDescriptor,
@@ -344,7 +353,6 @@ impl Tmem {
         word_count: usize,
         siz: u8,
     ) {
-        self.requests.get_mut().invalidate();
         let rgba32 = siz == 3;
         let mask = if rgba32 { MASK16 } else { MASK8 };
         let advance = if rgba32 { 4 } else { 8 };
@@ -371,13 +379,14 @@ impl Tmem {
             self.blocks.len() - 1
         };
         let load = (slot + 1) as u16;
+        let mut store_byte = self.writer();
 
         for _ in 0..word_count {
             if rgba32 {
                 // loadWord<true, false>: split R,G → low bank, B,A → high bank (dst | 0x800).
                 for i in 0..4 {
                     let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                    self.store_byte(
+                    store_byte(
                         dst,
                         src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
                         ByteSource {
@@ -385,7 +394,7 @@ impl Tmem {
                             offset: (tex + LOW_SRC[i]) as u16,
                         },
                     );
-                    self.store_byte(
+                    store_byte(
                         dst | PALETTE_BASE,
                         src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
                         ByteSource {
@@ -398,7 +407,7 @@ impl Tmem {
                 // loadWord<false, false>: copy the whole 8-byte word, applying the odd-line swap.
                 for i in 0..8 {
                     let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                    self.store_byte(
+                    store_byte(
                         dst,
                         src.get(tex + i).copied().unwrap_or(0),
                         ByteSource {
@@ -445,7 +454,6 @@ impl Tmem {
         src_stride_bytes: usize,
         siz: u8,
     ) {
-        self.requests.get_mut().invalidate();
         let rgba32 = siz == 3;
         let mask = if rgba32 { MASK16 } else { MASK8 };
         let advance = if rgba32 { 4 } else { 8 };
@@ -454,6 +462,7 @@ impl Tmem {
 
         let tmem_start = (dst_tmem_word << 3) & mask;
         let tmem_stride = line_words << 3;
+        let mut store_byte = self.writer();
 
         for r in 0..row_count {
             let odd = (r & 1) == 1;
@@ -465,12 +474,12 @@ impl Tmem {
                     // loadWord<true, false>: split R,G → low bank, B,A → high bank (dst | 0x800).
                     for i in 0..4 {
                         let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                        self.store_byte(
+                        store_byte(
                             dst,
                             src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
                             ByteSource::BANK,
                         );
-                        self.store_byte(
+                        store_byte(
                             dst | PALETTE_BASE,
                             src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
                             ByteSource::BANK,
@@ -480,7 +489,7 @@ impl Tmem {
                     // loadWord<false, false>: copy the whole 8-byte word, applying the odd-line swap.
                     for i in 0..8 {
                         let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                        self.store_byte(
+                        store_byte(
                             dst,
                             src.get(tex + i).copied().unwrap_or(0),
                             ByteSource::BANK,
@@ -495,13 +504,13 @@ impl Tmem {
     /// Load packed BE halfwords, repeating each across its destination word.
     /// `dst_word` is a 64-bit TMEM word address; writes wrap at 4 KiB.
     pub fn write_tlut(&mut self, entries_be: &[u8], count: usize, dst_word: usize) {
-        self.requests.get_mut().invalidate();
         let base = (dst_word << 3) & MASK8;
+        let mut store_byte = self.writer();
         for i in 0..count {
             let entry = &entries_be[i * 2..i * 2 + 2];
             let addr = (base + i * 8) & MASK8;
             for byte in 0..8 {
-                self.store_byte(addr + byte, entry[byte & 1], ByteSource::BANK);
+                store_byte(addr + byte, entry[byte & 1], ByteSource::BANK);
             }
         }
     }
@@ -516,6 +525,11 @@ impl Tmem {
         &self.bytes[PALETTE_BASE..]
     }
 
+    pub(crate) fn share_bank(&self) -> Arc<[u8; TMEM_BYTES]> {
+        self.bytes.clone()
+    }
+
+    #[cfg(test)]
     pub(crate) fn encoded_bank(&self) -> &[u8; TMEM_BYTES] {
         &self.bytes
     }
@@ -558,8 +572,7 @@ impl Tmem {
     /// Raw byte write into TMEM (for hand-computed tests that place bytes at exact addresses).
     #[cfg(test)]
     fn raw_set(&mut self, i: usize, v: u8) {
-        self.requests.get_mut().invalidate();
-        self.bytes[i] = v;
+        Arc::make_mut(&mut self.bytes)[i] = v;
     }
 }
 
@@ -852,7 +865,7 @@ mod tests {
     #[test]
     fn tile_lookup_matches_tmem_all_supported_formats() {
         let mut tmem = Tmem::default();
-        tmem.bytes.copy_from_slice(&pattern(4096));
+        Arc::make_mut(&mut tmem.bytes).copy_from_slice(&pattern(4096));
         for (fmt, siz) in [
             (0, 2),
             (0, 3),
