@@ -8,6 +8,38 @@ import zipfile
 from pathlib import Path
 from protocol import POLICY, VERSION, V4, V4_POLICY, command, invalidate_pairs, sha, spread, timing_policy
 
+VALIDATION_PATH = '/Volumes/DS Vault/hub/scratch/fast3d/tmem-checks/T1/windows/window6-v4-validation/native-demo1-dense/verdict.json'
+VALIDATION_SHA256 = '742b5d57041448d00ebb937bb844bdf8dff5dab148f69782cae1dfc3a88f8133'
+
+
+def verify_validation(plan):
+    if plan.get('policy') != V4 or plan.get('same_binary_for_both_labels') is True:
+        return
+    try:
+        proof = plan['validation_verdict']
+        path = Path(proof['path'])
+        validation = json.loads(path.read_text())
+        if (proof.get('source_path', str(path)) != VALIDATION_PATH or
+                proof['sha256'] != VALIDATION_SHA256 or sha(path) != VALIDATION_SHA256 or
+                not validation['valid'] or validation['policy'] != V4 or
+                validation['cell'] != 'native.demo1-dense' or
+                validation.get('same_binary_for_both_labels') is not True):
+            raise ValueError('validation verdict differs or failed')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError('v4 code comparison requires the pinned window6 passing parent/parent validation verdict') from error
+
+
+def code_change_status(metrics, admitted):
+    if not admitted or not metrics:
+        return 'inconclusive'
+    if any(m.get('repeatable_regression') for m in metrics.values()):
+        return 'regression'
+    if not all(m['valid'] for m in metrics.values()):
+        return 'inconclusive'
+    if any(m.get('resolved_speedup') for m in metrics.values()):
+        return 'resolved speedup'
+    return 'no regression resolved above U'
+
 CAPTURES = {
     'demo1-dense': {'frames':1519,'warmup':1399,'observed':[1400,1519],'route':'demo1','sha256':'2467ff249136182d2ad6a837f17f9dad4b405dfe45af10a5c8956dd3685328fa'},
     'demo1': {'frames':1600,'warmup':1199,'observed':[1200,1600],'route':'demo1-control','sha256':'bec5477ac49dbc2d37fe5d20063e4795aecb63558ac63a865bc09c11c237643b'},
@@ -331,7 +363,8 @@ def metric_verdict(parent, candidate, floor, version=VERSION, limit=.05, identic
     result.update(valid=valid, candidate_minus_parent_ms=deltas, median_delta_ms=median,
                   repeatable_regression=regression, resolved_speedup=speedup,
                   spurious_directional_change=identical and (regression or speedup),
-                  conclusion='inconclusive' if not valid else 'resolved speedup' if speedup else
+                  conclusion='regression' if version == V4 and regression and not identical else
+                  'inconclusive' if not valid else 'resolved speedup' if speedup else
                   'no regression resolved above U')
     return result
 
@@ -374,6 +407,7 @@ def batch_metrics(plan, runs, summaries, version, admitted_only=False):
 
 def batch_report(args):
     plan=json.loads(args.input.read_text())
+    verify_validation(plan)
     version = plan.get('policy', VERSION)
     policy = timing_policy(version, plan.get('backend'), plan.get('workload'), plan.get('configuration'))
     runs=[]
@@ -443,17 +477,6 @@ def batch_report(args):
             pair_reasons.append('v4 requires exactly five complete pairs in AB, BA, AB, BA, AB order')
         if plan.get('floors_ms') != {'cpu_ms':.01, 'emission_interval_ms':.01}:
             pair_reasons.append('v4 requires frozen 0.01 ms per-frame CPU and elapsed floors')
-        if plan.get('same_binary_for_both_labels') is not True:
-            try:
-                proof = plan['validation_verdict']
-                path = Path(proof['path'])
-                validation = json.loads(path.read_text())
-                if (sha(path) != proof['sha256'] or not validation['valid'] or
-                        validation['policy'] != V4 or validation['cell'] != 'native.demo1-dense' or
-                        validation.get('same_binary_for_both_labels') is not True):
-                    raise ValueError('validation verdict differs or failed')
-            except (OSError, ValueError, KeyError, TypeError):
-                pair_reasons.append('v4 code comparison requires the hashed passing parent/parent validation verdict')
     if not comparison and any('costs' not in r['artifacts'] for r in runs):
         pair_reasons.append('unpaired batches are only supported for cache-cost components')
     for run in runs:
@@ -499,6 +522,11 @@ def batch_report(args):
                       'valid':len(members)==5 and all(r['valid'] for r in members) and bool(metrics) and all(v['valid'] for v in metrics.values() if v['gating'])}
     result['cells'] = cells
     result['valid']=bool(cells) and not pair_reasons and all(value['valid'] for value in cells.values()) and all(value['valid'] for value in result['metrics'].values())
+    if version == V4 and plan.get('same_binary_for_both_labels') is not True:
+        result.update(same_binary_for_both_labels=False, production_shas=plan.get('production_shas'),
+                      validation_verdict=plan['validation_verdict'],
+                      status=code_change_status(result['metrics'], bool(cells) and not pair_reasons and
+                                                all(value['valid'] for value in cells.values())))
     args.out.write_text(json.dumps(result,indent=2))
 
 

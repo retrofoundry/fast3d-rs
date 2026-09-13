@@ -1,0 +1,295 @@
+{
+  "valid": true,
+  "cell": "native.demo1-dense",
+  "policy": "b2-quiet-v4",
+  "same_binary_for_both_labels": true,
+  "production_sha": "bb0fea399793eb2aeb1ae93d5972763b9761da98",
+  "reasons": [],
+  "metrics": {
+    "cold.cpu_ms": {
+      "policy": "b2-quiet-v4",
+      "valid": true,
+      "spreads": {
+        "parent": {
+          "valid": true,
+          "values": [
+            3.4422478598999264,
+            3.3807688463187433,
+            3.3578860078627226,
+            3.389416136526102,
+            3.3611091451036774
+          ],
+          "median": 3.3807688463187433,
+          "absolute_range": 0.08436185203720381,
+          "relative_spread": 0.024953451676846785,
+          "limit": 0.05
+        },
+        "candidate": {
+          "valid": true,
+          "values": [
+            3.3887328699070647,
+            3.4176263230879265,
+            3.3471126990708076,
+            3.3289490600429366,
+            3.386831457469611
+          ],
+          "median": 3.386831457469611,
+          "absolute_range": 0.0886772630449899,
+          "relative_spread": 0.026182957185369646,
+          "limit": 0.05
+        }
+      },
+      "absolute_floor_ms": 0.01,
+      "lost_sensitivity": {
+        "ms_per_frame": 0.0886772630449899,
+        "fraction_of_parent_median": 0.026229910140573184,
+        "parent_range_ms_per_frame": 0.08436185203720381,
+        "candidate_range_ms_per_frame": 0.0886772630449899,
+        "sample_counts": {
+          "parent": 5,
+          "candidate": 5
+        },
+        "scope": "This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only."
+      },
+      "effective_uncertainty_ms": 0.0886772630449899,
+      "candidate_minus_parent_ms": [
+        -0.05351498999286175,
+        0.03685747676918316,
+        -0.01077330879191507,
+        -0.06046707648316563,
+        0.025722312365933586
+      ],
+      "median_delta_ms": -0.01077330879191507,
+      "repeatable_regression": false,
+      "resolved_speedup": false,
+      "spurious_directional_change": false,
+      "conclusion": "no regression resolved above U"
+    },
+    "cold.emission_interval_ms": {
+      "policy": "b2-quiet-v4",
+      "valid": true,
+      "spreads": {
+        "parent": {
+          "valid": true,
+          "values": [
+            5.104942715307582,
+            5.040705710300429,
+            5.021927753934191,
+            5.050293007868383,
+            5.022293663805436
+          ],
+          "median": 5.040705710300429,
+          "absolute_range": 0.08301496137339104,
+          "relative_spread": 0.016468916485990075,
+          "limit": 0.05
+        },
+        "candidate": {
+          "valid": true,
+          "values": [
+            5.051298313304721,
+            5.0790312947067235,
+            5.007821768955651,
+            4.990695278969957,
+            5.051092871244635
+          ],
+          "median": 5.051092871244635,
+          "absolute_range": 0.08833601573676653,
+          "relative_spread": 0.01748849565599053,
+          "limit": 0.05
+        }
+      },
+      "absolute_floor_ms": 0.01,
+      "lost_sensitivity": {
+        "ms_per_frame": 0.08833601573676653,
+        "fraction_of_parent_median": 0.01752453343115356,
+        "parent_range_ms_per_frame": 0.08301496137339104,
+        "candidate_range_ms_per_frame": 0.08833601573676653,
+        "sample_counts": {
+          "parent": 5,
+          "candidate": 5
+        },
+        "scope": "This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only."
+      },
+      "effective_uncertainty_ms": 0.08833601573676653,
+      "candidate_minus_parent_ms": [
+        -0.05364440200286147,
+        0.03832558440629441,
+        -0.01410598497854032,
+        -0.05959772889842618,
+        0.028799207439199392
+      ],
+      "median_delta_ms": -0.01410598497854032,
+      "repeatable_regression": false,
+      "resolved_speedup": false,
+      "spurious_directional_change": false,
+      "conclusion": "no regression resolved above U"
+    },
+    "observed.cpu_ms": {
+      "policy": "b2-quiet-v4",
+      "valid": true,
+      "spreads": {
+        "parent": {
+          "valid": true,
+          "values": [
+            2.816010441666928,
+            2.6070419500001587,
+            2.38513682499998,
+            2.4897482833331877,
+            2.4382288249999418
+          ],
+          "median": 2.4897482833331877,
+          "absolute_range": 0.4308736166669478,
+          "relative_spread": 0.17305910784286566,
+          "limit": 0.25
+        },
+        "candidate": {
+          "valid": true,
+          "values": [
+            2.5414230166663856,
+            2.6008301916665157,
+            2.321996158333286,
+            2.325449216666728,
+            2.502227849999781
+          ],
+          "median": 2.502227849999781,
+          "absolute_range": 0.27883403333322976,
+          "relative_spread": 0.1114343097624999,
+          "limit": 0.25
+        }
+      },
+      "absolute_floor_ms": 0.01,
+      "lost_sensitivity": {
+        "ms_per_frame": 0.4308736166669478,
+        "fraction_of_parent_median": 0.17305910784286566,
+        "parent_range_ms_per_frame": 0.4308736166669478,
+        "candidate_range_ms_per_frame": 0.27883403333322976,
+        "sample_counts": {
+          "parent": 5,
+          "candidate": 5
+        },
+        "scope": "This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only."
+      },
+      "effective_uncertainty_ms": 0.4308736166669478,
+      "candidate_minus_parent_ms": [
+        -0.27458742500054223,
+        -0.006211758333642958,
+        -0.06314066666669405,
+        -0.16429906666645966,
+        0.06399902499983945
+      ],
+      "median_delta_ms": -0.06314066666669405,
+      "repeatable_regression": false,
+      "resolved_speedup": false,
+      "spurious_directional_change": false,
+      "conclusion": "no regression resolved above U"
+    },
+    "observed.emission_interval_ms": {
+      "policy": "b2-quiet-v4",
+      "valid": true,
+      "spreads": {
+        "parent": {
+          "valid": true,
+          "values": [
+            4.459360075,
+            4.252742016666667,
+            4.030742708333333,
+            4.1356343749999995,
+            4.080407291666667
+          ],
+          "median": 4.1356343749999995,
+          "absolute_range": 0.42861736666666683,
+          "relative_spread": 0.10364005320626703,
+          "limit": 0.15
+        },
+        "candidate": {
+          "valid": true,
+          "values": [
+            4.190252425,
+            4.243747916666667,
+            3.9645538166666667,
+            3.972076733333333,
+            4.148658675
+          ],
+          "median": 4.148658675,
+          "absolute_range": 0.2791941000000002,
+          "relative_spread": 0.06729743800868367,
+          "limit": 0.15
+        }
+      },
+      "absolute_floor_ms": 0.01,
+      "lost_sensitivity": {
+        "ms_per_frame": 0.42861736666666683,
+        "fraction_of_parent_median": 0.10364005320626703,
+        "parent_range_ms_per_frame": 0.42861736666666683,
+        "candidate_range_ms_per_frame": 0.2791941000000002,
+        "sample_counts": {
+          "parent": 5,
+          "candidate": 5
+        },
+        "scope": "This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only."
+      },
+      "effective_uncertainty_ms": 0.42861736666666683,
+      "candidate_minus_parent_ms": [
+        -0.2691076500000005,
+        -0.008994099999999783,
+        -0.06618889166666664,
+        -0.16355764166666642,
+        0.06825138333333314
+      ],
+      "median_delta_ms": -0.06618889166666664,
+      "repeatable_regression": false,
+      "resolved_speedup": false,
+      "spurious_directional_change": false,
+      "conclusion": "no regression resolved above U"
+    }
+  },
+  "lost_sensitivity": {
+    "cold.cpu_ms": {
+      "ms_per_frame": 0.0886772630449899,
+      "fraction_of_parent_median": 0.026229910140573184,
+      "parent_range_ms_per_frame": 0.08436185203720381,
+      "candidate_range_ms_per_frame": 0.0886772630449899,
+      "sample_counts": {
+        "parent": 5,
+        "candidate": 5
+      },
+      "scope": "This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only."
+    },
+    "cold.emission_interval_ms": {
+      "ms_per_frame": 0.08833601573676653,
+      "fraction_of_parent_median": 0.01752453343115356,
+      "parent_range_ms_per_frame": 0.08301496137339104,
+      "candidate_range_ms_per_frame": 0.08833601573676653,
+      "sample_counts": {
+        "parent": 5,
+        "candidate": 5
+      },
+      "scope": "This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only."
+    },
+    "observed.cpu_ms": {
+      "ms_per_frame": 0.4308736166669478,
+      "fraction_of_parent_median": 0.17305910784286566,
+      "parent_range_ms_per_frame": 0.4308736166669478,
+      "candidate_range_ms_per_frame": 0.27883403333322976,
+      "sample_counts": {
+        "parent": 5,
+        "candidate": 5
+      },
+      "scope": "This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only."
+    },
+    "observed.emission_interval_ms": {
+      "ms_per_frame": 0.42861736666666683,
+      "fraction_of_parent_median": 0.10364005320626703,
+      "parent_range_ms_per_frame": 0.42861736666666683,
+      "candidate_range_ms_per_frame": 0.2791941000000002,
+      "sample_counts": {
+        "parent": 5,
+        "candidate": 5
+      },
+      "scope": "This batch only; changes at or below U are unresolved. Incomplete or rejected batches are descriptive only."
+    }
+  },
+  "sensitivity_scope": "All recorded timings, including rejected runs; incomplete batches are descriptive only.",
+  "status": "pilot-cell-pass",
+  "attempts_sha256": "931c41b516f8f7ea1863cac2f5c732d7bc5dfd744e8527fbc93c713789da068e"
+}

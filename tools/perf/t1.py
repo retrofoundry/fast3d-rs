@@ -10,13 +10,15 @@ import time
 from types import SimpleNamespace
 
 from protocol import POLICY, VERSION, V4, V4_POLICY, command, sha, timing_policy, utc
-from report import CAPTURES, batch_report, batch_metrics, compare, metric_verdict as compare_metric, rows, summarize
+from report import (CAPTURES, VALIDATION_PATH, VALIDATION_SHA256, batch_report, batch_metrics,
+                    compare, metric_verdict as compare_metric, rows, summarize, verify_validation)
 
 PARENT = 'bb0fea399793eb2aeb1ae93d5972763b9761da98'
 SCRIPTS = ['t1.py', 'protocol.py', 'report.py', 'replay_batch.py']
 METRICS = ['cpu_ms', 'emission_interval_ms']
 NATIVE_PILOT = 'native.demo1-dense'
 V4_WINDOW = 'window3-v4-validation'
+CODE_CHANGE = 'accepted-v4-code-change'
 
 
 def v4_windows(authorization):
@@ -76,7 +78,9 @@ def row_manifest():
     return result
 
 
-def native_plan(root, out, version=V4):
+def native_plan(root, out, version=V4, code_change=None):
+    if code_change is not None and version != V4:
+        raise ValueError('native code-change batches require v4')
     attempts = []
     for pair in range(1, 6):
         for revision in (['parent', 'candidate'] if pair % 2 else ['candidate', 'parent']):
@@ -87,17 +91,39 @@ def native_plan(root, out, version=V4):
                 'backend': 'native', 'workload': 'demo1-dense', 'configuration': 'coarse',
                 'quiet_run': str(out/'quiet'/name/'run.json'),
                 'summary': str(timed/'summary.json'), 'expected_observed': 120,
-                'command': [str(root/'bin/b1-perf'), 'sequence',
+                'command': [str(root/'bin'/('b1-perf-'+revision if code_change is not None else 'b1-perf')), 'sequence',
                             str(root/'captures/demo1-dense.f3dcap'), str(timed), 'coarse'],
             })
-    return {'production_sha': PARENT, 'same_binary_for_both_labels': True,
+    plan = {'production_sha': PARENT, 'same_binary_for_both_labels': True,
             'policy': version, 'backend': 'native', 'workload': 'demo1-dense', 'configuration': 'coarse',
             'cells': ['parent.demo1-dense.coarse', 'candidate.demo1-dense.coarse'],
             'attempts': attempts}
+    if code_change is not None:
+        plan.pop('production_sha')
+        plan.update(same_binary_for_both_labels=False,
+                    **{key: code_change[key] for key in ['production_shas', 'builds', 'validation_verdict']})
+    return plan
 
 
-def metric_verdict(parent, candidate, floor, version=VERSION, limit=.05):
-    return compare_metric(parent, candidate, floor, version, limit, identical=True)
+def metric_verdict(parent, candidate, floor, version=VERSION, limit=.05, identical=True):
+    return compare_metric(parent, candidate, floor, version, limit, identical=identical)
+
+
+def code_change_authorization(authorization, name, verify_acceptance=True):
+    entry = next((entry for entry in authorization.get('windows', [])
+                  if isinstance(entry, dict) and entry['name'] == name), {})
+    if entry.get('purpose') != CODE_CHANGE:
+        return None
+    revisions = entry.get('production_shas', {})
+    if (authorization.get('accepted_by') != 'David' or entry.get('accepted_by') != 'David' or
+            not entry.get('quote', '').strip() or set(revisions) != {'parent', 'candidate'} or
+            any(not re.fullmatch('[0-9a-f]{40}', value) for value in revisions.values()) or
+            revisions['parent'] == revisions['candidate']):
+        raise ValueError('code-change window requires David\'s quote and both production SHAs')
+    proof = entry.get('acceptance', {})
+    if verify_acceptance and (not Path(proof.get('path', '')).is_file() or sha(Path(proof['path'])) != proof.get('sha256')):
+        raise ValueError('code-change window requires hashed David acceptance')
+    return entry
 
 
 def frame_errors(frames):
@@ -141,13 +167,18 @@ def reserve(root, name, start, end, host, attestation, version=VERSION):
             raise ValueError('accepted v4 windows are consumed in the order David recorded them')
     elif version != VERSION or name in v4_windows(authorization) or len(windows) + external >= 2:
         raise ValueError('two reserved windows exhausted; stop for the T1 protocol decision')
+    change = code_change_authorization(authorization, name) if version == V4 else None
     window = root/name
     window.mkdir()
-    write(window/'reservation.json', {'host': host, 'scheduled_start': start,
+    reservation = {'host': host, 'scheduled_start': start,
           'scheduled_end': end, 'operator_attestation': attestation,
           'production_sha': PARENT, 'policy': version, 'created_utc': utc(),
           'purpose': 'accepted-v4-parent-parent-validation' if version == V4 else 'v3-pilot',
-          'authorization': authorization if version == V4 else None})
+          'authorization': authorization if version == V4 else None}
+    if change:
+        reservation.pop('production_sha')
+        reservation.update(purpose=CODE_CHANGE, production_shas=change['production_shas'])
+    write(window/'reservation.json', reservation)
     return window
 
 
@@ -205,26 +236,48 @@ def decision(root):
             'scope': 'native worker dry-run feasibility only; Chrome driver admission on ci4 and the full ten-row timing/count/cold matrix remain separate gates'}
 
 
-def freeze(args):
-    root = args.root.resolve()
-    build = read(root/'provenance/build.json')
-    if build.get('production_sha') != PARENT or build.get('binary_sha256') != sha(root/'bin/b1-perf'):
-        raise ValueError('build record must identify the exact bb0fea3 binary')
+def verify_build(provenance, binary, production_sha):
+    build = read(provenance/'build.json')
+    if build.get('production_sha') != production_sha or build.get('binary_sha256') != sha(binary):
+        raise ValueError('build record must identify the exact production binary')
     for field in ['driver_source_sha256', 'dependency_graph_sha256', 'lock_sha256',
                   'rustc', 'assembler_sha', 'features', 'python_distribution']:
         if not build.get(field):
             raise ValueError(f'missing build provenance: {field}')
     for name, field in [('driver-source.tar.gz', 'driver_source_sha256'),
                         ('dependencies.json', 'dependency_graph_sha256'), ('Cargo.lock', 'lock_sha256')]:
-        if sha(root/'provenance'/name) != build[field]:
+        if sha(provenance/name) != build[field]:
             raise ValueError(f'build provenance hash mismatch: {name}')
-    graph = read(root/'provenance/dependencies.json')
+    graph = read(provenance/'dependencies.json')
     if not graph.get('packages') or not graph.get('resolve', {}).get('nodes'):
         raise ValueError('dependency graph must contain resolved packages')
+    return build
+
+
+def freeze(args):
+    root = args.root.resolve()
+    parent = getattr(args, 'parent_sha', None)
+    candidate = getattr(args, 'candidate_sha', None)
+    if parent is not None or candidate is not None:
+        if (not parent or not candidate or parent == candidate or
+                any(not re.fullmatch('[0-9a-f]{40}', value) for value in [parent, candidate])):
+            raise ValueError('code-change freeze requires two distinct full production SHAs')
+        revisions = {'parent': parent, 'candidate': candidate}
+        metadata = {'same_binary_for_both_labels': False, 'production_shas': revisions,
+                    'builds': {label: verify_build(root/'provenance'/label, root/'bin'/('b1-perf-'+label), revision)
+                               for label, revision in revisions.items()},
+                    'validation_verdict': {'path': str(root/'validation/window6-verdict.json'),
+                                          'source_path': VALIDATION_PATH, 'sha256': VALIDATION_SHA256}}
+        verify_validation({'policy': V4, **metadata})
+        binaries = ['bin/b1-perf-parent', 'bin/b1-perf-candidate']
+    else:
+        metadata = {'production_sha': PARENT,
+                    'build': verify_build(root/'provenance', root/'bin/b1-perf', PARENT)}
+        binaries = ['bin/b1-perf']
     for name, expected in CAPTURES.items():
         if sha(root/'captures'/(name+'.f3dcap')) != expected['sha256']:
             raise ValueError(f'capture hash mismatch: {name}')
-    required = ['bin/b1-perf', 'source/chrome-icosphere.n64', 'source/input.json',
+    required = [*binaries, 'source/chrome-icosphere.n64', 'source/input.json',
                 'python/bin/python3', *['scripts/'+name for name in SCRIPTS]]
     for name in required:
         if not (root/name).is_file():
@@ -238,9 +291,16 @@ def freeze(args):
         raise ValueError('source schedule or synthetic texture declaration changed')
     files = {str(p.relative_to(root)): sha(p) for p in sorted(root.rglob('*'))
              if p.is_file() and p.name != 'kit.json' and '__pycache__' not in p.parts}
-    write(root/'kit.json', {'production_sha': PARENT, 'policy': V4, 'quiet_policy': V4_POLICY,
+    manifest_rows = row_manifest()
+    if parent is not None:
+        for row in manifest_rows:
+            if row['backend'] == 'native':
+                row['command_argv'][0] = '{bundle}/bin/b1-perf-{revision}'
+                row['production_shas'] = revisions
+                row['cache_provider'] = 'recorded production CPU path for each revision; diagnostic LRU budget 16777216 bytes only in separate trace passes'
+    write(root/'kit.json', {**metadata, 'policy': V4, 'quiet_policy': V4_POLICY,
           'policies': {VERSION: POLICY, V4: V4_POLICY},
-          'files': files, 'build': build, 'rows': row_manifest(), 'created_utc': utc(),
+          'files': files, 'rows': manifest_rows, 'created_utc': utc(),
           'host_contract': 'drained blaze Apple M2, 8 logical cores, 24 GiB, macOS 26.x; orchard unloaded; no Chrome',
           'source': source})
     return 0
@@ -248,11 +308,20 @@ def freeze(args):
 
 def verify_kit(root):
     manifest = read(root/'kit.json')
-    if manifest['production_sha'] != PARENT or manifest['policy'] != V4 or manifest['quiet_policy'] != V4_POLICY or manifest.get('policies') != {VERSION: POLICY, V4: V4_POLICY}:
+    change = manifest.get('same_binary_for_both_labels') is False
+    if (not change and manifest.get('production_sha') != PARENT) or manifest['policy'] != V4 or manifest['quiet_policy'] != V4_POLICY or manifest.get('policies') != {VERSION: POLICY, V4: V4_POLICY}:
         raise ValueError('kit parent or quiet policy changed')
     for name, expected in manifest['files'].items():
         if sha(root/name) != expected:
             raise ValueError(f'relay hash mismatch: {name}')
+    if change:
+        for label in ['parent', 'candidate']:
+            build = verify_build(root/'provenance'/label, root/'bin'/('b1-perf-'+label),
+                                 manifest['production_shas'][label])
+            if build != manifest['builds'][label]:
+                raise ValueError('relayed build provenance differs from kit')
+        manifest['validation_verdict']['path'] = str(root/'validation/window6-verdict.json')
+        verify_validation(manifest)
     return manifest
 
 
@@ -349,6 +418,7 @@ def audit(out):
     if (out/'verdict.json').exists() or (out/'batch.json').exists():
         raise FileExistsError('completed attempt is immutable; use replay_batch.py with a fresh output directory')
     plan = read(out/'attempts.json')
+    verify_validation(plan)
     version = plan.get('policy', VERSION)
     timing_policy(version, plan.get('backend'), plan.get('workload'), plan.get('configuration'))
     reasons = []
@@ -369,7 +439,9 @@ def audit(out):
             try:
                 record = read(Path(entry['quiet_run']))
                 if record.get('command') != entry['command']:
-                    reasons.append('protocol command differs from the frozen identical-binary command')
+                    reasons.append('protocol command differs from the frozen identical-binary command'
+                                   if plan.get('same_binary_for_both_labels') is True else
+                                   'protocol command differs from the frozen command')
                 for evidence in record.get('telemetry', []):
                     if sha(Path(evidence['path'])) != evidence['sha256']:
                         reasons.append('telemetry hash changed')
@@ -417,6 +489,12 @@ def audit(out):
               'sensitivity_scope': 'All recorded timings, including rejected runs; incomplete batches are descriptive only.',
               'status': 'pilot-cell-pass' if not reasons else 'inconclusive',
               'attempts_sha256': sha(out/'attempts.json')}
+    if plan.get('same_binary_for_both_labels') is False:
+        result.pop('production_sha')
+        result.update(**{key: plan[key] for key in ['production_shas', 'builds', 'validation_verdict']})
+        batch = read(out/'batch.json') if (out/'batch.json').exists() else {}
+        if not reasons or result['reasons'] == ['report.py rejected the paired batch']:
+            result['status'] = batch.get('status', 'inconclusive')
     write(out/'verdict.json', result)
     return result
 
@@ -429,24 +507,38 @@ def native(args):
     authorization = reservation.get('authorization') or {}
     if reservation.get('policy') != V4 or args.window.name not in (v4_windows(authorization) or [V4_WINDOW]):
         raise ValueError('native-window requires an accepted v4 validation reservation')
-    plan = native_plan(root, out)
+    change = code_change_authorization(authorization, args.window.name, verify_acceptance=False)
+    manifest = verify_kit(root) if change else read(root/'kit.json')
+    if change:
+        if (reservation.get('purpose') != CODE_CHANGE or
+                manifest.get('same_binary_for_both_labels') is not False or
+                manifest.get('production_shas') != change['production_shas'] or
+                reservation.get('production_shas') != change['production_shas']):
+            raise ValueError('code-change bundle must match David\'s named production SHAs')
+    elif manifest.get('same_binary_for_both_labels') is False or reservation.get('purpose') == CODE_CHANGE:
+        raise ValueError('code-change bundle requires David\'s named code-change window')
+    plan = native_plan(root, out, code_change=manifest if change else None)
     plan['floors_ms'] = {'cpu_ms': args.cpu_floor_ms, 'emission_interval_ms': args.elapsed_floor_ms}
     if plan['floors_ms'] != {'cpu_ms':.01, 'emission_interval_ms':.01}:
         raise ValueError('v4 requires frozen 0.01 ms per-frame CPU and elapsed floors')
     plan.update(settle_seconds=90, reservation=reservation, kit_sha256=sha(root/'kit.json'))
-    plan['warmup'] = {'full_prefix_runs': 1, 'command': [str(root/'bin/b1-perf'), 'sequence',
+    plan['warmup'] = {'full_prefix_runs': 1, 'command': [plan['attempts'][0]['command'][0], 'sequence',
                       str(root/'captures/demo1-dense.f3dcap'), str(out/'warmup'), 'coarse']}
     write(out/'attempts.json', plan)
     try:
-        verify_kit(root)
+        if not change:
+            verify_kit(root)
         probe = worker_probe(reservation)
         write(out/'worker.json', probe)
         if probe['errors']:
             raise ValueError('; '.join(probe['errors']))
         with (out/'driver-checks.log').open('x') as log:
-            subprocess.run([sys.executable, str(root/'scripts/t1.py'), 'driver-checks',
-                            '--binary', str(root/'bin/b1-perf'), '--out', str(out/'driver-checks')],
-                           stdout=log, stderr=log, check=True)
+            for label in (['parent', 'candidate'] if change else ['']):
+                binary = root/'bin'/('b1-perf-'+label if label else 'b1-perf')
+                checks = out/('driver-checks-'+label if label else 'driver-checks')
+                subprocess.run([sys.executable, str(root/'scripts/t1.py'), 'driver-checks',
+                                '--binary', str(binary), '--out', str(checks)],
+                               stdout=log, stderr=log, check=True)
         with (out/'warmup.log').open('x') as log:
             subprocess.run(plan['warmup']['command'], stdout=log, stderr=log, check=True)
         warmup_finished = utc()
@@ -477,12 +569,14 @@ def native(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='T1 parent-versus-parent kit; hardware runs require a named reservation')
+    parser = argparse.ArgumentParser(description='Native validation and code-change kit; hardware runs require a named reservation')
     commands = parser.add_subparsers(dest='action', required=True)
     p = commands.add_parser('manifest')
     p.add_argument('--out', type=Path, required=True)
     p = commands.add_parser('freeze')
     p.add_argument('--root', type=Path, required=True)
+    p.add_argument('--parent-sha')
+    p.add_argument('--candidate-sha')
     p = commands.add_parser('reserve')
     for name in ['root']:
         p.add_argument('--'+name, type=Path, required=True)
