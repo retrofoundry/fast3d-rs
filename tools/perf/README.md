@@ -1,3 +1,7 @@
+For the bb0fea3 TMEM native parent-versus-parent dry run, use the [T1 kit](T1.md).
+Its worker relay, native reservation and separate ci4 Chrome driver admission commands
+explicitly replace the historical B2 defaults below.
+
 B1 provides diagnostic instrumentation and preliminary cache-cost measurements. B2 owns quiet performance evidence and optimization decisions. The driver is outside the workspace. Generated manifests, dependency locks, binaries, traces and results belong in scratch. The assembler remains a read-only path dependency at its existing revision and pin.
 
 From the reviewed worktree, using the tools already on PATH:

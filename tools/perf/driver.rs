@@ -10,6 +10,24 @@ use std::collections::BTreeMap;
 mod shared;
 pub use shared::*;
 
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Default)]
+struct BrowserFrames {
+    frames: Vec<Value>,
+    last_emission_ms: Option<f64>,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+impl BrowserFrames {
+    fn record_at(&mut self, mut frame: Value, now: f64) {
+        frame["emission_interval_ms"] = json!(self
+            .last_emission_ms
+            .replace(now)
+            .map(|previous| now - previous));
+        self.frames.push(frame);
+    }
+}
+
 pub fn frame_record(frame: &MeasuredFrame) -> Value {
     let mut record = output_record(frame.serial, &frame.output);
     record["observed"] = json!(frame.observed);
@@ -230,6 +248,19 @@ mod browser;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_frames_preserve_payload_and_measure_successive_emissions() {
+        let mut frames = BrowserFrames::default();
+        frames.record_at(json!({"serial": 0, "assembly_ms": 3}), 100.0);
+        frames.record_at(json!({"serial": 1, "assembly_ms": 4}), 104.5);
+        frames.record_at(json!({"serial": 2, "assembly_ms": 2}), 112.0);
+        assert_eq!(frames.frames[0]["emission_interval_ms"], Value::Null);
+        assert_eq!(frames.frames[1]["emission_interval_ms"], 4.5);
+        assert_eq!(frames.frames[2]["emission_interval_ms"], 7.5);
+        assert_eq!(frames.frames[1]["serial"], 1);
+        assert_eq!(frames.frames[1]["assembly_ms"], 4);
+    }
+
     #[test]
     fn source_driver_matches_assembler_bytes() {
         let scene =

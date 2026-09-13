@@ -103,17 +103,12 @@ later copy, so that case is not an rt64 parity claim.
 
 `f3dex2-modify-rgba`, `f3dex2-modify-st`, `f3dex2-modify-xy` and `f3dex2-modify-z`
 match rt64 exactly and can be gated with `--threshold 0 --max-diff-pixels 0`.
-`f3dex2-quad-winding` cannot: its acceptance rests on the independent per-pixel
-and culling assertions in `fast3d/src/tests/f3dex2_fixtures.rs`.
-
-That fixture's rt64 comparison carries a known triangle-coverage difference,
-unrelated to QUAD: 192 pixels over a threshold of 8 within `(41,32)..(239,223)`,
-where rt64 covers one extra pixel per row per visible triangle along the 4:3
-hypotenuse, in all three culling bands. Replacing each `07000204/0006080A`
-command in the exported RDRAM with TRI2 (`06000204/0006080A`) produces rt64
-output byte-identical to its QUAD render and leaves that difference unchanged,
-so both renderers dispatch QUAD as TRI2 and the mask belongs to edge coverage on
-sloped edges. Read it as a diagnostic, not as agreement or as a QUAD defect.
+`f3dex2-quad-winding` also matches rt64 exactly after the integer-pixel-origin
+coverage change. Its independent per-pixel and culling assertions remain in
+`fast3d/src/tests/f3dex2_fixtures.rs`. Replacing each `07000204/0006080A`
+command with TRI2 (`06000204/0006080A`) produces byte-identical rt64 output.
+The frozen [TMEM oracle ledger](../tmem/README.md) records zero RGBA residual
+for this row; the old 192-pixel residual is closed.
 
 The two BRANCH_Z fixtures are oracle-gated; neither uses equality or MODIFYVTX.
 CULLDL, threshold equality (`<=`), and modified raw Z have SDK-derived command-read

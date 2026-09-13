@@ -7,12 +7,22 @@ on:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+permissions:
+  contents: read
+  actions: read
 jobs:
   # Compile-only checks (fmt + clippy). No GPU adapter needed, so these run on Linux.
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: exact readback comparator rejection tests
+        run: python -m unittest discover -s tools/readbacks -v
+      - name: TMEM baselines and oracle policy tests
+        run: python -m unittest discover -s tools/tmem -v
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy (default)
@@ -40,14 +50,51 @@ jobs:
       WGPU_DX12_COMPILER: staticdxc
       RUST_TEST_NOCAPTURE: ${{ matrix.os == 'windows-latest' && '1' || '' }}
       RUST_LOG: wgpu_core=warn,wgpu_hal=warn
+      WGPU_BACKEND: ${{ matrix.os == 'windows-latest' && 'dx12' || 'metal' }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: test (default)
-        run: cargo test --workspace
-      - name: test (--features debug-ui)
-        run: cargo test -p fast3d --features debug-ui
-      - name: test (--all-features)
-        run: cargo test --workspace --all-features
+        with:
+          path: candidate
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: test, export and compare exact base readbacks
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          args=()
+          if [ "$EVENT_NAME" = pull_request ]; then
+            args+=(--base-checkout "${{ github.workspace }}/base")
+          fi
+          python "${{ github.workspace }}/candidate/tools/readbacks/ci.py" \
+            --checkout "${{ github.workspace }}/candidate" \
+            --output "${{ runner.temp }}/readbacks" \
+            --base-sha "$BASE_SHA" \
+            --artifact-name "readbacks-${{ matrix.os }}" "${args[@]}"
+      - name: publish candidate readbacks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readbacks-${{ matrix.os }}
+          path: ${{ runner.temp }}/readbacks/candidate
+          if-no-files-found: error
+          retention-days: 90
+      - name: publish base readbacks and comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: readback-evidence-${{ matrix.os }}
+          path: ${{ runner.temp }}/readbacks
+          if-no-files-found: error
+          retention-days: 90
 
   # Prove the library stays wasm-compatible (catches a native-only API / dep regression).
   wasm:
@@ -58,6 +105,10 @@ jobs:
         run: cargo build -p fast3d --target wasm32-unknown-unknown
       - name: build for wasm32 (--features capture)
         run: cargo build -p fast3d --target wasm32-unknown-unknown --features capture
+      - name: build for wasm32 (--features debug-ui)
+        run: cargo build -p fast3d --target wasm32-unknown-unknown --features debug-ui
+      - name: build for wasm32 (--features capture,debug-ui)
+        run: cargo build -p fast3d --target wasm32-unknown-unknown --features capture,debug-ui
 
   browser:
     runs-on: macos-14
@@ -75,13 +126,21 @@ jobs:
           cargo install --locked wasm-bindgen-cli --version "$version"
       # The image's own Google Chrome and ChromeDriver. A downloaded Chrome for Testing cannot
       # reach its Mach rendezvous port on these runners and its network service crash-loops.
-      - name: browser WebGPU replay
+      - name: browser runner environment
         run: |
           "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version
           "$CHROMEWEBDRIVER/chromedriver" --version
-          export CHROMEDRIVER="$CHROMEWEBDRIVER/chromedriver"
-          export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
-          cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown \
+          echo "CHROMEDRIVER=$CHROMEWEBDRIVER/chromedriver" >> "$GITHUB_ENV"
+          echo "WASM_BINDGEN_TEST_WEBDRIVER_JSON=$PWD/fast3d/webdriver.json" >> "$GITHUB_ENV"
+      - name: browser TMEM preimages
+        run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test tmem_preimage -- --nocapture
+      - name: browser TMEM IMAGE replay
+        if: ${{ !cancelled() }}
+        run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test tmem_fixture_replay -- --nocapture
+      - name: browser WebGPU replay
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test -p fast3d --no-fail-fast --features capture,profiling --target wasm32-unknown-unknown \
             --test browser_sm64_fixture_replay --test capture_facade \
             --test capture_memory_wasm --test profiling_capture \
             --test framebuffer_load_evidence -- --nocapture

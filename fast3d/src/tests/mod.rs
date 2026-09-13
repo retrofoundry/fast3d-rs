@@ -1,6 +1,9 @@
 #[allow(dead_code)]
 pub(crate) mod common;
 
+#[path = "../../../tools/readbacks/export.rs"]
+mod readback_export;
+
 mod alpha_dither;
 #[cfg(feature = "capture")]
 mod alpha_dither_fixture;
@@ -77,6 +80,9 @@ mod scene_builders;
 
 mod load_provenance;
 mod memory_failures;
+#[cfg(feature = "capture")]
+mod tmem_fixtures;
+mod tmem_witnesses;
 
 mod workload;
 

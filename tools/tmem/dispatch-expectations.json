@@ -1,0 +1,20 @@
+{
+  "status": "CPU-side expectations; execution assertions belong to cache/replacement deliveries",
+  "roles_fixture": {"fixture": "tmem-roles-lifetime.f3dcap", "draw_roles": [["r0", "r1"], ["r1", "r2"], ["r2", "r3"]], "level_zero_aliases": ["r0", "r1", "r2"], "cold_dispatches": 4, "cold_output_uploads": 0, "warm_dispatches": 0, "reordered_dispatches": 0, "prim_env_filter_only_dispatches": 0},
+  "changes": [
+    {"case": "tex1 only", "new_requests": ["tex1-new"], "dispatches": 1},
+    {"case": "detail only", "new_requests": ["detail-new"], "dispatches": 1},
+    {"case": "one independent non-halving LOD", "new_requests": ["lod1-new"], "dispatches": 1},
+    {"case": "level-zero alias", "new_requests": [], "dispatches": 0}
+  ],
+  "lifetime": [
+    {"case": "same four requests in two tasks before completion", "dispatches": 4},
+    {"case": "retained replay while resident", "dispatches": 0},
+    {"case": "prefix walk while resident", "dispatches": 0},
+    {"case": "cross-frame reuse while resident", "dispatches": 0},
+    {"case": "new device epoch with same four requests", "dispatches": 4},
+    {"case": "one-entry cache, A completed and evictable, then B completed and evictable, then A", "dispatches": 3},
+    {"case": "one-entry cache, A pinned, B bypassed twice in separate completed tasks", "dispatches": 3, "A_retained_pixels_unchanged": true}
+  ],
+  "invariants": {"residency_hit_raw_upload_bytes": 0, "residency_hit_dispatches": 0, "pending_reuse_dispatches": 0, "level_zero_alias_extra_uploads": 0}
+}

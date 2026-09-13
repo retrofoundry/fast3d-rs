@@ -1,0 +1,741 @@
+{
+  "schema": 1,
+  "configurations": [
+    "default",
+    "debug-ui",
+    "all-features"
+  ],
+  "rows": [
+    {
+      "id": "golden_rgba16_quad",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "rgba16-quad"
+    },
+    {
+      "id": "golden_i8_ramp",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "i8-ramp"
+    },
+    {
+      "id": "golden_i4_ramp",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "i4-ramp"
+    },
+    {
+      "id": "golden_ia16_ramp",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "ia16-ramp"
+    },
+    {
+      "id": "golden_ia8_ramp",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "ia8-ramp"
+    },
+    {
+      "id": "golden_ia4_ramp",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "ia4-ramp"
+    },
+    {
+      "id": "golden_wrap_repeat",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "wrap-repeat"
+    },
+    {
+      "id": "golden_mirror_repeat",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "mirror-repeat"
+    },
+    {
+      "id": "golden_ci8_ramp",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "ci8-ramp"
+    },
+    {
+      "id": "golden_ci8_canary",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "ci8-canary"
+    },
+    {
+      "id": "golden_ci4_grid",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "ci4-grid"
+    },
+    {
+      "id": "golden_ci4_canary",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "ci4-canary"
+    },
+    {
+      "id": "golden_multi_material",
+      "stage": "final",
+      "width": 96,
+      "height": 96,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "multi-material"
+    },
+    {
+      "id": "golden_multi_material_cutout_shows_hole",
+      "stage": "final",
+      "width": 96,
+      "height": 96,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "multi-material"
+    },
+    {
+      "id": "golden_tron",
+      "stage": "final",
+      "width": 96,
+      "height": 96,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "tron"
+    },
+    {
+      "id": "golden_tron_forced_fallback",
+      "stage": "final",
+      "width": 96,
+      "height": 96,
+      "blend_path": "forced-fallback",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "tron-fallback"
+    },
+    {
+      "id": "golden_multi_material_forced_fallback",
+      "stage": "final",
+      "width": 96,
+      "height": 96,
+      "blend_path": "forced-fallback",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "multi-material"
+    },
+    {
+      "id": "golden_fogworld",
+      "stage": "final",
+      "width": 96,
+      "height": 96,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "fogworld"
+    },
+    {
+      "id": "golden_alpha_threshold",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "alpha-threshold"
+    },
+    {
+      "id": "golden_decal",
+      "stage": "final",
+      "width": 96,
+      "height": 96,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "decal"
+    },
+    {
+      "id": "golden_high_poly",
+      "stage": "final",
+      "width": 96,
+      "height": 96,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "high-poly"
+    },
+    {
+      "id": "golden_2d_fill_texrect",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "2d-fill-texrect"
+    },
+    {
+      "id": "golden_2d_hud_over_3d",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "2d-hud-over-3d"
+    },
+    {
+      "id": "golden_2d_texrectflip",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "2d-texrectflip"
+    },
+    {
+      "id": "golden_2d_offscreen_then_sample",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "2d-offscreen-then-sample"
+    },
+    {
+      "id": "golden_2d_alpha_texrect_over_bg",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "2d-alpha-texrect-over-bg"
+    },
+    {
+      "id": "golden_2d_copy_alpha_keyed_over_bg",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "2d-copy-alpha-keyed-over-bg"
+    },
+    {
+      "id": "golden_pairless_flat_color",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "pairless-flat-color"
+    },
+    {
+      "id": "golden_pairless_chrome_icosphere",
+      "stage": "final",
+      "width": 64,
+      "height": 64,
+      "blend_path": "primary",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ],
+      "golden": "pairless-chrome-icosphere"
+    },
+    {
+      "id": "format-rgba16",
+      "stage": "decode",
+      "width": 192,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-i4",
+      "stage": "decode",
+      "width": 16,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ia4",
+      "stage": "decode",
+      "width": 16,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-i8",
+      "stage": "decode",
+      "width": 256,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ia8",
+      "stage": "decode",
+      "width": 256,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ia16",
+      "stage": "decode",
+      "width": 512,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-rgba32",
+      "stage": "decode",
+      "width": 4,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ci4-mode0",
+      "stage": "decode",
+      "width": 2,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ci4-mode1",
+      "stage": "decode",
+      "width": 2,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ci4-mode2",
+      "stage": "decode",
+      "width": 2,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ci4-mode3",
+      "stage": "decode",
+      "width": 2,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ci8-mode0",
+      "stage": "decode",
+      "width": 2,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ci8-mode1",
+      "stage": "decode",
+      "width": 2,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ci8-mode2",
+      "stage": "decode",
+      "width": 2,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "format-ci8-mode3",
+      "stage": "decode",
+      "width": 2,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "layout-odd-5x3",
+      "stage": "decode",
+      "width": 5,
+      "height": 3,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "alias-odd-swap",
+      "stage": "decode",
+      "width": 5,
+      "height": 3,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "alias-final-nibble",
+      "stage": "decode",
+      "width": 5,
+      "height": 3,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "layout-rgba32-wrap",
+      "stage": "decode",
+      "width": 5,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "alias-high-bank",
+      "stage": "decode",
+      "width": 5,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "layout-one-zero-line",
+      "stage": "decode",
+      "width": 1,
+      "height": 1,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "layout-lookup-wrap",
+      "stage": "decode",
+      "width": 4096,
+      "height": 4,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "alias-wrapped-lookup",
+      "stage": "decode",
+      "width": 4096,
+      "height": 4,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "layout-loadtile-padded",
+      "stage": "decode",
+      "width": 5,
+      "height": 3,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "layout-block-dxt0",
+      "stage": "decode",
+      "width": 5,
+      "height": 4,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "layout-block-dxt683",
+      "stage": "decode",
+      "width": 5,
+      "height": 4,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    },
+    {
+      "id": "tmem-layouts",
+      "stage": "final",
+      "width": 320,
+      "height": 240,
+      "blend_path": "forced-fallback",
+      "configurations": [
+        "all-features"
+      ]
+    },
+    {
+      "id": "tmem-tlut-mutation",
+      "stage": "final",
+      "width": 320,
+      "height": 240,
+      "blend_path": "forced-fallback",
+      "configurations": [
+        "all-features"
+      ]
+    },
+    {
+      "id": "tmem-roles-lifetime",
+      "stage": "final",
+      "width": 320,
+      "height": 240,
+      "blend_path": "forced-fallback",
+      "configurations": [
+        "all-features"
+      ]
+    },
+    {
+      "id": "layout-zero-line-nonci-tlut",
+      "stage": "decode",
+      "width": 1,
+      "height": 3,
+      "blend_path": "none",
+      "configurations": [
+        "default",
+        "debug-ui",
+        "all-features"
+      ]
+    }
+  ]
+}

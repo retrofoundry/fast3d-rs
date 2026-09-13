@@ -15,17 +15,17 @@ pub async fn source(
         "trace" => Mode::Trace,
         _ => return Err(JsValue::from_str("unknown mode")),
     };
-    let mut frames = Vec::new();
+    let mut frames = BrowserFrames::default();
     let setup = source_gpu(
         &source,
         mode,
         readback,
         if one_frame { 1 } else { 2 },
-        |frame| frames.push(frame),
+        |frame| frames.record_at(frame, now_ms()),
     )
     .await
     .map_err(|e| JsValue::from_str(&e))?;
-    serde_json::to_string(&json!({"setup":setup,"frames":frames}))
+    serde_json::to_string(&json!({"setup":setup,"frames":frames.frames}))
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
 
@@ -88,7 +88,7 @@ pub async fn sequence(
     let features = format!("{:?}", device.features());
     let limits = format!("{:?}", device.limits());
     let configuration = format!("{:?}", sequence.frames[0].frame);
-    let mut frames = Vec::new();
+    let mut frames = BrowserFrames::default();
     let setup = sequence
         .measure(
             device,
@@ -99,10 +99,10 @@ pub async fn sequence(
                 frames_in_flight: if one_frame { 1 } else { 2 },
                 ..Default::default()
             },
-            |frame| frames.push(frame_record(&frame)),
+            |frame| frames.record_at(frame_record(&frame), now_ms()),
         )
         .await
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    serde_json::to_string(&json!({"adapter":format!("{adapter:?}"),"features":features,"limits":limits,"configuration":configuration,"mode":mode,"frames_in_flight":if one_frame {1}else{2},"setup":setup,"frames":frames}))
+    serde_json::to_string(&json!({"adapter":format!("{adapter:?}"),"features":features,"limits":limits,"configuration":configuration,"mode":mode,"frames_in_flight":if one_frame {1}else{2},"setup":setup,"frames":frames.frames}))
         .map_err(|e| JsValue::from_str(&e.to_string()))
 }
