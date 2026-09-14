@@ -9,10 +9,11 @@ import subprocess
 import sys
 import zipfile
 
-from readbacks import artifact_file, compare, file_hash, json_hash, load_capture
+from readbacks import artifact_file, compare, file_hash, gpu_decode_inventory, json_hash, load_capture
 
 
 HERE = Path(__file__).resolve().parent
+GPU_DECODE_TEST = "fast3d/tests/texture_decode_gpu.rs"
 INVENTORY = json.loads((HERE / "inventory.json").read_text(encoding="utf-8"))
 COMMANDS = {
     "default": ["cargo", "test", "--locked", "--no-fail-fast", "--workspace"],
@@ -79,8 +80,50 @@ def collect_rows(output):
     return rows, errors
 
 
+def gpu_decode_requirement(checkout):
+    source = checkout / GPU_DECODE_TEST
+    return {"version": 1, "source_test_sha256": file_hash(source) if source.is_file() else None,
+            "required_configurations": list(COMMANDS) if source.is_file() else []}
+
+
+def save_gpu_decode_manifest(output, manifest, inventory=None):
+    output = output.resolve()
+    inventory = gpu_decode_inventory() if inventory is None else inventory
+    declaration = manifest["gpu_decode"]
+    rows, errors = [], []
+    for config in manifest["configurations"]:
+        directory = output / config / "gpu-decode"
+        for metadata in sorted(directory.glob("*.json")):
+            try:
+                row = json.loads(metadata.read_text(encoding="utf-8"))
+                stem = row["id"]
+                if row["stage"] != "decode":
+                    raise ValueError("wrong GPU output stage")
+                for field, suffix, hash_field in [("file", ".bin", "sha256"),
+                                                   ("input_file", ".input.bin", "input_sha256"),
+                                                   ("expected_file", ".expected.bin", "expected_sha256")]:
+                    path = artifact_file(directory, stem + suffix)
+                    row[field] = path.relative_to(output).as_posix()
+                    row[hash_field] = file_hash(path)
+                row.update(configuration=config, metadata_file=metadata.relative_to(output).as_posix(),
+                           metadata_sha256=file_hash(metadata))
+                rows.append(row)
+            except (ValueError, KeyError, OSError) as error:
+                errors.append(f"{metadata}: {error}")
+    declaration["inventory_sha256"] = json_hash(inventory)
+    supplement = {field: declaration[field] for field in
+                  ["version", "source_test_sha256", "required_configurations", "inventory_sha256"]}
+    supplement.update({field: manifest[field] for field in
+                       ["source_sha", "tested_sha", "base_sha", "run_id", "run_attempt"]})
+    supplement.update(rows=rows, errors=errors)
+    path = output / "gpu-decode-manifest.json"
+    path.write_text(json.dumps(supplement, indent=2) + "\n", encoding="utf-8")
+    declaration.update(manifest_file=path.name, manifest_sha256=file_hash(path))
+
+
 def save_manifest(output, manifest):
     manifest["rows"], manifest["errors"] = collect_rows(output)
+    save_gpu_decode_manifest(output, manifest)
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
@@ -139,16 +182,21 @@ def capture(checkout, output, base_sha, harness_checkout):
             "compiler": os.environ.get("WGPU_DX12_COMPILER", ""),
             "test_threads": os.environ.get("RUST_TEST_THREADS", ""),
         },
+        "gpu_decode": gpu_decode_requirement(checkout),
         "configurations": {config: {"command": command, "exit_code": None}
                            for config, command in COMMANDS.items()}, "rows": [], "errors": [],
     }
+    if manifest["gpu_decode"]["source_test_sha256"] is not None:
+        shutil.copyfile(checkout / GPU_DECODE_TEST, output / "gpu-decode-source.rs")
     save_manifest(output, manifest)
     try:
         for config, command in COMMANDS.items():
             directory = output / config
             directory.mkdir()
             env = dict(os.environ, FAST3D_GOLDEN_OUTPUT=str(directory / "final"),
-                       FAST3D_DECODE_OUTPUT=str(directory / "decode"))
+                       FAST3D_DECODE_OUTPUT=str(directory / "decode"),
+                       FAST3D_GPU_DECODE_OUTPUT=str(directory / "gpu-decode"),
+                       FAST3D_RESIDENCY_OUTPUT=str(directory / "residency"))
             build = subprocess.run(command + ["--no-run", "--message-format=json"], cwd=checkout,
                                    env=env, text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             (directory / "build.log").write_text(build.stdout, encoding="utf-8")
@@ -169,7 +217,7 @@ def capture(checkout, output, base_sha, harness_checkout):
                 "failed_tests": sorted(set(re.findall(r"(?m)^test (\S+) \.\.\. FAILED\s*$", test_log))),
                 "failed_targets": sorted(set(re.findall(r"(?m)^error: test failed, to rerun pass (.+)$", test_log))),
                 "build_log": f"{config}/build.log", "test_log": f"{config}/test.log",
-                "binaries": binaries, "environment": {key: env[key] for key in ["FAST3D_GOLDEN_OUTPUT", "FAST3D_DECODE_OUTPUT"]},
+                "binaries": binaries, "environment": {key: env[key] for key in ["FAST3D_GOLDEN_OUTPUT", "FAST3D_DECODE_OUTPUT", "FAST3D_GPU_DECODE_OUTPUT", "FAST3D_RESIDENCY_OUTPUT"]},
             }
             print(f"{checkout}: {config} exit {result.returncode}", flush=True)
     finally:
@@ -193,7 +241,7 @@ def overlay(base, candidate, source_sha):
     for name in files:
         if name in ["Cargo.lock", "fast3d/Cargo.toml#dev-dependencies"]:
             continue
-        if not name.startswith(("fast3d/src/tests/", "fast3d/tests/", "tools/readbacks/")) and name != "tools/tmem/vectors.json":
+        if not name.startswith(("fast3d/src/tests/", "fast3d/tests/", "tools/readbacks/")) and name not in ["tools/tmem/vectors.json", "tools/tmem/gpu-decode-inventory.json"]:
             raise ValueError(f"production file forbidden in test harness overlay: {name}")
         destination = base / name
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -257,15 +305,16 @@ def gate(args):
     output.mkdir(parents=True, exist_ok=False)
     candidate = output / "candidate"
     manifest = capture(args.checkout, candidate, args.base_sha, args.checkout)
+    require_gpu_decode = (args.checkout / GPU_DECODE_TEST).is_file()
     if not args.base_checkout:
-        load_capture(candidate, INVENTORY, manifest["source_sha"], manifest["run_id"])
+        load_capture(candidate, INVENTORY, manifest["source_sha"], manifest["run_id"], require_gpu_decode=require_gpu_decode)
         return
     history = []
     base = output / "downloaded-base"
     try:
-        load_capture(candidate, INVENTORY, manifest["source_sha"], manifest["run_id"])
+        load_capture(candidate, INVENTORY, manifest["source_sha"], manifest["run_id"], require_gpu_decode=require_gpu_decode)
         run_id = fetch_base(args.repository, args.base_sha, args.artifact_name, base)
-        report = compare(base, candidate, INVENTORY, args.base_sha, manifest["source_sha"], run_id, manifest["run_id"])
+        report = compare(base, candidate, INVENTORY, args.base_sha, manifest["source_sha"], run_id, manifest["run_id"], require_gpu_decode=require_gpu_decode)
         if not report["passed"]:
             (output / "cross-run-comparison.json").write_text(json.dumps(report, indent=2) + "\n")
             raise ValueError("cross-run RGBA delta; recapture both revisions on this runner")
@@ -278,7 +327,7 @@ def gate(args):
         base_manifest = capture(args.base_checkout, base, args.base_sha, args.checkout)
         try:
             report = compare(base, candidate, INVENTORY, args.base_sha, manifest["source_sha"],
-                             base_manifest["run_id"], manifest["run_id"], allow_incomplete=True)
+                             base_manifest["run_id"], manifest["run_id"], allow_incomplete=True, require_gpu_decode=require_gpu_decode)
         except (ValueError, KeyError, OSError) as error:
             report = {"passed": False, "complete": False, "error": str(error)}
     (output / "comparison.json").write_text(json.dumps(report, indent=2) + "\n")

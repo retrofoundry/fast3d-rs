@@ -6,6 +6,9 @@ draws the frame.
 fast3d walks N64 display lists through a high-level emulation of the RCP and rasterizes them
 with wgpu, so the same renderer runs natively and on the web (WebGPU/wasm).
 
+Texture preparation uses GPU decode with renderer-owned residency. See
+[texture decode and residency](docs/texture-residency.md) for ownership, limits and counters.
+
 ## Use it
 
 ```toml

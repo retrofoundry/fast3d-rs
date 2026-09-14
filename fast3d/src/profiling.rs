@@ -15,6 +15,9 @@ pub use requests::*;
 pub(crate) struct Recorder;
 #[cfg(not(any(test, feature = "profiling")))]
 impl Recorder {
+    pub fn active(&self) -> bool {
+        false
+    }
     pub fn span(&self, _: &'static str) -> Span {
         Span
     }
@@ -89,4 +92,23 @@ mod tests;
 #[cfg(feature = "profiling")]
 pub fn gpu_accounting_probe(device: &wgpu::Device, queue: &wgpu::Queue) -> (Snapshot, Snapshot) {
     crate::render::gpu_accounting_probe(device, queue)
+}
+
+/// Untimed residency pressure and retained-image readback diagnostic.
+#[cfg(all(feature = "profiling", feature = "capture"))]
+pub async fn gpu_residency_pressure_probe(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+) -> Result<std::collections::BTreeMap<String, Snapshot>, String> {
+    crate::render::texture_resources::probe::run(device, queue).await
+}
+
+/// Untimed readback of the production compute decoder for owned diagnostic requests.
+#[cfg(all(feature = "profiling", feature = "capture"))]
+pub async fn gpu_decode_readback(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    requests: &[Request],
+) -> Result<Vec<Vec<u8>>, String> {
+    crate::render::texture_decode::readback_requests(device, queue, requests).await
 }

@@ -2,6 +2,10 @@ use crate::hle::{
     combiner,
     rdp::{Rdp, TileDescriptor},
     texdec::FormatInfo,
+    texture_request::{
+        self, DecodeRecipe, EncodedInput, EncodedTextureRequest,
+        Representation as EncodedRepresentation,
+    },
     tile_sampling::TileSampling,
     tmem::Tmem,
 };
@@ -40,6 +44,9 @@ pub struct Request {
     pub tlut: u8,
     pub extent: [u32; 2],
     pub bank: Bank,
+    /// Resolved encoded compatibility input, captured before later TMEM loads.
+    #[cfg_attr(feature = "profiling", serde(default))]
+    pub linear: Option<Vec<u8>>,
     pub reachable_bytes: usize,
     pub read_operations: u64,
     pub palette_bytes: usize,
@@ -53,79 +60,123 @@ impl Request {
         tile: &TileDescriptor,
         tlut: u8,
         role: &str,
-        output: Result<&[u8], crate::DiagKind>,
+        encoded: Result<&EncodedTextureRequest, crate::DiagKind>,
     ) -> Self {
-        let representation = representation(rdp, tile, tlut);
-        let mut request = Self {
+        let representation = encoded.as_ref().map_or_else(
+            |_| representation(rdp, tile, tlut),
+            |request| match request.recipe().representation {
+                EncodedRepresentation::Tile => Representation::Tile,
+                EncodedRepresentation::Lookup4096x4 => Representation::Lookup,
+                EncodedRepresentation::LinearCompat => Representation::Linear,
+            },
+        );
+        let mut bank = rdp
+            .tmem_bank
+            .profile_bank(representation == Representation::Linear);
+        let mut linear = None;
+        if let Ok(request) = encoded {
+            let owned_bank = match request.input() {
+                EncodedInput::Tmem(bytes) => bytes,
+                EncodedInput::LinearCompat {
+                    bytes,
+                    palette_bank,
+                } => {
+                    linear = Some(bytes.to_vec());
+                    palette_bank
+                }
+            };
+            bank.bytes.copy_from_slice(owned_bank.as_ref());
+        }
+        Self {
             representation,
             role: role.into(),
             tile: tile.clone(),
             tlut,
-            extent: TileSampling::from_tile(tile, tlut).allocation_extent(),
-            bank: rdp
-                .tmem_bank
-                .profile_bank(representation == Representation::Linear),
+            extent: encoded.as_ref().map_or_else(
+                |_| TileSampling::from_tile(tile, tlut).allocation_extent(),
+                |request| request.recipe().output,
+            ),
+            bank,
+            linear,
             reachable_bytes: 0,
             read_operations: 0,
             palette_bytes: 0,
-            output: output.as_ref().map(|v| v.to_vec()).unwrap_or_default(),
-            rejection: output.err().map(|e| format!("{e:?}")),
+            output: Vec::new(),
+            rejection: encoded.err().map(|e| format!("{e:?}")),
+        }
+    }
+
+    /// Offline CPU analysis for developer tools. Live trace capture leaves these fields empty.
+    pub fn analyze(&mut self) -> Result<(), crate::DiagKind> {
+        let fi = FormatInfo {
+            fmt: self.tile.fmt,
+            siz: self.tile.siz,
         };
-        if request.rejection.is_none() {
-            let mut reads = [false; 4096];
-            let mut read_operations = 0;
-            let mut read = |addr| {
-                reads[addr] = true;
-                read_operations += 1;
-            };
-            let decoded = match representation {
-                Representation::Tile => rdp.tmem_bank.sample_tile_observed(tile, tlut, &mut read),
-                Representation::Lookup => rdp
-                    .tmem_bank
-                    .sampling_lookup_observed(tile, tlut, &mut read),
-                Representation::Linear => {
-                    let bytes = request.prepare().expect("successful reconstruction");
-                    request.reachable_bytes = bytes.len();
-                    read_operations += bytes.len() as u64;
-                    if tile.fmt == 2 {
-                        let mut palette_read = |offset| {
-                            reads[2048 + offset] = true;
-                            read_operations += 1;
-                        };
-                        let pixels = if tile.siz == 0 {
-                            crate::hle::texdec::decode_ci4_observed(
-                                &bytes,
-                                tile.width.into(),
-                                tile.height.into(),
-                                rdp.tmem_bank.palette(),
-                                tile.palette,
-                                tlut,
-                                &mut palette_read,
-                            )
-                        } else {
-                            crate::hle::texdec::decode_ci8_observed(
-                                &bytes,
-                                tile.width.into(),
-                                tile.height.into(),
-                                rdp.tmem_bank.palette(),
-                                tlut,
-                                &mut palette_read,
-                            )
-                        };
-                        assert_eq!(pixels, request.output);
-                    }
-                    request.decode_prepared(&bytes)
+        fi.validate()?;
+        if self.rejection.is_some() {
+            return Err(crate::DiagKind::TextureBytesUnavailable {
+                tmem_addr: self.tile.tmem_addr,
+            });
+        }
+        let tmem = Tmem::from_profile(&self.bank);
+        let mut reads = [false; 4096];
+        let mut read_operations = 0;
+        let mut read = |addr| {
+            reads[addr] = true;
+            read_operations += 1;
+        };
+        let mut linear_bytes = 0;
+        let output = match self.representation {
+            Representation::Tile => tmem.sample_tile_observed(&self.tile, self.tlut, &mut read)?,
+            Representation::Lookup => {
+                tmem.sampling_lookup_observed(&self.tile, self.tlut, &mut read)?
+            }
+            Representation::Linear => {
+                let bytes = self.linear.clone().map_or_else(|| self.prepare(), Ok)?;
+                linear_bytes = bytes.len();
+                read_operations += bytes.len() as u64;
+                let mut palette_read = |offset| {
+                    reads[2048 + offset] = true;
+                    read_operations += 1;
+                };
+                match (self.tile.fmt, self.tile.siz) {
+                    (2, 0) => crate::hle::texdec::decode_ci4_observed(
+                        &bytes,
+                        self.tile.width.into(),
+                        self.tile.height.into(),
+                        tmem.palette(),
+                        self.tile.palette,
+                        self.tlut,
+                        &mut palette_read,
+                    ),
+                    (2, 1) => crate::hle::texdec::decode_ci8_observed(
+                        &bytes,
+                        self.tile.width.into(),
+                        self.tile.height.into(),
+                        tmem.palette(),
+                        self.tlut,
+                        &mut palette_read,
+                    ),
+                    _ => fi.decode(
+                        &bytes,
+                        self.tile.width.into(),
+                        self.tile.height.into(),
+                        tmem.palette(),
+                        self.tile.palette,
+                        self.tlut,
+                    )?,
                 }
             }
-            .expect("diagnostic decode must match successful decode");
-            assert_eq!(decoded, request.output, "diagnostic decoder differs");
-            request.read_operations = read_operations;
-            request.reachable_bytes += reads.iter().filter(|&&read| read).count();
-            if tile.fmt == 2 {
-                request.palette_bytes = reads[2048..].iter().filter(|&&read| read).count();
-            }
-        }
-        request
+        };
+        self.output = output;
+        self.read_operations = read_operations;
+        self.reachable_bytes = linear_bytes + reads.iter().filter(|&&read| read).count();
+        self.palette_bytes = if self.tile.fmt == 2 {
+            reads[2048..].iter().filter(|&&read| read).count()
+        } else {
+            0
+        };
+        Ok(())
     }
 
     pub fn class(&self) -> String {
@@ -141,7 +192,7 @@ impl Request {
         )
     }
 
-    /// Repeats required format validation and compatibility reconstruction before a lookup.
+    /// Return owned compatibility bytes; older traces reconstruct them from saved provenance.
     pub fn prepare(&self) -> Result<Vec<u8>, crate::DiagKind> {
         let fi = FormatInfo {
             fmt: self.tile.fmt,
@@ -154,9 +205,14 @@ impl Request {
             });
         }
         match self.representation {
-            Representation::Linear => Tmem::from_profile(&self.bank).linear_bytes(
-                &self.tile,
-                fi.tmem_bytes(self.tile.width.into(), self.tile.height.into()),
+            Representation::Linear => self.linear.clone().map_or_else(
+                || {
+                    Tmem::from_profile(&self.bank).linear_bytes(
+                        &self.tile,
+                        fi.tmem_bytes(self.tile.width.into(), self.tile.height.into()),
+                    )
+                },
+                Ok,
             ),
             _ => Ok(Vec::new()),
         }
@@ -221,23 +277,32 @@ pub struct DecodeExecutor {
 }
 
 impl Request {
-    /// Rebuild the owned production request for an untimed trace/identity inspection.
+    #[cfg(any(test, all(feature = "profiling", feature = "capture")))]
+    pub(crate) fn encoded_request(&self) -> Result<EncodedTextureRequest, crate::DiagKind> {
+        EncodedTextureRequest::from_diagnostic(self)
+    }
+
+    /// Compute the production identity from an owned diagnostic snapshot without expanding pixels.
     pub fn encoded_identity(&self) -> Result<(u64, Vec<u8>), crate::DiagKind> {
-        self.prepare()?;
-        let rdp = Rdp {
-            tmem_bank: Tmem::from_profile(&self.bank),
-            ..Default::default()
+        let linear = self.prepare()?;
+        let representation = match self.representation {
+            Representation::Tile => EncodedRepresentation::Tile,
+            Representation::Lookup => EncodedRepresentation::Lookup4096x4,
+            Representation::Linear => EncodedRepresentation::LinearCompat,
         };
-        let binding = crate::hle::texture_request::prepare(
-            &rdp,
+        let recipe = DecodeRecipe::new(
             &self.tile,
             self.tlut,
-            &crate::profiling::Recorder::default(),
-        )?;
-        let crate::hle::texture_request::TextureSource::Encoded(request) = binding.source else {
-            unreachable!()
-        };
-        Ok((request.key().xxh3_64, request.witness().to_vec()))
+            representation,
+            TileSampling::from_tile(&self.tile, self.tlut),
+        );
+        let bank = self.bank.bytes.as_slice().try_into().map_err(|_| {
+            crate::DiagKind::TextureBytesUnavailable {
+                tmem_addr: self.tile.tmem_addr,
+            }
+        })?;
+        let witness = texture_request::serialize(&recipe, bank, &linear);
+        Ok((twox_hash::XxHash3_64::oneshot(&witness), witness))
     }
 
     pub fn diagnostic_variant(&self, xor: u8) -> Self {
@@ -249,15 +314,26 @@ impl Request {
             tmem_bank: Tmem::from_profile(&bank),
             ..Default::default()
         };
-        let output = combiner::decode_sampling_texture(&rdp, &self.tile, self.tlut)
-            .map(|v| v.texture.decode().into_owned());
-        Self::capture(
+        let binding =
+            crate::hle::texture_request::prepare(&rdp, &self.tile, self.tlut, &Default::default());
+        let encoded = binding.as_ref().map(|binding| {
+            let crate::hle::texture_request::TextureSource::Encoded(request) = &binding.source
+            else {
+                unreachable!()
+            };
+            request.as_ref()
+        });
+        let mut request = Self::capture(
             &rdp,
             &self.tile,
             self.tlut,
             &self.role,
-            output.as_ref().map(|v| v.as_slice()).map_err(|e| *e),
-        )
+            encoded.map_err(|error| *error),
+        );
+        if request.rejection.is_none() {
+            request.analyze().expect("validated diagnostic input");
+        }
+        request
     }
 
     pub fn executor(&self) -> DecodeExecutor {
@@ -276,16 +352,8 @@ impl Request {
 
 impl DecodeExecutor {
     pub fn baseline_decode(&self) -> Result<Vec<u8>, crate::DiagKind> {
-        if self.rejected {
-            return Err(crate::DiagKind::TextureBytesUnavailable {
-                tmem_addr: self.tile.tmem_addr,
-            });
-        }
-        if let Some(diag) = self.rdp.tmem_bank.rejection(&self.tile) {
-            return Err(diag.kind);
-        }
-        combiner::decode_sampling_texture(&self.rdp, &self.tile, self.tlut)
-            .map(|level| level.texture.decode().into_owned())
+        let linear = self.prepare()?;
+        self.decode_validated(&linear)
     }
     pub fn prepare(&self) -> Result<Vec<u8>, crate::DiagKind> {
         self.validate()?;
@@ -333,6 +401,10 @@ impl DecodeExecutor {
 
     pub fn decode(&self, linear: &[u8]) -> Result<Vec<u8>, crate::DiagKind> {
         self.validate()?;
+        self.decode_validated(linear)
+    }
+
+    fn decode_validated(&self, linear: &[u8]) -> Result<Vec<u8>, crate::DiagKind> {
         match self.representation {
             Representation::Tile => self.rdp.tmem_bank.sample_tile(&self.tile, self.tlut),
             Representation::Lookup => self.rdp.tmem_bank.sampling_lookup(&self.tile, self.tlut),
@@ -436,15 +508,31 @@ pub fn authored_requests() -> Vec<Request> {
                     rdp.tmem_bank.write_tlut(&data[..512], 256, 256);
                 }
                 for tlut in if fmt == 2 { vec![2, 3] } else { vec![0] } {
-                    let output = combiner::decode_sampling_texture(&rdp, &tile, tlut)
-                        .map(|v| v.texture.decode().into_owned());
-                    requests.push(Request::capture(
+                    let binding = crate::hle::texture_request::prepare(
+                        &rdp,
+                        &tile,
+                        tlut,
+                        &Default::default(),
+                    );
+                    let encoded = binding.as_ref().map(|binding| {
+                        let crate::hle::texture_request::TextureSource::Encoded(request) =
+                            &binding.source
+                        else {
+                            unreachable!()
+                        };
+                        request.as_ref()
+                    });
+                    let mut request = Request::capture(
                         &rdp,
                         &tile,
                         tlut,
                         "authored",
-                        output.as_ref().map(|v| v.as_slice()).map_err(|e| *e),
-                    ));
+                        encoded.map_err(|error| *error),
+                    );
+                    if request.rejection.is_none() {
+                        request.analyze().expect("validated authored input");
+                    }
+                    requests.push(request);
                 }
             }
         }

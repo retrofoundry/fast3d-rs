@@ -184,6 +184,8 @@ fn identity_is_computed_once_from_retained_inputs_after_bank_mutation_and_drop()
     assert_eq!(old.decode(), [61; 4]);
     assert_eq!(old.key(), identity.key);
     assert_eq!(old.witness(), identity.witness.as_ref());
+    let witness = old.witness_profiled(&profiler);
+    assert!(Arc::ptr_eq(&witness, &old.witness_profiled(&profiler)));
     assert!(std::ptr::eq(identity, old.identity(&profiler)));
     assert_work("identity-first-i8-1x1", &profiler.drain());
     assert_ne!(old.key(), request(&second).identity(&profiler).key);
@@ -283,6 +285,7 @@ fn memory_accounting_does_not_force_identity_and_counts_shared_bank_once() {
         memory.include(source);
     }
     assert_eq!(memory.payload_bytes, TMEM_BYTES);
+    let before_identity_overhead = memory.overhead_bytes;
     assert!(request(&first).identity.get().is_none());
     assert!(request(&second).identity.get().is_none());
     request(&first).identity(&profiler);
@@ -291,6 +294,10 @@ fn memory_accounting_does_not_force_identity_and_counts_shared_bank_once() {
         memory.include(source);
     }
     assert_eq!(memory.payload_bytes, TMEM_BYTES + 59);
+    assert_eq!(
+        memory.overhead_bytes,
+        before_identity_overhead + 2 * std::mem::size_of::<usize>()
+    );
     assert!(request(&second).identity.get().is_none());
 }
 

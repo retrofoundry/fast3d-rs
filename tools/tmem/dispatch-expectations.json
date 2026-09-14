@@ -1,5 +1,5 @@
 {
-  "status": "T2 lazy identity gates are executable; memo and compute/residency dispatch gates are deferred to T4",
+  "status": "T2 lazy-identity baselines remain frozen; T4 compute/residency expectations are executable hardware gates",
   "roles_fixture": {
     "fixture": "tmem-roles-lifetime.f3dcap",
     "draw_roles": [
@@ -354,5 +354,49 @@
     },
     "counted_workloads": "All ten frozen native/Chrome primary/control rows report tmem.* counters and retained/cache memory gauges; absent removed memo/snapshot counters mean zero. Retained-bank copy-on-write allocations and bytes are counted separately. Untimed counter-off and counter-on controls quantify instrumentation cost.",
     "cpu_bridge": "CPU expansion occurs on positional upload misses and explicit pixel inspection. No decoded CPU result cache. T4 tightens supported-TMEM production CPU expansion to zero."
+  },
+  "t4": {
+    "recipe_memo": "deferred; operation census demonstrates opportunities but no net timing payoff is claimed",
+    "roles_fixture": {
+      "resolutions_per_frame": 6,
+      "cold_misses": 4,
+      "cold_hits": 2,
+      "cold_raw_upload_bytes": 16384,
+      "cold_compute_passes": 1,
+      "warm_misses": 0,
+      "warm_hits": 6
+    },
+    "display_list_reloads_three_frames": {
+      "requests": 54,
+      "distinct_images": 9,
+      "hashes_computed": 54,
+      "bytes_hashed": 14112,
+      "witness_comparisons": 45,
+      "witness_bytes_compared": 11760,
+      "encoded_comparisons": 27,
+      "encoded_bytes_compared": 110592,
+      "bytes_compared": 122352,
+      "decode_dispatches": 9,
+      "decode_compute_passes": 1,
+      "decode_input_upload_bytes": 36864,
+      "decode_input_upload_calls": 9,
+      "decode_uniform_upload_bytes": 576,
+      "decode_uniform_upload_calls": 9,
+      "hits": 45,
+      "misses": 9,
+      "evictions": 0,
+      "bypasses": 0,
+      "resident_gpu_bytes": 1728,
+      "resident_cpu_bytes": 2352,
+      "snapshot_allocations": 0,
+      "snapshot_bytes": 0,
+      "cpu_decode_executions": 0,
+      "cpu_decode_output_bytes": 0,
+      "moved_rdp_fixture_bank_cow_allocations": 26,
+      "moved_rdp_fixture_bank_cow_bytes": 106496,
+      "public_facade_bank_cow_allocations": 27,
+      "public_facade_bank_cow_bytes": 110592
+    },
+    "public_facade_copy_note": "Renderer and CpuInterpreter clone the prior RDP before interpretation, adding a first-load bank copy compared with the frozen fixture that moves RDP. Both shapes remain counted."
   }
 }

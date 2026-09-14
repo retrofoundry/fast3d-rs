@@ -1,8 +1,10 @@
 # TMEM validation fixtures
 
-Production rendering decodes owned TMEM requests on the CPU at upload. These tools
-freeze the byte contract and test lazy identity, ownership and validation boundaries.
-Fast3dV1 is specified in [fast3d-v1.md](fast3d-v1.md); the internal T2 boundary
+Production rendering decodes owned TMEM requests with GPU compute and retains
+images by exact encoded identity. These tools freeze the byte contract and test
+lazy identity, ownership and validation boundaries. The CPU request decoder is a
+test oracle; explicit offline profiling helpers can also expand saved inputs.
+Fast3dV1 is specified in [fast3d-v1.md](fast3d-v1.md); the internal request boundary
 and counter definitions are in [owned-requests.md](owned-requests.md).
 
 ## Frozen baselines

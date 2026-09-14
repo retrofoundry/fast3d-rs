@@ -54,7 +54,121 @@ def capture_failures(manifest):
     return failures
 
 
-def load_capture(root, inventory, source_sha, run_id, *, allow_incomplete=False):
+def gpu_decode_inventory():
+    return json.loads((Path(__file__).resolve().parent.parent / "tmem/gpu-decode-inventory.json").read_text(encoding="utf-8"))
+
+
+def gpu_decode_rows(inventory, configurations):
+    if inventory["version"] != 1 or not inventory["rows"]:
+        raise ValueError("invalid GPU decode inventory")
+    ids = set()
+    for row in inventory["rows"]:
+        if row["id"] in ids or not re.fullmatch(r"[A-Za-z0-9_-]+", row["id"]):
+            raise ValueError("duplicate or invalid GPU decode inventory ID")
+        if row["width"] <= 0 or row["height"] <= 0:
+            raise ValueError("invalid GPU decode inventory extent")
+        ids.add(row["id"])
+    return {(config, row["id"]): dict(row, stage="decode", blend_path="none")
+            for config in configurations for row in inventory["rows"]}
+
+
+def load_gpu_decode(root, manifest, inventory=None, *, allow_incomplete=False, require_gpu_decode=None):
+    declaration = manifest.get("gpu_decode")
+    empty = {"required_configurations": [], "rows": 0, "missing_rows": [], "errors": []}
+    if declaration is None:
+        if require_gpu_decode or "tools/tmem/gpu-decode-inventory.json" in manifest.get("harness_files", {}):
+            raise ValueError("missing GPU decode declaration")
+        return empty
+    source_hash = declaration.get("source_test_sha256")
+    has_test = source_hash is not None
+    required = list(manifest["configurations"]) if has_test else []
+    declared = declaration.get("required_configurations", [])
+    if declaration.get("version") != 1 or set(declared) != set(required) or len(declared) != len(required):
+        raise ValueError("GPU decode requirement differs from tested source")
+    if require_gpu_decode is not None and require_gpu_decode != has_test:
+        raise ValueError("GPU decode requirement differs from requested checkout")
+    if has_test:
+        if not re.fullmatch(r"[0-9a-f]{64}", source_hash) or file_hash(artifact_file(root, "gpu-decode-source.rs")) != source_hash:
+            raise ValueError("GPU decode source hash mismatch")
+    inventory = gpu_decode_inventory() if inventory is None else inventory
+    if declaration["inventory_sha256"] != json_hash(inventory):
+        raise ValueError("incompatible GPU decode inventory hash")
+    path = artifact_file(root, declaration["manifest_file"])
+    if file_hash(path) != declaration["manifest_sha256"]:
+        raise ValueError("GPU decode manifest hash mismatch")
+    supplement = json.loads(path.read_text(encoding="utf-8"))
+    for field in ["version", "source_test_sha256", "required_configurations", "inventory_sha256"]:
+        if supplement.get(field) != declaration[field]:
+            raise ValueError(f"GPU decode manifest {field} mismatch")
+    for field in ["source_sha", "tested_sha", "base_sha", "run_id", "run_attempt"]:
+        if supplement.get(field) != manifest[field]:
+            raise ValueError(f"GPU decode manifest {field} mismatch")
+    expected = gpu_decode_rows(inventory, required)
+    rows = authenticate_rows(root, supplement["rows"], expected, manifest["runtime"]["os"] == "Windows",
+                             roles=("gpu-compute",), metadata=True)
+    missing = sorted(set(expected) - set(rows))
+    errors = supplement["errors"]
+    if errors and not allow_incomplete:
+        raise ValueError("GPU decode capture errors: " + "; ".join(errors))
+    if missing and not allow_incomplete:
+        raise ValueError(f"missing GPU decode rows: {len(missing)}; first rows: {missing[:8]}")
+    return {"required_configurations": required, "rows": len(rows), "missing_rows": missing, "errors": errors}
+
+
+def authenticate_rows(root, actual, expected, windows, *, roles=("render", "cpu-oracle", "compute"), metadata=False):
+    rows = {}
+    files = set()
+    for row in actual:
+        key = (row["configuration"], row["id"])
+        if key in rows:
+            raise ValueError(f"duplicate row: {key}")
+        if key not in expected:
+            raise ValueError(f"unexpected row: {key}")
+        for field in ["stage", "width", "height", "blend_path"]:
+            if row[field] != expected[key][field]:
+                raise ValueError(f"{key}: incompatible {field}")
+        if row["channels"] != "RGBA":
+            raise ValueError(f"{key}: channel policy must be RGBA")
+        if not row.get("test_id") or row["role"] not in roles:
+            raise ValueError(f"{key}: missing test or decode provenance")
+        if row["stage"] == "final" or row["role"] in ["compute", "gpu-compute"]:
+            adapter = row.get("adapter")
+            if not adapter or any(field not in adapter for field in
+                                  ["name", "vendor", "device", "device_type", "driver", "driver_info", "backend"]):
+                raise ValueError(f"{key}: missing adapter provenance")
+            if windows and (adapter["backend"] != "Dx12" or adapter["device_type"] != "Cpu"):
+                raise ValueError(f"{key}: WARP requires a CPU Dx12 adapter")
+        if not re.fullmatch(r"[0-9a-f]{64}", row["input_sha256"]):
+            raise ValueError(f"{key}: invalid input hash")
+        if file_hash(artifact_file(root, row["input_file"])) != row["input_sha256"]:
+            raise ValueError(f"{key}: input_sha256 mismatch")
+        path = artifact_file(root, row["file"])
+        if path in files:
+            raise ValueError(f"overwritten output file: {row['file']}")
+        files.add(path)
+        pixels = path.read_bytes()
+        if row["width"] <= 0 or row["height"] <= 0 or len(pixels) != row["width"] * row["height"] * 4:
+            raise ValueError(f"{key}: wrong RGBA byte length")
+        if file_hash(path) != row["sha256"]:
+            raise ValueError(f"{key}: file hash mismatch")
+        if row["stage"] == "decode":
+            literal = artifact_file(root, row["expected_file"])
+            if file_hash(literal) != row["expected_sha256"] or literal.read_bytes() != pixels:
+                raise ValueError(f"{key}: independent literal differs from decode")
+        if metadata:
+            path = artifact_file(root, row["metadata_file"])
+            if file_hash(path) != row["metadata_sha256"]:
+                raise ValueError(f"{key}: metadata hash mismatch")
+            source = json.loads(path.read_text(encoding="utf-8"))
+            for field in ["id", "stage", "role", "blend_path", "test_id", "width", "height", "channels", "adapter"]:
+                if source.get(field) != row.get(field):
+                    raise ValueError(f"{key}: metadata {field} mismatch")
+        rows[key] = row
+    return rows
+
+
+def load_capture(root, inventory, source_sha, run_id, *, allow_incomplete=False,
+                 supplemental_inventory=None, require_gpu_decode=None):
     root = Path(root)
     manifest = json.loads(artifact_file(root, "manifest.json").read_text(encoding="utf-8"))
     if manifest["schema"] != 1:
@@ -87,56 +201,22 @@ def load_capture(root, inventory, source_sha, run_id, *, allow_incomplete=False)
     if failures and not allow_incomplete:
         raise ValueError("; ".join(failures))
     expected = expected_rows(inventory)
-    rows = {}
-    files = set()
-    for row in manifest["rows"]:
-        key = (row["configuration"], row["id"])
-        if key in rows:
-            raise ValueError(f"duplicate row: {key}")
-        if key not in expected:
-            raise ValueError(f"unexpected row: {key}")
-        for field in ["stage", "width", "height", "blend_path"]:
-            if row[field] != expected[key][field]:
-                raise ValueError(f"{key}: incompatible {field}")
-        if row["channels"] != "RGBA":
-            raise ValueError(f"{key}: channel policy must be RGBA")
-        if not row.get("test_id") or row["role"] not in ["render", "cpu-oracle", "compute"]:
-            raise ValueError(f"{key}: missing test or decode provenance")
-        if row["stage"] == "final" or row["role"] == "compute":
-            adapter = row.get("adapter")
-            if not adapter or any(field not in adapter for field in
-                                  ["name", "vendor", "device", "device_type", "driver", "driver_info", "backend"]):
-                raise ValueError(f"{key}: missing adapter provenance")
-            if windows and (adapter["backend"] != "Dx12" or adapter["device_type"] != "Cpu"):
-                raise ValueError(f"{key}: WARP requires a CPU Dx12 adapter")
-        if not re.fullmatch(r"[0-9a-f]{64}", row["input_sha256"]):
-            raise ValueError(f"{key}: invalid input hash")
-        if file_hash(artifact_file(root, row["input_file"])) != row["input_sha256"]:
-            raise ValueError(f"{key}: input_sha256 mismatch")
-        path = artifact_file(root, row["file"])
-        if path in files:
-            raise ValueError(f"overwritten output file: {row['file']}")
-        files.add(path)
-        pixels = path.read_bytes()
-        if row["width"] <= 0 or row["height"] <= 0 or len(pixels) != row["width"] * row["height"] * 4:
-            raise ValueError(f"{key}: wrong RGBA byte length")
-        if file_hash(path) != row["sha256"]:
-            raise ValueError(f"{key}: file hash mismatch")
-        if row["stage"] == "decode":
-            literal = artifact_file(root, row["expected_file"])
-            if file_hash(literal) != row["expected_sha256"] or literal.read_bytes() != pixels:
-                raise ValueError(f"{key}: independent literal differs from decode")
-        rows[key] = row
+    rows = authenticate_rows(root, manifest["rows"], expected, windows)
     missing = set(expected) - set(rows)
     if missing and not allow_incomplete:
         raise ValueError(f"missing rows: {sorted(missing)}")
+    manifest["_gpu_decode"] = load_gpu_decode(
+        root, manifest, supplemental_inventory, allow_incomplete=allow_incomplete,
+        require_gpu_decode=require_gpu_decode)
     return manifest, rows
 
 
 def compare(base, candidate, inventory, base_sha, candidate_sha, base_run_id, candidate_run_id,
-            *, allow_incomplete=False):
-    parent, parent_rows = load_capture(base, inventory, base_sha, base_run_id, allow_incomplete=allow_incomplete)
-    head, head_rows = load_capture(candidate, inventory, candidate_sha, candidate_run_id, allow_incomplete=allow_incomplete)
+            *, allow_incomplete=False, supplemental_inventory=None, require_gpu_decode=None):
+    parent, parent_rows = load_capture(base, inventory, base_sha, base_run_id, allow_incomplete=allow_incomplete,
+                                     supplemental_inventory=supplemental_inventory)
+    head, head_rows = load_capture(candidate, inventory, candidate_sha, candidate_run_id, allow_incomplete=allow_incomplete,
+                                  supplemental_inventory=supplemental_inventory, require_gpu_decode=require_gpu_decode)
     if head["base_sha"] != base_sha:
         raise ValueError("candidate base SHA does not match requested base")
     for field in ["runtime", "harness_sha256"]:
@@ -145,8 +225,10 @@ def compare(base, candidate, inventory, base_sha, candidate_sha, base_run_id, ca
     missing = {label: sorted(set(expected_rows(inventory)) - set(rows))
                for label, rows in [("base", parent_rows), ("candidate", head_rows)]}
     failures = {"base": capture_failures(parent), "candidate": capture_failures(head)}
-    complete = not any(missing.values()) and not any(failures.values())
-    report = {"passed": complete, "complete": complete, "missing_rows": missing, "failures": failures,
+    gpu_decode = {"base": parent["_gpu_decode"], "candidate": head["_gpu_decode"]}
+    complete = not any(missing.values()) and not any(failures.values()) and all(
+        not result["missing_rows"] and not result["errors"] for result in gpu_decode.values())
+    report = {"passed": complete, "complete": complete, "missing_rows": missing, "failures": failures, "gpu_decode": gpu_decode,
               "threshold": 0, "base_sha": base_sha, "candidate_sha": candidate_sha,
               "base_run_id": str(base_run_id), "candidate_run_id": str(candidate_run_id), "rows": []}
     for key, row in head_rows.items():

@@ -6,6 +6,26 @@ and 27 decode witnesses in each configuration, plus three IMAGE fixtures under
 all-features. `goldens.json` freezes the SHA-256 ledger of all 27 committed golden
 files. Neither inventory is discovered from whatever output a test happens to write.
 
+GPU decode readbacks have a separate version-one `gpu-decode-manifest.json`.
+`tools/tmem/gpu-decode-inventory.json` freezes 1,909 named component/layout rows
+and their extents. A checkout containing `fast3d/tests/texture_decode_gpu.rs`
+requires every row in default, debug-ui and all-features, for 5,727 supplemental
+configuration rows. The actual tested checkout determines that requirement. The
+base harness overlay carries the inventory and authenticator but does not add the
+new GPU test or production decoder, so a base without that test requires zero
+supplemental rows. The original 171 configuration rows remain the exact-base
+comparison inventory.
+
+`FAST3D_GPU_DECODE_OUTPUT` writes into each configuration's `gpu-decode` directory.
+The supplement hashes the actual encoded input, expected CPU/literal output, GPU
+output and exporter metadata. Its loader checks every GPU byte against the saved
+expected bytes and requires compute-role and adapter provenance. The main manifest
+hashes the supplement and records the source-test hash; a copy of that source
+travels with the artifact. Missing or corrupt supplemental rows cannot supply a
+successful artifact, including when Cargo otherwise reports success. Partial failed
+configurations retain their authenticated rows and missing-row report, with the
+comparison still marked incomplete.
+
 Every comparison uses all four RGBA channels, threshold zero and zero differing
 pixels. The existing tolerance-two golden assertions still run. A missing adapter,
 row, configuration, input, literal or output file fails the gate. Windows captures

@@ -22,7 +22,10 @@ starting state. The fixture format does not store a prior register or TMEM snaps
 snapshots from both the live starting registers and the version-one defaults. It rejects a
 difference in prepared render inputs, diagnostics or summaries as dependence on prior RDP
 state. GPU submission consumes those same prepared inputs, including target effects, uniforms,
-textures and RSP buffers. Inspection-only metadata does not participate. Tasks that hit the
+owned encoded texture requests and RSP buffers. Texture comparison uses the
+validated recipe and owned encoded bytes, without expanding pixels. Compatibility
+requests retain their resolved encoded stream; later loads cannot alter captured
+input. Inspection-only metadata does not participate. Tasks that hit the
 renderer’s no-work return still carry each walk’s registers forward separately, so a later
 active use of inherited state is checked. The check does not reset the running guest.
 

@@ -49,6 +49,7 @@ impl FormatInfo {
     /// - other    → error; RGBA32 requires the dual-bank TMEM decoder
     ///
     /// `tlut`/`palette`/`tlut_fmt` carry TLUT state for CI formats (Task 3); non-CI ignore them.
+    #[cfg(any(test, feature = "profiling"))]
     pub fn decode(
         &self,
         src: &[u8],
@@ -79,6 +80,7 @@ impl FormatInfo {
 ///
 /// I8 expansion: the 8-bit intensity value broadcasts to all four RGBA components, so
 /// alpha = intensity (not opaque).
+#[cfg(any(test, feature = "profiling"))]
 pub fn decode_i8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -102,6 +104,7 @@ pub fn decode_i8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 ///
 /// TODO: row-align nibbles for odd-width textures (N64 TMEM starts each row on a byte boundary;
 /// this flat-stream packing only matches hardware for even widths — all current test scenes are even).
+#[cfg(any(test, feature = "profiling"))]
 pub fn decode_i4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -122,6 +125,7 @@ pub fn decode_i4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 /// second byte. IA formats are distinct from I formats: alpha is NOT the intensity.
 ///
 /// IA16 expansion: `i=(ia16>>8)&0xFF`, `a=ia16&0xFF`.
+#[cfg(any(test, feature = "profiling"))]
 pub fn decode_ia16(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -142,6 +146,7 @@ pub fn decode_ia16(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 ///
 /// IA8 expansion:
 ///   `i=(ia8>>4)&0xF; a=(ia8>>0)&0xF; i=(i<<4)|i; a=(a<<4)|a`.
+#[cfg(any(test, feature = "profiling"))]
 pub fn decode_ia8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -170,6 +175,7 @@ pub fn decode_ia8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 /// Nibble order: same as I4 (even column = high nibble).
 ///
 /// TODO: row-align nibbles for odd-width textures (same caveat as `decode_i4`).
+#[cfg(any(test, feature = "profiling"))]
 pub fn decode_ia4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -188,6 +194,7 @@ pub fn decode_ia4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 
 /// RGBA16 TLUT entry (5/5/5/1 big-endian) → RGBA8. Matches `combiner::decode_rgba16` expand exactly:
 /// `(c5 << 3) | (c5 >> 2)`. Shared with the faithful CI sampler in `tmem::sample_tile`.
+#[cfg(any(test, feature = "profiling"))]
 pub(crate) fn decode_rgba16_entry(v: u16) -> [u8; 4] {
     let r5 = ((v >> 11) & 0x1F) as u8;
     let g5 = ((v >> 6) & 0x1F) as u8;
@@ -203,6 +210,7 @@ pub(crate) fn decode_rgba16_entry(v: u16) -> [u8; 4] {
 
 /// IA16 TLUT entry → RGBA8 (intensity in RGB, explicit alpha):
 /// `i=(ia16>>8)&0xFF`, `a=ia16&0xFF`. Shared with the faithful CI sampler in `tmem::sample_tile`.
+#[cfg(any(test, feature = "profiling"))]
 pub(crate) fn decode_ia16_entry(v: u16) -> [u8; 4] {
     let i = (v >> 8) as u8;
     let a = (v & 0xFF) as u8;
@@ -216,10 +224,12 @@ pub(crate) fn decode_ia16_entry(v: u16) -> [u8; 4] {
 /// Decodes by `tlut_fmt`: 2=RGBA16 entry, 3=IA16 entry, else → transparent black.
 ///
 /// The `palette` field (CI4 sub-palette select) is IGNORED for CI8 — CI8 has no sub-palette.
+#[cfg(any(test, feature = "profiling"))]
 pub fn decode_ci8(src: &[u8], w: u32, h: u32, tlut: &[u8], tlut_fmt: u8) -> Vec<u8> {
     decode_ci8_observed(src, w, h, tlut, tlut_fmt, &mut |_| {})
 }
 
+#[cfg(any(test, feature = "profiling"))]
 pub(crate) fn decode_ci8_observed(
     src: &[u8],
     w: u32,
@@ -266,10 +276,12 @@ pub(crate) fn decode_ci8_observed(
 /// packed RDRAM → stride-8, so entry `i` lives at byte `i*8`). Both `(palette<<7)` and
 /// `(index<<3)` index directly into this stride-8 buffer — no adjustment needed.
 /// Out-of-range index → 0 (zero-pad safety net, same as decode_ci8).
+#[cfg(any(test, feature = "profiling"))]
 pub fn decode_ci4(src: &[u8], w: u32, h: u32, tlut: &[u8], palette: u8, tlut_fmt: u8) -> Vec<u8> {
     decode_ci4_observed(src, w, h, tlut, palette, tlut_fmt, &mut |_| {})
 }
 
+#[cfg(any(test, feature = "profiling"))]
 pub(crate) fn decode_ci4_observed(
     src: &[u8],
     w: u32,

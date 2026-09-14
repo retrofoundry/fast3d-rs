@@ -1,24 +1,25 @@
-use std::{
-    borrow::Cow,
-    sync::{Arc, OnceLock},
-};
+#[cfg(test)]
+use std::borrow::Cow;
 
+use std::sync::{Arc, OnceLock};
+
+#[cfg(test)]
+use super::tmem::BankDecoder;
 use super::{
     combiner::{tile_takes_faithful_path, validate_tile_texture},
     rdp::{Rdp, TileDescriptor},
     texdec::FormatInfo,
     tile_sampling::TileSampling,
-    tmem::{BankDecoder, TMEM_BYTES},
+    tmem::TMEM_BYTES,
 };
 use crate::{profiling::Recorder, DiagKind};
 
-#[cfg_attr(not(any(test, feature = "profiling")), allow(dead_code))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureKeyScheme {
     Fast3dV1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextureKey {
     pub scheme: TextureKeyScheme,
     pub xxh3_64: u64,
@@ -46,6 +47,37 @@ pub struct DecodeRecipe {
     pub tlut: u8,
 }
 
+impl DecodeRecipe {
+    pub(crate) fn new(
+        tile: &TileDescriptor,
+        tlut: u8,
+        representation: Representation,
+        sampling: TileSampling,
+    ) -> Self {
+        let logical = [u32::from(tile.width.max(1)), u32::from(tile.height.max(1))];
+        Self {
+            representation,
+            output: if representation == Representation::Tile {
+                [u32::from(tile.width), u32::from(tile.height)]
+            } else {
+                sampling.allocation_extent()
+            },
+            logical,
+            fmt: tile.fmt,
+            siz: tile.siz,
+            base: tile.tmem_addr,
+            line: tile.line,
+            palette: if tile.fmt == 2 && tile.siz == 0 {
+                tile.palette
+            } else {
+                0
+            },
+            tlut: if tile.fmt == 2 { tlut } else { 0 },
+        }
+    }
+}
+
+#[cfg(test)]
 impl DecodeRecipe {
     fn tile(&self) -> TileDescriptor {
         TileDescriptor {
@@ -85,21 +117,24 @@ pub struct EncodedTextureRequest {
     identity: OnceLock<TextureIdentity>,
 }
 
-#[cfg_attr(not(any(test, feature = "profiling")), allow(dead_code))]
 #[derive(Debug)]
 struct TextureIdentity {
     key: TextureKey,
-    witness: Box<[u8]>,
+    witness: Arc<[u8]>,
 }
 
-// Rendering starts consuming content identity with T4 residency.
-#[cfg_attr(not(any(test, feature = "profiling")), allow(dead_code))]
 impl EncodedTextureRequest {
+    #[cfg(test)]
     pub fn key(&self) -> TextureKey {
         self.key_profiled(&Default::default())
     }
+    #[cfg(test)]
     pub fn witness(&self) -> &[u8] {
         &self.identity(&Default::default()).witness
+    }
+
+    pub(crate) fn witness_profiled(&self, profiling: &Recorder) -> Arc<[u8]> {
+        self.identity(profiling).witness.clone()
     }
 
     pub(crate) fn key_profiled(&self, profiling: &Recorder) -> TextureKey {
@@ -123,13 +158,85 @@ impl EncodedTextureRequest {
                     scheme: TextureKeyScheme::Fast3dV1,
                     xxh3_64: twox_hash::XxHash3_64::oneshot(&witness),
                 },
-                witness: witness.into_boxed_slice(),
+                witness: witness.into(),
             }
         })
     }
 }
 
 impl EncodedTextureRequest {
+    #[cfg(any(test, all(feature = "profiling", feature = "capture")))]
+    pub(crate) fn from_diagnostic(request: &crate::profiling::Request) -> Result<Self, DiagKind> {
+        let tile = &request.tile;
+        let fi = FormatInfo {
+            fmt: tile.fmt,
+            siz: tile.siz,
+        };
+        fi.validate()?;
+        let unavailable = DiagKind::TextureBytesUnavailable {
+            tmem_addr: tile.tmem_addr,
+        };
+        if request.rejection.is_some()
+            || request
+                .extent
+                .iter()
+                .any(|&extent| extent == 0 || extent > 4096)
+            || tile.width == 0
+            || tile.width > 4096
+            || tile.height == 0
+            || tile.height > 4096
+            || tile.tmem_addr > 511
+            || tile.line > 511
+            || tile.palette > 15
+            || request.tlut > 3
+            || tile.masks > 15
+            || tile.maskt > 15
+        {
+            return Err(unavailable);
+        }
+        let bank: &[u8; TMEM_BYTES] = request
+            .bank
+            .bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| unavailable)?;
+        let representation = match request.representation {
+            crate::profiling::Representation::Tile => Representation::Tile,
+            crate::profiling::Representation::Lookup => Representation::Lookup4096x4,
+            crate::profiling::Representation::Linear => Representation::LinearCompat,
+        };
+        let mut recipe = DecodeRecipe::new(
+            tile,
+            request.tlut,
+            representation,
+            TileSampling::from_tile(tile, request.tlut),
+        );
+        recipe.output = request.extent;
+        let input = if representation == Representation::LinearCompat {
+            if request.extent != recipe.logical || (tile.fmt == 0 && tile.siz == 3) {
+                return Err(unavailable);
+            }
+            let bytes = request.prepare()?;
+            if bytes.len() != fi.tmem_bytes(recipe.logical[0], recipe.logical[1]) {
+                return Err(unavailable);
+            }
+            EncodedInput::LinearCompat {
+                bytes: bytes.into(),
+                palette_bank: Arc::new(*bank),
+            }
+        } else {
+            if representation == Representation::Lookup4096x4 && request.extent != [4096, 4] {
+                return Err(unavailable);
+            }
+            EncodedInput::Tmem(Arc::new(*bank))
+        };
+        Ok(Self {
+            input,
+            recipe,
+            identity: OnceLock::new(),
+        })
+    }
+
     pub fn input(&self) -> &EncodedInput {
         &self.input
     }
@@ -148,7 +255,7 @@ impl EncodedTextureRequest {
             profiling.count("tmem.bytes_compared", a.len() as u64);
             a == b
         };
-        // Positional reuse can conservatively compare complete owned inputs without content keys.
+        // Capture admission conservatively compares complete owned inputs without content keys.
         match (&self.input, &other.input) {
             (EncodedInput::Tmem(a), EncodedInput::Tmem(b)) => equal(&a[..], &b[..]),
             (
@@ -165,6 +272,16 @@ impl EncodedTextureRequest {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(input: EncodedInput, recipe: DecodeRecipe) -> Self {
+        Self {
+            input,
+            recipe,
+            identity: OnceLock::new(),
+        }
+    }
+
+    #[cfg(test)]
     pub fn decode(&self) -> Vec<u8> {
         let tile = self.recipe().tile();
         let result = match self.input() {
@@ -214,36 +331,12 @@ impl From<Vec<u8>> for TextureSource {
 }
 
 impl TextureSource {
+    #[cfg(test)]
     pub fn decode(&self) -> Cow<'_, [u8]> {
         match self {
             Self::Encoded(request) => Cow::Owned(request.decode()),
             Self::Rgba(bytes) => Cow::Borrowed(bytes),
         }
-    }
-
-    pub(crate) fn decode_profiled(&self, profiling: &Recorder, role: &str) -> Cow<'_, [u8]> {
-        let _span = profiling.span("decode");
-        let pixels = self.decode();
-        if let Self::Encoded(request) = self {
-            profiling.count("tmem.cpu_decode_executions", 1);
-            profiling.count("tmem.cpu_decode_output_bytes", pixels.len() as u64);
-            #[cfg(any(test, feature = "profiling"))]
-            profiling.decode(
-                format!(
-                    "{:?}.{}-{}.tlut{}.{}x{}.{role}",
-                    request.recipe().representation,
-                    request.recipe().fmt,
-                    request.recipe().siz,
-                    request.recipe().tlut,
-                    request.recipe().output[0],
-                    request.recipe().output[1]
-                ),
-                Some(pixels.len()),
-            );
-            #[cfg(not(any(test, feature = "profiling")))]
-            let _ = (request, role);
-        }
-        pixels
     }
 
     pub(crate) fn matches(&self, other: &Self, profiling: &Recorder) -> bool {
@@ -261,6 +354,7 @@ pub struct TextureBindingInput {
     pub sampling: TileSampling,
 }
 
+#[cfg(test)]
 impl TextureBindingInput {
     pub(crate) fn matches(&self, other: &Self, profiling: &Recorder) -> bool {
         self.sampling == other.sampling && self.source.matches(&other.source, profiling)
@@ -287,25 +381,7 @@ pub(crate) fn prepare(
     } else {
         Representation::LinearCompat
     };
-    let recipe = DecodeRecipe {
-        representation,
-        output: if representation == Representation::Tile {
-            [u32::from(tile.width), u32::from(tile.height)]
-        } else {
-            sampling.allocation_extent()
-        },
-        logical,
-        fmt: tile.fmt,
-        siz: tile.siz,
-        base: tile.tmem_addr,
-        line: tile.line,
-        palette: if tile.fmt == 2 && tile.siz == 0 {
-            tile.palette
-        } else {
-            0
-        },
-        tlut: if tile.fmt == 2 { tlut } else { 0 },
-    };
+    let recipe = DecodeRecipe::new(tile, tlut, representation, sampling);
     let needed = FormatInfo {
         fmt: tile.fmt,
         siz: tile.siz,
@@ -338,8 +414,7 @@ pub(crate) fn prepare(
     })
 }
 
-#[cfg_attr(not(any(test, feature = "profiling")), allow(dead_code))]
-fn serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], linear: &[u8]) -> Vec<u8> {
+pub(crate) fn serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], linear: &[u8]) -> Vec<u8> {
     let mut selected = [false; TMEM_BYTES];
     let mut palette = [false; TMEM_BYTES];
     let mut mark = |rel: usize, odd: bool, parity: usize| {
@@ -464,13 +539,17 @@ impl TextureMemory {
             TextureSource::Encoded(request) => {
                 if !self.allocation(
                     Arc::as_ptr(request) as usize,
-                    request
-                        .identity
-                        .get()
-                        .map_or(0, |identity| identity.witness.len()),
+                    0,
                     std::mem::size_of::<EncodedTextureRequest>() + arc_header,
                 ) {
                     return;
+                }
+                if let Some(identity) = request.identity.get() {
+                    self.allocation(
+                        identity.witness.as_ptr() as usize,
+                        identity.witness.len(),
+                        arc_header,
+                    );
                 }
                 let bank = match request.input() {
                     EncodedInput::Tmem(bank) => bank,

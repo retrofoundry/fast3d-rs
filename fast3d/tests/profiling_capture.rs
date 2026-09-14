@@ -95,26 +95,43 @@ async fn check_upload_accounting() {
     assert_eq!(first.counters["buffer.source.creations"], 1);
     assert_eq!(first.counters["buffer.source.capacity_bytes"], 4);
     assert_eq!(first.counters["buffer.source.upload_bytes"], 3);
-    for role in ["lod0", "lod1", "lod2", "texture1", "detail"] {
-        assert_eq!(first.counters[&format!("texture.{role}.creations")], 1);
-        assert_eq!(first.counters[&format!("texture.{role}.upload_bytes")], 4);
+    let count = |snapshot: &fast3d::profiling::Snapshot, name: &str| {
+        snapshot.counters.get(name).copied().unwrap_or(0)
+    };
+    for (name, cold, warm) in [
+        ("texture.lod0.creations", 1, 0),
+        ("tmem.misses", 1, 0),
+        ("tmem.hits", 4, 5),
+        ("tmem.hashes_computed", 1, 0),
+        ("tmem.witness_comparisons", 4, 5),
+        ("tmem.decode_dispatches", 1, 0),
+        ("tmem.decode_compute_passes", 1, 0),
+        ("tmem.decode_input_upload_calls", 1, 0),
+        ("tmem.decode_input_upload_bytes", 4096, 0),
+        ("tmem.decode_uniform_upload_calls", 1, 0),
+        ("tmem.decode_uniform_upload_bytes", 64, 0),
+        ("tmem.cpu_decode_executions", 0, 0),
+        ("tmem.cpu_decode_output_bytes", 0, 0),
+    ] {
+        assert_eq!(count(&first, name), cold, "cold {name}");
+        assert_eq!(count(&second, name), warm, "warm {name}");
     }
-    let mut repeated: Vec<&str> = second.counters.keys().map(String::as_str).collect();
-    repeated.sort_unstable();
-    assert_eq!(
-        repeated,
-        ["tmem.bytes_compared", "tmem.encoded_comparisons"]
-    );
-    assert_eq!(second.counters["tmem.encoded_comparisons"], 6);
+    for role in ["lod0", "lod1", "lod2", "texture1", "detail"] {
+        assert_eq!(count(&first, &format!("texture.{role}.upload_bytes")), 0);
+        assert_eq!(count(&second, &format!("texture.{role}.upload_bytes")), 0);
+        if role != "lod0" {
+            assert_eq!(count(&first, &format!("texture.{role}.creations")), 0);
+        }
+    }
 }
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn upload_counts_include_all_texture_roles_and_buffer_init_counts_bytes() {
+fn shared_texture_roles_decode_once_and_warm_hits_upload_nothing() {
     pollster::block_on(check_upload_accounting());
 }
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen_test::wasm_bindgen_test]
-async fn upload_counts_include_all_texture_roles_and_buffer_init_counts_bytes() {
+async fn shared_texture_roles_decode_once_and_warm_hits_upload_nothing() {
     check_upload_accounting().await;
 }
 

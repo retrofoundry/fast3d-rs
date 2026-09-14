@@ -53,7 +53,13 @@ impl TraceCollector {
         }
     }
     pub fn frame(&mut self, serial: u64, observed: bool, snapshot: &Snapshot) -> Value {
-        for request in &snapshot.requests {
+        let mut requests = snapshot.requests.clone();
+        for request in &mut requests {
+            if request.rejection.is_none() {
+                request.analyze().expect("admitted offline trace analysis");
+            }
+        }
+        for request in &requests {
             if request.rejection.is_some() {
                 continue;
             }
@@ -67,7 +73,7 @@ impl TraceCollector {
             &mut self.simulator,
             serial,
             observed,
-            &snapshot.requests
+            &requests
         ))
     }
 }
@@ -248,6 +254,26 @@ mod browser;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn trace_collector_analyzes_owned_input_without_mutating_live_trace() {
+        let mut request = fast3d::profiling::authored_requests().remove(0);
+        let expected = std::mem::take(&mut request.output);
+        request.reachable_bytes = 0;
+        request.read_operations = 0;
+        request.palette_bytes = 0;
+        let snapshot = Snapshot {
+            requests: vec![request],
+            ..Default::default()
+        };
+        let mut collector = TraceCollector::new(1024 * 1024);
+        collector.frame(0, true, &snapshot);
+        let analyzed = &collector.cases.values().next().unwrap()[0];
+        assert_eq!(analyzed.output, expected);
+        assert_eq!(analyzed.reachable_bytes, 2);
+        assert!(snapshot.requests[0].output.is_empty());
+        assert_eq!(snapshot.requests[0].read_operations, 0);
+    }
+
     #[test]
     fn browser_frames_preserve_payload_and_measure_successive_emissions() {
         let mut frames = BrowserFrames::default();

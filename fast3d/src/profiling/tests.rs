@@ -62,6 +62,7 @@ fn cache_preflight_matches_uncached_decode() {
             "{}",
             request.class()
         );
+        assert_eq!(executor.baseline_decode().unwrap(), request.output);
         let equal = request.clone();
         assert_eq!(request.canonical(&prepared), equal.canonical(&prepared));
         let mut changed = request.clone();
@@ -108,6 +109,11 @@ fn profiling_does_not_change_summaries() {
         assert_eq!(snapshot.counters["material.builds"], 1);
         assert_eq!(snapshot.counters["tmem.requests"], 1);
         assert_eq!(snapshot.requests.len(), usize::from(mode == Mode::Trace));
+        for request in &snapshot.requests {
+            assert!(request.output.is_empty());
+            assert_eq!(request.read_operations, 0);
+            assert_eq!(request.reachable_bytes, 0);
+        }
     }
     rdp.tiles[0].fmt = 1;
     rsp.profiling = Recorder::new(Mode::Trace);
@@ -115,6 +121,61 @@ fn profiling_does_not_change_summaries() {
     let snapshot = rsp.profiling.drain();
     assert_eq!(snapshot.counters["tmem.rejected_requests"], 1);
     assert!(snapshot.requests[0].rejection.is_some());
+}
+
+#[test]
+fn trace_keeps_linear_input_and_identity_after_provenance_is_gone() {
+    use crate::hle::texture_request::{prepare, TextureSource};
+
+    let mut rdp = Rdp::default();
+    let tile = TileDescriptor {
+        fmt: 4,
+        siz: 1,
+        width: 3,
+        height: 3,
+        line: 1,
+        ..Default::default()
+    };
+    rdp.tmem_bank.write_block(&[61; 16], 0, 0, 0, 2, 1);
+    let binding = prepare(&rdp, &tile, 0, &Recorder::default()).unwrap();
+    let TextureSource::Encoded(encoded) = &binding.source else {
+        unreachable!()
+    };
+    let expected = (encoded.key().xxh3_64, encoded.witness().to_vec());
+    let mut trace = Request::capture(&rdp, &tile, 0, "texture0", Ok(encoded));
+    rdp.tmem_bank.write_tile(&[91; 8], 0, 1, 1, 1, 8, 1);
+    drop((rdp, binding));
+    trace.bank.sources.clear();
+    trace.bank.blocks.clear();
+    assert!(trace.output.is_empty());
+    assert_eq!(trace.linear.as_deref(), Some([61; 9].as_slice()));
+    assert_eq!(trace.encoded_identity().unwrap(), expected);
+    trace.analyze().unwrap();
+    assert_eq!(trace.output, [61; 36]);
+    assert_eq!(trace.reachable_bytes, 9);
+    assert_eq!(trace.read_operations, 9);
+}
+
+#[test]
+fn diagnostic_gpu_input_rejects_incomplete_banks_and_invalid_extents() {
+    let mut request = authored_requests().remove(0);
+    assert!(request.encoded_request().is_ok());
+    request.bank.bytes.pop();
+    assert!(request.encoded_request().is_err());
+    request.bank.bytes.push(0);
+    request.extent = [0, 1];
+    assert!(request.encoded_request().is_err());
+    request.extent = [4097, 1];
+    assert!(request.encoded_request().is_err());
+    request.extent = [1, 1];
+    request.tlut = 4;
+    assert!(request.encoded_request().is_err());
+    request.tlut = 0;
+    request.representation = Representation::Lookup;
+    assert!(request.encoded_request().is_err());
+    request.representation = Representation::Linear;
+    request.linear = Some(vec![0]);
+    assert!(request.encoded_request().is_err());
 }
 
 #[cfg(feature = "capture")]

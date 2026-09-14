@@ -49,32 +49,6 @@ impl From<&Material> for TextureInputs {
     }
 }
 
-impl TextureInputs {
-    pub(super) fn matches(&self, other: &Self, profiling: &crate::profiling::Recorder) -> bool {
-        let optional =
-            |a: &Option<TextureBindingInput>, b: &Option<TextureBindingInput>| match (a, b) {
-                (Some(a), Some(b)) => a.matches(b, profiling),
-                (None, None) => true,
-                _ => false,
-            };
-        self.sampling == other.sampling
-            && self.tex_w == other.tex_w
-            && self.tex_h == other.tex_h
-            && self.wrap_s == other.wrap_s
-            && self.wrap_t == other.wrap_t
-            && self.num_levels == other.num_levels
-            && self.texture.matches(&other.texture, profiling)
-            && optional(&self.tex1, &other.tex1)
-            && optional(&self.detail_tex, &other.detail_tex)
-            && self.mip_levels.len() == other.mip_levels.len()
-            && self
-                .mip_levels
-                .iter()
-                .zip(&other.mip_levels)
-                .all(|(a, b)| a.matches(b, profiling))
-    }
-}
-
 #[derive(Debug, PartialEq)]
 pub(super) struct RspInputs<'a> {
     pub source: BufferData<rb::SrcVertex>,
