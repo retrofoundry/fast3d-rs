@@ -54,8 +54,21 @@ def capture_failures(manifest):
     return failures
 
 
-def gpu_decode_inventory():
-    return json.loads((Path(__file__).resolve().parent.parent / "tmem/gpu-decode-inventory.json").read_text(encoding="utf-8"))
+def gpu_decode_profile(system):
+    return "warp" if system == "Windows" else "full"
+
+
+def gpu_decode_inventory(profile="full"):
+    directory = Path(__file__).resolve().parent.parent / "tmem"
+    inventory = json.loads((directory / "gpu-decode-inventory.json").read_text(encoding="utf-8"))
+    if profile == "warp":
+        ids = json.loads((directory / "gpu-decode-warp.json").read_text(encoding="utf-8"))
+        inventory["rows"] = [row for row in inventory["rows"] if row["id"] in ids]
+        if not ids or len(inventory["rows"]) != len(ids):
+            raise ValueError("unknown or duplicate WARP decode vector")
+    elif profile != "full":
+        raise ValueError("unknown GPU decode profile")
+    return inventory
 
 
 def gpu_decode_rows(inventory, configurations):
@@ -90,14 +103,17 @@ def load_gpu_decode(root, manifest, inventory=None, *, allow_incomplete=False, r
     if has_test:
         if not re.fullmatch(r"[0-9a-f]{64}", source_hash) or file_hash(artifact_file(root, "gpu-decode-source.rs")) != source_hash:
             raise ValueError("GPU decode source hash mismatch")
-    inventory = gpu_decode_inventory() if inventory is None else inventory
+    profile = gpu_decode_profile(manifest["runtime"]["os"])
+    if declaration.get("profile") != profile:
+        raise ValueError("GPU decode profile differs from backend policy")
+    inventory = gpu_decode_inventory(profile) if inventory is None else inventory
     if declaration["inventory_sha256"] != json_hash(inventory):
         raise ValueError("incompatible GPU decode inventory hash")
     path = artifact_file(root, declaration["manifest_file"])
     if file_hash(path) != declaration["manifest_sha256"]:
         raise ValueError("GPU decode manifest hash mismatch")
     supplement = json.loads(path.read_text(encoding="utf-8"))
-    for field in ["version", "source_test_sha256", "required_configurations", "inventory_sha256"]:
+    for field in ["version", "profile", "source_test_sha256", "required_configurations", "inventory_sha256"]:
         if supplement.get(field) != declaration[field]:
             raise ValueError(f"GPU decode manifest {field} mismatch")
     for field in ["source_sha", "tested_sha", "base_sha", "run_id", "run_attempt"]:

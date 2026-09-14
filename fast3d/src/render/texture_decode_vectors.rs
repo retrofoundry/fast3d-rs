@@ -82,6 +82,20 @@ pub(super) struct Vector {
     pub expected: Vec<u8>,
 }
 
+pub(super) fn readback_vectors(warp: bool) -> Vec<Vector> {
+    let mut vectors = component_vectors();
+    vectors.extend(layout_vectors());
+    vectors.extend(literal_layout_vectors());
+    assert_eq!(vectors.len(), 1909);
+    if warp {
+        let ids: Vec<String> =
+            serde_json::from_str(include_str!("../../../tools/tmem/gpu-decode-warp.json")).unwrap();
+        vectors.retain(|vector| ids.contains(&vector.name));
+        assert_eq!(vectors.len(), ids.len(), "unknown or duplicate WARP vector");
+    }
+    vectors
+}
+
 const C5: [u8; 32] = [
     0, 8, 16, 24, 33, 41, 49, 57, 66, 74, 82, 90, 99, 107, 115, 123, 132, 140, 148, 156, 165, 173,
     181, 189, 198, 206, 214, 222, 231, 239, 247, 255,

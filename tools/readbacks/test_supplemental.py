@@ -18,7 +18,7 @@ class SupplementalReadbacks(CaptureCase):
         source.write_text("authored compute readback test")
         shutil.copyfile(source, self.head / "gpu-decode-source.rs")
         manifest = self.manifest(self.head)
-        manifest["gpu_decode"] = ci.gpu_decode_requirement(self.checkout)
+        manifest["gpu_decode"] = ci.gpu_decode_requirement(self.checkout, system="Windows")
         for config in self.inventory["configurations"]:
             directory = self.head / config / "gpu-decode"
             directory.mkdir(parents=True)
@@ -137,6 +137,27 @@ class SupplementalReadbacks(CaptureCase):
         with self.assertRaisesRegex(ValueError, "GPU decode requirement"):
             self.load()
 
+    def test_profile_cannot_be_downgraded_or_swapped_between_backends(self):
+        for profile in ["full", "empty", ""]:
+            with self.subTest(profile=profile):
+                self.mutate(self.head, lambda m: m["gpu_decode"].update(profile=profile))
+                with self.assertRaisesRegex(ValueError, "GPU decode profile"):
+                    self.load()
+        self.mutate(self.head, lambda m: m["gpu_decode"].update(profile="warp"))
+        self.mutate(self.head, lambda m: m["runtime"].update(os="Darwin"))
+        with self.assertRaisesRegex(ValueError, "GPU decode profile"):
+            self.load()
+
+    def test_warp_inventory_is_fixed_and_preserves_all_comparison_rows(self):
+        inventory = readbacks.gpu_decode_inventory("warp")
+        rows = readbacks.gpu_decode_rows(inventory, ci.COMMANDS)
+        self.assertEqual(len(rows), 297)
+        self.assertEqual(len(readbacks.expected_rows(ci.INVENTORY)), 171)
+        full = readbacks.gpu_decode_rows(readbacks.gpu_decode_inventory(), ci.COMMANDS)
+        self.assertTrue(rows.items() <= full.items())
+        with self.assertRaisesRegex(ValueError, "GPU decode profile"):
+            readbacks.gpu_decode_inventory("empty")
+
     def test_gate_can_require_supplement_independently_of_artifact_declaration(self):
         self.mutate(self.head, lambda m: m.pop("gpu_decode"))
         with self.assertRaisesRegex(ValueError, "GPU decode declaration"):
@@ -171,7 +192,7 @@ class SupplementalReadbacks(CaptureCase):
 
     def test_base_without_gpu_test_declares_zero_rows_with_current_harness(self):
         manifest = self.manifest(self.base)
-        manifest["gpu_decode"] = ci.gpu_decode_requirement(self.root / "old-checkout")
+        manifest["gpu_decode"] = ci.gpu_decode_requirement(self.root / "old-checkout", system="Windows")
         ci.save_gpu_decode_manifest(self.base, manifest, self.gpu_inventory)
         self.write(self.base / "manifest.json", manifest)
         result, _ = readbacks.load_capture(self.base, self.inventory, BASE, "10",

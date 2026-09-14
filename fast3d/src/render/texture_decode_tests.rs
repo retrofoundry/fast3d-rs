@@ -138,3 +138,72 @@ fn texture_decode_vectors_match_the_frozen_artifact_inventory() {
         .collect();
     assert_eq!(&actual, rows);
 }
+
+#[test]
+fn warp_readbacks_cover_formats_modes_and_addressing_edges() {
+    use crate::profiling::Representation;
+
+    let selected = super::vectors::readback_vectors(true);
+    assert!(
+        selected.len() <= 100,
+        "WARP must bound live decode resources"
+    );
+    for (fmt, siz) in [
+        (0, 2),
+        (0, 3),
+        (2, 0),
+        (2, 1),
+        (3, 0),
+        (3, 1),
+        (3, 2),
+        (4, 0),
+        (4, 1),
+    ] {
+        for mode in if fmt == 2 {
+            &[0, 1, 2, 3][..]
+        } else {
+            &[3][..]
+        } {
+            for representation in [Representation::Tile, Representation::Lookup] {
+                assert!(
+                    selected.iter().any(|v| {
+                        let r = &v.request;
+                        r.tile.fmt == fmt
+                            && r.tile.siz == siz
+                            && r.tlut == *mode
+                            && r.representation == representation
+                            && r.tile.tmem_addr == 511
+                            && r.tile.line == 3
+                            && r.tile.palette == 15
+                    }),
+                    "missing high-bank/wrapped layout {fmt}/{siz}/{mode}/{representation:?}"
+                );
+            }
+        }
+        if siz != 3 {
+            assert!(
+                selected.iter().any(|v| {
+                    let r = &v.request;
+                    r.tile.fmt == fmt
+                        && r.tile.siz == siz
+                        && r.representation == Representation::Linear
+                        && r.extent == [3, 3]
+                }),
+                "missing odd-width linear format {fmt}/{siz}"
+            );
+        }
+    }
+    for literal in super::vectors::literal_layout_vectors() {
+        let vector = selected.iter().find(|v| v.name == literal.name).unwrap();
+        assert_eq!(vector.expected, literal.expected);
+    }
+    for vector in selected {
+        assert_eq!(
+            super::vectors::oracle(&vector.request),
+            vector.expected,
+            "{}",
+            vector.name
+        );
+    }
+    assert_eq!(super::vectors::readback_vectors(false).len(), 1909);
+}

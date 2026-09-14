@@ -7,9 +7,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import zipfile
 
-from readbacks import artifact_file, compare, file_hash, gpu_decode_inventory, json_hash, load_capture
+from readbacks import artifact_file, compare, file_hash, gpu_decode_inventory, gpu_decode_profile, json_hash, load_capture
 
 
 HERE = Path(__file__).resolve().parent
@@ -20,6 +22,23 @@ COMMANDS = {
     "debug-ui": ["cargo", "test", "--locked", "--no-fail-fast", "-p", "fast3d", "--features", "debug-ui"],
     "all-features": ["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--all-features"],
 }
+
+
+def test_commands(checkout, config, system):
+    command = COMMANDS[config]
+    if system != "Windows":
+        return [command]
+    features = {"default": [], "debug-ui": ["--features", "debug-ui"], "all-features": ["--all-features"]}
+    command = ["cargo", "test", "--locked", "--no-fail-fast", "-p", "fast3d"] + features[config]
+    commands = [command + ["--lib", "--", "tests::goldens::", "tests::tmem_witnesses::",
+                           "render::texture_decode::gpu_tests::"]]
+    if config == "all-features":
+        targets = ["--test", "tmem_fixture_replay"]
+        for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure"]:
+            if (checkout / "fast3d/tests" / (target + ".rs")).is_file():
+                targets.extend(["--test", target])
+        commands.append(command + targets)
+    return commands
 
 
 def command_output(command, checkout):
@@ -80,16 +99,17 @@ def collect_rows(output):
     return rows, errors
 
 
-def gpu_decode_requirement(checkout):
+def gpu_decode_requirement(checkout, system=None):
     source = checkout / GPU_DECODE_TEST
-    return {"version": 1, "source_test_sha256": file_hash(source) if source.is_file() else None,
+    return {"version": 1, "profile": gpu_decode_profile(system or platform.system()),
+            "source_test_sha256": file_hash(source) if source.is_file() else None,
             "required_configurations": list(COMMANDS) if source.is_file() else []}
 
 
 def save_gpu_decode_manifest(output, manifest, inventory=None):
     output = output.resolve()
-    inventory = gpu_decode_inventory() if inventory is None else inventory
     declaration = manifest["gpu_decode"]
+    inventory = gpu_decode_inventory(declaration["profile"]) if inventory is None else inventory
     rows, errors = [], []
     for config in manifest["configurations"]:
         directory = output / config / "gpu-decode"
@@ -112,7 +132,7 @@ def save_gpu_decode_manifest(output, manifest, inventory=None):
                 errors.append(f"{metadata}: {error}")
     declaration["inventory_sha256"] = json_hash(inventory)
     supplement = {field: declaration[field] for field in
-                  ["version", "source_test_sha256", "required_configurations", "inventory_sha256"]}
+                  ["version", "profile", "source_test_sha256", "required_configurations", "inventory_sha256"]}
     supplement.update({field: manifest[field] for field in
                        ["source_sha", "tested_sha", "base_sha", "run_id", "run_attempt"]})
     supplement.update(rows=rows, errors=errors)
@@ -181,47 +201,69 @@ def capture(checkout, output, base_sha, harness_checkout):
             "backend": os.environ.get("WGPU_BACKEND", ""),
             "compiler": os.environ.get("WGPU_DX12_COMPILER", ""),
             "test_threads": os.environ.get("RUST_TEST_THREADS", ""),
+            "build_environment": {key: os.environ.get(key, "") for key in
+                                  ["CARGO_BUILD_JOBS", "CARGO_INCREMENTAL", "CARGO_PROFILE_DEV_DEBUG", "CARGO_PROFILE_TEST_DEBUG"]},
         },
         "gpu_decode": gpu_decode_requirement(checkout),
-        "configurations": {config: {"command": command, "exit_code": None}
-                           for config, command in COMMANDS.items()}, "rows": [], "errors": [],
+        "configurations": {config: {"commands": test_commands(checkout, config, platform.system()), "exit_code": None}
+                           for config in COMMANDS}, "rows": [], "errors": [],
     }
     if manifest["gpu_decode"]["source_test_sha256"] is not None:
         shutil.copyfile(checkout / GPU_DECODE_TEST, output / "gpu-decode-source.rs")
     save_manifest(output, manifest)
+    target = tempfile.TemporaryDirectory(prefix="readback-target-", dir=checkout) if platform.system() == "Windows" else None
     try:
-        for config, command in COMMANDS.items():
+        for config, configuration in manifest["configurations"].items():
             directory = output / config
             directory.mkdir()
             env = dict(os.environ, FAST3D_GOLDEN_OUTPUT=str(directory / "final"),
                        FAST3D_DECODE_OUTPUT=str(directory / "decode"),
                        FAST3D_GPU_DECODE_OUTPUT=str(directory / "gpu-decode"),
                        FAST3D_RESIDENCY_OUTPUT=str(directory / "residency"))
-            build = subprocess.run(command + ["--no-run", "--message-format=json"], cwd=checkout,
-                                   env=env, text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            (directory / "build.log").write_text(build.stdout, encoding="utf-8")
+            if target is not None:
+                env["CARGO_TARGET_DIR"] = target.name
             binaries = {}
-            for line in build.stdout.splitlines():
-                try:
-                    message = json.loads(line)
-                    executable = message.get("executable")
-                    if executable:
-                        binaries[str(Path(executable).resolve())] = file_hash(executable)
-                except json.JSONDecodeError:
-                    continue
-            with (directory / "test.log").open("w") as log:
-                result = subprocess.run(command, cwd=checkout, env=env, stdout=log, stderr=subprocess.STDOUT) if build.returncode == 0 else build
+            executions = []
+            with (directory / "build.log").open("w", encoding="utf-8") as build_log, \
+                    (directory / "test.log").open("w", encoding="utf-8") as log:
+                for command in configuration["commands"]:
+                    cargo = command[:command.index("--")] if "--" in command else command
+                    print(f"{checkout}: {config} build {json.dumps(cargo)}; disk free {shutil.disk_usage(checkout).free}", flush=True)
+                    started = time.monotonic()
+                    build = subprocess.run(cargo + ["--no-run", "--message-format=json"], cwd=checkout,
+                                           env=env, text=True, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                    build_log.write(build.stdout)
+                    build_log.flush()
+                    for line in build.stdout.splitlines():
+                        try:
+                            message = json.loads(line)
+                            executable = message.get("executable")
+                            if executable:
+                                binaries[str(Path(executable).resolve())] = file_hash(executable)
+                        except json.JSONDecodeError:
+                            continue
+                    print(f"{checkout}: {config} test {json.dumps(command)}", flush=True)
+                    result = subprocess.run(command, cwd=checkout, env=env, stdout=log, stderr=subprocess.STDOUT) if build.returncode == 0 else build
+                    executions.append({"command": command, "exit_code": result.returncode,
+                                       "build_exit_code": build.returncode, "seconds": time.monotonic() - started})
+                    print(f"{checkout}: {config} exit {result.returncode} after {executions[-1]['seconds']:.1f}s", flush=True)
             test_log = (directory / "test.log").read_text(encoding="utf-8")
             manifest["configurations"][config] = {
-                "command": command, "exit_code": result.returncode, "build_exit_code": build.returncode,
+                "commands": configuration["commands"], "executions": executions,
+                "exit_code": next((r["exit_code"] for r in executions if r["exit_code"]), 0),
+                "build_exit_code": next((r["build_exit_code"] for r in executions if r["build_exit_code"]), 0),
                 "failed_tests": sorted(set(re.findall(r"(?m)^test (\S+) \.\.\. FAILED\s*$", test_log))),
                 "failed_targets": sorted(set(re.findall(r"(?m)^error: test failed, to rerun pass (.+)$", test_log))),
                 "build_log": f"{config}/build.log", "test_log": f"{config}/test.log",
-                "binaries": binaries, "environment": {key: env[key] for key in ["FAST3D_GOLDEN_OUTPUT", "FAST3D_DECODE_OUTPUT", "FAST3D_GPU_DECODE_OUTPUT", "FAST3D_RESIDENCY_OUTPUT"]},
+                "binaries": binaries, "environment": {key: env[key] for key in ["FAST3D_GOLDEN_OUTPUT", "FAST3D_DECODE_OUTPUT", "FAST3D_GPU_DECODE_OUTPUT", "FAST3D_RESIDENCY_OUTPUT", "CARGO_TARGET_DIR"] if key in env},
             }
-            print(f"{checkout}: {config} exit {result.returncode}", flush=True)
+            save_manifest(output, manifest)
     finally:
-        save_manifest(output, manifest)
+        try:
+            save_manifest(output, manifest)
+        finally:
+            if target is not None:
+                target.cleanup()
     return manifest
 
 
@@ -241,7 +283,7 @@ def overlay(base, candidate, source_sha):
     for name in files:
         if name in ["Cargo.lock", "fast3d/Cargo.toml#dev-dependencies"]:
             continue
-        if not name.startswith(("fast3d/src/tests/", "fast3d/tests/", "tools/readbacks/")) and name not in ["tools/tmem/vectors.json", "tools/tmem/gpu-decode-inventory.json"]:
+        if not name.startswith(("fast3d/src/tests/", "fast3d/tests/", "tools/readbacks/")) and name not in ["tools/tmem/vectors.json", "tools/tmem/gpu-decode-inventory.json", "tools/tmem/gpu-decode-warp.json"]:
             raise ValueError(f"production file forbidden in test harness overlay: {name}")
         destination = base / name
         destination.parent.mkdir(parents=True, exist_ok=True)

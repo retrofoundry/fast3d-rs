@@ -8,13 +8,39 @@ files. Neither inventory is discovered from whatever output a test happens to wr
 
 GPU decode readbacks have a separate version-one `gpu-decode-manifest.json`.
 `tools/tmem/gpu-decode-inventory.json` freezes 1,909 named component/layout rows
-and their extents. A checkout containing `fast3d/tests/texture_decode_gpu.rs`
-requires every row in default, debug-ui and all-features, for 5,727 supplemental
-configuration rows. The actual tested checkout determines that requirement. The
+and their extents. Metal and Chrome execute all 1,909 cases; native Metal artifacts
+require 5,727 supplemental rows across default, debug-ui and all-features. Windows
+executes the 99 IDs in `tools/tmem/gpu-decode-warp.json` in each configuration,
+requiring 297 supplemental rows. The profile is fixed by the target OS in Rust and
+validated against the recorded runtime OS by the artifact loader. An artifact cannot
+choose a smaller profile. Both inventories retain the same input and expected bytes.
+A checkout containing `fast3d/tests/texture_decode_gpu.rs` requires the supplement. The
 base harness overlay carries the inventory and authenticator but does not add the
 new GPU test or production decoder, so a base without that test requires zero
 supplemental rows. The original 171 configuration rows remain the exact-base
 comparison inventory.
+
+The WARP subset retains all nine formats, CI4/CI8 in all four TLUT modes, low and
+high palette pages, each RGBA32 channel, tile and lookup layouts at TMEM base 511,
+odd-width linear compatibility, and all five independent layout literals. Those
+literals exercise both nibble parities, odd-row swapping, split-bank wrap, zero
+line and the four wrapped lookup planes. CPU tests enforce the coverage and check
+every selected expected output against the CPU oracle. The full inventory is unchanged.
+
+Windows runs the `tests::goldens`, `tests::tmem_witnesses` and native compute library
+modules in each configuration. All-features also runs `tmem_fixture_replay` and the
+tested checkout's `texture_decode_gpu`, `texture_residency` and
+`texture_residency_pressure` integration targets. Metal still runs the complete
+workspace suites. This limits repeated WARP shader compilation while preserving
+all 171 parent-comparison rows and the compute/residency execution gates.
+
+Windows builds use two Cargo jobs, no debug symbols or incremental cache, and a
+capture-owned temporary target directory shared by its three configurations. The
+directory is removed after the capture, before any base bootstrap builds. Logs
+announce each command and free disk space; manifests retain command durations,
+build settings, binary hashes and logs, and are saved after each configuration.
+All required raw exports are retained. Candidate and bootstrap base still run on
+the same runner and use the same comparison policy.
 
 `FAST3D_GPU_DECODE_OUTPUT` writes into each configuration's `gpu-decode` directory.
 The supplement hashes the actual encoded input, expected CPU/literal output, GPU

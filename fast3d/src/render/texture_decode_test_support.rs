@@ -4,11 +4,7 @@ use super::vectors::{self, Vector};
 use super::export;
 
 pub(super) fn vectors() -> Vec<Vector> {
-    let mut vectors = vectors::component_vectors();
-    vectors.extend(vectors::layout_vectors());
-    vectors.extend(vectors::literal_layout_vectors());
-    assert_eq!(vectors.len(), 1909);
-    vectors
+    vectors::readback_vectors(cfg!(target_os = "windows"))
 }
 
 pub(super) fn verify(device: &wgpu::Device, vectors: &[Vector], decoded: &[Vec<u8>]) {
