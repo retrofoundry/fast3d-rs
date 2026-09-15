@@ -22,5 +22,8 @@
   "tools/readbacks/test_dependencies.py",
   "tools/readbacks/test_fetch.py",
   "tools/readbacks/test_readbacks.py",
+  "tools/readbacks/test_supplemental.py",
+  "tools/tmem/gpu-decode-inventory.json",
+  "tools/tmem/gpu-decode-warp.json",
   "tools/tmem/vectors.json"
 ]

@@ -23,8 +23,10 @@ pub mod tmem;
 
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use blender::{decode_render_mode, AlphaCompare, BlendClass, RenderMode, ZMode};
+#[cfg(test)]
+pub use combiner::decode_rgba16;
 #[cfg_attr(not(test), allow(unused_imports))]
-pub use combiner::{decode_rgba16, Material, MAX_LOD_LEVELS};
+pub use combiner::{Material, MAX_LOD_LEVELS};
 #[cfg_attr(not(test), allow(unused_imports))]
 pub use gbi::GbiUcode;
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]

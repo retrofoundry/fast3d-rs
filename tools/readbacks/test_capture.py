@@ -84,6 +84,49 @@ class CaptureFailures(unittest.TestCase):
         self.assertEqual(manifest["source_sha"], "a" * 40)
         self.assertIsNone(manifest["configurations"]["default"]["exit_code"])
 
+    def test_windows_capture_bounds_targets_and_keeps_failures_and_build_cleanup(self):
+        tests = self.checkout / "fast3d/tests"
+        tests.mkdir()
+        for target in ["tmem_fixture_replay", "texture_decode_gpu", "texture_residency", "texture_residency_pressure"]:
+            (tests / (target + ".rs")).write_text("test target")
+        targets = set()
+        executions = []
+
+        def runner(command, **kwargs):
+            target = Path(kwargs["env"]["CARGO_TARGET_DIR"])
+            self.assertTrue(target.is_dir())
+            targets.add(target)
+            (target / "build-product").write_text("temporary build output")
+            if "--no-run" in command:
+                self.assertNotIn("--", command)
+                return subprocess.CompletedProcess(command, 0, stdout="")
+            executions.append(command)
+            if "--lib" in command:
+                self.assertEqual(command[command.index("--") + 1:], [
+                    "tests::goldens::", "tests::tmem_witnesses::", "render::texture_decode::gpu_tests::"])
+                return subprocess.CompletedProcess(command, 101)
+            for name in ["tmem_fixture_replay", "texture_decode_gpu", "texture_residency", "texture_residency_pressure"]:
+                self.assertIn(name, command)
+            self.assertIn("--all-features", command)
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(ci.platform, "system", return_value="Windows"):
+            self.capture(runner)
+        manifest = json.loads((self.output / "manifest.json").read_text())
+        self.assertEqual(len(executions), 4)
+        self.assertEqual(manifest["gpu_decode"]["profile"], "warp")
+        for result in manifest["configurations"].values():
+            self.assertEqual(result["exit_code"], 101)
+        self.assertEqual(len(targets), 1)
+        self.assertFalse(next(iter(targets)).exists())
+
+    def test_windows_base_only_selects_integration_targets_in_its_source(self):
+        commands = ci.test_commands(self.checkout, "all-features", "Windows")
+        self.assertEqual(len(commands), 2)
+        self.assertEqual(commands[1][-2:], ["--test", "tmem_fixture_replay"])
+        for config in ci.COMMANDS:
+            self.assertEqual(ci.test_commands(self.checkout, config, "Darwin"), [ci.COMMANDS[config]])
+
     def test_dependency_artifacts_are_authenticated(self):
         def runner(command, **kwargs):
             return subprocess.CompletedProcess(command, 0, stdout="")

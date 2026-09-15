@@ -6,6 +6,10 @@ mod texrect_tests;
 
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;
+mod texture_bindings;
+pub(crate) mod texture_decode;
+mod texture_residency;
+pub(crate) mod texture_resources;
 use framebuffers::{DepthImage, DepthPipeline, Framebuffer, ImageLayout};
 
 /// The depth format the Z-buffer uses. `Depth32Float` is WebGL2-core (`DEPTH_COMPONENT32F`) and
@@ -62,7 +66,7 @@ const LOD_BINDING_BASE: u32 = 6;
 
 /// Clamp a declared LOD level count to the fixed per-level binding budget (`MAX_LOD`). LOD levels are
 /// now independent textures (no halving mip chain), so the count is NOT bounded by the base dims —
-/// only by how many `tex_lod*` bindings exist. Both the upload (`build_tex_entry`) and the shader
+/// only by how many `tex_lod*` bindings exist. Both the upload (`texture_bindings::BindingBuilder`) and the shader
 /// uniform (`CombinerUniform::from_run` → `lod_params.y`) share this helper so they can never drift.
 fn uploaded_level_count(declared: u8) -> u32 {
     (declared.max(1) as u32).min(MAX_LOD)
@@ -70,7 +74,7 @@ fn uploaded_level_count(declared: u8) -> u32 {
 
 /// The `MAX_LOD - 1` independent LOD-level texture bind-group entries (bindings 6..=12), all pointing
 /// at `view`. Appended to EVERY `@group(0)` bind group: the material draw path overrides them with
-/// real per-level textures (`build_tex_entry`); every other path (fill / present / fb-source / blit /
+/// real per-level textures (`texture_bindings::BindingBuilder`); every other path (fill / present / fb-source / blit /
 /// test harness) binds the shared 1×1 dummy here — those paths never sample a LOD level.
 fn lod_level_entries(view: &wgpu::TextureView) -> impl Iterator<Item = wgpu::BindGroupEntry<'_>> {
     (0..MAX_LOD - 1).map(move |i| wgpu::BindGroupEntry {
@@ -258,7 +262,7 @@ impl CombinerUniform {
             },
             // LOD params: lod_enable = 1.0 when the material's per-level texture set is active
             // (`mat.lod`), else 0.0; num_levels is the REAL uploaded level count (clamped to MAX_LOD
-            // the same way `build_tex_entry` clamps its uploads, so the shader never selects a level
+            // the same way `texture_bindings::BindingBuilder` clamps its uploads, so the shader never selects a level
             // past what was actually bound); prim_lod_frac from the material (the primitive LOD fraction);
             // lod_scale = 1. A non-LOD material keeps `[0, 1, prim_lod_frac, 1]` — byte-identical to
             // before (the shader gates all new consumption on `.x != 0`). No non-LOD golden sets
@@ -601,6 +605,7 @@ mod tests {
 /// RGBA16 -> RGBA8 decode. The single implementation lives in `hle`; re-exported here so
 /// the renderer's texture path and tests share one decoder (no drift).
 #[cfg_attr(not(test), allow(unused_imports))]
+#[cfg(test)]
 pub use crate::hle::decode_rgba16;
 
 fn rect_quad(
@@ -1782,185 +1787,6 @@ fn address_mode(wrap: u8) -> wgpu::AddressMode {
     }
 }
 
-struct TexCache {
-    inputs: inputs::TextureInputs,
-    bind_group: wgpu::BindGroup,
-}
-
-/// Upload `mat`'s texture to the GPU and build a `@group(0)` (tex + sampler) bind group.
-///
-/// Standalone (not a `SceneRenderer` method) so callers can hold immutable borrows of
-/// `self.textured` and `self.samplers` while mutably updating `self.tex_caches`, without
-/// triggering a split-borrow conflict.
-fn build_tex_entry(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    bgl: &wgpu::BindGroupLayout,
-    samplers: &[[wgpu::Sampler; 3]; 3],
-    dummy_view: &wgpu::TextureView,
-    mat: &inputs::TextureInputs,
-    profiling: &crate::profiling::Recorder,
-) -> TexCache {
-    let _span = profiling.span("resources");
-    // Upload one decoded RGBA8 texture (tex0, or the tex1 second texture) to a fresh GPU texture,
-    // returning its view. The view keeps the texture alive via the bind group's strong ref.
-    let upload = |role: &'static str,
-                  label: &str,
-                  w: u32,
-                  h: u32,
-                  binding: &crate::hle::texture_request::TextureBindingInput|
-     -> wgpu::TextureView {
-        let bytes = binding.source.decode_profiled(profiling, role);
-        let size = wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        };
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(w * 4),
-                rows_per_image: Some(h),
-            },
-            size,
-        );
-        profiling.texture(role, u64::from(w) * u64::from(h) * 4, bytes.len() as u64);
-        tex.create_view(&wgpu::TextureViewDescriptor::default())
-    };
-    // tex0: LOD level 0 as its OWN single-level texture (`upload` uses mip_level_count = 1). Non-LOD
-    // materials upload only this from `mat.texture` — byte-identical to the pre-LOD single
-    // `write_texture`. When LOD is active, level 0 is `mat.texture` (== `mip_levels[0]`).
-    let [w, h] = mat.allocation_extent;
-    let tex_view = upload(
-        if mat.mip_levels.is_empty() {
-            "texture0"
-        } else {
-            "lod0"
-        },
-        "n64-tex",
-        w,
-        h,
-        &mat.texture,
-    );
-    // Levels 1..MAX_LOD as INDEPENDENT per-level textures (hardware-faithful — NO halving constraint),
-    // bound at bindings 6..=12. `uploaded_level_count` caps the real count at MAX_LOD. A slot beyond
-    // the uploaded count (or a non-LOD material) binds the shared 1×1 dummy; it is never sampled
-    // because the shader clamps the selected level to the uploaded count. Views are held in
-    // `level_views` so their textures stay alive for the bind group's strong refs.
-    let num_levels = uploaded_level_count(mat.num_levels);
-    let level_views: Vec<wgpu::TextureView> = (1..MAX_LOD)
-        .map(|k| {
-            if k < num_levels {
-                if let Some(lvl) = mat.mip_levels.get(k as usize) {
-                    let [w, h] = lvl.sampling.allocation_extent();
-                    return upload(
-                        [
-                            "lod0", "lod1", "lod2", "lod3", "lod4", "lod5", "lod6", "lod7",
-                        ][k as usize],
-                        &format!("n64-tex-lod{k}"),
-                        w,
-                        h,
-                        lvl,
-                    );
-                }
-            }
-            dummy_view.clone()
-        })
-        .collect();
-    // Binding 2/3: the second texture (TEXEL1) when the material carries one (`tile_count == 2`),
-    // else the shared 1×1 dummy. tex1 wrap comes from the second tile's cms/cmt.
-    let tex1_view = match &mat.tex1 {
-        Some(t) => {
-            let [w, h] = t.sampling.allocation_extent();
-            upload("texture1", "n64-tex1", w, h, t)
-        }
-        None => dummy_view.clone(),
-    };
-    let samp1 = match &mat.tex1 {
-        Some(t) => {
-            &samplers[(t.sampling.modes[0] as usize).min(2)][(t.sampling.modes[1] as usize).min(2)]
-        }
-        None => &samplers[2][2],
-    };
-    // Binding 4/5: the DETAIL tile when present (LOD DETAIL mode), else the shared 1×1 dummy.
-    // ClampToEdge/Linear sampler for the detail tile.
-    let detail_view = match &mat.detail_tex {
-        Some(d) => {
-            let [w, h] = d.sampling.allocation_extent();
-            upload("detail", "n64-tex-detail", w, h, d)
-        }
-        None => dummy_view.clone(),
-    };
-    let sampling = mat.sampling;
-    let sampling_buffer = sampling_buffer_profiled(device, &sampling, profiling);
-    let entries: Vec<wgpu::BindGroupEntry> = [
-        sampling_entry(&sampling_buffer),
-        wgpu::BindGroupEntry {
-            binding: 0,
-            resource: wgpu::BindingResource::TextureView(&tex_view),
-        },
-        wgpu::BindGroupEntry {
-            binding: 1,
-            resource: wgpu::BindingResource::Sampler(
-                &samplers[(mat.wrap_s as usize).min(2)][(mat.wrap_t as usize).min(2)],
-            ),
-        },
-        wgpu::BindGroupEntry {
-            binding: 2,
-            resource: wgpu::BindingResource::TextureView(&tex1_view),
-        },
-        wgpu::BindGroupEntry {
-            binding: 3,
-            resource: wgpu::BindingResource::Sampler(samp1),
-        },
-        wgpu::BindGroupEntry {
-            binding: 4,
-            resource: wgpu::BindingResource::TextureView(&detail_view),
-        },
-        wgpu::BindGroupEntry {
-            binding: 5,
-            resource: wgpu::BindingResource::Sampler(&samplers[2][2]),
-        },
-    ]
-    .into_iter()
-    .chain(
-        level_views
-            .iter()
-            .enumerate()
-            .map(|(i, v)| wgpu::BindGroupEntry {
-                binding: LOD_BINDING_BASE + i as u32,
-                resource: wgpu::BindingResource::TextureView(v),
-            }),
-    )
-    .collect();
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("n64-bg"),
-        layout: bgl,
-        entries: &entries,
-    });
-    TexCache {
-        inputs: mat.clone(),
-        bind_group,
-    }
-}
-
 pub struct SceneRenderer {
     pub(crate) profiling: crate::profiling::Recorder,
     pub(crate) frame_serial: u64,
@@ -1973,8 +1799,8 @@ pub struct SceneRenderer {
     present_extent_layout: wgpu::BindGroupLayout,
     rsp: RspProcessPipeline,
     samplers: [[wgpu::Sampler; 3]; 3],
-    /// Positional GPU bindings, compared against encoded witnesses and draw sampling state.
-    tex_caches: Vec<TexCache>,
+    texture_resources: texture_resources::TextureResources,
+    material_bindings: Vec<texture_bindings::MaterialBinding>,
     /// A 1×1 white `@group(0)` (tex + sampler) bind group used as the texture binding for
     /// `FillRect` draws (which carry no material, but the pipeline layout still requires group 0).
     /// The fill combine has `tex_enable = 0`, so this texture is never actually sampled.
@@ -2007,39 +1833,13 @@ pub struct SceneRenderer {
 
 impl SceneRenderer {
     fn profile_resident_resources(&self) {
-        let allocation = |binding: &crate::hle::texture_request::TextureBindingInput| {
-            let [w, h] = binding.sampling.allocation_extent();
-            u64::from(w) * u64::from(h) * 4
-        };
+        self.texture_resources.profile(&self.profiling);
         self.profiling.gauge(
-            "gpu_decoded_texture_bytes",
-            self.tex_caches
+            "tmem.rgba_compatibility_gpu_bytes",
+            self.material_bindings
                 .iter()
-                .map(|cache| {
-                    let c = &cache.inputs;
-                    allocation(&c.texture)
-                        + c.tex1.as_ref().map_or(0, allocation)
-                        + c.mip_levels.iter().skip(1).map(allocation).sum::<u64>()
-                        + c.detail_tex.as_ref().map_or(0, allocation)
-                })
+                .map(texture_bindings::MaterialBinding::rgba_bytes)
                 .sum(),
-        );
-        let mut memory = crate::hle::texture_request::TextureMemory::default();
-        for cache in &self.tex_caches {
-            let c = &cache.inputs;
-            for binding in std::iter::once(&c.texture)
-                .chain(c.tex1.iter())
-                .chain(c.mip_levels.iter())
-                .chain(c.detail_tex.iter())
-            {
-                memory.include(&binding.source);
-            }
-        }
-        self.profiling
-            .gauge("cpu_upload_cache_bytes", memory.payload_bytes as u64);
-        self.profiling.gauge(
-            "cpu_upload_cache_allocation_overhead_bytes",
-            memory.overhead_bytes as u64,
         );
         self.profiling.gauge(
             "gpu_framebuffer_bytes",
@@ -2228,7 +2028,8 @@ impl SceneRenderer {
             present_extent_layout,
             rsp,
             samplers,
-            tex_caches: Vec::new(),
+            texture_resources: texture_resources::TextureResources::new(device),
+            material_bindings: Vec::new(),
             fill_bind_group,
             dummy_view,
             fb_w: w,
@@ -2559,6 +2360,8 @@ impl SceneRenderer {
     /// Explicit frame boundary (D2): reset the per-frame first-touch-clear set. Does NOT drop the
     /// textures (cross-frame persistence). `Renderer::begin_frame` delegates here.
     pub fn begin_frame(&mut self) {
+        self.texture_resources.collect(&self.profiling);
+
         #[cfg(feature = "capture")]
         if self.depth_reset_policy == crate::DepthResetPolicy::FrameBoundary {
             self.discard_depth();
@@ -2930,7 +2733,15 @@ pub(crate) fn gpu_accounting_probe(
     );
     assert_eq!(buffer.size(), 4);
     renderer.upload_materials(device, queue, &[inputs::TextureInputs::from(&material)]);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer.texture_resources.encode(&mut encoder, &recorder);
+    queue.submit([encoder.finish()]);
+    renderer.texture_resources.submitted(queue, &recorder);
     let first = recorder.drain();
     renderer.upload_materials(device, queue, &[inputs::TextureInputs::from(&material)]);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    renderer.texture_resources.encode(&mut encoder, &recorder);
+    queue.submit([encoder.finish()]);
+    renderer.texture_resources.submitted(queue, &recorder);
     (first, recorder.drain())
 }

@@ -204,7 +204,7 @@ fn push_triangles(
 
 use super::framebuffers::{ImageLayout, ImageRequest};
 use super::inputs::{DrawInputs, RenderInputs, TargetInputs, TextureInputs};
-use super::{build_tex_entry, CombinerUniform, SceneRenderer, CLEAR_COLOR};
+use super::{CombinerUniform, SceneRenderer, CLEAR_COLOR};
 use crate::ClearPolicy;
 
 impl TargetWorkload {
@@ -233,29 +233,33 @@ impl SceneRenderer {
         queue: &wgpu::Queue,
         textures: &[TextureInputs],
     ) {
-        self.tex_caches.truncate(textures.len());
-        for (i, mat) in textures.iter().enumerate() {
-            let rebuild = self
-                .tex_caches
-                .get(i)
-                .is_none_or(|cache| !cache.inputs.matches(mat, &self.profiling));
-            if rebuild {
-                let entry = build_tex_entry(
-                    device,
-                    queue,
-                    self.textured.bind_group_layout(),
-                    &self.samplers,
-                    &self.dummy_view,
-                    mat,
-                    &self.profiling,
-                );
-                if i < self.tex_caches.len() {
-                    self.tex_caches[i] = entry;
-                } else {
-                    self.tex_caches.push(entry);
-                }
-            }
-        }
+        self.texture_resources.collect(&self.profiling);
+        let previous: Vec<_> = std::mem::take(&mut self.material_bindings)
+            .into_iter()
+            .enumerate()
+            .map(|(index, binding)| {
+                textures
+                    .get(index)
+                    .filter(|input| {
+                        binding.may_reuse(input, &self.texture_resources, &self.profiling)
+                    })
+                    .map(|_| binding)
+            })
+            .collect();
+        let mut previous = previous.into_iter();
+        let mut builder = super::texture_bindings::BindingBuilder {
+            device,
+            queue,
+            layout: self.textured.bind_group_layout(),
+            samplers: &self.samplers,
+            dummy: &self.dummy_view,
+            resources: &mut self.texture_resources,
+            profiling: &self.profiling,
+        };
+        self.material_bindings = textures
+            .iter()
+            .map(|texture| builder.build(texture, previous.next().flatten()))
+            .collect();
     }
 
     fn upload_draws(&self, device: &wgpu::Device, target: &TargetInputs) -> DrawUpload {
@@ -336,6 +340,7 @@ impl SceneRenderer {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("workload"),
         });
+        self.texture_resources.encode(&mut encoder, &self.profiling);
         let buffers = self.rsp.process_scene(
             device,
             &mut encoder,
@@ -491,7 +496,7 @@ impl SceneRenderer {
             }
             let upload = self.upload_draws(device, target);
             let material_bgs: Vec<_> = self
-                .tex_caches
+                .material_bindings
                 .iter()
                 .map(|cache| &cache.bind_group)
                 .collect();
@@ -624,6 +629,7 @@ impl SceneRenderer {
         drop(encoding);
         let _submission = self.profiling.span("submission");
         queue.submit(Some(command));
+        self.texture_resources.submitted(queue, &self.profiling);
         self.profiling.count("submissions", 1);
         last_target
     }

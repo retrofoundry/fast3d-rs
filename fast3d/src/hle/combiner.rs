@@ -326,7 +326,7 @@ pub struct Tex1 {
     /// Wrap mode from the TEXEL1 tile (cms/cmt): 0=WRAP 1=MIRROR 2=CLAMP.
     pub wrap_s: u8,
     pub wrap_t: u8,
-    /// Tile format/size of the TEXEL1 tile (diagnostic; decode is CPU-side).
+    /// Tile format/size of the TEXEL1 tile, retained for diagnostics.
     pub fmt: u8,
     pub siz: u8,
 }
@@ -348,7 +348,7 @@ pub struct MipLevel {
 }
 
 /// The complete material produced by the HLE from the display list.
-/// Owns texture requests and draw state. CPU expansion is deferred to upload or inspection.
+/// Owns immutable texture requests and draw state for GPU preparation.
 #[derive(Clone, Debug)]
 pub struct Material {
     pub sampling: TileSampling,
@@ -371,7 +371,7 @@ pub struct Material {
     /// Wrap mode from the render tile (cms/cmt): 0=WRAP 1=MIRROR 2=CLAMP.
     pub wrap_s: u8,
     pub wrap_t: u8,
-    /// Tile format/size (diagnostic; decode is CPU-side).
+    /// Tile format/size, retained for diagnostics.
     pub fmt: u8,
     pub siz: u8,
     /// Blend color RGBA (sourced from gsDPSetBlendColor; Phase D dependency).
@@ -453,6 +453,7 @@ pub fn decode_combine(w0: u32, w1: u32) -> CombinerSelectors {
 /// across the workspace: re-exported as `hle::decode_rgba16`, and `renderer` re-exports it
 /// in turn so the texture-upload path and the renderer tests share one implementation.
 /// Each 5-bit channel is bit-replicated: (c5 << 3) | (c5 >> 2) for full 8-bit range.
+#[cfg(any(test, feature = "profiling"))]
 pub fn decode_rgba16(src: &[u8]) -> Vec<u8> {
     let n = src.len() / 2;
     let mut out = vec![0u8; n * 4];
@@ -648,7 +649,7 @@ fn texture_at_draw<T>(
     }
 }
 
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub(crate) fn decode_sampling_texture(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
@@ -672,7 +673,7 @@ fn request_profiled(
     })
 }
 
-fn decode_profiled(
+fn request_with_trace(
     rdp: &crate::hle::rdp::Rdp,
     tile: &crate::hle::rdp::TileDescriptor,
     tlut: u8,
@@ -687,13 +688,18 @@ fn decode_profiled(
             rsp.profiling.count("tmem.rejected_requests", 1);
         }
         if rsp.profiling.tracing() {
-            let pixels = output.as_ref().map(|v| v.texture.decode());
+            let encoded = output.as_ref().map(|level| {
+                let TextureSource::Encoded(request) = &level.texture else {
+                    unreachable!()
+                };
+                request.as_ref()
+            });
             rsp.profiling.request(crate::profiling::Request::capture(
                 rdp,
                 tile,
                 tlut,
                 role,
-                pixels.as_ref().map(|v| v.as_ref()).map_err(|e| **e),
+                encoded.map_err(|e| *e),
             ));
         }
     }
@@ -803,7 +809,7 @@ fn build_material_inner(
     let tlut_fmt = ((rdp.other_mode_h >> 14) & 0x3) as u8;
     let decoded = if uses_physical0 {
         texture_at_draw(
-            decode_profiled(rdp, tile, tlut_fmt, rsp, "texture0"),
+            request_with_trace(rdp, tile, tlut_fmt, rsp, "texture0"),
             diags,
             pc,
         )?
@@ -827,7 +833,7 @@ fn build_material_inner(
         let t1_w = t1.width.max(1) as u32;
         let t1_h = t1.height.max(1) as u32;
         let decoded = texture_at_draw(
-            decode_profiled(rdp, t1, tlut_fmt, rsp, "texture1"),
+            request_with_trace(rdp, t1, tlut_fmt, rsp, "texture1"),
             diags,
             pc,
         )?;
@@ -855,7 +861,7 @@ fn build_material_inner(
         for k in 0..n {
             let tile = &rdp.tiles[(base + k as usize) & 7];
             levels.push(texture_at_draw(
-                decode_profiled(
+                request_with_trace(
                     rdp,
                     tile,
                     tlut_fmt,
@@ -871,7 +877,7 @@ fn build_material_inner(
         let td = rdp.text_detail();
         let detail = if td & 0b10 != 0 {
             Some(texture_at_draw(
-                decode_profiled(rdp, &rdp.tiles[0], tlut_fmt, rsp, "detail"),
+                request_with_trace(rdp, &rdp.tiles[0], tlut_fmt, rsp, "detail"),
                 diags,
                 pc,
             )?)

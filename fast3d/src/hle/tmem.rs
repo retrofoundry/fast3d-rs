@@ -1,8 +1,8 @@
 //! Hardware-faithful, byte-addressable TMEM.
 //!
 //! Models the RDP's 4 KiB texture memory as a flat byte array and reproduces the exact
-//! LoadBlock write path and per-tile sample path of the N64 RDP,
-//! decoding to RGBA8 on the CPU.
+//! LoadBlock write path of the N64 RDP. Rendering decodes immutable requests on the
+//! GPU; the byte-addressed CPU decoder remains the test and offline-tool oracle.
 //!
 //! The odd-line word swap: on an odd TMEM line the two 4-byte halves of every 8-byte word are
 //! swapped. Both the write path (LoadBlock) and the read path (sample) key this swap on the SAME
@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use crate::diag::DiagKind;
 use crate::hle::rdp::TileDescriptor;
+#[cfg(any(test, feature = "profiling"))]
 use crate::hle::texdec::{decode_ia16_entry, decode_rgba16_entry, FormatInfo};
 
 /// Total TMEM size in bytes (4 KiB).
@@ -591,10 +592,12 @@ impl PartialEq for Tmem {
     }
 }
 
+#[cfg(any(test, feature = "profiling"))]
 pub(crate) struct BankDecoder<'a> {
     bytes: &'a [u8; TMEM_BYTES],
 }
 
+#[cfg(any(test, feature = "profiling"))]
 impl<'a> BankDecoder<'a> {
     pub(crate) fn new(bytes: &'a [u8; TMEM_BYTES]) -> Self {
         Self { bytes }

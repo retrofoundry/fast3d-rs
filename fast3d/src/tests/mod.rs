@@ -2,7 +2,7 @@
 pub(crate) mod common;
 
 #[path = "../../../tools/readbacks/export.rs"]
-mod readback_export;
+pub(crate) mod readback_export;
 
 mod alpha_dither;
 #[cfg(feature = "capture")]

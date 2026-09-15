@@ -32,10 +32,8 @@ jobs:
       - name: clippy (--features debug-ui)
         run: cargo clippy -p fast3d --features debug-ui --all-targets -- -D warnings
 
-  # The GPU/render tests (goldens, framebuffer store, hooks, debugger) need a real wgpu
-  # adapter. macOS runners have Metal and Windows runners have WARP (software D3D); Linux
-  # runners have no adapter, so the render suite is not exercised there (it is compiled by
-  # `lint`).
+  # Metal runs the full suites. WARP runs the frozen comparison rows, bounded compute
+  # corpus and residency targets; ci.py applies the same profile to a bootstrap base.
   test:
     strategy:
       fail-fast: false
@@ -64,6 +62,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: bound Windows build resources
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "CARGO_BUILD_JOBS=2" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_DEV_DEBUG=0" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_TEST_DEBUG=0" >> "$GITHUB_ENV"
       - name: test, export and compare exact base readbacks
         shell: bash
         env:
@@ -140,6 +146,9 @@ jobs:
       - name: browser TMEM IMAGE replay
         if: ${{ !cancelled() }}
         run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test tmem_fixture_replay -- --nocapture
+      - name: browser TMEM compute and residency
+        if: ${{ !cancelled() }}
+        run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test texture_decode_gpu --test texture_residency --test texture_residency_pressure -- --nocapture
       - name: browser WebGPU replay
         if: ${{ !cancelled() }}
         run: |
