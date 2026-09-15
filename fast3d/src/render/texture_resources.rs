@@ -99,8 +99,7 @@ impl TextureResources {
         role: &'static str,
         profiling: &Recorder,
     ) -> Image {
-        let key = request.key_profiled(profiling);
-        let witness = request.witness_profiled(profiling);
+        let (key, witness) = request.identity_profiled(profiling);
         let [w, h] = request.recipe().output;
         let bytes = u64::from(w) * u64::from(h) * 4;
         let mut created = false;

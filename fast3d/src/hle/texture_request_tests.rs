@@ -522,4 +522,55 @@ fn display_list_reloads_banks_between_draws_and_frames_without_identity_work() {
             assert_eq!(a.texture.decode(), b.texture.decode());
         }
     }
+    for source in frames
+        .iter()
+        .flat_map(|frame| &frame.materials)
+        .flat_map(|m| m.texture_sources())
+    {
+        let TextureSource::Encoded(request) = source else {
+            panic!("encoded material")
+        };
+        request.identity_profiled(&profiling);
+    }
+    let profile = profiling.drain();
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../tools/tmem/dispatch-expectations.json"
+    ))
+    .unwrap();
+    for name in [
+        "hashes_computed",
+        "bytes_hashed",
+        "preimage_bytes_constructed",
+        "footprint_span_bytes",
+        "palette_index_reads",
+    ] {
+        assert_eq!(
+            count(&profile, name),
+            contract["t4"]["display_list_reloads_three_frames"][name]
+                .as_u64()
+                .unwrap(),
+            "{name}"
+        );
+    }
+    println!(
+        "T4_IDENTITY_WORK {}",
+        serde_json::to_string(&profile.counters).unwrap()
+    );
+}
+
+#[test]
+fn construction_and_identity_memo_work_are_counted_separately() {
+    let (rdp, tile, profiler) = state();
+    let binding = prepare(&rdp, &tile, 0, &profiler).unwrap();
+    let request = request(&binding);
+    request.key_profiled(&profiler);
+    let first = profiler.drain();
+    assert_eq!(count(&first, "preimage_bytes_constructed"), 59);
+    assert_eq!(count(&first, "bytes_hashed"), 59);
+    assert_eq!(count(&first, "identity_memo_hits"), 0);
+    request.key_profiled(&profiler);
+    let repeat = profiler.drain();
+    assert_eq!(count(&repeat, "preimage_bytes_constructed"), 0);
+    assert_eq!(count(&repeat, "bytes_hashed"), 0);
+    assert_eq!(count(&repeat, "identity_memo_hits"), 1);
 }

@@ -25,7 +25,8 @@ The canonical preimage and default-seed XXH3 key use the already-owned encoded
 input, so a key requested after a later load, RDP clone mutation or RDP destruction
 still describes the original draw. No extra bank snapshot is needed for identity.
 Memory accounting reads only initialized witnesses and cannot force identity.
-The profiled entry points count first initialization. A resident image can share
+The profiled entry points count construction and hashing separately, and count
+accesses that reuse an initialized identity. A resident image can share
 the immutable witness allocation without retaining the whole encoded request.
 The witness has its own Arc control block, counted as allocation overhead.
 
@@ -50,11 +51,10 @@ The material builder retains the original load diagnostic and PC. A retained
 request remains executable after mutation; a new rejected draw cannot use that
 request to bypass validation or reach residency.
 
-There is no recipe memo. A bank reload invalidated every entry in the T2 prototype,
-so demo1-dense's reload-per-draw workload had no memo hits. A new memo needs measured
-payoff for its lookup, retention and bookkeeping costs. Separate requests have
-separate lazy identity cells, including repeated recipes on an unchanged bank. Linear streams are reconstructed on each request. Only retained
-scenes, bindings and interpreter state keep bank allocations alive.
+Separate requests have separate lazy identity cells, including repeated recipes
+on an unchanged bank. There is no interpreter recipe memo. Linear streams are
+reconstructed on each request. Only retained scenes, bindings and interpreter
+state keep bank allocations alive.
 
 All operation counters use the `tmem.` prefix:
 
@@ -63,7 +63,10 @@ All operation counters use the `tmem.` prefix:
 | `requests`, `rejected_requests` | Interpreter texture-role requests and rejected requests |
 | `bank_cow_allocations`, `bank_cow_bytes` | Bank copies made by loads while prior storage is still owned |
 | `linear_reconstruction_bytes` | Encoded linear stream bytes constructed for validated requests |
-| `hashes_computed`, `bytes_hashed` | Profiled first identity initialization and complete Fast3dV1 preimages hashed |
+| `hashes_computed`, `bytes_hashed` | Hash executions and complete Fast3dV1 preimages fed to XXH3 |
+| `preimage_bytes_constructed` | Canonical bytes written on identity initialization |
+| `identity_memo_hits` | Accesses that reuse the request-local identity; includes binding checks and combined key/witness access for residency |
+| `footprint_span_bytes`, `palette_index_reads` | Physical range lengths before deduplication and encoded byte reads for CI palette selection |
 | `encoded_comparisons`, `bytes_compared` | Direct owned-input comparisons and full equal-length slices passed to equality, independent of early exit |
 | `cpu_decode_executions`, `cpu_decode_output_bytes` | Zero for supported TMEM rendering, including live tracing |
 

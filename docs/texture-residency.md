@@ -61,17 +61,24 @@ bounded framebuffer-view path uses ordered framebuffer descriptors, not TMEM
 identity. GPU-source texture loads remain rejected under the existing framebuffer
 contract. This change adds no replacement provider.
 
-There is no recipe memo. The three-frame per-draw reload census finds 27 reusable
-bank/recipe tuples among 54 request allocations, but does not establish a net
-timing benefit from retaining and looking them up. Repeated request objects reuse
-their lazy identity; separately prepared requests still compute their own key.
+Each request memoizes its identity on first use. Separately prepared requests
+compute their own keys, including equal-byte reloads. Physical selection marks
+row spans in a 4096-bit set, splits odd-row partial words and wrapped ranges,
+and mirrors RGBA32's selected low-bank bytes into the high bank. Lookup selects
+its complete physical bank directly. CI alone scans encoded indices for palette
+selection; CI4 excludes an unused final low nibble. The serializer emits the
+same sorted address/byte pairs and Fast3dV1 framing for every representation.
 
 Profiling reports the following work and memory scopes. Gauges also emit `.peak`
 values within each recorder interval.
 
 | Name under `tmem.` | Meaning |
 | --- | --- |
-| `hashes_computed`, `bytes_hashed` | Request-local identity initialization and preimage bytes |
+| `hashes_computed`, `bytes_hashed` | Request-local hash executions and complete Fast3dV1 bytes fed to XXH3 |
+| `preimage_bytes_constructed` | Canonical bytes written on identity initialization, counted separately from hashing |
+| `identity_memo_hits` | Accesses reusing an initialized request identity, including binding checks; a residency resolution accesses key and witness together |
+| `footprint_span_bytes` | Physical range lengths selected before wrap/overlap deduplication, including both RGBA32 banks; excludes palette selection |
+| `palette_index_reads` | Encoded byte reads for CI palette selection; a CI4 byte can supply two indices |
 | `bank_cow_allocations`, `bank_cow_bytes` | Load-time copies while old bank storage is owned |
 | `linear_reconstruction_bytes` | Owned compatibility stream construction |
 | `encoded_comparisons`, `witness_comparisons`, `bytes_compared` | Whole-input and residency-witness equality work; equal-length slices count in full |
