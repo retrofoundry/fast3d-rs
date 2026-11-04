@@ -606,7 +606,7 @@ fn fill_rect_keeps_register_snapshots_and_rejects_consuming_modes() {
             ([255; 6], [511, 5, 8])
         ]
     );
-    for cycle in [0, 1, 3] {
+    for cycle in [0, 1] {
         for (command, kind) in [
             (
                 gdp_set_other_mode_h(9, 3, 0),
@@ -631,6 +631,27 @@ fn fill_rect_keeps_register_snapshots_and_rejects_consuming_modes() {
             );
             assert_eq!(result.dropped_runs, 1);
             assert!(result.scene.framebuffer_pairs.is_empty());
+        }
+    }
+}
+
+#[test]
+fn copy_and_fill_ignore_conversion_and_chroma_key_modes() {
+    let mut copy = vec![gdp_set_tile(0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)];
+    copy.extend(Draw::TexRect.commands());
+    for (cycle, draw) in [(2, copy), (3, vec![gdp_fill_rectangle(0, 0, 10, 10)])] {
+        for mode in [
+            gdp_set_other_mode_h(9, 3, 0),
+            gdp_set_other_mode_h(9, 3, 0xa00),
+            gdp_set_other_mode_h(8, 1, 0x100),
+        ] {
+            let (dl, mut commands) = setup(cycle, true);
+            commands.push(mode);
+            commands.extend(&draw);
+            let (result, _) = finish(dl, commands);
+            assert!(result.diags.is_empty(), "cycle {cycle}: {:?}", result.diags);
+            assert_eq!(result.dropped_runs, 0);
+            assert_eq!(result.scene.framebuffer_pairs[0].ops.len(), 1);
         }
     }
 }

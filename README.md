@@ -123,9 +123,10 @@ These combiner inputs are recognised but remain unwired:
 One-cycle mode checks cycle 1; two-cycle mode checks both cycles. Copy and fill
 modes bypass the combiner. Inactive selectors do not reject a draw.
 
-Writing TEXTCONV to a value other than `G_TC_FILT` rejects subsequent draws with
-`UnsupportedTextureConversion`; enabling `G_CK_KEY` rejects them with
-`UnsupportedChromaKey`. The unwritten TEXTCONV default retains the library's
+Writing TEXTCONV to a value other than `G_TC_FILT` rejects subsequent one- and
+two-cycle draws with `UnsupportedTextureConversion`; enabling `G_CK_KEY` rejects
+them with `UnsupportedChromaKey`. Copy and fill draws never read these modes and
+are not rejected. The unwritten TEXTCONV default retains the library's
 existing rendering behaviour. All these diagnostics have Error severity and
 drop the draw before shader preparation. Selector enums live in `fast3d::diag`.
 

@@ -545,22 +545,16 @@ fn validate_register_selectors(
     true
 }
 
-pub(crate) fn validate_fill_inputs(
-    rdp: &crate::hle::rdp::Rdp,
-    diags: &mut Vec<crate::diag::Diagnostic>,
-    pc: u64,
-) -> bool {
-    let selectors = decode_combine(rdp.combine_l, rdp.combine_h);
-    validate_register_selectors(&selectors, (rdp.other_mode_h >> 20) & 3, diags, pc)
-        && validate_conversion_modes(rdp, diags, pc)
-}
-
 fn validate_conversion_modes(
     rdp: &crate::hle::rdp::Rdp,
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
 ) -> bool {
-    let mode_error = if rdp.other_mode_h & crate::hle::consts::G_CK_KEY != 0 {
+    // COPY and FILL bypass the texture filter and combiner, so these modes are never consumed.
+    let cycle_type = (rdp.other_mode_h >> 20) & 3;
+    let mode_error = if cycle_type >= 2 {
+        None
+    } else if rdp.other_mode_h & crate::hle::consts::G_CK_KEY != 0 {
         Some(crate::diag::DiagKind::UnsupportedChromaKey)
     } else if rdp.texture_conversion_set
         && rdp.other_mode_h & (7 << 9) != crate::hle::consts::G_TC_FILT

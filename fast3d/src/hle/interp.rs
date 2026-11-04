@@ -903,9 +903,7 @@ pub(crate) fn interpret_with_bindings<M: Rdram>(
                     break 'dispatch;
                 }
 
-                if crate::hle::rsp::validate_depth_alias(&rdp, true, &mut diags, pc).is_none()
-                    || !crate::hle::combiner::validate_fill_inputs(&rdp, &mut diags, pc)
-                {
+                if crate::hle::rsp::validate_depth_alias(&rdp, true, &mut diags, pc).is_none() {
                     dropped_runs += 1;
                     pc = next_pc;
                     break 'dispatch;
