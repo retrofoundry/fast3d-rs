@@ -296,6 +296,10 @@ class TimingV4Tests(unittest.TestCase):
             self.assertIn('driver-checks', events[0])
             self.assertEqual(events[1][1:3], ['sequence', str(root/'captures/demo1-dense.f3dcap')])
             self.assertEqual(events[1][3:], [str(window/'native-demo1-dense/warmup'), 'coarse'])
+            plan = json.loads((window/'native-demo1-dense/attempts.json').read_text())
+            self.assertEqual(plan['warmup'], {'full_prefix_runs':1, 'command':[
+                str(root/'bin/b1-perf'), 'sequence', str(root/'captures/demo1-dense.f3dcap'),
+                str(window/'native-demo1-dense/warmup'), 'coarse']})
             self.assertEqual(events[2], 90)
             self.assertEqual(len(events[3:]), 10)
             self.assertTrue(all(protocol.V4 in argv and '--backend' in argv for argv in events[3:]))

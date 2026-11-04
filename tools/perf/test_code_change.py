@@ -38,31 +38,38 @@ class CodeChangeTests(unittest.TestCase):
         self.assertTrue(t1.metric_verdict([100]*5, [99]*5, .01, protocol.V4, identical=False)['resolved_speedup'])
         self.assertFalse(t1.metric_verdict([100]*5, [99]*5, .01, protocol.V4)['valid'])
 
+    def audit_batch(self, root, delta=0, code_change=True):
+        def change(values, window, entry, i):
+            if entry['revision'] == 'candidate':
+                values['cpu_ms'] += delta or 0
+        plan = timing.TimingV4Tests().batch(root, change)
+        plan.update(settle_seconds=90, warmup={'full_prefix_runs':1})
+        if code_change:
+            plan.update(change_metadata(), same_binary_for_both_labels=False, warmup=[
+                {'revision':label, 'full_prefix_runs':1} for label in ['parent','candidate']])
+        frames = ''.join(json.dumps({'serial':i, 'observed':i >= 1400})+'\n' for i in range(1,1520))
+        for name in (['warmup-parent','warmup-candidate'] if code_change else ['warmup']):
+            (root/name).mkdir()
+            (root/name/'frames.jsonl').write_text(frames)
+        (root/'settle.json').write_text('{"elapsed_seconds":90}')
+        for entry in plan['attempts']:
+            quiet = Path(entry['quiet_run'])
+            telemetry = quiet.with_name('telemetry.jsonl')
+            telemetry.write_text('{"processes":[]}\n')
+            run = json.loads(quiet.read_text())
+            run['telemetry'] = [{'path':str(telemetry),'sha256':protocol.sha(telemetry)}]
+            quiet.write_text(json.dumps(run))
+            target = Path(entry['summary']).parent
+            (target/'frames.jsonl').write_text(frames)
+            (target/'setup.json').write_text('{"readback":false,"frames_in_flight":2}')
+        return plan
+
     def test_native_audit_outcomes_and_missing_attachment_refusal(self):
         for delta, expected in [(1, 'regression'), (-1, 'resolved speedup'),
                                 (.005, 'no regression resolved above U'), (None, 'inconclusive')]:
             with self.subTest(delta=delta), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                def change(values, window, entry, i):
-                    if entry['revision'] == 'candidate':
-                        values['cpu_ms'] += delta or 0
-                plan = timing.TimingV4Tests().batch(root, change)
-                plan.update(change_metadata(), same_binary_for_both_labels=False, settle_seconds=90,
-                            warmup={'full_prefix_runs':1})
-                frames = ''.join(json.dumps({'serial':i, 'observed':i >= 1400})+'\n' for i in range(1,1520))
-                (root/'warmup').mkdir()
-                (root/'warmup/frames.jsonl').write_text(frames)
-                (root/'settle.json').write_text('{"elapsed_seconds":90}')
-                for entry in plan['attempts']:
-                    quiet = Path(entry['quiet_run'])
-                    telemetry = quiet.with_name('telemetry.jsonl')
-                    telemetry.write_text('{"processes":[]}\n')
-                    run = json.loads(quiet.read_text())
-                    run['telemetry'] = [{'path':str(telemetry),'sha256':protocol.sha(telemetry)}]
-                    quiet.write_text(json.dumps(run))
-                    target = Path(entry['summary']).parent
-                    (target/'frames.jsonl').write_text(frames)
-                    (target/'setup.json').write_text('{"readback":false,"frames_in_flight":2}')
+                plan = self.audit_batch(root, delta)
                 if delta is None:
                     Path(plan['attempts'][0]['quiet_run']).unlink()
                 (root/'attempts.json').write_text(json.dumps(plan))
@@ -82,6 +89,37 @@ class CodeChangeTests(unittest.TestCase):
             self.assertFalse((root/'verdict.json').exists())
             self.assertFalse((root/'batch.json').exists())
 
+    def test_audit_requires_each_warmup_and_checks_its_frames(self):
+        for code_change in [False, True]:
+            for label in (['parent','candidate'] if code_change else ['']):
+                for defect in [None, 'missing', 'prefix', 'observed', 'readback', 'count', 'entry']:
+                    with self.subTest(code_change=code_change, label=label, defect=defect), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory)
+                        plan = self.audit_batch(root, code_change=code_change)
+                        path = root/('warmup-'+label if label else 'warmup')/'frames.jsonl'
+                        if defect == 'missing':
+                            path.unlink()
+                        elif defect in ['prefix', 'observed', 'readback']:
+                            frames = [json.loads(line) for line in path.read_text().splitlines()]
+                            if defect == 'prefix': frames.pop(0)
+                            if defect == 'observed': frames[-1]['observed'] = False
+                            if defect == 'readback': frames[0]['readback_ms'] = 1
+                            path.write_text(''.join(json.dumps(frame)+'\n' for frame in frames))
+                        elif defect == 'count':
+                            warmup = next(w for w in plan['warmup'] if w['revision'] == label) if code_change else plan['warmup']
+                            warmup['full_prefix_runs'] = 0
+                        elif defect == 'entry':
+                            if code_change:
+                                plan['warmup'] = [w for w in plan['warmup'] if w['revision'] != label]
+                            else:
+                                plan.pop('warmup')
+                        (root/'attempts.json').write_text(json.dumps(plan))
+                        result = t1.audit(root)
+                        self.assertEqual(result['valid'], defect is None)
+                        if defect is not None:
+                            self.assertTrue(any('warm-up' in r or 'prefix' in r or 'observed window' in r or
+                                                'readback' in r for r in result['reasons']), result['reasons'])
+
     def test_replay_keeps_direction_and_requires_the_relocated_attachment(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -97,11 +135,15 @@ class CodeChangeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'window6'):
                 replay_directory(root, root/'refused', protocol.V4, 'native')
             self.assertFalse((root/'refused').exists())
-            replay_directory(root, root/'replay', protocol.V4, 'native', FIXTURE)
-            result = json.loads((root/'replay/replay.json').read_text())
-            self.assertFalse(result['timing_valid'])
-            self.assertEqual(result['metrics']['observed.cpu_ms']['conclusion'], 'resolved speedup')
-            self.assertFalse(result['metrics']['observed.cpu_ms']['spurious_directional_change'])
+            for name, warmup in [('single', {'full_prefix_runs':1}), ('both', [
+                    {'revision':label, 'full_prefix_runs':1} for label in ['parent','candidate']])]:
+                plan['warmup'] = warmup
+                (root/'attempts.json').write_text(json.dumps(plan))
+                replay_directory(root, root/name, protocol.V4, 'native', FIXTURE)
+                result = json.loads((root/name/'replay.json').read_text())
+                self.assertFalse(result['timing_valid'])
+                self.assertEqual(result['metrics']['observed.cpu_ms']['conclusion'], 'resolved speedup')
+                self.assertFalse(result['metrics']['observed.cpu_ms']['spurious_directional_change'])
 
     def authorization(self, root):
         proof = root/'acceptance.md'
@@ -138,9 +180,10 @@ class CodeChangeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 t1.reserve(root, WINDOW, *args, version=protocol.V4)
 
-    def test_native_controls_both_binaries_before_one_warmup_and_settle(self):
-        for mismatch in [False, True]:
-            with self.subTest(mismatch=mismatch), tempfile.TemporaryDirectory() as directory:
+    def test_native_warms_each_binary_before_fixed_settle(self):
+        native_plan = t1.native_plan
+        for mismatch, reverse in [(False, False), (False, True), (True, False)]:
+            with self.subTest(mismatch=mismatch, reverse=reverse), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory).resolve()
                 window = root/WINDOW
                 window.mkdir()
@@ -154,7 +197,12 @@ class CodeChangeTests(unittest.TestCase):
                 manifest = dict(change_metadata(), same_binary_for_both_labels=False)
                 if mismatch: manifest['production_shas']['candidate'] = 'a'*40
                 events = []
-                with patch.object(t1, 'verify_kit', return_value=manifest), \
+                def ordered_plan(*args, **kwargs):
+                    plan = native_plan(*args, **kwargs)
+                    if reverse: plan['attempts'].reverse()
+                    return plan
+                with patch.object(t1, 'native_plan', side_effect=ordered_plan), \
+                        patch.object(t1, 'verify_kit', return_value=manifest), \
                         patch.object(t1, 'worker_probe', return_value={'errors':[]}), \
                         patch.object(t1.subprocess, 'run', side_effect=lambda argv, **kw:events.append(argv)), \
                         patch.object(t1.time, 'sleep', side_effect=lambda seconds:events.append(seconds)), \
@@ -167,11 +215,18 @@ class CodeChangeTests(unittest.TestCase):
                     self.assertEqual(t1.native(args), 0)
                 for i, label in enumerate(['parent','candidate']):
                     self.assertIn(str(root/'bin'/('b1-perf-'+label)), events[i])
-                self.assertEqual(events[2][0], str(root/'bin/b1-perf-parent'))
-                self.assertEqual(events[3], 90)
-                self.assertEqual(len(events[4:]), 10)
-                self.assertEqual([argv[-5] for argv in events[4:]],
-                    [a['command'][0] for a in t1.native_plan(root, window/'native-demo1-dense', code_change=manifest)['attempts']])
+                out = window/'native-demo1-dense'
+                plan = json.loads((out/'attempts.json').read_text())
+                expected = [{'revision':label, 'full_prefix_runs':1, 'command':[
+                    str(root/'bin'/('b1-perf-'+label)), 'sequence',
+                    str(root/'captures/demo1-dense.f3dcap'), str(out/('warmup-'+label)), 'coarse']}
+                    for label in (['candidate','parent'] if reverse else ['parent','candidate'])]
+                self.assertEqual(plan['warmup'], expected)
+                self.assertEqual(events[2:4], [w['command'] for w in expected])
+                self.assertEqual(events[4], 90)
+                self.assertEqual(len(events[5:]), 10)
+                self.assertEqual([argv[-5] for argv in events[5:]],
+                    [a['command'][0] for a in plan['attempts']])
 
     def test_freeze_and_relay_verify_each_build_and_the_attachment(self):
         with tempfile.TemporaryDirectory() as directory:
