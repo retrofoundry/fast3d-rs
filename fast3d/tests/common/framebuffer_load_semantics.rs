@@ -71,10 +71,8 @@ pub fn fast3d_expected(case: Case, x: u32, y: u32) -> [u8; 4] {
         } else {
             expected(x, y, PRODUCER, [REPLACEMENT; 8])
         }
-    } else if (232..264).contains(&x) && (40..72).contains(&y) {
-        [0, 0, 255, 255]
     } else {
-        [0, 0, 0, 255]
+        expected(x, y, PRODUCER, PRODUCER)
     }
 }
 

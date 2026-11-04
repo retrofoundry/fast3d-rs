@@ -25,6 +25,8 @@ pub enum ConvertInput {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MemoryAccess {
+    /// Guest image bytes compared before using a retained target.
+    Framebuffer,
     Command,
     Continuation,
     Vertex,
@@ -96,6 +98,12 @@ pub enum DiagKind {
         address: u64,
         canvas: (u32, u32),
         depth: (u32, u32),
+    },
+    /// Guest write-back cannot encode this color-image layout.
+    UnsupportedGuestWriteback {
+        address: u64,
+        fmt: u8,
+        siz: u8,
     },
     UnsupportedImageReinterpretation {
         address: u64,
@@ -209,6 +217,7 @@ impl DiagKind {
             DiagKind::UndefinedMvp
             | DiagKind::UndefinedFogFactors
             | DiagKind::UnsupportedImageReinterpretation { .. }
+            | DiagKind::UnsupportedGuestWriteback { .. }
             | DiagKind::RenderModeNeverSet
             | DiagKind::NonCanonicalBlend
             | DiagKind::StrayRdphalf => Severity::Warn,
@@ -270,6 +279,7 @@ impl std::fmt::Display for DiagKind {
                 "legacy canvas {}x{} cannot share guest depth {address:#018x} at {}x{}; set a color image or use a {}x{} canvas",
                 canvas.0, canvas.1, depth.0, depth.1, depth.0, depth.1
             ),
+            DiagKind::UnsupportedGuestWriteback { address, fmt, siz } => write!(f, "guest write-back unsupported at {address:#x}: format {fmt}, size {siz}"),
             DiagKind::UnsupportedImageReinterpretation { address, depth } => write!(
                 f,
                 "unsupported preservation across {} image reinterpretation at {address:#018x}",

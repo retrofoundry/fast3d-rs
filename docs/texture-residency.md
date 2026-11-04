@@ -56,10 +56,15 @@ epoch. Old completion callbacks only signal their old submission tokens; they
 cannot insert resources into a new cache. On device loss, the consumer recreates
 its device and renderer. No device handles transfer between epochs.
 
-Synthetic or debug RGBA sources still upload their supplied pixels. The existing
-bounded framebuffer-view path uses ordered framebuffer descriptors, not TMEM
-identity. GPU-source texture loads remain rejected under the existing framebuffer
-contract. This change adds no replacement provider.
+Synthetic or debug RGBA sources upload their supplied pixels. Framebuffer loads
+retain immutable GPU snapshots and per-byte tags with source pointer offsets.
+Complete tagged pairs use the unquantised RGBA16/IA16 path; CI8 with TLUT 2/3
+uses the existing framebuffer reinterpretation. Split pairs use the existing
+byte quantisation path. Ordinary writes replace only their destination tags.
+These requests bypass ordinary identity and residency, so placeholder bank bytes
+under tags never enter a Fast3dV1 key. Other tagged formats remain unsupported
+until quantised materialisation is implemented. The load-free framebuffer-view
+path retains its ordered framebuffer descriptors.
 
 Each request memoizes its identity on first use. Separately prepared requests
 compute their own keys, including equal-byte reloads. Physical selection marks

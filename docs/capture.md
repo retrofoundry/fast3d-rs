@@ -88,8 +88,11 @@ is an error. Review live images and independent semantic assertions before pinni
 regression golden. `fast3d/tests/fixtures/host64-fill.f3dcap` is a synthetic full-frame red fill,
 with literal F3D commands and addresses above 4 GiB; it contains no game assets.
 
-Helix applies depth write-back during captured tasks before releasing the guest. The
-current capture format does not store write-back patches.
+Helix applies depth write-back during captured tasks before releasing the guest. Its live
+presentation follows ordered VI swaps. `CaptureFrame::present_host` and
+`CaptureSequence::present_host` keep recording last-rendered task output; the current capture
+format does not store HOST scanout selection or write-back patches. Swap-only presentations do
+not add frames to a sequence.
 
 ## Reset-rooted sequences
 
@@ -345,3 +348,10 @@ The existing version-two sequence envelope is unchanged and accepts either frame
 `Fixture::from_bytes` parses frame payloads; `Sequence::from_bytes` parses sequence envelopes.
 The replay example tries the frame parser first, since the outer version alone no longer
 identifies the container kind.
+
+Guest write-back can stay enabled while recording ordinary frames. Target-byte comparisons go
+through the recording memory reader, so their spans are retained. Tasks that import a CPU edit or restore bytes into a replaced target
+are refused with `task imports framebuffer bytes; capture requires versioned attachment
+imports`; live rendering and write-back still complete. The current fixture format has no
+attachment-import operation, and replay does not enable guest write-back. Apply patches before
+submitting the next recorded task, just as during ordinary rendering.

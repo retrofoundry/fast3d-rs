@@ -9,8 +9,31 @@ struct DecodeParams {
 @group(0) @binding(1) var<uniform> params: DecodeParams;
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
 
-// Upload bytes stay in N64 order: byte 0 occupies bits 0..7 of each little-endian word.
+fn framebuffer_pointer(address: u32) -> u32 {
+    if params.input.y == 0u { return 0u; }
+    return encoded[params.input.y + address];
+}
+
+fn framebuffer_color(pointer: u32) -> vec4<f32> {
+    return unpack4x8unorm(encoded[(pointer - 1u) >> 1u]);
+}
+
+fn framebuffer_ia(color: vec4<f32>) -> vec4<f32> {
+    // rt64 preserves precision with R10G10B10A2 interpreted as I16A16.
+    let rgba = vec4<u32>(round(clamp(color * 1023.0, vec4<f32>(0.0), vec4<f32>(1023.0))));
+    let packed = (rgba.r << 22u) | (rgba.g << 12u) | (rgba.b << 2u) | select(0u, 3u, rgba.a > 0u);
+    let intensity = f32(packed >> 16u) / 65535.0;
+    return vec4<f32>(intensity, intensity, intensity, f32(packed & 65535u) / 65535.0);
+}
+
 fn byte_at(address: u32) -> u32 {
+    let pointer = framebuffer_pointer(address);
+    if pointer != 0u {
+        let color = vec4<u32>(round(framebuffer_color(pointer) * 255.0));
+        let packed = ((color.r >> 3u) << 11u) | ((color.g >> 3u) << 6u) | ((color.b >> 3u) << 1u) | ((color.a >> 2u) & 1u);
+        return (packed >> (8u * (1u - ((pointer - 1u) & 1u)))) & 255u;
+    }
+    // Upload bytes stay in N64 order: byte 0 occupies bits 0..7 of each little-endian word.
     return (encoded[address >> 2u] >> ((address & 3u) * 8u)) & 255u;
 }
 
@@ -48,6 +71,18 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if linear {
         address0 = relative;
         address1 = relative + 1u;
+    }
+    let pointer = framebuffer_pointer(address0);
+    if size == 2u && pointer != 0u && ((pointer - 1u) & 1u) == 0u && framebuffer_pointer(address1) == pointer + 1u {
+        let color = framebuffer_color(pointer);
+        if format == 0u {
+            textureStore(output, vec2<i32>(id.xy), color);
+            return;
+        }
+        if format == 3u {
+            textureStore(output, vec2<i32>(id.xy), framebuffer_ia(color));
+            return;
+        }
     }
     var first = 0u;
     var second = 0u;

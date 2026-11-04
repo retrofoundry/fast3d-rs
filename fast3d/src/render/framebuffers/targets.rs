@@ -41,7 +41,15 @@ impl ImageDescriptor {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct TargetDescriptors(BTreeMap<(u64, bool), ImageDescriptor>);
+pub(crate) struct TargetDescriptors {
+    images: BTreeMap<(u64, bool), ImageDescriptor>,
+    writes: BTreeMap<(u64, bool), u64>,
+    coherent: bool,
+    /// Coherent mode: bytes each image owns from earlier tasks, and images drawn in this one.
+    owned: Vec<(std::ops::Range<u64>, (u64, bool, ImageLayout))>,
+    drawn: std::collections::BTreeSet<(u64, bool)>,
+    versions: Vec<ImageDescriptor>,
+}
 
 impl TargetDescriptors {
     pub(crate) fn record(
@@ -51,7 +59,7 @@ impl TargetDescriptors {
         height: u32,
         depth: bool,
     ) -> Result<ImageDescriptor, DiagKind> {
-        let old = self.0.get(&(address, depth));
+        let old = self.images.get(&(address, depth));
         let compatible = old.is_some_and(|old| old.layout == layout);
         let descriptor = ImageDescriptor {
             address,
@@ -65,7 +73,15 @@ impl TargetDescriptors {
             generation: old.map_or(1, |old| old.generation + u64::from(!compatible)),
         };
         descriptor.range()?;
-        self.0.insert((address, depth), descriptor);
+        if let Some(old) = old.filter(|_| !compatible) {
+            self.versions.retain(|version| {
+                !(version.address == old.address
+                    && version.depth == old.depth
+                    && version.layout == old.layout)
+            });
+            self.versions.push(*old);
+        }
+        self.images.insert((address, depth), descriptor);
         Ok(descriptor)
     }
 
@@ -75,11 +91,92 @@ impl TargetDescriptors {
         length: u64,
     ) -> Result<Option<ImageDescriptor>, DiagKind> {
         let range = checked_range(address, length)?;
-        Ok(self.0.values().copied().find(|image| {
+        Ok(self.images.values().copied().find(|image| {
             image
                 .range()
                 .is_ok_and(|known| range.start < known.end && known.start < range.end)
         }))
+    }
+
+    pub(crate) fn written(&mut self, address: u64, depth: bool) {
+        let next = self.writes.values().copied().max().unwrap_or(0) + 1;
+        self.writes.insert((address, depth), next);
+        self.drawn.insert((address, depth));
+    }
+
+    pub(crate) fn seed_owners(&mut self, owners: &super::coherence::Ownership) {
+        self.coherent = true;
+        self.writes.clear();
+        self.drawn.clear();
+        self.owned.clear();
+        for (&start, range) in owners.0.iter().filter(|(_, range)| !range.foreign) {
+            let writer = range.writer;
+            self.owned.push((
+                start..start + range.bytes.len() as u64,
+                (writer.address, writer.depth, writer.layout),
+            ));
+            self.writes
+                .entry((range.writer.address, range.writer.depth))
+                .and_modify(|generation| *generation = (*generation).max(range.generation))
+                .or_insert(range.generation);
+        }
+    }
+
+    pub(crate) fn load_source(
+        &self,
+        address: u64,
+        length: u64,
+    ) -> Result<Option<ImageDescriptor>, DiagKind> {
+        let range = checked_range(address, length)?;
+        let source = self
+            .images
+            .values()
+            .chain(self.versions.iter().filter(|_| self.coherent))
+            .filter(|source| {
+                source
+                    .range()
+                    .is_ok_and(|r| r.start < range.end && range.start < r.end)
+            })
+            .filter(|source| {
+                !self.coherent
+                    || self.drawn.contains(&(source.address, source.depth))
+                    || self.owned.iter().any(|(owned, key)| {
+                        *key == (source.address, source.depth, source.layout)
+                            && owned.start < range.end
+                            && range.start < owned.end
+                    })
+            })
+            .max_by_key(|source| {
+                (
+                    self.coherent
+                        && source.range().is_ok_and(|known| {
+                            known.start <= range.start && range.end <= known.end
+                        }),
+                    self.coherent
+                        && !source.depth
+                        && (source.layout.fmt, source.layout.siz) == (0, 2),
+                    self.writes
+                        .get(&(source.address, source.depth))
+                        .copied()
+                        .unwrap_or(0),
+                )
+            })
+            .copied();
+        let Some(source) = source else {
+            return Ok(None);
+        };
+        let fail = |reason| DiagKind::UnsupportedFramebufferAccess { address, reason };
+        if source.depth {
+            return Err(fail(FramebufferAccess::DepthTexture));
+        }
+        if (source.layout.fmt, source.layout.siz) != (0, 2) {
+            return Err(fail(FramebufferAccess::Reinterpretation));
+        }
+        let extent = source.range()?;
+        if address < extent.start || range.end > extent.end {
+            return Err(fail(FramebufferAccess::Extent));
+        }
+        Ok(Some(source))
     }
 
     pub(crate) fn source(
@@ -98,7 +195,7 @@ impl TargetDescriptors {
         };
         let range = request.range()?;
         let matches: Vec<_> = self
-            .0
+            .images
             .values()
             .copied()
             .filter(|image| {
@@ -128,7 +225,7 @@ impl TargetDescriptors {
             return Err(fail(FramebufferAccess::Reinterpretation));
         }
         let view = source.range()?;
-        if self.0.values().any(|other| {
+        if self.images.values().any(|other| {
             *other != source
                 && other
                     .range()
@@ -143,6 +240,6 @@ impl TargetDescriptors {
     }
 
     pub(crate) fn get(&self, address: u64, depth: bool) -> Option<ImageDescriptor> {
-        self.0.get(&(address, depth)).copied()
+        self.images.get(&(address, depth)).copied()
     }
 }

@@ -396,6 +396,39 @@ fn capture_accepts_default_start_equivalent_tasks_after_previous_work() {
     }
 }
 
+#[test]
+fn capture_accepts_framebuffer_loads_after_earlier_loads() {
+    let address = 0x10000;
+    let mut commands = vec![
+        gdp_set_color_image(0, 2, 4, address),
+        gdp_set_scissor(0, 0, 0, 16, 8),
+        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
+        gdp_set_fill_color(0xf801f801),
+        gdp_fill_rectangle(0, 0, 12, 4),
+        gdp_set_texture_image(0, 2, 4, address),
+        gdp_set_tile(0, 2, 1, 0, 7, 0, 2, 0, 0, 2, 0, 0),
+        (0xf4000000, (7 << 24) | (12 << 12) | 4),
+        gdp_set_color_image(0, 2, 64, 0),
+        gdp_set_scissor(0, 0, 0, 256, 192),
+        gdp_set_tile(0, 2, 1, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+        gdp_set_tile_size(0, 0, 0, 12, 4),
+        gdp_set_cycle_type(2),
+    ];
+    commands.extend(gsp_texture_rectangle(
+        0, 0, 12, 4, 0, 0, 0, 4096, 1024, false,
+    ));
+    commands.push(gsp_enddl());
+    let load = task(&commands, 0);
+    let (device, queue) = crate::render::headless_device_forced_fallback();
+    let mut renderer = fixture().renderer(device, queue, ClearPolicy::PerFrame);
+    for _ in 0..2 {
+        let mut capture = CaptureFrame::begin(&mut renderer, 0, 0, Provenance::default());
+        record(&mut capture, &mut renderer, &load).unwrap();
+        assert!(renderer.rdp.tmem_bank.framebuffer_tags.is_some());
+        capture.finish(None).unwrap();
+    }
+}
+
 fn full_fill() -> Task {
     task(
         &[

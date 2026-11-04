@@ -681,6 +681,13 @@ fn request_with_trace(
         if output.is_err() {
             rsp.profiling.count("tmem.rejected_requests", 1);
         }
+        if output
+            .as_ref()
+            .is_ok_and(|level| matches!(level.texture, TextureSource::Framebuffer(_)))
+        {
+            rsp.profiling.count("framebuffer.texture_requests", 1);
+            return output;
+        }
         if rsp.profiling.tracing() {
             let encoded = output.as_ref().map(|level| {
                 let TextureSource::Encoded(request) = &level.texture else {

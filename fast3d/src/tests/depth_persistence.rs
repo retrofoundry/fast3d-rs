@@ -1301,11 +1301,12 @@ mod writeback {
     }
 
     #[test]
-    fn depth_writeback_clear_roundtrips_at_native_extent() {
-        let address = 0x1_0020_0000;
+    fn guest_writeback_clear_roundtrips_at_native_extent() {
+        let memory = [0u16; 35];
+        let address = memory.as_ptr() as u64;
         for (width, height) in [(1280, 720), (13, 9)] {
             let mut r = renderer(width, height);
-            r.set_depth_writeback(true);
+            r.set_guest_writeback(true);
             assert_eq!(
                 process(&mut r, &depth_fill(address, 0xfffc_fffc)).termination,
                 crate::inspect::WalkTermination::End
@@ -1319,13 +1320,15 @@ mod writeback {
     }
 
     #[test]
-    fn depth_writeback_fill_preserves_words_and_row_parity() {
+    fn guest_writeback_fill_preserves_words_and_row_parity() {
         let mut r = renderer(64, 64);
-        r.set_depth_writeback(true);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 35];
+        let address = memory.as_mut_ptr() as u64;
         for exponent in 0..8u32 {
             let even = (exponent << 13) | 0x1234;
             let odd = (exponent << 13) | 0x1ffc;
-            process(&mut r, &depth_fill(0x2_0020_0000, even << 16 | odd));
+            process(&mut r, &depth_fill(address, even << 16 | odd));
             let patches = r.take_guest_writes();
             assert_eq!(
                 words(&patches[0]),
@@ -1333,29 +1336,28 @@ mod writeback {
                     .map(|i| if i % 2 == 0 { even as u16 } else { odd as u16 })
                     .collect::<Vec<_>>()
             );
+            apply(patches);
         }
     }
 
     #[test]
-    fn disabled_depth_writeback_does_not_read_back() {
+    fn disabled_guest_writeback_does_not_read_back() {
         let mut r = renderer(64, 64);
         let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
         r.inner.profiling = recorder.clone();
-        assert!(!r.depth_writeback);
+        assert!(!r.guest_writeback);
+        let memory = [0u16; 35];
         for enabled in [false, true, false] {
-            r.set_depth_writeback(enabled);
+            r.set_guest_writeback(enabled);
             recorder.drain();
-            process(&mut r, &depth_fill(0x1_0020_0000, 0xfffc_fffc));
+            process(&mut r, &depth_fill(memory.as_ptr() as u64, 0xfffc_fffc));
             assert_eq!(r.take_guest_writes().len(), usize::from(enabled));
-            assert_eq!(
-                recorder
-                    .snapshot()
-                    .counters
-                    .get("readback.depth_bytes")
-                    .copied()
-                    .unwrap_or(0),
-                if enabled { 7 * 5 * 4 } else { 0 }
-            );
+            assert_eq!(r.inner.coherence.is_some(), enabled);
+            assert!(recorder
+                .snapshot()
+                .counters
+                .iter()
+                .all(|(key, value)| !key.starts_with("readback.") || *value == 0));
         }
     }
 
@@ -1367,9 +1369,9 @@ mod writeback {
     }
 
     #[test]
-    fn depth_writeback_triangle_matches_viewport_packed_z() {
+    fn guest_writeback_triangle_matches_viewport_packed_z() {
         let mut r = renderer(1280, 720);
-        r.set_depth_writeback(true);
+        r.set_guest_writeback(true);
         for modified in [false, true] {
             r.reset();
             let mut b = DlBuilder::new();
@@ -1391,23 +1393,35 @@ mod writeback {
             let hw = Image(finish(b, dl));
             r.process_dl(&hw, u64::from(hw.0.entry), Microcode::F3dex2, &mut NopSink);
             let patches = r.take_guest_writes();
-            assert_eq!(patches.len(), 1);
-            assert_eq!(patches[0].address, u64::from(Z));
-            let words = words(&patches[0]);
-            assert_eq!(words.len(), 320 * 240);
-            // z18 = (511 / 1024) * 262144 = 130816; exponent 0, mantissa 2044.
-            assert_eq!(words[120 * 320 + 160], 0x1ff0);
-            assert_eq!(words[0], 0xfffc);
+            for (address, expected) in [(A, 0xf801), (Z, 0x1ff0)] {
+                let writes: Vec<_> = patches
+                    .iter()
+                    .filter(|p| {
+                        (u64::from(address)..u64::from(address) + 320 * 240 * 2)
+                            .contains(&p.address)
+                    })
+                    .collect();
+                assert_eq!(writes.len(), 176);
+                for (row, patch) in writes.iter().enumerate() {
+                    assert_eq!(
+                        patch.address,
+                        u64::from(address) + (((row + 32) * 320 + 32) * 2) as u64
+                    );
+                    assert_eq!(words(patch), vec![expected; 256]);
+                }
+            }
         }
     }
 
     #[test]
-    fn depth_writeback_only_accepted_tasks_produce_patches() {
+    fn guest_writeback_only_accepted_tasks_produce_patches() {
         let mut r = renderer(64, 64);
-        r.set_depth_writeback(true);
-        process(&mut r, &depth_fill(0x1_0020_0000, 0xfffc_fffc));
+        r.set_guest_writeback(true);
+        let memory = [0u16; 35];
+        let address = memory.as_ptr() as u64;
+        process(&mut r, &depth_fill(address, 0xfffc_fffc));
         assert_eq!(r.take_guest_writes().len(), 1);
-        let mut rejected = depth_fill(0x1_0020_0000, 0);
+        let mut rejected = depth_fill(address, 0);
         rejected.insert(rejected.len() - 1, [0xd500_0000, 0]);
         assert_eq!(
             process(&mut r, &rejected).termination,
@@ -1451,5 +1465,667 @@ mod writeback {
             &mut Stop,
         );
         assert!(r.take_guest_writes().is_empty());
+    }
+
+    fn color_pixels(r: &mut Renderer, address: u64, width: u32, height: u32) -> Vec<u8> {
+        let device = r.device().clone();
+        let queue = r.queue().clone();
+        pixels_from_render(&device, &queue, width, height, FORMAT, |view| {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            r.inner.scanout(&device, &mut encoder, view, address, None);
+            queue.submit([encoder.finish()]);
+        })
+    }
+
+    fn apply(patches: Vec<GuestWrite>) {
+        for patch in patches {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    patch.bytes.as_ptr(),
+                    patch.address as *mut u8,
+                    patch.bytes.len(),
+                );
+            }
+        }
+    }
+
+    fn color_fill(
+        address: u64,
+        width: u32,
+        height: u32,
+        fmt: u32,
+        siz: u32,
+        word: u32,
+        bounds: [u32; 4],
+    ) -> Vec<[u64; 2]> {
+        let mut dl = vec![
+            gdp_set_color_image(fmt, siz, width, 0),
+            gdp_set_scissor(0, 0, 0, width * 4, height * 4),
+        ];
+        fill(&mut dl, word, bounds);
+        let mut dl: Vec<_> = dl
+            .into_iter()
+            .map(|(a, b)| [u64::from(a), u64::from(b)])
+            .collect();
+        dl[0][1] = address;
+        dl
+    }
+
+    fn run(r: &mut Renderer, mut dl: Vec<[u64; 2]>) -> Vec<GuestWrite> {
+        dl.push([0xdf00_0000, 0]);
+        assert_eq!(
+            process(r, &dl).termination,
+            crate::inspect::WalkTermination::End
+        );
+        r.take_guest_writes()
+    }
+
+    #[test]
+    fn color_supersedes_depth_and_literal_words_survive() {
+        let mut r = renderer(1280, 720);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 35];
+        let address = memory.as_mut_ptr() as u64;
+        let mut dl = depth_fill(address, 0xfffc_fffc);
+        dl.pop();
+        dl.push([u64::from(gdp_set_depth_image(0).0), address + 70]);
+        dl.extend(color_fill(address, 7, 5, 0, 2, 0x1234_abcd, [0, 0, 6, 4]));
+        apply(run(&mut r, dl));
+        assert_eq!(
+            memory,
+            std::array::from_fn(|i| if i % 2 == 0 { 0x1234 } else { 0xabcd })
+        );
+        assert!(run(&mut r, vec![]).is_empty());
+    }
+
+    #[test]
+    fn i8_alias_preserves_second_half_of_rgba16() {
+        let mut r = renderer(640, 480);
+        r.set_guest_writeback(true);
+        let mut memory = vec![0u16; 320 * 240];
+        let address = memory.as_mut_ptr() as u64;
+        let mut dl = color_fill(address, 320, 240, 0, 2, 0x1234_1234, [0, 0, 319, 239]);
+        dl.extend(color_fill(
+            address,
+            320,
+            240,
+            4,
+            1,
+            0xffff_ffff,
+            [0, 0, 319, 239],
+        ));
+        apply(run(&mut r, dl));
+        assert!(memory[..38400].iter().all(|&word| word == 0xffff));
+        assert!(memory[38400..].iter().all(|&word| word == 0x1234));
+    }
+
+    #[test]
+    fn fullscreen_color_overwrites_portrait_depth() {
+        let mut r = renderer(640, 480);
+        r.set_guest_writeback(true);
+        let mut memory = vec![0u16; 320 * 240];
+        let address = memory.as_mut_ptr() as u64;
+        let portrait = address + 4096;
+        let mut dl = color_fill(address, 320, 240, 0, 2, 0x1234_1234, [0, 0, 319, 239]);
+        dl.push([u64::from(gdp_set_depth_image(0).0), portrait]);
+        dl.extend(color_fill(
+            portrait,
+            64,
+            112,
+            0,
+            2,
+            0xfffc_fffc,
+            [0, 0, 63, 111],
+        ));
+        let color = CcPass {
+            a: ZERO_C,
+            b: ZERO_C,
+            c: ZERO_C,
+            d: 3,
+        };
+        let alpha = CcPass {
+            a: ZERO_A,
+            b: ZERO_A,
+            c: ZERO_A,
+            d: 3,
+        };
+        let mut draw: Vec<_> = [
+            gdp_set_color_image(0, 2, 320, 0),
+            gdp_set_scissor(0, 0, 0, 1280, 960),
+            gdp_set_cycle_type(0),
+            gdp_set_render_mode(G_RM_OPA_SURF, G_RM_OPA_SURF2),
+            gdp_set_combine_lerp(color, alpha, color, alpha),
+            gdp_set_prim_color(0, 0, 0x00ff00ff),
+            gdp_fill_rectangle(0, 0, 1280, 960),
+        ]
+        .into_iter()
+        .map(|(a, b)| [u64::from(a), u64::from(b)])
+        .collect();
+        draw[0][1] = address;
+        dl.extend(draw);
+        apply(run(&mut r, dl));
+        assert!(memory.iter().all(|&word| word == 0x07c1));
+    }
+
+    #[test]
+    fn cpu_color_edit_is_imported_and_partial_writes_stay_partial() {
+        let mut r = renderer(80, 60);
+        r.set_guest_writeback(true);
+        let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+        r.inner.profiling = recorder.clone();
+        let mut memory = [0u16; 35];
+        let address = memory.as_mut_ptr() as u64;
+        apply(run(
+            &mut r,
+            color_fill(address, 7, 5, 0, 2, 0xf801_f801, [0, 0, 6, 4]),
+        ));
+        recorder.drain();
+        apply(run(
+            &mut r,
+            color_fill(address, 7, 5, 0, 2, 0x003f_003f, [6, 4, 6, 4]),
+        ));
+        assert_eq!(
+            recorder
+                .snapshot()
+                .counters
+                .get("import.pixels")
+                .copied()
+                .unwrap_or(0),
+            0
+        );
+        memory[0] = 0x07c1;
+        recorder.drain();
+        let patches = run(
+            &mut r,
+            color_fill(address, 7, 5, 0, 2, 0xffff_ffff, [3, 2, 3, 2]),
+        );
+        assert_eq!(
+            patches,
+            vec![GuestWrite {
+                address: address + 34,
+                bytes: 0xffffu16.to_ne_bytes().to_vec()
+            }]
+        );
+        apply(patches);
+        assert_eq!(memory[0], 0x07c1);
+        assert_eq!(memory[34], 0x003f);
+        assert_eq!(memory[1], 0xf801);
+        assert_eq!(recorder.snapshot().counters.get("import.pixels"), Some(&1));
+        let pixels = color_pixels(&mut r, address, 7, 5);
+        assert_eq!(&pixels[..4], &GREEN);
+        assert_eq!(&pixels[4..8], &RED);
+    }
+
+    #[test]
+    fn cpu_depth_edit_is_imported_before_partial_fill() {
+        let mut r = renderer(80, 60);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 35];
+        let address = memory.as_mut_ptr() as u64;
+        process(&mut r, &depth_fill(address, 0xfffc_fffc));
+        apply(r.take_guest_writes());
+        memory[0] = 0x4000;
+        apply(run(
+            &mut r,
+            color_fill(address, 7, 5, 0, 2, 0x8000_8000, [6, 4, 6, 4]),
+        ));
+        assert_depth(r.device(), r.queue(), &r.inner, address, [7, 5], |x, y| {
+            if x == 0 && y == 0 {
+                196608.0 / 262144.0
+            } else if x == 6 && y == 4 {
+                245760.0 / 262144.0
+            } else {
+                262143.0 / 262144.0
+            }
+        });
+        assert_eq!(memory[0], 0x4000);
+    }
+    #[test]
+    fn bind_only_task_imports_edits_before_the_next_task() {
+        let mut r = renderer(7, 5);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 35];
+        let address = memory.as_mut_ptr() as u64;
+        apply(run(
+            &mut r,
+            color_fill(address, 7, 5, 0, 2, 0xf801_f801, [0, 0, 6, 4]),
+        ));
+        memory[0] = 0x07c1;
+        assert!(run(&mut r, vec![]).is_empty());
+        apply(run(
+            &mut r,
+            color_fill(address, 7, 5, 0, 2, 0x003f_003f, [6, 4, 6, 4]),
+        ));
+        let pixels = color_pixels(&mut r, address, 7, 5);
+        assert_eq!(&pixels[..4], &GREEN);
+        assert_eq!(memory[0], 0x07c1);
+    }
+
+    #[test]
+    fn edits_seen_by_a_rejected_task_are_imported_by_the_next_accepted_one() {
+        let mut r = renderer(7, 5);
+        r.set_guest_writeback(true);
+        let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+        r.inner.profiling = recorder.clone();
+        let mut memory = [0u16; 35];
+        let address = memory.as_mut_ptr() as u64;
+        apply(run(
+            &mut r,
+            color_fill(address, 7, 5, 0, 2, 0xf801_f801, [0, 0, 6, 4]),
+        ));
+        memory[0] = 0x07c1;
+        assert_eq!(
+            process(&mut r, &[[0xd500_0000, 0], [0xdf00_0000, 0]]).termination,
+            crate::inspect::WalkTermination::Rejected
+        );
+        assert!(run(&mut r, vec![]).is_empty());
+        assert_eq!(&color_pixels(&mut r, address, 7, 5)[..4], &GREEN);
+        recorder.drain();
+        assert!(run(&mut r, vec![]).is_empty());
+        assert_eq!(
+            recorder
+                .snapshot()
+                .counters
+                .get("import.pixels")
+                .copied()
+                .unwrap_or(0),
+            0
+        );
+        assert_eq!(memory[0], 0x07c1);
+    }
+
+    #[cfg(feature = "capture")]
+    #[test]
+    fn writeback_capture_records_import_reads_and_refuses_foreign_uploads() {
+        use crate::capture::{CaptureFrame, Provenance};
+        let mut r = renderer(7, 5);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 35];
+        let address = memory.as_mut_ptr() as u64;
+        let mut dl = color_fill(address, 7, 5, 0, 2, 0xf801_f801, [0, 0, 6, 4]);
+        dl.push([0xdf00_0000, 0]);
+        let mut capture = CaptureFrame::begin(&mut r, 0, 0, Provenance::default());
+        for _ in 0..2 {
+            unsafe {
+                capture.process_dl_host(
+                    &mut r,
+                    HostRam::new(&[]),
+                    dl.as_ptr() as u64,
+                    Microcode::F3dex2,
+                    crate::DataFormat::Fixed,
+                    &mut NopSink,
+                )
+            }
+            .unwrap();
+            apply(r.take_guest_writes());
+        }
+        let fixture = capture.present_last(&mut r).unwrap();
+        assert!(fixture.tasks[1]
+            .spans
+            .iter()
+            .any(|span| span.address <= address
+                && span.address + span.bytes.len() as u64 >= address + 70));
+        let replay = pollster::block_on(fixture.replay_headless()).unwrap();
+        assert!(replay
+            .rgba8
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == RED));
+        let mut capture = CaptureFrame::begin(&mut r, 0, 0, Provenance::default());
+        memory[0] = 0x07c1;
+        let result = unsafe {
+            capture.process_dl_host(
+                &mut r,
+                HostRam::new(&[]),
+                dl.as_ptr() as u64,
+                Microcode::F3dex2,
+                crate::DataFormat::Fixed,
+                &mut NopSink,
+            )
+        };
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("imports framebuffer bytes"));
+        assert_eq!(memory[0], 0x07c1);
+    }
+
+    #[test]
+    fn unsupported_color_layout_diagnoses_once_and_emits_no_patches() {
+        let mut r = renderer(7, 5);
+        r.set_guest_writeback(true);
+        let mut memory = [0u32; 35];
+        let address = memory.as_mut_ptr() as u64;
+        let mut dl = color_fill(address, 7, 5, 0, 3, 0xffff_ffff, [0, 0, 6, 4]);
+        dl.extend(color_fill(address, 7, 5, 0, 3, 0, [0, 0, 6, 4]));
+        dl.push([0xdf00_0000, 0]);
+        let mut diagnostics = Vec::new();
+        unsafe {
+            r.process_dl_host(
+                HostRam::new(&[]),
+                dl.as_ptr() as u64,
+                Microcode::F3dex2,
+                &mut diagnostics,
+            );
+        }
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diag| matches!(
+                    diag.kind,
+                    crate::DiagKind::UnsupportedGuestWriteback { .. }
+                ))
+                .count(),
+            1
+        );
+        assert!(r.take_guest_writes().is_empty());
+    }
+    #[test]
+    fn recreated_color_view_restores_edits_outside_the_previous_layout() {
+        let mut r = renderer(4, 2);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 8];
+        let address = memory.as_mut_ptr() as u64;
+        apply(run(
+            &mut r,
+            color_fill(address, 4, 2, 0, 2, 0xf801_f801, [0, 0, 3, 1]),
+        ));
+        apply(run(
+            &mut r,
+            color_fill(address, 4, 2, 4, 1, 0xffff_ffff, [0, 0, 3, 1]),
+        ));
+        memory[7] = 0x07c1;
+        let bind = color_fill(address, 4, 2, 0, 2, 0, [0, 0, 0, 0]);
+        assert!(run(&mut r, bind[..2].to_vec()).is_empty());
+        apply(run(
+            &mut r,
+            color_fill(address, 4, 2, 0, 2, 0x003f_003f, [0, 0, 0, 0]),
+        ));
+        let pixels = color_pixels(&mut r, address, 4, 2);
+        assert_eq!(&pixels[28..32], &GREEN);
+        assert_eq!(&pixels[16..20], &RED);
+        assert_eq!(memory[7], 0x07c1);
+    }
+    #[test]
+    fn target_growth_keeps_draws_over_imported_pixels() {
+        let mut r = renderer(4, 2);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 8];
+        let address = memory.as_mut_ptr() as u64;
+        apply(run(
+            &mut r,
+            color_fill(address, 4, 1, 0, 2, 0xf801_f801, [0, 0, 3, 0]),
+        ));
+        memory[0] = 0x07c1;
+        let mut dl = color_fill(address, 4, 1, 0, 2, 0x003f_003f, [0, 0, 0, 0]);
+        dl.extend(color_fill(address, 4, 2, 0, 2, 0xffff_ffff, [3, 1, 3, 1]));
+        apply(run(&mut r, dl));
+        let pixels = color_pixels(&mut r, address, 4, 2);
+        assert_eq!(&pixels[..4], &BLUE);
+        assert_eq!(memory[0], 0x003f);
+    }
+
+    #[test]
+    fn framebuffer_texture_source_imports_cpu_edits() {
+        let mut r = renderer(7, 5);
+        r.set_guest_writeback(true);
+        let mut source = [0u16; 35];
+        let mut destination = [0u16; 35];
+        let address = source.as_mut_ptr() as u64;
+        let target = destination.as_mut_ptr() as u64;
+        apply(run(
+            &mut r,
+            color_fill(address, 7, 5, 0, 2, 0xf801_f801, [0, 0, 6, 4]),
+        ));
+        apply(run(
+            &mut r,
+            color_fill(target, 7, 5, 0, 2, 0x0001_0001, [0, 0, 6, 4]),
+        ));
+        source[0] = 0x07c1;
+        let mut commands = vec![
+            gdp_set_cycle_type(2),
+            gdp_set_texture_image(0, 2, 7, 0),
+            gdp_set_tile(0, 2, 2, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+            gdp_set_tile_size(0, 0, 0, 24, 16),
+        ];
+        commands.extend(gsp_texture_rectangle(
+            0, 0, 24, 16, 0, 0, 0, 4096, 1024, false,
+        ));
+        let mut commands: Vec<_> = commands
+            .into_iter()
+            .map(|(a, b)| [u64::from(a), u64::from(b)])
+            .collect();
+        commands[1][1] = address;
+        apply(run(&mut r, commands));
+        assert_eq!(destination[0], 0x07c1);
+        assert!(destination[1..].iter().all(|&pixel| pixel == 0xf801));
+        assert_eq!(source[0], 0x07c1);
+    }
+    #[test]
+    fn same_task_layout_roundtrip_restores_latest_writers() {
+        let mut r = renderer(4, 2);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 8];
+        let address = memory.as_mut_ptr() as u64;
+        let mut dl = color_fill(address, 4, 2, 0, 2, 0xf801_f801, [0, 0, 3, 1]);
+        dl.extend(color_fill(address, 4, 2, 4, 1, 0xffff_ffff, [0, 0, 3, 1]));
+        dl.extend(color_fill(address, 4, 2, 0, 2, 0x003f_003f, [0, 0, 0, 0]));
+        apply(run(&mut r, dl));
+        let pixels = color_pixels(&mut r, address, 4, 2);
+        assert_eq!(&pixels[..4], &BLUE);
+        assert_eq!(&pixels[4..8], &[255; 4]);
+        assert_eq!(&pixels[16..20], &RED);
+        assert_eq!(
+            memory,
+            [0x003f, 0xffff, 0xffff, 0xffff, 0xf801, 0xf801, 0xf801, 0xf801]
+        );
+    }
+    #[test]
+    fn framebuffer_load_uses_latest_color_or_rejects_depth() {
+        for later in [false, true] {
+            for color_last in [false, true] {
+                let mut r = renderer(4, 2);
+                r.set_guest_writeback(true);
+                let mut source = [0u16; 70];
+                let mut destination = [0u16; 8];
+                let address = source.as_mut_ptr() as u64;
+                let target = destination.as_mut_ptr() as u64;
+                let mut depth = depth_fill(address, 0xfffc_fffc);
+                depth.pop();
+                let mut color = vec![[u64::from(gdp_set_depth_image(0).0), address + 70]];
+                color.extend(color_fill(address, 4, 2, 0, 2, 0xf801_f801, [0, 0, 3, 1]));
+                let mut dl = if color_last {
+                    depth.into_iter().chain(color).collect::<Vec<_>>()
+                } else {
+                    color.into_iter().chain(depth).collect()
+                };
+                if later {
+                    apply(run(&mut r, dl));
+                    dl = Vec::new();
+                    if color_last {
+                        source[0] = 0x07c1;
+                    }
+                }
+                let commands = [
+                    gdp_set_texture_image(0, 2, 4, 0),
+                    gdp_set_tile(0, 2, 1, 0, 7, 0, 2, 0, 0, 2, 0, 0),
+                    (0xf4000000, (7 << 24) | (12 << 12) | 4),
+                    gdp_set_color_image(0, 2, 4, 0),
+                    gdp_set_scissor(0, 0, 0, 16, 8),
+                    gdp_set_tile(0, 2, 1, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+                    gdp_set_tile_size(0, 0, 0, 12, 4),
+                    gdp_set_cycle_type(2),
+                    gdp_set_render_mode(0, 0),
+                ];
+                let mut commands: Vec<_> = commands
+                    .into_iter()
+                    .map(|(a, b)| [u64::from(a), u64::from(b)])
+                    .collect();
+                commands[0][1] = address;
+                commands[3][1] = target;
+                dl.extend(commands);
+                dl.extend(
+                    gsp_texture_rectangle(0, 0, 12, 4, 0, 0, 0, 4096, 1024, false)
+                        .into_iter()
+                        .map(|(a, b)| [u64::from(a), u64::from(b)]),
+                );
+                dl.push([0xdf000000, 0]);
+                let mut diagnostics = Vec::new();
+                let summary = unsafe {
+                    r.process_dl_host(
+                        HostRam::new(&[]),
+                        dl.as_ptr() as u64,
+                        Microcode::F3dex2,
+                        &mut diagnostics,
+                    )
+                };
+                assert_eq!(summary.termination, crate::inspect::WalkTermination::End);
+                if later && color_last {
+                    assert_eq!(source[0], 0x07c1);
+                }
+                if color_last {
+                    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+                    let pixels = color_pixels(&mut r, target, 4, 2);
+                    for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+                        assert_eq!(
+                            *pixel,
+                            if later && i == 0 {
+                                [0, 255, 0, 255]
+                            } else {
+                                RED
+                            }
+                        );
+                    }
+                } else {
+                    assert!(
+                        diagnostics.iter().any(|d| matches!(
+                            d.kind,
+                            crate::DiagKind::UnsupportedFramebufferAccess {
+                                reason: crate::FramebufferAccess::DepthTexture,
+                                ..
+                            }
+                        )),
+                        "{diagnostics:?}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn framebuffer_load_tmem_survives_reconfigure() {
+        let mut r = renderer(4, 2);
+        let source = 0x10000;
+        let target = 0x20000;
+        let mut dl = color_fill(source, 4, 2, 0, 2, 0xf801_f801, [0, 0, 3, 1]);
+        dl.extend(
+            [
+                gdp_set_texture_image(0, 2, 4, source as u32),
+                gdp_set_tile(0, 2, 1, 0, 7, 0, 2, 0, 0, 2, 0, 0),
+                (0xf4000000, (7 << 24) | (12 << 12) | 4),
+            ]
+            .into_iter()
+            .map(|(a, b)| [u64::from(a), u64::from(b)]),
+        );
+        run(&mut r, dl);
+        r.reconfigure(r.config);
+        let mut dl: Vec<_> = [
+            gdp_set_color_image(0, 2, 4, target as u32),
+            gdp_set_tile(0, 2, 1, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+            gdp_set_tile_size(0, 0, 0, 12, 4),
+            gdp_set_cycle_type(2),
+            gdp_set_render_mode(0, 0),
+        ]
+        .into_iter()
+        .map(|(a, b)| [u64::from(a), u64::from(b)])
+        .collect();
+        dl.extend(
+            gsp_texture_rectangle(0, 0, 12, 4, 0, 0, 0, 4096, 1024, false)
+                .into_iter()
+                .map(|(a, b)| [u64::from(a), u64::from(b)]),
+        );
+        run(&mut r, dl);
+        assert_eq!(color_pixels(&mut r, target, 4, 2), RED.repeat(8));
+    }
+
+    #[test]
+    fn framebuffer_load_ia16_strips_keep_unwritten_rgba16_view() {
+        let mut r = renderer(4, 4);
+        r.set_guest_writeback(true);
+        let mut memory = [0u16; 16];
+        let address = memory.as_mut_ptr() as u64;
+        let mut dl = color_fill(address, 4, 4, 0, 2, 0xf801_f801, [0, 0, 3, 1]);
+        dl.extend(color_fill(address, 4, 4, 0, 2, 0x003f_003f, [0, 2, 3, 3]));
+        let texel = n64_gbi::encode::CcPass {
+            a: ZERO_C,
+            b: ZERO_C,
+            c: ZERO_C,
+            d: 1,
+        };
+        let alpha = n64_gbi::encode::CcPass {
+            a: ZERO_A,
+            b: ZERO_A,
+            c: ZERO_A,
+            d: ZERO_A,
+        };
+        for y in [0, 2] {
+            let mut commands = vec![
+                gdp_set_color_image(4, 1, 4, 0),
+                gdp_set_scissor(0, 0, 0, 16, 16),
+                gdp_set_texture_image(3, 2, 4, 0),
+                gdp_set_tile(3, 2, 1, 0, 7, 0, 2, 0, 0, 2, 0, 0),
+                (0xf4000000 | (y * 4), (7 << 24) | (12 << 12) | ((y + 1) * 4)),
+                gdp_set_tile(3, 2, 1, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+                gdp_set_tile_size(0, 0, 0, 12, 4),
+                gdp_set_cycle_type(0),
+                gdp_set_other_mode_h(12, 2, 0),
+                gdp_set_other_mode_h(4, 2, 3 << 4),
+                gdp_set_other_mode_h(6, 2, 3 << 6),
+                gdp_set_render_mode(
+                    gbl_c1(CLR_IN, A_0, CLR_IN, B_1),
+                    gbl_c2(CLR_IN, A_0, CLR_IN, B_1),
+                ),
+                gdp_set_combine_lerp(texel, alpha, texel, alpha),
+            ];
+            commands.extend(gsp_texture_rectangle(
+                0,
+                y * 4,
+                16,
+                (y + 2) * 4,
+                0,
+                0,
+                0,
+                1024,
+                1024,
+                false,
+            ));
+            let mut commands: Vec<_> = commands
+                .into_iter()
+                .map(|(a, b)| [u64::from(a), u64::from(b)])
+                .collect();
+            commands[0][1] = address;
+            commands[2][1] = address;
+            dl.extend(commands);
+        }
+        dl.push([0xdf000000, 0]);
+        let mut diagnostics = Vec::new();
+        unsafe {
+            r.process_dl_host(
+                HostRam::new(&[]),
+                dl.as_ptr() as u64,
+                Microcode::F3dex2,
+                &mut diagnostics,
+            );
+        }
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(matches!(
+            diagnostics[0].kind,
+            crate::DiagKind::UnsupportedImageReinterpretation { depth: false, .. }
+        ));
+        apply(r.take_guest_writes());
+        let bytes: Vec<_> = memory.into_iter().flat_map(u16::to_ne_bytes).collect();
+        assert_eq!(&bytes[..8], &[255; 8]);
+        assert_eq!(&bytes[8..16], &[0; 8]);
+        assert_eq!(&bytes[16..], [0x003fu16.to_ne_bytes(); 8].concat());
     }
 }

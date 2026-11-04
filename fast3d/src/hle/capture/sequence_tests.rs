@@ -295,6 +295,84 @@ fn capture_sequence_replays_from_reset() {
 }
 
 #[test]
+fn capture_host_swaps_do_not_add_frames_or_invalidate_writeback() {
+    let source = depth_sequence();
+    let (device, queue) = crate::render::headless_device_forced_fallback();
+    let mut renderer = source.frames[0].renderer(device, queue, ClearPolicy::Persist);
+    renderer.set_guest_writeback(true);
+    let mut capture = CaptureSequence::begin(&mut renderer, 123).unwrap();
+    let mut memory = std::collections::BTreeMap::new();
+    for fixture in &source.frames {
+        capture
+            .present_host(&mut renderer, Some(0x1_0010_0000))
+            .unwrap();
+        capture
+            .begin_frame(&mut renderer, fixture.provenance.clone())
+            .unwrap();
+        for task in &fixture.tasks {
+            let mut task = task.clone();
+            let mut bytes = memory.clone();
+            for span in &task.spans {
+                bytes.extend(
+                    span.bytes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &byte)| (span.address + i as u64, byte)),
+                );
+            }
+            task.spans.clear();
+            for (address, byte) in bytes {
+                if let Some(span) = task
+                    .spans
+                    .last_mut()
+                    .filter(|span| span.address + span.bytes.len() as u64 == address)
+                {
+                    span.bytes.push(byte);
+                } else {
+                    task.spans.push(super::MemorySpan {
+                        address,
+                        bytes: vec![byte],
+                    });
+                }
+            }
+            let hardware = ReplayHardware::new(&task, None).unwrap();
+            capture
+                .frame_mut()
+                .unwrap()
+                .process_dl(
+                    &mut renderer,
+                    &hardware,
+                    task.entry,
+                    task.microcode,
+                    task.data_format,
+                    &mut crate::NopSink,
+                )
+                .unwrap();
+            let patches = renderer.take_guest_writes();
+            assert!(!patches.is_empty());
+            for patch in patches {
+                memory.extend(
+                    patch
+                        .bytes
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &byte)| (patch.address + i as u64, byte)),
+                );
+            }
+        }
+        capture
+            .present_host(&mut renderer, Some(0x2_0010_0000))
+            .unwrap();
+        capture.present_host(&mut renderer, None).unwrap();
+    }
+    let recorded = capture.finish(0, vec![1, 2]).unwrap();
+    assert_eq!(recorded.frames.len(), 2);
+    assert_eq!(recorded.frames[0].tasks.len(), 2);
+    assert_eq!(recorded.frames[1].tasks.len(), 1);
+    assert!(recorded.frames.iter().all(|frame| frame.frame.vi.is_none()));
+}
+
+#[test]
 fn sequence_depth_controls_distinguish_task_and_frame_boundaries() {
     let mut sequence = depth_sequence();
     switch_second_frame_color(&mut sequence);

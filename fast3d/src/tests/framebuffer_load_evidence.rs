@@ -1,6 +1,6 @@
 use super::dl_builder::{Built, Command, DlBuilder};
 use crate::capture::{Fixture, Frame, MemoryLayout, MemorySpan, Provenance, SourceLayout, Task};
-use crate::{DataFormat, DiagKind, Diagnostic, FramebufferAccess, Microcode, RendererConfig};
+use crate::{DataFormat, Microcode, RendererConfig};
 use n64_gbi::{consts::*, encode::*};
 
 #[path = "../../tests/common/framebuffer_load_semantics.rs"]
@@ -228,39 +228,9 @@ fn scene(case: Case) -> Built {
     b.finish("main")
 }
 
-fn rejection(built: &Built, case: Case) -> Diagnostic {
-    let load = if case.offset() {
-        OFFSET_LOAD
-    } else {
-        EXACT_LOAD
-    };
-    let bytes: Vec<_> = [load.0, load.1]
-        .into_iter()
-        .flat_map(u32::to_be_bytes)
-        .collect();
-    let index = built.rdram[built.entry as usize..]
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .position(|word| word.as_slice() == bytes)
-        .unwrap();
-    Diagnostic {
-        at: u64::from(built.entry) + index as u64 * 8,
-        kind: DiagKind::UnsupportedFramebufferAccess {
-            address: u64::from(SOURCE) + if case.offset() { 0xd0 } else { 0 },
-            reason: FramebufferAccess::TextureLoad,
-        },
-    }
-}
-
 fn assert_boundary(built: &Built, case: Case) -> crate::hle::InterpResult {
     let result = crate::hle::interpret_rdram(&built.rdram, built.entry);
-    let expected = if case == Case::ShortcutRect {
-        vec![]
-    } else {
-        vec![rejection(built, case)]
-    };
-    assert_eq!(result.diags, expected, "{case:?}");
+    assert!(result.diags.is_empty(), "{case:?}: {:?}", result.diags);
     assert_eq!(result.termination, crate::inspect::WalkTermination::End);
     assert_eq!(result.scene.color_image.addr, u64::from(OUTPUT));
     assert_eq!(
@@ -275,18 +245,12 @@ fn assert_boundary(built: &Built, case: Case) -> crate::hle::InterpResult {
 }
 
 #[test]
-fn f0_real_load_is_an_expected_rejection() {
+fn f0_real_load_records_a_snapshot_without_guest_reads() {
     for case in CASES {
         let built = scene(case);
         assert!(built.rdram.len() < OUTPUT as usize);
         let result = assert_boundary(&built, case);
-        assert_eq!(
-            result.dropped_runs,
-            match case {
-                Case::ShortcutRect => 0,
-                _ => 32,
-            }
-        );
+        assert_eq!(result.dropped_runs, 0);
     }
 }
 
@@ -560,7 +524,7 @@ fn write_rt64_framebuffer_load_evidence() {
             .collect();
         std::fs::write(prefix.with_extension("fast3d-expected.rgba8"), fast3d).unwrap();
         if case != Case::ShortcutRect {
-            assert!(fixture.final_color_image().is_err());
+            assert!(fixture.final_color_image().is_ok());
             let mut rdram = built.rdram;
             rdram.resize(8 * 1024 * 1024, 0);
             std::fs::write(prefix.with_extension("rdram"), rdram).unwrap();
@@ -572,3 +536,6 @@ fn write_rt64_framebuffer_load_evidence() {
         }
     }
 }
+
+#[path = "framebuffer_loads.rs"]
+mod loads;

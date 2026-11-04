@@ -1,36 +1,15 @@
 #![cfg(feature = "capture")]
 
 use fast3d::capture::{Fixture, ReplayHardware};
-use fast3d::{DiagKind, Diagnostic, FramebufferAccess, Hardware};
+use fast3d::Hardware;
 
+#[allow(dead_code)]
 #[path = "common/framebuffer_load_semantics.rs"]
 mod semantics;
 use semantics::{Case, CASES};
 
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
-
-fn diagnostics(case: Case) -> Vec<Diagnostic> {
-    if case == Case::ShortcutRect {
-        vec![]
-    } else {
-        vec![Diagnostic {
-            at: if case == Case::OffsetTriangle {
-                0x0cd8
-            } else {
-                0x04d8
-            },
-            kind: DiagKind::UnsupportedFramebufferAccess {
-                address: if case.offset() {
-                    0x0030_00d0
-                } else {
-                    0x0030_0000
-                },
-                reason: FramebufferAccess::TextureLoad,
-            },
-        }]
-    }
-}
 
 struct Continue;
 
@@ -56,15 +35,14 @@ fn f0_capture_boundary() {
         );
         hardware.check().unwrap();
         assert_eq!(result.termination, fast3d::inspect::WalkTermination::End);
-        assert_eq!(result.diagnostics, diagnostics(case), "{}", case.name());
-        assert_eq!(
-            result.dropped_runs,
-            if case == Case::ShortcutRect { 0 } else { 32 }
+        assert!(
+            result.diagnostics.is_empty(),
+            "{}: {:?}",
+            case.name(),
+            result.diagnostics
         );
-        assert_eq!(
-            fixture.final_color_image().is_ok(),
-            case == Case::ShortcutRect
-        );
+        assert_eq!(result.dropped_runs, 0);
+        assert!(fixture.final_color_image().is_ok());
     }
 }
 
@@ -103,13 +81,15 @@ async fn replay() {
                 wgpu::Backend::BrowserWebGpu
             );
             assert_eq!((output.width, output.height), (320, 240));
-            assert_eq!(output.diagnostics, [diagnostics(case)], "{}", case.name());
+            assert!(
+                output.diagnostics.iter().all(Vec::is_empty),
+                "{}: {:?}",
+                case.name(),
+                output.diagnostics
+            );
             assert_eq!(output.summaries.len(), 1);
             assert!(output.summaries[0].renderable);
-            assert_eq!(
-                output.summaries[0].errors,
-                u32::from(case != Case::ShortcutRect)
-            );
+            assert_eq!(output.summaries[0].errors, 0);
             assert_eq!(output.rgba8.len(), 320 * 240 * 4);
             for (i, pixel) in output.rgba8.as_chunks::<4>().0.iter().enumerate() {
                 let (x, y) = (i as u32 % 320, i as u32 / 320);

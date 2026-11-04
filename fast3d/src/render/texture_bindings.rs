@@ -8,12 +8,14 @@ use super::{
 use crate::hle::texture_request::TextureSource;
 
 enum BindingImage {
+    Framebuffer,
     Encoded(Image),
     Rgba(Arc<RgbaImage>),
     Dummy,
 }
 
 enum PreparedImage {
+    Framebuffer(wgpu::TextureView),
     Encoded(Image),
     Rgba(Arc<RgbaImage>),
     Dummy,
@@ -34,6 +36,7 @@ impl PreparedImage {
             Self::Encoded(image) => &image.value.view,
             Self::Rgba(image) => &image.view,
             Self::Dummy => dummy,
+            Self::Framebuffer(view) => view,
         }
     }
 
@@ -42,6 +45,7 @@ impl PreparedImage {
             Self::Encoded(image) => BindingImage::Encoded(image),
             Self::Rgba(image) => BindingImage::Rgba(image),
             Self::Dummy => BindingImage::Dummy,
+            Self::Framebuffer(_) => BindingImage::Framebuffer,
         }
     }
 }
@@ -111,6 +115,7 @@ pub(super) struct BindingBuilder<'a> {
     pub layout: &'a wgpu::BindGroupLayout,
     pub samplers: &'a [[wgpu::Sampler; 3]; 3],
     pub dummy: &'a wgpu::TextureView,
+    pub copies: &'a mut super::framebuffers::copies::Copies,
     pub resources: &'a mut TextureResources,
     pub profiling: &'a crate::profiling::Recorder,
 }
@@ -142,6 +147,10 @@ impl BindingBuilder<'_> {
                 "lod7",
             ][index];
             let image = match &binding.source {
+                TextureSource::Framebuffer(request) => PreparedImage::Framebuffer(
+                    self.copies
+                        .texture(self.device, self.queue, request, self.profiling),
+                ),
                 TextureSource::Encoded(request) => PreparedImage::Encoded(self.resources.resolve(
                     self.device,
                     self.queue,

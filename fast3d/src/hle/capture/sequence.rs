@@ -70,6 +70,23 @@ impl CaptureSequence {
         Ok(())
     }
 
+    /// Present HOST scanout, recording an active task frame only; VI swaps are not recorded.
+    pub fn present_host(&mut self, renderer: &mut Renderer, address: Option<u64>) -> Result<()> {
+        if self.active.is_some() {
+            let frame = self.take_frame()?.present_host(renderer, address)?;
+            self.complete(renderer, frame);
+        } else {
+            if !std::rc::Rc::ptr_eq(&self.expected_generation, &renderer.capture_generation) {
+                return Err(invalid("renderer changed outside sequence recording"));
+            }
+            renderer
+                .present_host(address)
+                .map_err(|error| CaptureError::Gpu(format!("presentation failed: {error:?}")))?;
+            self.expected_generation = renderer.capture_generation.clone();
+        }
+        Ok(())
+    }
+
     pub fn present_last_to(
         &mut self,
         renderer: &mut Renderer,

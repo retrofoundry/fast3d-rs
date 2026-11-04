@@ -30,17 +30,10 @@ fn prefix_texture_load_ignores_targets_created_by_other_tasks() {
     assert!(diags.is_empty(), "{diags:?}");
     assert_eq!(prefix.termination, WalkTermination::Cap);
     assert_eq!(renderer.rdp, snapshot);
+    assert!(renderer.rdp.tmem_bank.framebuffer_tags.is_none());
     renderer.process_dl(&memory, 0, Microcode::F3dex2, &mut diags);
-    assert_eq!(
-        diags,
-        [Diagnostic {
-            at: 16,
-            kind: crate::DiagKind::UnsupportedFramebufferAccess {
-                address: u64::from(A),
-                reason: crate::FramebufferAccess::TextureLoad,
-            },
-        }]
-    );
+    assert!(diags.is_empty(), "{diags:?}");
+    assert!(renderer.rdp.tmem_bank.framebuffer_tags.is_some());
 }
 
 fn hw(words: impl IntoIterator<Item = (u32, u32)>) -> ImgHw {

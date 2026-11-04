@@ -254,6 +254,7 @@ impl SceneRenderer {
             samplers: &self.samplers,
             dummy: &self.dummy_view,
             resources: &mut self.texture_resources,
+            copies: &mut self.framebuffer_copies,
             profiling: &self.profiling,
         };
         self.material_bindings = textures
@@ -312,7 +313,6 @@ impl SceneRenderer {
         clear_policy: ClearPolicy,
     ) -> Option<TargetId> {
         self.diagnostics.clear();
-        self.depth_writes.clear();
         self.dropped_runs = 0;
         let preparation = self.profiling.span("render_inputs");
         let inputs = RenderInputs::with_targets(
@@ -337,11 +337,24 @@ impl SceneRenderer {
     ) -> Option<TargetId> {
         self.diagnostics.clear();
         let encoding = self.profiling.span("encoding");
+        self.framebuffer_copies.begin(
+            device,
+            inputs
+                .targets
+                .iter()
+                .flat_map(|target| &target.operations)
+                .filter_map(|op| match &op.draw {
+                    DrawInputs::FramebufferCopy(copy) => Some(copy.clone()),
+                    _ => None,
+                }),
+        );
         self.upload_materials(device, queue, &inputs.textures);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("workload"),
         });
         self.texture_resources.encode(&mut encoder, &self.profiling);
+        self.framebuffer_copies
+            .encode(&mut encoder, 0, &self.profiling);
         let buffers = self.rsp.process_scene(
             device,
             &mut encoder,
@@ -350,7 +363,29 @@ impl SceneRenderer {
             &self.profiling,
         );
         let mut last_target = None;
+        let mut imported = std::collections::HashSet::new();
         for target in &inputs.targets {
+            if !target.operations.is_empty()
+                && target
+                    .operations
+                    .iter()
+                    .all(|op| matches!(op.draw, DrawInputs::FramebufferCopy(_)))
+            {
+                for op in &target.operations {
+                    if let DrawInputs::FramebufferCopy(copy) = &op.draw {
+                        self.framebuffer_copies.copy(
+                            &mut encoder,
+                            copy,
+                            &self.framebuffers,
+                            &self.color_versions,
+                            self.coherence.as_ref().map(|c| &c.owners),
+                            &self.profiling,
+                        );
+                    }
+                }
+                continue;
+            }
+
             self.profiling
                 .target(target.logical_extent, target.output_extent);
             #[cfg(feature = "capture")]
@@ -404,6 +439,58 @@ impl SceneRenderer {
             {
                 height = height.max(old.texture.height());
             }
+            let color_restore_from = self
+                .framebuffers
+                .get(&target.id)
+                .filter(|old| old.layout == color_layout)
+                .map_or(Some(0), |old| {
+                    (old.color.height() < height).then_some(old.color.height())
+                });
+            let depth_restore_from = depth_id
+                .and_then(|id| self.depthbuffers.get(&id))
+                .filter(|old| old.layout == depth_layout)
+                .map_or(Some(0), |old| {
+                    (old.texture.height() < height).then_some(old.texture.height())
+                });
+            let color_initialize =
+                clear_policy == ClearPolicy::PerFrame && !self.first_touch.contains(&target.id);
+            let color_needs_import = color_restore_from.is_some() || color_initialize;
+            let depth_initialize = clear_policy == ClearPolicy::PerFrame
+                && depth_id.is_some_and(|id| !self.depth_first_touch.contains(&id));
+            let depth_needs_import = depth_restore_from.is_some() || depth_initialize;
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.coherence.as_ref().is_some_and(|coherence| {
+                use super::framebuffers::coherence::Writer;
+                let color = match target.id {
+                    TargetId::Guest(address) if color_restore_from.is_some() => Some(Writer {
+                        address,
+                        layout: color_layout,
+                        depth: false,
+                    }),
+                    _ => None,
+                };
+                let depth = match depth_id {
+                    Some(TargetId::Guest(address)) if depth_restore_from.is_some() => {
+                        Some(Writer {
+                            address,
+                            layout: depth_layout,
+                            depth: true,
+                        })
+                    }
+                    _ => None,
+                };
+                color
+                    .into_iter()
+                    .chain(depth)
+                    .any(|writer| coherence.pending_overlaps(writer, height))
+            }) {
+                queue.submit([encoder.finish()]);
+                self.profiling.count("submissions", 1);
+                self.coherence.as_mut().unwrap().resolve(device);
+                encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("workload"),
+                });
+            }
             if let Some(id) = depth_id {
                 self.ensure_depth(
                     device,
@@ -417,22 +504,26 @@ impl SceneRenderer {
                     clear_policy,
                 );
             }
-            for operation in &target.operations {
-                let writes_depth = match &operation.draw {
-                    DrawInputs::DepthFill { .. } => true,
-                    DrawInputs::Tris { mode, .. } => mode.z_test || mode.z_write || mode.read_depth,
-                    _ => false,
-                };
-                let (_, y, width, height) = operation.scissor;
+            if self.coherence.is_some() {
                 if let Some(TargetId::Guest(address)) = depth_id {
-                    if writes_depth && width != 0 && height != 0 {
-                        self.depth_writes
-                            .entry(address)
-                            .and_modify(|rows| {
-                                rows.start = rows.start.min(y);
-                                rows.end = rows.end.max(y + height);
-                            })
-                            .or_insert(y..y + height);
+                    let writer = super::framebuffers::coherence::Writer {
+                        address,
+                        layout: depth_layout,
+                        depth: true,
+                    };
+                    if (imported.insert(writer) || depth_restore_from.is_some())
+                        && depth_needs_import
+                    {
+                        if depth_initialize && depth_restore_from.is_some() {
+                            self.import_target(device, &mut encoder, writer, None);
+                        }
+                        let uploaded =
+                            self.import_target(device, &mut encoder, writer, depth_restore_from);
+                        if uploaded && depth_restore_from.is_some() {
+                            if let Some(coherence) = &mut self.coherence {
+                                coherence.imported = true;
+                            }
+                        }
                     }
                 }
             }
@@ -440,12 +531,44 @@ impl SceneRenderer {
                 let depth = &self.depthbuffers[&depth_id.unwrap()];
                 for operation in &target.operations {
                     if let DrawInputs::DepthFill { word } = operation.draw {
+                        if let (Some(coherence), Some(TargetId::Guest(address))) =
+                            (&mut self.coherence, depth_id)
+                        {
+                            coherence.fill(
+                                super::framebuffers::coherence::Writer {
+                                    address,
+                                    layout: depth_layout,
+                                    depth: true,
+                                },
+                                operation.scissor,
+                                word,
+                            );
+                        }
                         self.depth_pipeline.fill(
                             device,
                             &mut encoder,
                             depth,
                             word,
                             operation.scissor,
+                            &self.profiling,
+                        );
+                    } else if let DrawInputs::FramebufferCopy(copy) = &operation.draw {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(coherence) = &mut self.coherence {
+                            queue.submit([encoder.finish()]);
+                            self.profiling.count("submissions", 1);
+                            coherence.resolve(device);
+                            encoder =
+                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("framebuffer-load"),
+                                });
+                        }
+                        self.framebuffer_copies.copy(
+                            &mut encoder,
+                            copy,
+                            &self.framebuffers,
+                            &self.color_versions,
+                            self.coherence.as_ref().map(|c| &c.owners),
                             &self.profiling,
                         );
                     } else {
@@ -456,6 +579,9 @@ impl SceneRenderer {
                             },
                         });
                     }
+                }
+                if let Some(TargetId::Guest(address)) = depth_id {
+                    self.target_descriptors.written(address, true);
                 }
                 continue;
             }
@@ -471,7 +597,45 @@ impl SceneRenderer {
                 height,
                 clear_policy,
             );
-            let source_valid: Vec<_> = target
+            if self.coherence.is_some() {
+                if let TargetId::Guest(address) = target.id {
+                    let writer = super::framebuffers::coherence::Writer {
+                        address,
+                        layout: color_layout,
+                        depth: false,
+                    };
+                    let first = imported.insert(writer);
+                    if first || color_restore_from.is_some() {
+                        if color_needs_import {
+                            if color_initialize && color_restore_from.is_some() {
+                                self.import_target(device, &mut encoder, writer, None);
+                            }
+                            let uploaded = self.import_target(
+                                device,
+                                &mut encoder,
+                                writer,
+                                color_restore_from,
+                            );
+                            if uploaded && color_restore_from.is_some() {
+                                if let Some(coherence) = &mut self.coherence {
+                                    coherence.imported = true;
+                                }
+                            }
+                        }
+                        if first && !writer.supported() {
+                            self.diagnostics.push(crate::Diagnostic {
+                                at: target.pc,
+                                kind: crate::DiagKind::UnsupportedGuestWriteback {
+                                    address,
+                                    fmt: color_layout.fmt,
+                                    siz: color_layout.siz,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+            let mut source_valid: Vec<_> = target
                 .operations
                 .iter()
                 .map(|operation| {
@@ -503,6 +667,20 @@ impl SceneRenderer {
                     valid
                 })
                 .collect();
+            let coverage_texture = self
+                .coherence
+                .as_ref()
+                .map(|_| super::framebuffers::coherence::coverage_texture(device, w, height));
+            let coverage_view = coverage_texture
+                .as_ref()
+                .map(|texture| texture.create_view(&Default::default()));
+            if let Some(view) = &coverage_view {
+                clear_color(
+                    &mut encoder,
+                    view,
+                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                );
+            }
             let depth = depth_id.map(|id| &self.depthbuffers[&id]);
             let mut color_load = wgpu::LoadOp::Load;
             last_target = Some(target.id);
@@ -531,13 +709,135 @@ impl SceneRenderer {
                 })
             });
             let mut start = 0;
+            #[cfg(not(target_arch = "wasm32"))]
+            let mut ownership_start = 0;
+            #[cfg(target_arch = "wasm32")]
+            let ownership_start = 0;
             while start < target.operations.len() {
+                if let DrawInputs::FramebufferCopy(copy) = &target.operations[start].draw {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(coherence) = &mut self.coherence {
+                        use super::framebuffers::coherence::Writer;
+                        let color = match target.id {
+                            TargetId::Guest(address) => Some(Writer {
+                                address,
+                                layout: color_layout,
+                                depth: false,
+                            }),
+                            TargetId::Legacy => None,
+                        };
+                        let touches = |writer: Writer| {
+                            copy.spans.iter().any(|span| {
+                                let address = copy.source.address
+                                    + u64::from(
+                                        span.origin[1] * copy.source.layout.width + span.origin[0],
+                                    ) * 2;
+                                let end = address + u64::from(span.width) * 2;
+                                target.operations[ownership_start..start]
+                                    .iter()
+                                    .enumerate()
+                                    .any(|(index, op)| {
+                                        if matches!(
+                                            op.draw,
+                                            DrawInputs::FramebufferCopy(_) | DrawInputs::Rejected
+                                        ) {
+                                            return false;
+                                        }
+                                        let (x, y, width, height) =
+                                            target.write_bounds(ownership_start + index);
+                                        let first = writer.address
+                                            + u64::from(y * writer.layout.width + x)
+                                                * writer.pixel_bytes() as u64;
+                                        let last = writer.address
+                                            + (u64::from(
+                                                (y + height.saturating_sub(1))
+                                                    * writer.layout.width
+                                                    + x
+                                                    + width,
+                                            )) * writer.pixel_bytes() as u64;
+                                        first < end && address < last
+                                    })
+                            })
+                        };
+                        let depth_writer = depth_id.and_then(|id| match id {
+                            TargetId::Guest(address) => Some(Writer {
+                                address,
+                                layout: depth_layout,
+                                depth: true,
+                            }),
+                            _ => None,
+                        });
+                        if color.is_some_and(touches) || depth_writer.is_some_and(touches) {
+                            coherence.snapshot(
+                                device,
+                                &mut encoder,
+                                coverage_texture.as_ref().unwrap(),
+                                color.map(|writer| (writer, &self.framebuffers[&target.id].color)),
+                                depth_writer.map(|writer| {
+                                    (writer, &self.depthbuffers[&depth_id.unwrap()].texture)
+                                }),
+                                target.operations.iter().map(|op| op.literal_fill).collect(),
+                            );
+                            ownership_start = start + 1;
+                        }
+                        let writer = Writer {
+                            address: copy.source.address,
+                            layout: copy.source.layout,
+                            depth: false,
+                        };
+                        if coherence.pending_overlaps(writer, copy.source.height) {
+                            queue.submit([encoder.finish()]);
+                            self.profiling.count("submissions", 1);
+                            coherence.resolve(device);
+                            encoder =
+                                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                                    label: Some("framebuffer-load"),
+                                });
+                        }
+                    }
+                    self.framebuffer_copies.copy(
+                        &mut encoder,
+                        copy,
+                        &self.framebuffers,
+                        &self.color_versions,
+                        self.coherence.as_ref().map(|c| &c.owners),
+                        &self.profiling,
+                    );
+                    start += 1;
+                    continue;
+                }
                 let read_depth = target.operations[start].reads_depth();
-                let end = start
-                    + target.operations[start..]
-                        .iter()
-                        .take_while(|op| op.reads_depth() == read_depth)
-                        .count();
+                let end = if self.coherence.is_some() {
+                    start + 1
+                } else {
+                    start
+                        + target.operations[start..]
+                            .iter()
+                            .take_while(|op| {
+                                !matches!(op.draw, DrawInputs::FramebufferCopy(_))
+                                    && op.reads_depth() == read_depth
+                            })
+                            .count()
+                };
+                for (slot, operation) in target.operations.iter().enumerate().take(end).skip(start)
+                {
+                    let material = match operation.draw {
+                        DrawInputs::Tris { material_index, .. } => Some(material_index),
+                        DrawInputs::Rectangle { material_index, .. } => material_index,
+                        _ => None,
+                    };
+                    if let Some(kind) = material.and_then(|index| {
+                        self.framebuffer_copies
+                            .failure(&inputs.textures[index as usize])
+                    }) {
+                        self.diagnostics.push(crate::Diagnostic {
+                            at: operation.pc,
+                            kind,
+                        });
+                        self.dropped_runs += 1;
+                        source_valid[slot] = false;
+                    }
+                }
                 let attachment = depth.filter(|_| !read_depth).map(|depth| {
                     wgpu::RenderPassDepthStencilAttachment {
                         view: &depth.attach,
@@ -548,6 +848,83 @@ impl SceneRenderer {
                         stencil_ops: None,
                     }
                 });
+                if let Some(view) = &coverage_view {
+                    let operation = &target.operations[start];
+                    let (x, y, width, height) = operation.scissor;
+                    if source_valid[start]
+                        && width != 0
+                        && height != 0
+                        && !matches!(operation.draw, DrawInputs::Rejected)
+                    {
+                        let coverage = self.coverage.get_or_insert_with(|| {
+                            super::framebuffers::coherence::Coverage::new(device)
+                        });
+                        let pipeline = coverage
+                            .pipeline(device, &self.textured_fb, &operation.draw, any_depth)
+                            .clone();
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("guest-coverage"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: attachment.clone(),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                        pass.set_scissor_rect(x, y, width, height);
+                        if read_depth {
+                            pass.set_bind_group(2, depth_bg.as_ref().unwrap(), &[]);
+                        }
+                        match &operation.draw {
+                            DrawInputs::Tris {
+                                index_start,
+                                index_count,
+                                material_index,
+                                ..
+                            } => {
+                                pass.set_pipeline(&pipeline);
+                                if let Some(index) = &buffers.indices {
+                                    pass.set_index_buffer(
+                                        index.slice(..),
+                                        wgpu::IndexFormat::Uint32,
+                                    );
+                                }
+                                if let Some(vertices) = buffers.vertices.get(&target.logical_extent)
+                                {
+                                    pass.set_vertex_buffer(0, vertices.slice(..));
+                                }
+                                pass.set_bind_group(0, material_bgs[*material_index as usize], &[]);
+                                pass.set_bind_group(1, &upload.uniforms, &[(start * 256) as u32]);
+                                pass.draw_indexed(
+                                    *index_start..*index_start + *index_count,
+                                    0,
+                                    0..1,
+                                );
+                            }
+                            DrawInputs::Rectangle { .. } => self.draw_rect_op(
+                                &mut pass,
+                                device,
+                                &operation.draw,
+                                &material_bgs,
+                                upload.rectangles.as_ref(),
+                                Some(&upload.uniforms),
+                                start as u32,
+                                target.rect_indices[start],
+                                any_depth,
+                                Some(&pipeline),
+                            ),
+                            _ => {}
+                        }
+                    }
+                }
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("workload-segment"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -583,7 +960,7 @@ impl SceneRenderer {
                     }
                     pass.set_scissor_rect(x, y, width, height);
                     match &operation.draw {
-                        DrawInputs::Rejected => {}
+                        DrawInputs::Rejected | DrawInputs::FramebufferCopy(_) => {}
                         DrawInputs::DepthFill { .. } => {
                             unreachable!("depth fills have no color attachment")
                         }
@@ -637,11 +1014,79 @@ impl SceneRenderer {
                                 slot as u32,
                                 target.rect_indices[slot],
                                 any_depth,
+                                None,
                             );
                         }
                     }
                 }
                 start = end;
+            }
+            if let TargetId::Guest(address) = target.id {
+                if target.operations.iter().any(|op| {
+                    !matches!(
+                        op.draw,
+                        DrawInputs::FramebufferCopy(_) | DrawInputs::Rejected
+                    )
+                }) {
+                    self.target_descriptors.written(address, false);
+                }
+            }
+            let writes_depth = target.operations.iter().any(|op| matches!(&op.draw, DrawInputs::Tris { mode, .. } if mode.z_test && mode.z_write && !mode.read_depth));
+            if let Some(TargetId::Guest(address)) = depth_id.filter(|_| writes_depth) {
+                self.target_descriptors.written(address, true);
+            }
+            if let (Some(coherence), Some(coverage)) = (&mut self.coherence, &coverage_texture) {
+                if !target.operations[ownership_start..].iter().any(|op| {
+                    !matches!(
+                        op.draw,
+                        DrawInputs::FramebufferCopy(_) | DrawInputs::Rejected
+                    )
+                }) {
+                    continue;
+                }
+                use super::framebuffers::coherence::Writer;
+                let color = match target.id {
+                    TargetId::Guest(address) => Some((
+                        Writer {
+                            address,
+                            layout: color_layout,
+                            depth: false,
+                        },
+                        &self.framebuffers[&target.id].color,
+                    )),
+                    TargetId::Legacy => None,
+                };
+                let depth = match depth_id.filter(|_| writes_depth) {
+                    Some(TargetId::Guest(address)) => Some((
+                        Writer {
+                            address,
+                            layout: depth_layout,
+                            depth: true,
+                        },
+                        &self.depthbuffers[&depth_id.unwrap()].texture,
+                    )),
+                    _ => None,
+                };
+                self.profiling.count(
+                    "readback.coverage_bytes",
+                    u64::from(w) * u64::from(height) * 8,
+                );
+                if color.is_some() {
+                    self.profiling
+                        .count("readback.color_bytes", u64::from(w) * u64::from(height) * 4);
+                }
+                if depth.is_some() {
+                    self.profiling
+                        .count("readback.depth_bytes", u64::from(w) * u64::from(height) * 4);
+                }
+                coherence.snapshot(
+                    device,
+                    &mut encoder,
+                    coverage,
+                    color,
+                    depth,
+                    target.operations.iter().map(|op| op.literal_fill).collect(),
+                );
             }
         }
         self.profile_resident_resources();

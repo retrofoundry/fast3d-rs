@@ -1,7 +1,7 @@
 # Framebuffer load fixtures
 
-These fixtures issue a real framebuffer load and pin fast3d's current rejection of it. They add
-no framebuffer-load support.
+These fixtures issue real framebuffer loads and check ordered GPU snapshots. Loads read
+the unquantised RGBA8 target, following David's 2026-09-12 rt64 decision.
 The saved n64.toys `offscreen-then-sample.n64` and its `.bin` golden are unchanged.
 
 `fast3d/src/tests/framebuffer_load_evidence.rs` builds four IMAGE fixtures:
@@ -13,11 +13,11 @@ The saved n64.toys `offscreen-then-sample.n64` and its `.bin` golden are unchang
 | `fbload-exact-rect` | One-cycle TexRect; producer-base SETTIMG and zero LoadTile origin |
 | `fbload-shortcut-rect` | Existing load-free, exact-base copy-mode convenience; fast3d only |
 
-The first three must be rejected by parent and candidate fast3d with exactly one
-`UnsupportedFramebufferAccess { reason: TextureLoad }` diagnostic and 32 dropped
-draw commands. A TRI2 drops once for its two triangles. Their consumers stay
-black, while the unrelated blue witness remains visible. Rejection is a passing
-boundary assertion. The shortcut has no diagnostic and executes its 16 TexRects.
+The first three render all consumers without diagnostics or dropped draws. Both
+consumer groups sample the load-time snapshot, including the group after the
+producer overwrite. The shortcut has no diagnostic and executes its 16 TexRects;
+it continues to read the live target. Unsupported reinterpretations still reject
+only dependent draws.
 
 ## Independent construction
 
@@ -93,8 +93,9 @@ one texture load and no later TMEM write. Both groups must retain the old eight
 texels. A pointer to the live producer would fail this test.
 
 Every consumer patch is 16×16. First-group columns start at `x=40,56,72,88`;
-second-group columns at `x=136,152,168,184`. Rows start at `y=40,56`. The loaded
-RGB8 column above gives the required color of every pixel. The triangle variant
+second-group columns at `x=136,152,168,184`. Rows start at `y=40,56`. The shaded
+RGB8 column above gives fast3d's required color of every pixel. The loaded RGB8
+column is the quantised hardware reference; the lower, grid-exact row agrees with both. The triangle variant
 draws each patch as two triangles with identical ST at all vertices; there are
 no sloped outer edges. TexRects use constant `s=column+0.5,t=row+0.5`; vertex ST
 doubles that value before the RSP's exact one-half texture scale. Point sampling
@@ -132,10 +133,10 @@ cargo test -p fast3d --lib exact_base_fb_alias_keeps_compatibility_pixels
 ```
 
 The writer directly emits `.f3dcap`, `.rdram`, `.json`, `.expected.rgba8` and
-`.fast3d-expected.rgba8` for each real load. It first asserts exact rejection,
+`.fast3d-expected.rgba8` for each real load. It first asserts successful loads,
 normal termination and final target. It preserves the same big-endian commands
 in both exports, with zero-filled gaps in the 8 MiB RDRAM. The ordinary
-`export_capture_rdram` remains strict and rejects these diagnostic fixtures.
+`export_capture_rdram` accepts these supported command streams.
 The shortcut gets only a capture and fast3d expectation, never an rt64 export.
 Checked-in captures must decode to the same fixtures the writer builds.
 
@@ -168,6 +169,37 @@ cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknow
   --test framebuffer_load_evidence -- --nocapture
 ```
 
-The native/browser test asserts current rejection, exact surviving fast3d pixels
-and shortcut pixels under both clear policies. It does not require fast3d to
-render the real loads. Preserve the existing Metal/DX12 and fallback matrix.
+The native/browser test asserts successful loads, exact fast3d pixels and shortcut
+pixels under both clear policies. Preserve the existing Metal/DX12 and fallback matrix.
+
+## GPU load path
+
+LoadTile, LoadBlock and LoadTLUT append a copy operation before subsequent draws.
+The copy retains RGBA8 pixels in a GPU buffer. TMEM records copy identity and source
+byte offsets using the same word swaps, wrapping and TLUT replication as ordinary
+loads. Texture preparation decodes those tags on the GPU into the existing sampled
+texture representation, for rectangles and triangles. Reloads get distinct identities;
+ordinary TMEM writes replace only the tags they touch.
+
+RGBA16 sampling preserves the unquantised color. IA16 follows rt64's R10G10B10A2 to
+I16A16 conversion. CI8 reconstructs RGBA16 bytes, high byte first, then looks up the
+current RGBA16 or IA16 TLUT. Other sampling interpretations report
+`UnsupportedFramebufferAccess::Reinterpretation`. Pure depth sources remain unsupported.
+In coherent mode, copy execution consults byte ownership; pending overlapping GPU writes
+are resolved before selecting color sources. This can submit and wait during rendering,
+after the interpreter has accepted the whole task. The copy itself reads no guest bytes.
+Older color layouts remain available while they own bytes, including CPU imports into
+those views. Coherent target-layout changes import the latest owned bytes and still report
+`UnsupportedImageReinterpretation`. Color draws over depth storage report
+`UnsupportedDepthAlias`.
+
+The capture container is unchanged: commands reproduce copies, and generated pixels
+add no memory spans. Framebuffer requests are counted separately in profiling and omit
+the encoded-TMEM CPU oracle trace. Coherent capture keeps its existing admission rules.
+
+`fast3d/src/tests/framebuffer_loads.rs` adds reload, later-task, 320-wide interior,
+six-row save/restore, IA16, CI8 byte pairing and GPU TLUT tests. The TLUT test loads
+two interior rows and checks source stride and replicated TMEM halfwords. The IA16 RGB/alpha
+pairs for the four grid colors are `(33,150)`, `(132,108)`, `(222,105)`, `(8,85)`;
+these follow rt64's precision-preserving conversion, rather than a literal byte split.
+The CI8 indices are `22 19 85 31 dd e7 09 97` with an identity-intensity IA16 palette.

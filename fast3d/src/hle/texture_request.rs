@@ -332,6 +332,8 @@ impl PartialEq for EncodedTextureRequest {
 pub enum TextureSource {
     Encoded(Arc<EncodedTextureRequest>),
     Rgba(Arc<[u8]>),
+    /// Sample an immutable framebuffer load through its TMEM byte mapping.
+    Framebuffer(Arc<super::framebuffer_load::FramebufferTexture>),
 }
 
 impl From<Vec<u8>> for TextureSource {
@@ -346,6 +348,7 @@ impl TextureSource {
         match self {
             Self::Encoded(request) => Cow::Owned(request.decode()),
             Self::Rgba(bytes) => Cow::Borrowed(bytes),
+            Self::Framebuffer(_) => panic!("framebuffer textures require GPU decoding"),
         }
     }
 
@@ -353,6 +356,7 @@ impl TextureSource {
         match (self, other) {
             (Self::Encoded(a), Self::Encoded(b)) => a.matches(b, profiling),
             (Self::Rgba(a), Self::Rgba(b)) => a == b,
+            (Self::Framebuffer(a), Self::Framebuffer(b)) => Arc::ptr_eq(a, b) || a == b,
             _ => false,
         }
     }
@@ -378,15 +382,22 @@ pub(crate) fn prepare(
     profiling: &Recorder,
 ) -> Result<TextureBindingInput, DiagKind> {
     let _span = profiling.span("texture_request");
-    validate_tile_texture(rdp, tile)?;
     if let Some(diagnostic) = rdp.tmem_bank.rejection(tile) {
         return Err(diagnostic.kind);
     }
     let sampling = TileSampling::from_tile(tile, tlut);
     let logical = [u32::from(tile.width.max(1)), u32::from(tile.height.max(1))];
+    let framebuffer = rdp.tmem_bank.has_framebuffer(tile);
+    if framebuffer && !matches!((tile.fmt, tile.siz, tlut), (0 | 3, 2, _) | (2, 1, 2 | 3)) {
+        return Err(DiagKind::UnsupportedFramebufferAccess {
+            address: rdp.tex_image.3,
+            reason: crate::FramebufferAccess::Reinterpretation,
+        });
+    }
+    validate_tile_texture(rdp, tile)?;
     let representation = if sampling.image[2] == 1 {
         Representation::Lookup4096x4
-    } else if tile_takes_faithful_path(rdp, tile, logical[0]) {
+    } else if framebuffer || tile_takes_faithful_path(rdp, tile, logical[0]) {
         Representation::Tile
     } else {
         Representation::LinearCompat
@@ -413,15 +424,20 @@ pub(crate) fn prepare(
     } else {
         EncodedInput::Tmem(bank)
     };
-    let request = Arc::new(EncodedTextureRequest {
+    let request = EncodedTextureRequest {
         input,
         recipe,
         identity: OnceLock::new(),
-    });
-    Ok(TextureBindingInput {
-        source: TextureSource::Encoded(request),
-        sampling,
-    })
+    };
+    let source = if framebuffer {
+        TextureSource::Framebuffer(Arc::new(super::framebuffer_load::FramebufferTexture {
+            encoded: request,
+            tags: rdp.tmem_bank.framebuffer_tags_for(tile),
+        }))
+    } else {
+        TextureSource::Encoded(Arc::new(request))
+    };
+    Ok(TextureBindingInput { source, sampling })
 }
 
 mod serialization;
@@ -448,6 +464,13 @@ impl TextureMemory {
     pub(crate) fn include(&mut self, source: &TextureSource) {
         let arc_header = 2 * std::mem::size_of::<usize>();
         match source {
+            TextureSource::Framebuffer(request) => {
+                self.allocation(
+                    Arc::as_ptr(request) as usize,
+                    4096 * std::mem::size_of::<super::framebuffer_load::Tag>(),
+                    std::mem::size_of::<super::framebuffer_load::FramebufferTexture>() + arc_header,
+                );
+            }
             TextureSource::Rgba(bytes) => {
                 self.allocation(bytes.as_ptr() as usize, bytes.len(), arc_header);
             }
