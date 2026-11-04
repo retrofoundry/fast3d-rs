@@ -2,11 +2,7 @@
 
 fn shade_decal_dual(in: VsOut) -> FragOut {
     let r = eval_combiner(in);
-    let p1 = (combiner.blender_mux >> 14u) & 3u;
-    var comb3 = r.rgb;
-    if (p1 == 3u) {
-        comb3 = mix(comb3, combiner.fog_color.rgb, in.color.a);
-    }
+    let comb3 = blend_fog(r.rgb, r.alpha, in.color.a);
     let out_a = r.alpha;
     alpha_discard(r, in.clip_position.xy);
 

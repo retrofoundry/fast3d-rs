@@ -729,3 +729,50 @@ fn alpha_discard(result: CycleResult, position: vec2<f32>) {
         discard;
     }
 }
+
+fn blend_fog(rgb: vec3<f32>, combiner_alpha: f32, shade_alpha: f32) -> vec3<f32> {
+    let mux = combiner.blender_mux;
+    let p = (mux >> 14u) & 3u;
+    let a = (mux >> 10u) & 3u;
+    let m = (mux >> 6u) & 3u;
+    let b = (mux >> 2u) & 3u;
+    let blend_enabled = combiner.cycle_type == 1u ||
+        (combiner.cycle_type == 0u && combiner.force_blend != 0u);
+    let local_fog = (p == 0u && m == 3u) || (p == 3u && m == 0u);
+    if (!local_fog || b == 1u) {
+        if (p == 3u) {
+            return mix(rgb, combiner.fog_color.rgb, shade_alpha);
+        }
+        return rgb;
+    }
+    // Shade-alpha captures depend on the continuous float lerp and existing blend-enable gate.
+    if (a == 2u && b == 0u) {
+        if (p == 0u) {
+            return select(rgb, mix(combiner.fog_color.rgb, rgb, shade_alpha), blend_enabled);
+        }
+        return mix(rgb, combiner.fog_color.rgb, shade_alpha);
+    }
+    // Without FORCE_BL a one-cycle draw blends only coverage edges, which fast3d does not model.
+    if (!blend_enabled) {
+        return select(rgb, combiner.fog_color.rgb, p == 3u);
+    }
+    var alpha = 0.0;
+    switch a {
+        case 0u: { alpha = combiner_alpha; }
+        case 1u: { alpha = combiner.fog_color.a; }
+        case 2u: { alpha = shade_alpha; }
+        default: {}
+    }
+    let alpha_byte = u32(round(clamp(alpha, 0.0, 1.0) * 255.0));
+    let weight_a = alpha_byte >> 3u;
+    var weight_b = 0u;
+    if (b == 0u) { weight_b = (255u - alpha_byte) >> 3u; }
+    if (b == 2u) { weight_b = 31u; }
+    let input_color = vec3<u32>(round(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0));
+    let fog_color = vec3<u32>(round(combiner.fog_color.rgb * 255.0));
+    let p_color = select(input_color, fog_color, p == 3u);
+    let m_color = select(input_color, fog_color, m == 3u);
+    let numerator = p_color * weight_a + m_color * (weight_b + 1u);
+    // Two-cycle cycle 0 shifts even without FORCE_BL (blender_equation_cycle0_2).
+    return vec3<f32>((numerator >> vec3<u32>(5u)) & vec3<u32>(255u)) / 255.0;
+}

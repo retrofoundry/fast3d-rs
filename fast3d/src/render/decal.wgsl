@@ -3,10 +3,8 @@
 fn shade_decal(in: VsOut) -> vec4<f32> {
     let r = eval_combiner(in);
     var rgb = r.rgb;
-    // C3: fog mix — applied when cyc1 blender P == CLR_FOG (3). Matches skeleton.wgsl/fs_main.
-    let p1 = (combiner.blender_mux >> 14u) & 3u;
-    if (p1 == 3u && combiner.primitive_depth.w == 0u) {
-        rgb = mix(rgb, combiner.fog_color.rgb, in.color.a);
+    if (combiner.primitive_depth.w == 0u) {
+        rgb = blend_fog(rgb, r.alpha, in.color.a);
     }
     alpha_discard(r, in.clip_position.xy);
 

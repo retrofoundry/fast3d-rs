@@ -1,8 +1,10 @@
+use super::common::{clear_color_rgb, pixel, render_to_pixels};
+use crate::hle::consts::rdp::*;
 use crate::hle::gbi::GbiUcode;
 use crate::hle::interp::interpret;
 use crate::hle::mem::{GbiDataFormat, RdramImage};
 use crate::hle::{Scene, SceneOp};
-use crate::render::headless_device;
+use crate::render::{headless_device, headless_device_forced_fallback, SceneRenderer};
 use n64_gbi::encode::{mtx_to_bytes, VtxColored};
 
 use super::render::{render_scene_to_rgba8, run_compute_outputs};
@@ -332,4 +334,309 @@ fn jrb_provenance() -> crate::capture::Provenance {
 pub(super) fn jrb_fixture() -> crate::capture::Fixture {
     let (bytes, entry) = jrb_memory(false);
     super::capture_fixture::make(bytes, entry, 320, 240, jrb_provenance())
+}
+
+#[test]
+fn fog_blender_p_and_m_match_the_equation() {
+    for fallback in [false, true] {
+        let (device, queue, dual) = if fallback {
+            let (device, queue) = headless_device_forced_fallback();
+            (device, queue, false)
+        } else {
+            headless_device()
+        };
+        let mut renderer =
+            SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, dual);
+        for (mode, cycles, fog_in_p, alpha) in [
+            (0x0af0_42b0, 0, false, 255),
+            (0x0af0_42b0 & !FORCE_BL, 0, false, 255),
+            (G_RM_FOG_SHADE_A | FORCE_BL, 0, true, 255),
+            (
+                gbl_c1(CLR_IN, A_SHADE, CLR_FOG, B_1MA) | G_RM_AA_ZB_OPA_SURF2,
+                1,
+                false,
+                255,
+            ),
+            (G_RM_FOG_SHADE_A | G_RM_AA_ZB_OPA_SURF2, 1, true, 255),
+            (
+                gbl_c1(CLR_IN, A_SHADE, CLR_FOG, B_1MA)
+                    | gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA)
+                    | FORCE_BL,
+                1,
+                false,
+                128,
+            ),
+            (
+                G_RM_FOG_SHADE_A | gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA) | FORCE_BL,
+                1,
+                true,
+                128,
+            ),
+        ] {
+            for decal in [false, true] {
+                for factor in [0, 64, 128, 192, 255] {
+                    let mut commands = Vec::new();
+                    if decal {
+                        let [r, g, b] = clear_color_rgb();
+                        commands.extend([
+                            (0xB700_0000, 1),
+                            (0xB900_031D, G_RM_OPA_SURF | Z_CMP | Z_UPD),
+                            (0xFA00_0000, u32::from_be_bytes([r, g, b, 255])),
+                            (0x0430_0040, 0x40),
+                            (0xBF00_0000, 0x0000_0a14),
+                            (0xBF00_0000, 0x0000_141e),
+                        ]);
+                    }
+                    commands.extend([
+                        (0xBA00_1402, cycles << 20),
+                        (
+                            0xB900_031D,
+                            mode | if decal { ZMODE_DEC | Z_CMP } else { 0 },
+                        ),
+                        (0xFA00_0000, 0xc864_3200 | alpha),
+                        (0xF800_0000, 0x1446_8cff),
+                        (0xBC00_0008, factor),
+                        (0x0430_0040, 0x40),
+                        (0xBF00_0000, 0x0000_0a14),
+                        (0xBF00_0000, 0x0000_141e),
+                    ]);
+                    let pixels =
+                        render_to_pixels(&device, &queue, &mut renderer, &scene(&commands), 64, 64);
+                    let actual = pixel(&pixels, 64, 32, 32);
+                    for channel in 0..3 {
+                        let (p, m) = if fog_in_p {
+                            ([20, 70, 140], [200, 100, 50])
+                        } else {
+                            ([200, 100, 50], [20, 70, 140])
+                        };
+                        let a = factor as f32 / 255.0;
+                        let expected = if cycles == 0 && mode & FORCE_BL == 0 {
+                            p[channel] as f32
+                        } else {
+                            p[channel] as f32 * a + m[channel] as f32 * (1.0 - a)
+                        };
+                        let blend_alpha = alpha as f32 / 255.0;
+                        let expected = expected * blend_alpha
+                            + f32::from(clear_color_rgb()[channel]) * (1.0 - blend_alpha);
+                        assert!((f32::from(actual[channel]) - expected).abs() <= 1.0,
+                        "mode={mode:#010x} cycles={cycles} factor={factor} decal={decal} fallback={fallback} channel={channel}: {actual:?}, expected {expected}");
+                    }
+                    assert_eq!(
+                        actual[3],
+                        if dual && alpha < 255 {
+                            255
+                        } else {
+                            alpha as u8
+                        }
+                    );
+                }
+            }
+        }
+    }
+}
+
+type FogPixelCase = (u8, u8, u8, [[u8; 3]; 2]);
+
+const INPUT_RGB: [u8; 3] = [200, 100, 50];
+const FOG_RGB: [u8; 3] = [20, 70, 140];
+
+fn assert_local_fog_equations(
+    a: u32,
+    b: u32,
+    input: [u8; 3],
+    fog: [u8; 3],
+    cases: &[FogPixelCase],
+) {
+    for fallback in [false, true] {
+        let (device, queue, dual) = if fallback {
+            let (device, queue) = headless_device_forced_fallback();
+            (device, queue, false)
+        } else {
+            headless_device()
+        };
+        let mut renderer =
+            SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, dual);
+        for &(alpha, fog_alpha, shade_alpha, shifted) in cases {
+            for (cycles, force) in [(0, false), (0, true), (1, false), (1, true)] {
+                for fog_in_p in [true, false] {
+                    let (p, m) = if fog_in_p {
+                        (CLR_FOG, CLR_IN)
+                    } else {
+                        (CLR_IN, CLR_FOG)
+                    };
+                    let mode = gbl_c1(p, a, m, b)
+                        | if force { FORCE_BL } else { 0 }
+                        | if cycles == 1 {
+                            if force {
+                                gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA)
+                            } else {
+                                G_RM_OPA_SURF2
+                            }
+                        } else {
+                            0
+                        };
+                    for decal in [false, true] {
+                        let mut commands = Vec::new();
+                        if decal {
+                            let [r, g, b] = clear_color_rgb();
+                            commands.extend([
+                                (0xB700_0000, 1),
+                                (0xB900_031D, G_RM_OPA_SURF | Z_CMP | Z_UPD),
+                                (0xFA00_0000, u32::from_be_bytes([r, g, b, 255])),
+                                (0x0430_0040, 0x40),
+                                (0xBF00_0000, 0x0000_0a14),
+                                (0xBF00_0000, 0x0000_141e),
+                            ]);
+                        }
+                        commands.extend([
+                            (0xBA00_1402, cycles << 20),
+                            (
+                                0xB900_031D,
+                                mode | if decal { ZMODE_DEC | Z_CMP } else { 0 },
+                            ),
+                            (
+                                0xFA00_0000,
+                                u32::from_be_bytes([input[0], input[1], input[2], alpha]),
+                            ),
+                            (
+                                0xF800_0000,
+                                u32::from_be_bytes([fog[0], fog[1], fog[2], fog_alpha]),
+                            ),
+                            (0xBC00_0008, u32::from(shade_alpha)),
+                            (0x0430_0040, 0x40),
+                            (0xBF00_0000, 0x0000_0a14),
+                            (0xBF00_0000, 0x0000_141e),
+                        ]);
+                        let pixels = render_to_pixels(
+                            &device,
+                            &queue,
+                            &mut renderer,
+                            &scene(&commands),
+                            64,
+                            64,
+                        );
+                        let actual = pixel(&pixels, 64, 32, 32);
+                        let expected = if force || cycles == 1 {
+                            shifted[usize::from(!fog_in_p)]
+                        } else if fog_in_p {
+                            fog
+                        } else {
+                            input
+                        };
+                        for channel in 0..3 {
+                            let blend_alpha = if cycles == 1 && force {
+                                f32::from(alpha) / 255.0
+                            } else {
+                                1.0
+                            };
+                            let expected = f32::from(expected[channel]) * blend_alpha
+                                + f32::from(clear_color_rgb()[channel]) * (1.0 - blend_alpha);
+                            let tolerance = if cycles == 1 && force { 1.0 } else { 0.0 };
+                            assert!((f32::from(actual[channel]) - expected).abs() <= tolerance,
+                                "a={a} b={b} alpha={alpha} fog_alpha={fog_alpha} shade_alpha={shade_alpha} cycles={cycles} force={force} fog_in_p={fog_in_p} decal={decal} fallback={fallback}: {actual:?}, channel={channel} expected={expected}");
+                        }
+                        assert_eq!(
+                            actual[3],
+                            if dual && cycles == 1 && force {
+                                255
+                            } else {
+                                alpha
+                            }
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fog_prim_a_uses_fog_alpha_independently_of_shade_alpha() {
+    // G_RM_FOG_PRIM_A = GBL_c1(FOG, A_FOG, IN, 1MA); literals use angrylion's 5-bit weights.
+    let mut cases = Vec::new();
+    for (fog_alpha, expected) in [
+        (0, [[200, 100, 50], [20, 70, 140]]),
+        (64, [[155, 92, 72], [65, 77, 117]]),
+        (128, [[110, 85, 95], [110, 85, 95]]),
+        (192, [[65, 77, 117], [155, 92, 72]]),
+        (255, [[25, 70, 137], [194, 99, 52]]),
+    ] {
+        for shade_alpha in [0, 73, 128, 255] {
+            for alpha in [64, 255] {
+                cases.push((alpha, fog_alpha, shade_alpha, expected));
+            }
+        }
+    }
+    assert_local_fog_equations(A_FOG, B_1MA, INPUT_RGB, FOG_RGB, &cases);
+}
+
+#[test]
+fn fog_input_and_zero_alpha_use_complementary_b() {
+    let rows = [
+        (0, [[200, 100, 50], [20, 70, 140]]),
+        (128, [[110, 85, 95], [110, 85, 95]]),
+        (255, [[25, 70, 137], [194, 99, 52]]),
+    ];
+    for a in [A_IN, A_0] {
+        let cases: Vec<_> = rows
+            .iter()
+            .map(|&(alpha, expected)| {
+                let expected = if a == A_0 { rows[0].1 } else { expected };
+                (alpha, 17, 73, expected)
+            })
+            .collect();
+        assert_local_fog_equations(a, B_1MA, INPUT_RGB, FOG_RGB, &cases);
+    }
+}
+
+#[test]
+fn fog_local_alpha_and_noncomplementary_b_follow_blender_rounding() {
+    for (b, rows) in [
+        (
+            B_1,
+            [
+                (0, [[200, 100, 50], [20, 70, 140]]),
+                (128, [[210, 135, 120], [120, 120, 165]]),
+                (255, [[219, 167, 185], [213, 166, 188]]),
+            ],
+        ),
+        (
+            B_0,
+            [
+                (0, [[6, 3, 1], [0, 2, 4]]),
+                (128, [[16, 38, 71], [100, 52, 29]]),
+                (255, [[25, 70, 137], [194, 99, 52]]),
+            ],
+        ),
+    ] {
+        for a in [A_IN, A_FOG, A_SHADE, A_0] {
+            let cases: Vec<_> = rows
+                .iter()
+                .take(if a == A_0 { 1 } else { rows.len() })
+                .map(|&(value, shifted)| {
+                    (
+                        if a == A_IN { value } else { 255 },
+                        if a == A_FOG { value } else { 17 },
+                        if a == A_SHADE { value } else { 73 },
+                        shifted,
+                    )
+                })
+                .collect();
+            assert_local_fog_equations(a, b, INPUT_RGB, FOG_RGB, &cases);
+        }
+    }
+}
+
+#[test]
+fn fog_blender_matches_the_hardware_worked_example() {
+    // P = M = 128 and A = 128: B = 1 gives (128*16 + 128*32) >> 5, B = 0 gives (128*16 + 128) >> 5.
+    for (b, value) in [(B_1, 192), (B_0, 68)] {
+        assert_local_fog_equations(
+            A_IN,
+            b,
+            [128; 3],
+            [128; 3],
+            &[(128, 17, 73, [[value; 3]; 2])],
+        );
+    }
 }
