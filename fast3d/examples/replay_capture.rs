@@ -35,11 +35,10 @@ mod native {
         }
         let bytes = std::fs::read(&args[0])?;
         let prefix = PathBuf::from(&args[1]);
-        if bytes.get(8..12) != Some(&2u32.to_le_bytes()) {
+        if let Ok(fixture) = Fixture::from_bytes(&bytes) {
             if args.len() != 2 {
                 return Err("depth controls require a reset-rooted sequence".into());
             }
-            let fixture = Fixture::from_bytes(&bytes)?;
             let output = pollster::block_on(fixture.replay_headless())?;
             write_image(&prefix, &output)?;
             std::fs::write(named(&prefix, ".log"), format!("adapter: {:?}\nframe: {:?}\nprovenance: {:?}\nsummaries: {:?}\ndiagnostics: {:?}\ncommands: {:#?}\n", output.adapter_info, fixture.frame, fixture.provenance, output.summaries, output.diagnostics, output.commands))?;

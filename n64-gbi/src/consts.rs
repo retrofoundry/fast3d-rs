@@ -150,6 +150,8 @@ pub mod rdp {
     pub const G_RDPHALF_2: u8 = 0xF1;
     /// G_CYC_COPY (2): copy-mode cycle type (SETOTHERMODE_H CYC field value).
     pub const G_CYC_COPY: u32 = 2;
+    /// G_CYC_FILL (3): fill-mode cycle type (SETOTHERMODE_H CYC field value).
+    pub const G_CYC_FILL: u32 = 3;
 }
 
 pub mod rsp_f3dex2 {

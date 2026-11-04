@@ -157,6 +157,7 @@ fn public_walk_without_renderer() {
         let summary = run(
             &[
                 (0xff10013f, 0x100000),
+                (0xef300c00, 0),
                 (0xf7000000, 0xcafecafe),
                 (0xf65003c0, 0),
                 (end, 0),
@@ -164,7 +165,7 @@ fn public_walk_without_renderer() {
             microcode,
             &mut observer,
         );
-        assert_eq!(summary.dispatched, 4);
+        assert_eq!(summary.dispatched, 5);
         assert_eq!(observer.fills, 1);
         let mut observer = Observer {
             stop: true,
@@ -216,6 +217,7 @@ fn public_observed_rendering_walk() {
         let hw = Hardware(
             [
                 (0xff10013fu32, 0x100000u32),
+                (0xef300c00, 0),
                 (0xf7000000, 0xcafecafe),
                 (0xf65003c0, 0),
                 (end, 0),

@@ -31,7 +31,7 @@ pub(crate) fn install_overrides<M: Rdram>(t: &mut [Handler<M>; 256]) {
     }
 }
 
-fn spnoop<M: Rdram>(_: &Cmd, _: &mut Ctx<M>) {}
+pub(crate) fn spnoop<M: Rdram>(_: &Cmd, _: &mut Ctx<M>) {}
 
 fn unsupported<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let opcode = c.opcode();
@@ -57,6 +57,7 @@ fn vtx<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let end = c.p0(1, 7);
     match end.checked_sub(count) {
         Some(dst) if (dst + count) as usize <= RSP_MAX_VERTICES => {
+            cx.rsp.prepare_vertex(cx.diags, cx.pc);
             let addr = memory_try!(cx, Vertex, cx.mem.resolve_masked(c.w1_addr));
             memory_try!(
                 cx,
@@ -188,7 +189,7 @@ fn texture<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 
 /// gsDPSetOtherMode_H: update the RDP othermode.H field.
 /// p0[8,8] = shift field (pos of the high bit); p0[0,8] = length-1.
-fn set_other_mode_h<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+pub(crate) fn set_other_mode_h<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let shift_field = c.p0(8, 8);
     let len_field = c.p0(0, 8);
     cx.rsp
@@ -196,14 +197,14 @@ fn set_other_mode_h<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     cx.rsp.material_dirty = true;
 }
 
-fn set_other_mode_l<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+pub(crate) fn set_other_mode_l<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let shift_field = c.p0(8, 8);
     let len_field = c.p0(0, 8);
     cx.rsp
         .set_other_mode_l(shift_field, len_field, c.w1, cx.rdp);
 }
 
-fn set_texture_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+pub(crate) fn set_texture_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let fmt = c.p0(21, 3) as u8;
     let siz = c.p0(19, 2) as u8;
     // The width field is (actual_width - 1), but tex_image stores the field value directly.
@@ -212,7 +213,7 @@ fn set_texture_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     cx.rsp.set_texture_image(fmt, siz, width, addr, cx.rdp);
 }
 
-fn move_word<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
+pub(crate) fn move_word<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let ty = c.p0(16, 8);
     if ty == cx.gbi_consts.g_mw_segment as u32 {
         // seg = p0(2,4), value = w1 (stored RAW).
@@ -228,6 +229,7 @@ fn move_word<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     } else if ty == cx.gbi_consts.g_mw_fog as u32 {
         // G_MW_FOG data word: high i16 = fog multiplier (fm), low i16 = fog offset (fo).
         // The ucode already converted min/max to fm/fo; HLE reads them directly (no re-derive).
+        cx.rsp.fog_factors_valid = true;
         cx.rdp.fog_mul = (c.w1 >> 16) as i16;
         cx.rdp.fog_offset = (c.w1 & 0xFFFF) as i16;
     } else {

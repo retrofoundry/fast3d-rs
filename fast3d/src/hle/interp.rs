@@ -145,7 +145,7 @@ struct ObservedDispatch {
     diagnostics_start: usize,
     index_start: usize,
     depth_before: usize,
-    emission: Option<Emission<'static>>,
+    emissions: Vec<Emission<'static>>,
 }
 
 impl ObservedDispatch {
@@ -168,7 +168,7 @@ impl ObservedDispatch {
             diagnostics_start,
             index_start,
             depth_before,
-            emission: None,
+            emissions: Vec::new(),
         }
     }
 
@@ -191,6 +191,150 @@ fn framebuffer_target(scene: &Scene, pair_index: usize) -> FramebufferTarget {
         depth_image: pair.depth_image,
         is_depth_clear: pair.is_depth_clear,
     }
+}
+
+pub(crate) struct TexRect {
+    pub rect: crate::hle::TexRectBounds,
+    pub tile: u8,
+    pub uls: i16,
+    pub ult: i16,
+    pub dsdx: i16,
+    pub dtdy: i16,
+    pub flip: bool,
+}
+
+pub(crate) fn emit_texrect<M: Rdram>(rect: TexRect, cx: &mut Ctx<M>) -> Option<Emission<'static>> {
+    let TexRect {
+        rect,
+        tile,
+        uls,
+        ult,
+        dsdx,
+        dtdy,
+        flip,
+    } = rect;
+    let rdp = &mut *cx.rdp;
+    let rsp = &mut *cx.rsp;
+    let scene = &mut *cx.scene;
+    let rec = &mut *cx.rec;
+    let diags = &mut *cx.diags;
+    let dropped_runs = &mut *cx.dropped_runs;
+    let pc = cx.pc;
+    let copy_mode = ((rdp.other_mode_h >> 20) & 3) == crate::hle::consts::G_CYC_COPY;
+    if !rdp.color_image_set {
+        // A 2D op needs a framebuffer target; one before the first CIMG is malformed → drop.
+        *dropped_runs += 1;
+        diags.push(Diagnostic {
+            at: pc,
+            kind: DiagKind::DrawBeforeCimg,
+        });
+        return None;
+    }
+
+    let tile_desc = &rdp.tiles[usize::from(tile)];
+    let layout = crate::render::framebuffers::ImageLayout {
+        width: u32::from(rdp.tex_image.2) + 1,
+        fmt: rdp.tex_image.0,
+        siz: rdp.tex_image.1,
+    };
+    let (uses_texture, uses_second_texture) = crate::hle::combiner::physical_texture_uses(
+        &crate::hle::combiner::decode_combine(rdp.combine_l, rdp.combine_h),
+        (rdp.other_mode_h >> 20) & 3,
+    );
+    let load_free = !rdp.tmem_bank.tile_has_load(tile_desc);
+    let source = if uses_texture && load_free {
+        rec.framebuffers.targets.source(
+            rdp.tex_image.3,
+            rdp.color_image.addr,
+            layout,
+            u32::from(tile_desc.height.max(1)),
+        )
+    } else {
+        Ok(None)
+    };
+    let fb_source = match source {
+        Ok(Some(source)) if uses_second_texture => {
+            diags.push(Diagnostic {
+                at: pc,
+                kind: DiagKind::UnsupportedFramebufferAccess {
+                    address: source.address,
+                    reason: crate::FramebufferAccess::TextureMode,
+                },
+            });
+            *dropped_runs += 1;
+            return None;
+        }
+        Ok(Some(source))
+            if (tile_desc.fmt, tile_desc.siz) != (layout.fmt, layout.siz)
+                || u32::from(tile_desc.width) > layout.width =>
+        {
+            diags.push(Diagnostic {
+                at: pc,
+                kind: DiagKind::UnsupportedFramebufferAccess {
+                    address: source.address,
+                    reason: crate::diag::FramebufferAccess::Reinterpretation,
+                },
+            });
+            *dropped_runs += 1;
+            return None;
+        }
+        Ok(source) => source.map(|source| source.address),
+        Err(kind) => {
+            diags.push(Diagnostic { at: pc, kind });
+            *dropped_runs += 1;
+            return None;
+        }
+    };
+    let Some((material_index, render_mode_index)) =
+        crate::hle::rsp::snapshot_rect_run(rsp, rdp, tile, diags, scene, pc)
+    else {
+        *dropped_runs += 1;
+        return None;
+    };
+    crate::hle::rsp::ensure_pair_open(scene, rdp, rec);
+    crate::hle::rsp::record_scissor_if_changed(scene, rdp, rec);
+
+    let cur = rec.cur_pair;
+
+    scene.framebuffer_pairs[cur]
+        .ops
+        .push(crate::hle::rsp::SceneOp::TexRect {
+            rect,
+            tile,
+            uls,
+            ult,
+            dsdx,
+            dtdy,
+            flip,
+            copy_mode,
+            material_index,
+            render_mode_index,
+            fog_color: rdp.fog_color,
+            prim_depth: rdp.prim_depth,
+            fb_source,
+        });
+    scene.draw_origins.push(crate::scene::DrawOrigin {
+        pc,
+        depth_image: rdp.depth_image,
+        scissor: rdp.scissor,
+        indices: 0..0,
+        rectangle: Some((cur, scene.framebuffer_pairs[cur].ops.len() - 1)),
+    });
+    Some(Emission::TexRect {
+        material_index,
+        render_mode_index,
+        target: framebuffer_target(scene, cur),
+        op_index: (scene.framebuffer_pairs[cur].ops.len() - 1) as u32,
+        rect,
+        tile,
+        uls,
+        ult,
+        dsdx,
+        dtdy,
+        flip,
+        copy_mode,
+        fb_source,
+    })
 }
 
 impl InterpResult {
@@ -304,15 +448,41 @@ pub(crate) fn interpret_profiled<M: Rdram>(
     entry: u64,
     ucode: crate::hle::gbi::GbiUcode,
     data_format: crate::hle::mem::GbiDataFormat,
+    rdp: crate::hle::rdp::Rdp,
+    framebuffers: FramebufferState,
+    observer: Option<&mut dyn crate::inspect::WalkObserver>,
+    profiling: crate::profiling::Recorder,
+) -> InterpResult {
+    interpret_with_bindings(
+        mem,
+        entry,
+        ucode,
+        data_format,
+        rdp,
+        framebuffers,
+        observer,
+        profiling,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn interpret_with_bindings<M: Rdram>(
+    mem: M,
+    entry: u64,
+    mut ucode: crate::hle::gbi::GbiUcode,
+    data_format: crate::DataFormat,
     mut rdp: crate::hle::rdp::Rdp,
     framebuffers: FramebufferState,
     mut observer: Option<&mut dyn crate::inspect::WalkObserver>,
     profiling: crate::profiling::Recorder,
+    bindings: &[(u64, crate::Microcode)],
 ) -> InterpResult {
     rdp.tmem_bank.profiling = profiling.clone();
     let mut mem = mem;
-    let gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
+    let mut gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
     let mut rsp = crate::hle::rsp::Rsp::new(gbi.consts, gbi.data_format);
+    rsp.set_initial_microcode(ucode);
     rsp.profiling = profiling;
     rdp.color_changed = false;
     rdp.depth_changed = false;
@@ -376,6 +546,7 @@ pub(crate) fn interpret_profiled<M: Rdram>(
             w1_addr: cmd.w1_addr,
         };
         let op = c.opcode();
+        let dispatch_microcode = ucode;
 
         let mut observed = observer.as_ref().map(|_| {
             ObservedDispatch::new(
@@ -456,9 +627,22 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                         Control::Abort
                     }
                 }
-            } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
+            } else if ucode != crate::hle::gbi::GbiUcode::F3d
                 && op == crate::hle::consts::G_LOAD_UCODE
             {
+                if rdphalf_1.is_some() && c.p0(16, 8) == 0 {
+                    if let Some(&(_, target)) =
+                        bindings.iter().find(|&&(token, _)| token == c.w1_addr)
+                    {
+                        if target != crate::Microcode::F3d {
+                            ucode = target.into();
+                            gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
+                            rsp.switch_microcode(ucode);
+                            pc = walk_try!(Command, checked_span(pc, stride));
+                            break 'dispatch;
+                        }
+                    }
+                }
                 diags.push(Diagnostic {
                     at: pc,
                     kind: DiagKind::UnsupportedMicrocodeLoad {
@@ -507,7 +691,7 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                 }
                 Control::Continue => {}
             }
-            if ucode == crate::hle::gbi::GbiUcode::F3dex2 && op == crate::hle::consts::G_RDPHALF_1 {
+            if ucode != crate::hle::gbi::GbiUcode::F3d && op == crate::hle::consts::G_RDPHALF_1 {
                 rdphalf_1 = Some(c.w1_addr);
                 pc = walk_try!(Command, checked_span(pc, stride));
                 break 'dispatch;
@@ -527,6 +711,21 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                 let cmd1 = walk_try!(Continuation, mem.read_command(pc1));
                 if let Some(observed) = &mut observed {
                     observed.push_word(pc1, &cmd1);
+                }
+                if ucode == crate::hle::gbi::GbiUcode::S2dex2
+                    && op == crate::hle::consts::G_TEXRECT
+                    && cmd1.w0 >> 24 == 0x04
+                {
+                    diags.push(Diagnostic {
+                        at: pc,
+                        kind: DiagKind::UnsupportedCommand {
+                            opcode: 0x04,
+                            w0: cmd1.w0,
+                            w1: cmd1.w1_addr,
+                        },
+                    });
+                    rejected = true;
+                    break 'dispatch;
                 }
                 let pc2 = walk_try!(Continuation, checked_span(pc1, stride));
                 let cmd2 = walk_try!(Continuation, mem.read_command(pc2));
@@ -557,93 +756,10 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                 let dsdx = (cmd2.w1 >> 16) as i16;
                 let dtdy = cmd2.w1 as i16;
                 let flip = op == crate::hle::consts::G_TEXRECTFLIP;
-                let copy_mode = ((rdp.other_mode_h >> 20) & 3) == crate::hle::consts::G_CYC_COPY;
                 let rect = crate::hle::TexRectBounds { ulx, uly, lrx, lry };
 
-                if !rdp.color_image_set {
-                    // A 2D op needs a framebuffer target; one before the first CIMG is malformed → drop.
-                    dropped_runs += 1;
-                    diags.push(Diagnostic {
-                        at: pc,
-                        kind: DiagKind::DrawBeforeCimg,
-                    });
-                    pc = next_pc;
-                    break 'dispatch;
-                }
-
-                let tile_desc = &rdp.tiles[usize::from(tile)];
-                let layout = crate::render::framebuffers::ImageLayout {
-                    width: u32::from(rdp.tex_image.2) + 1,
-                    fmt: rdp.tex_image.0,
-                    siz: rdp.tex_image.1,
-                };
-                let (uses_texture, uses_second_texture) =
-                    crate::hle::combiner::physical_texture_uses(
-                        &crate::hle::combiner::decode_combine(rdp.combine_l, rdp.combine_h),
-                        (rdp.other_mode_h >> 20) & 3,
-                    );
-                let load_free = !rdp.tmem_bank.tile_has_load(tile_desc);
-                let source = if uses_texture && load_free {
-                    rec.framebuffers.targets.source(
-                        rdp.tex_image.3,
-                        rdp.color_image.addr,
-                        layout,
-                        u32::from(tile_desc.height.max(1)),
-                    )
-                } else {
-                    Ok(None)
-                };
-                let fb_source = match source {
-                    Ok(Some(source)) if uses_second_texture => {
-                        diags.push(Diagnostic {
-                            at: pc,
-                            kind: DiagKind::UnsupportedFramebufferAccess {
-                                address: source.address,
-                                reason: crate::FramebufferAccess::TextureMode,
-                            },
-                        });
-                        dropped_runs += 1;
-                        pc = next_pc;
-                        break 'dispatch;
-                    }
-                    Ok(Some(source))
-                        if (tile_desc.fmt, tile_desc.siz) != (layout.fmt, layout.siz)
-                            || u32::from(tile_desc.width) > layout.width =>
-                    {
-                        diags.push(Diagnostic {
-                            at: pc,
-                            kind: DiagKind::UnsupportedFramebufferAccess {
-                                address: source.address,
-                                reason: crate::diag::FramebufferAccess::Reinterpretation,
-                            },
-                        });
-                        dropped_runs += 1;
-                        pc = next_pc;
-                        break 'dispatch;
-                    }
-                    Ok(source) => source.map(|source| source.address),
-                    Err(kind) => {
-                        diags.push(Diagnostic { at: pc, kind });
-                        dropped_runs += 1;
-                        pc = next_pc;
-                        break 'dispatch;
-                    }
-                };
-                let Some((material_index, render_mode_index)) = crate::hle::rsp::snapshot_rect_run(
-                    &rsp, &rdp, tile, &mut diags, &mut scene, pc,
-                ) else {
-                    dropped_runs += 1;
-                    pc = next_pc;
-                    break 'dispatch;
-                };
-                crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
-                crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
-
-                let cur = rec.cur_pair;
-
-                scene.framebuffer_pairs[cur]
-                    .ops
-                    .push(crate::hle::rsp::SceneOp::TexRect {
+                let emission = emit_texrect(
+                    TexRect {
                         rect,
                         tile,
                         uls,
@@ -651,34 +767,22 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                         dsdx,
                         dtdy,
                         flip,
-                        copy_mode,
-                        material_index,
-                        render_mode_index,
-                        fog_color: rdp.fog_color,
-                        prim_depth: rdp.prim_depth,
-                        fb_source,
-                    });
-                scene.draw_origins.push(crate::scene::DrawOrigin {
-                    pc,
-                    depth_image: rdp.depth_image,
-                    scissor: rdp.scissor,
-                    indices: 0..0,
-                    rectangle: Some((cur, scene.framebuffer_pairs[cur].ops.len() - 1)),
-                });
+                    },
+                    &mut Ctx {
+                        rsp: &mut rsp,
+                        rdp: &mut rdp,
+                        mem: &mut mem,
+                        scene: &mut scene,
+                        diags: &mut diags,
+                        pc,
+                        gbi_consts: gbi.consts,
+                        rec: &mut rec,
+                        dropped_runs: &mut dropped_runs,
+                        unknown_seen: &mut unknown_seen,
+                    },
+                );
                 if let Some(observed) = &mut observed {
-                    observed.emission = Some(Emission::TexRect {
-                        target: framebuffer_target(&scene, cur),
-                        op_index: (scene.framebuffer_pairs[cur].ops.len() - 1) as u32,
-                        rect,
-                        tile,
-                        uls,
-                        ult,
-                        dsdx,
-                        dtdy,
-                        flip,
-                        copy_mode,
-                        fb_source,
-                    });
+                    observed.emissions.extend(emission);
                 }
                 pc = next_pc;
                 break 'dispatch;
@@ -686,13 +790,13 @@ pub(crate) fn interpret_profiled<M: Rdram>(
             if op == crate::hle::consts::G_FILLRECT {
                 // Fixed: 1 word (lrx/lry in w0, ulx/uly in w1). Float: 2 words (F6 + E1), all coords
                 // sign-extended 24-bit across cmd0.w0/w1 and cmd1.w0/w1.
-                let (rect, words) = match gbi.data_format {
+                let (bounds, words) = match gbi.data_format {
                     crate::hle::mem::GbiDataFormat::Fixed => (
-                        crate::hle::rsp::Rect {
-                            lrx: (c.p0(12, 12) as i32) >> 2,
-                            lry: (c.p0(0, 12) as i32) >> 2,
-                            ulx: (c.p1(12, 12) as i32) >> 2,
-                            uly: (c.p1(0, 12) as i32) >> 2,
+                        crate::hle::TexRectBounds {
+                            lrx: c.p0(12, 12) as i32,
+                            lry: c.p0(0, 12) as i32,
+                            ulx: c.p1(12, 12) as i32,
+                            uly: c.p1(0, 12) as i32,
                         },
                         1u64,
                     ),
@@ -703,15 +807,21 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                             observed.push_word(pc1, &cmd1);
                         }
                         (
-                            crate::hle::rsp::Rect {
-                                lrx: sext24(c.w0) >> 2,
-                                lry: sext24(c.w1) >> 2,
-                                ulx: sext24(cmd1.w0) >> 2,
-                                uly: sext24(cmd1.w1) >> 2,
+                            crate::hle::TexRectBounds {
+                                lrx: sext24(c.w0),
+                                lry: sext24(c.w1),
+                                ulx: sext24(cmd1.w0),
+                                uly: sext24(cmd1.w1),
                             },
                             2u64,
                         )
                     }
+                };
+                let rect = crate::hle::rsp::Rect {
+                    lrx: bounds.lrx >> 2,
+                    lry: bounds.lry >> 2,
+                    ulx: bounds.ulx >> 2,
+                    uly: bounds.uly >> 2,
                 };
 
                 let mut next_pc = pc;
@@ -725,6 +835,70 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                         at: pc,
                         kind: DiagKind::DrawBeforeCimg,
                     });
+                    pc = next_pc;
+                    break 'dispatch;
+                }
+
+                // Outside FILL/COPY the RDP draws the rectangle like a texture rectangle with zero
+                // texture coordinates: through the combiner and blender, lower-right exclusive
+                // (rt64 RDP::fillRect). OoT's fade overlays are 1-cycle fills with primitive alpha.
+                let cycle = (rdp.other_mode_h >> 20) & 3;
+                if cycle != crate::hle::consts::G_CYC_FILL
+                    && cycle != crate::hle::consts::G_CYC_COPY
+                {
+                    let Some((material_index, render_mode_index)) =
+                        crate::hle::rsp::snapshot_rect_run(
+                            &rsp, &rdp, 0, &mut diags, &mut scene, pc,
+                        )
+                    else {
+                        dropped_runs += 1;
+                        pc = next_pc;
+                        break 'dispatch;
+                    };
+                    crate::hle::rsp::ensure_pair_open(&mut scene, &mut rdp, &mut rec);
+                    crate::hle::rsp::record_scissor_if_changed(&mut scene, &rdp, &mut rec);
+                    let cur = rec.cur_pair;
+                    scene.framebuffer_pairs[cur]
+                        .ops
+                        .push(crate::hle::rsp::SceneOp::TexRect {
+                            rect: bounds,
+                            tile: 0,
+                            uls: 0,
+                            ult: 0,
+                            dsdx: 0,
+                            dtdy: 0,
+                            flip: false,
+                            copy_mode: false,
+                            material_index,
+                            render_mode_index,
+                            fog_color: rdp.fog_color,
+                            prim_depth: rdp.prim_depth,
+                            fb_source: None,
+                        });
+                    scene.draw_origins.push(crate::scene::DrawOrigin {
+                        pc,
+                        depth_image: rdp.depth_image,
+                        scissor: rdp.scissor,
+                        indices: 0..0,
+                        rectangle: Some((cur, scene.framebuffer_pairs[cur].ops.len() - 1)),
+                    });
+                    if let Some(observed) = &mut observed {
+                        observed.emissions.push(Emission::TexRect {
+                            material_index,
+                            render_mode_index,
+                            target: framebuffer_target(&scene, cur),
+                            op_index: (scene.framebuffer_pairs[cur].ops.len() - 1) as u32,
+                            rect: bounds,
+                            tile: 0,
+                            uls: 0,
+                            ult: 0,
+                            dsdx: 0,
+                            dtdy: 0,
+                            flip: false,
+                            copy_mode: false,
+                            fb_source: None,
+                        });
+                    }
                     pc = next_pc;
                     break 'dispatch;
                 }
@@ -759,7 +933,7 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                     )),
                 });
                 if let Some(observed) = &mut observed {
-                    observed.emission = Some(Emission::FillRect {
+                    observed.emissions.push(Emission::FillRect {
                         target: framebuffer_target(&scene, rec.cur_pair),
                         op_index: (scene.framebuffer_pairs[rec.cur_pair].ops.len() - 1) as u32,
                         rect,
@@ -771,6 +945,7 @@ pub(crate) fn interpret_profiled<M: Rdram>(
             }
 
             let index_start = scene.indices.len() as u32;
+            let diagnostics_start = diags.len();
             let mut cx = Ctx {
                 rsp: &mut rsp,
                 rdp: &mut rdp,
@@ -783,6 +958,26 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                 dropped_runs: &mut dropped_runs,
                 unknown_seen: &mut unknown_seen,
             };
+            if ucode == crate::hle::gbi::GbiUcode::S2dex2 && matches!(op, 0x09 | 0x0a) {
+                let result = if op == 0x09 {
+                    crate::hle::rsp_s2dex2::bg_1cyc(&c, &mut cx)
+                } else {
+                    crate::hle::rsp_s2dex2::bg_copy(&c, &mut cx)
+                };
+                match result {
+                    Ok(emissions) => {
+                        if let Some(observed) = &mut observed {
+                            observed.emissions.extend(emissions);
+                        }
+                    }
+                    Err(()) => {
+                        rejected = true;
+                        break 'dispatch;
+                    }
+                }
+                pc = walk_try!(Command, checked_span(pc, stride));
+                break 'dispatch;
+            }
             gbi.table[op as usize](&c, &mut cx);
             let index_end = scene.indices.len() as u32;
             if index_end > index_start {
@@ -802,18 +997,20 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                     rectangle: None,
                 });
             }
-            if diags.last().is_some_and(|d| {
-                matches!(
-                    d.kind,
-                    DiagKind::MemoryRead { .. }
-                        | DiagKind::DlPastRdram
-                        | DiagKind::UnhandledMovemem(_)
-                        | DiagKind::UnhandledMoveword(_)
-                        | DiagKind::UnsupportedCommand {
-                            opcode: 0xd3..=0xd5,
-                            ..
-                        }
-                )
+            if diags[diagnostics_start..].last().is_some_and(|d| {
+                (ucode == crate::hle::gbi::GbiUcode::S2dex2
+                    && matches!(d.kind, DiagKind::UnsupportedCommand { .. }))
+                    || matches!(
+                        d.kind,
+                        DiagKind::MemoryRead { .. }
+                            | DiagKind::DlPastRdram
+                            | DiagKind::UnhandledMovemem(_)
+                            | DiagKind::UnhandledMoveword(_)
+                            | DiagKind::UnsupportedCommand {
+                                opcode: 0xd3..=0xd5,
+                                ..
+                            }
+                    )
             }) {
                 rejected = true;
                 break 'dispatch;
@@ -829,7 +1026,7 @@ pub(crate) fn interpret_profiled<M: Rdram>(
             let mut names = [GeometryFlag { mask: 0, name: "" }; 12];
             let geometry_names =
                 crate::inspect::geometry_flags(ucode.into(), rsp.geometry_mode(), &mut names);
-            let emission = if scene.indices.len() > observed.index_start {
+            let emissions = if scene.indices.len() > observed.index_start {
                 let (run_index, op_index, run) = if rdp.color_image_set {
                     let ops = &scene.framebuffer_pairs[rec.cur_pair].ops;
                     let Some(crate::hle::rsp::SceneOp::Tris(run)) = ops.last() else {
@@ -840,7 +1037,7 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                     let index = scene.draw_runs.len() - 1;
                     (Some(index as u32), None, &scene.draw_runs[index])
                 };
-                Some(Emission::Triangles {
+                vec![Emission::Triangles {
                     run_index,
                     op_index,
                     material_index: run.material_index,
@@ -850,11 +1047,12 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                         .then(|| framebuffer_target(&scene, rec.cur_pair)),
                     index_start: observed.index_start as u32,
                     indices: &scene.indices[observed.index_start..],
-                })
+                }]
             } else {
-                observed.emission
+                observed.emissions
             };
             let outcome = observer.command(WalkStep {
+                microcode: dispatch_microcode.into(),
                 seq: (dispatched - 1) as u32,
                 pc: observed.words[0].pc,
                 words: &observed.words[..observed.word_count],
@@ -863,7 +1061,7 @@ pub(crate) fn interpret_profiled<M: Rdram>(
                 flow,
                 next_pc: (!matches!(flow, WalkFlow::End | WalkFlow::Fault)).then_some(pc),
                 state: rsp.inspect_state(&rdp, geometry_names),
-                emissions: emission.as_slice(),
+                emissions: &emissions,
                 diagnostics_start: observed.diagnostics_start,
                 diagnostics: &diags[observed.diagnostics_start..],
             });
@@ -1415,6 +1613,130 @@ mod rect_encoding_tests {
     }
 
     #[test]
+    fn synthetic_texrect_matches_command_path() {
+        for color_image_set in [false, true] {
+            for copy_mode in [false, true] {
+                for flip in [false, true] {
+                    let mut rdp = crate::hle::rdp::Rdp {
+                        color_image_set,
+                        color_image: ColorImage {
+                            fmt: 0,
+                            siz: 2,
+                            width: 320,
+                            addr: 0x10000,
+                        },
+                        depth_image: Some(0x20000),
+                        scissor: Scissor {
+                            ulx: 2,
+                            uly: 3,
+                            lrx: 300,
+                            lry: 200,
+                            mode: 0,
+                        },
+                        other_mode_h: if copy_mode { 2 << 20 } else { 0 },
+                        tex_image: (0, 2, 3, 0),
+                        ..Default::default()
+                    };
+                    rdp.tiles[0].siz = 2;
+                    rdp.tiles[0].line = 1;
+                    rdp.tiles[0].width = 4;
+                    rdp.tiles[0].height = 1;
+                    rdp.tmem_bank
+                        .write_tile(&[0xf8, 1].repeat(4), 0, 1, 1, 1, 8, 2);
+                    let mut bytes = Vec::new();
+                    let opcode = if flip { G_TEXRECTFLIP } else { G_TEXRECT };
+                    push(
+                        &mut bytes,
+                        (
+                            (u32::from(opcode) << 24) | (1280 << 12) | 960,
+                            (20 << 12) | 28,
+                        ),
+                    );
+                    push(&mut bytes, (u32::from(G_RDPHALF_1) << 24, (11 << 16) | 13));
+                    push(
+                        &mut bytes,
+                        (u32::from(G_RDPHALF_2) << 24, (4096 << 16) | 512),
+                    );
+                    push(&mut bytes, enddl());
+                    let command = interpret_with_state(
+                        RdramImage::new(&bytes),
+                        0,
+                        GbiUcode::F3dex2,
+                        crate::hle::mem::GbiDataFormat::Fixed,
+                        rdp.clone(),
+                        None,
+                    );
+                    let mut mem = RdramImage::new(&[]);
+                    let mut rsp = crate::hle::rsp::Rsp::default();
+                    let mut scene = Scene::default();
+                    let mut diags = Vec::new();
+                    let mut rec = crate::hle::rsp::PairRec::default();
+                    let mut dropped_runs = 0;
+                    let mut unknown_seen = [false; 256];
+                    let emission = emit_texrect(
+                        TexRect {
+                            rect: crate::hle::TexRectBounds {
+                                ulx: 20,
+                                uly: 28,
+                                lrx: 1280,
+                                lry: 960,
+                            },
+                            tile: 0,
+                            uls: 11,
+                            ult: 13,
+                            dsdx: 4096,
+                            dtdy: 512,
+                            flip,
+                        },
+                        &mut Ctx {
+                            rsp: &mut rsp,
+                            rdp: &mut rdp,
+                            mem: &mut mem,
+                            scene: &mut scene,
+                            diags: &mut diags,
+                            pc: 0,
+                            gbi_consts: GbiUcode::F3dex2.constants(),
+                            rec: &mut rec,
+                            dropped_runs: &mut dropped_runs,
+                            unknown_seen: &mut unknown_seen,
+                        },
+                    );
+                    rsp.finish(&mut scene);
+                    scene.color_image = rdp.color_image;
+                    assert_eq!(scene, command.scene);
+                    assert_eq!(rdp, command.rdp);
+                    assert_eq!(diags, command.diags);
+                    assert_eq!(dropped_runs, command.dropped_runs);
+                    assert_eq!(emission.is_some(), color_image_set);
+                    if color_image_set {
+                        assert_eq!(scene.draw_origins.len(), 1);
+                        assert!(matches!(
+                            scene.framebuffer_pairs[0].ops.last(),
+                            Some(SceneOp::TexRect {
+                                material_index: 0,
+                                render_mode_index: 0,
+                                ..
+                            })
+                        ));
+                        assert!(matches!(
+                            emission,
+                            Some(Emission::TexRect {
+                                uls: 11,
+                                ult: 13,
+                                dsdx: 4096,
+                                dtdy: 512,
+                                ..
+                            })
+                        ));
+                    } else {
+                        assert_eq!(diags[0].kind, DiagKind::DrawBeforeCimg);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn fixed_texrect_records_op_and_sentinel_decodes() {
         let mut b = Vec::new();
         push(&mut b, cimg(0x10000));
@@ -1523,6 +1845,10 @@ mod rect_encoding_tests {
     fn fixed_fillrect_one_word_records_fill_color() {
         let mut b = Vec::new();
         push(&mut b, cimg(0x10000));
+        push(
+            &mut b,
+            n64_gbi::encode::gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
+        );
         push(&mut b, fill_color(0xCAFE_F00D));
         // 1-word FILLRECT: lrx=320, lry=240, ulx=10, uly=20.
         push(
@@ -1607,6 +1933,10 @@ mod rect_encoding_tests {
     fn float_fillrect_two_words_records_fill_color() {
         let mut b = Vec::new();
         push(&mut b, cimg(0x10000));
+        push(
+            &mut b,
+            n64_gbi::encode::gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
+        );
         push(&mut b, fill_color(0x1234_5678));
         // Float FILLRECT = F6 + E1: lrx/lry in cmd0.w0/w1, ulx/uly in cmd1.w0/w1 (all sext24).
         push(&mut b, ((G_FILLRECT as u32) << 24 | 1280, 960));
@@ -1635,11 +1965,187 @@ mod rect_encoding_tests {
         );
     }
 
+    fn fillrect_cycle_paths(format: crate::DataFormat) {
+        use n64_gbi::consts::rdp::*;
+        use n64_gbi::encode::*;
+        use std::ops::ControlFlow;
+
+        let color = CcPass {
+            a: 15,
+            b: 15,
+            c: 31,
+            d: 3,
+        };
+        let alpha = CcPass {
+            a: 7,
+            b: 7,
+            c: 7,
+            d: 3,
+        };
+        let combine = gdp_set_combine_lerp(color, alpha, color, alpha);
+        let mode1 = IM_RD | CVG_DST_FULL | FORCE_BL | gbl_c1(CLR_IN, A_IN, CLR_MEM, B_1MA);
+        let mode2 = gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA);
+        let bounds = crate::hle::TexRectBounds {
+            ulx: if format == crate::DataFormat::Float {
+                -19
+            } else {
+                21
+            },
+            uly: 29,
+            lrx: 1283,
+            lry: 963,
+        };
+        for cycle in [0, 1, G_CYC_FILL, G_CYC_COPY] {
+            let mut b = Vec::new();
+            for command in [
+                cimg(0x10000),
+                gdp_set_cycle_type(cycle),
+                gdp_set_render_mode(mode1, mode2),
+                combine,
+                gdp_set_prim_color(0, 0, 0x12345678),
+                fill_color(0xCAFE_F00D),
+            ] {
+                push(&mut b, command);
+            }
+            match format {
+                crate::DataFormat::Fixed => push(
+                    &mut b,
+                    gdp_fill_rectangle(
+                        bounds.ulx as u32,
+                        bounds.uly as u32,
+                        bounds.lrx as u32,
+                        bounds.lry as u32,
+                    ),
+                ),
+                crate::DataFormat::Float => {
+                    push(
+                        &mut b,
+                        (
+                            (G_FILLRECT as u32) << 24 | bounds.lrx as u32,
+                            bounds.lry as u32,
+                        ),
+                    );
+                    push(
+                        &mut b,
+                        (
+                            (G_RDPHALF_1 as u32) << 24 | (bounds.ulx as u32 & 0xFFFFFF),
+                            bounds.uly as u32,
+                        ),
+                    );
+                }
+            }
+            push(&mut b, prim_sentinel());
+            push(&mut b, enddl());
+            let r = match format {
+                crate::DataFormat::Fixed => run(&b, GbiUcode::F3dex2),
+                crate::DataFormat::Float => run_float(&b),
+            };
+            assert!(r.diags.is_empty(), "cycle {cycle}: {:?}", r.diags);
+            assert_eq!(r.rdp.prim, SENTINEL);
+            assert_eq!(r.scene.framebuffer_pairs.len(), 1);
+            if cycle == G_CYC_FILL || cycle == G_CYC_COPY {
+                assert_eq!(
+                    r.scene.framebuffer_pairs[0].ops,
+                    vec![SceneOp::FillRect {
+                        rect: Rect {
+                            ulx: bounds.ulx >> 2,
+                            uly: bounds.uly >> 2,
+                            lrx: bounds.lrx >> 2,
+                            lry: bounds.lry >> 2
+                        },
+                        color_raw: 0xCAFE_F00D,
+                        convert: Default::default(),
+                        key: Default::default(),
+                    }]
+                );
+            } else {
+                assert_eq!(
+                    r.scene.framebuffer_pairs[0].ops,
+                    vec![SceneOp::TexRect {
+                        rect: bounds,
+                        tile: 0,
+                        uls: 0,
+                        ult: 0,
+                        dsdx: 0,
+                        dtdy: 0,
+                        flip: false,
+                        copy_mode: false,
+                        material_index: 0,
+                        render_mode_index: 0,
+                        fog_color: [0; 4],
+                        prim_depth: Default::default(),
+                        fb_source: None,
+                    }]
+                );
+                assert_eq!(r.scene.materials.len(), 1);
+                let material = &r.scene.materials[0];
+                assert_eq!(material.cycle_type, cycle);
+                assert_eq!(material.prim, [0x12, 0x34, 0x56, 0x78]);
+                assert_eq!(
+                    (material.selectors.raw_l, material.selectors.raw_h),
+                    combine
+                );
+                assert_eq!(material.tile_count, 0);
+                assert!(!material.tex_enable);
+                assert_eq!(
+                    r.scene.render_modes,
+                    vec![crate::hle::blender::decode_render_mode(
+                        mode1 | mode2,
+                        cycle << 20,
+                        0
+                    )]
+                );
+                assert_eq!(
+                    r.scene.render_modes[0].fallback_class,
+                    crate::hle::blender::BlendClass::AlphaOver
+                );
+            }
+            let mut emissions = 0;
+            let observed = interpret(
+                crate::RdramImage::new(&b),
+                0,
+                GbiUcode::F3dex2,
+                format,
+                Some(&mut |step: crate::inspect::WalkStep<'_>| {
+                    if !step.emissions.is_empty() {
+                        assert_eq!(step.seq, 6);
+                        assert_eq!(
+                            step.words.len(),
+                            if format == crate::DataFormat::Float {
+                                2
+                            } else {
+                                1
+                            }
+                        );
+                        emissions += step.emissions.len();
+                    }
+                    ControlFlow::Continue(())
+                }),
+            );
+            assert_eq!(emissions, 1);
+            assert_eq!(observed, r);
+        }
+    }
+
+    #[test]
+    fn fixed_fillrect_cycle_paths_preserve_bounds_material_and_emission() {
+        fillrect_cycle_paths(crate::DataFormat::Fixed);
+    }
+
+    #[test]
+    fn float_fillrect_cycle_paths_preserve_bounds_material_and_emission() {
+        fillrect_cycle_paths(crate::DataFormat::Float);
+    }
+
     #[test]
     fn mid_pair_scissor_change_emits_setscissor_op() {
         // Two FILLRECTs in one pair with a scissor change between → ops = [Fill, SetScissor, Fill].
         let mut b = Vec::new();
         push(&mut b, cimg(0x10000));
+        push(
+            &mut b,
+            n64_gbi::encode::gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
+        );
         push(&mut b, scissor(0, 0, 320, 240, 0)); // S1 (becomes active_scissor)
         push(&mut b, fill_color(0x1111_1111));
         push(

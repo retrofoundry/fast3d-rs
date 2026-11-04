@@ -1,6 +1,7 @@
 //! Position and texcoord are transformed on the GPU (renderer compute kernel -> OutVertex);
 //! the CPU keeps conditional control positions, RSP/RDP state, and state-index tables.
 
+use crate::diag::{DiagKind, Diagnostic};
 use crate::hle::gbi::f3dex2::F3DEX2_CONSTS;
 use crate::hle::interp::checked_span;
 use crate::hle::math::{identity, mul4, mul_col_vec3, mul_row_vec4, Mat4};
@@ -32,6 +33,10 @@ pub struct TextureState {
 }
 
 pub struct Rsp {
+    microcode: crate::Microcode,
+    pub(crate) obj_render_mode: u32,
+    mvp_valid: bool,
+    pub(crate) fog_factors_valid: bool,
     pub(crate) profiling: crate::profiling::Recorder,
     cache_global_index: [u32; RSP_MAX_VERTICES],
     loaded: [bool; RSP_MAX_VERTICES],
@@ -82,6 +87,10 @@ pub struct Rsp {
 impl Default for Rsp {
     fn default() -> Self {
         Rsp {
+            microcode: crate::Microcode::F3dex2,
+            obj_render_mode: 0,
+            mvp_valid: true,
+            fog_factors_valid: true,
             profiling: Default::default(),
             cache_global_index: [0u32; RSP_MAX_VERTICES],
             loaded: [false; RSP_MAX_VERTICES],
@@ -144,6 +153,44 @@ impl Rsp {
         }
     }
 
+    pub(crate) fn set_initial_microcode(&mut self, ucode: crate::hle::gbi::GbiUcode) {
+        self.microcode = ucode.into();
+        self.fog_factors_valid = ucode != crate::hle::gbi::GbiUcode::S2dex2;
+    }
+
+    pub(crate) fn switch_microcode(&mut self, ucode: crate::hle::gbi::GbiUcode) {
+        self.microcode = ucode.into();
+        self.consts = ucode.constants();
+        self.loaded.fill(false);
+        self.clip_codes.fill(None);
+        self.screen_z.fill(None);
+        self.used.fill(false);
+        self.mvp_valid = false;
+        self.material_dirty = true;
+        // Known SDK divergence: geometry and lights retain values; OoT restores geometry via SETUPDL.
+        if ucode == crate::hle::gbi::GbiUcode::S2dex2 {
+            self.obj_render_mode = 0;
+            self.fog_factors_valid = false;
+        }
+    }
+
+    pub(crate) fn prepare_vertex(&mut self, diags: &mut Vec<Diagnostic>, pc: u64) {
+        if !self.mvp_valid {
+            diags.push(Diagnostic {
+                at: pc,
+                kind: DiagKind::UndefinedMvp,
+            });
+            self.recompute_mvp();
+            self.mvp_valid = false;
+        }
+        if !self.fog_factors_valid && self.geom & self.consts.g_fog_geom != 0 {
+            diags.push(Diagnostic {
+                at: pc,
+                kind: DiagKind::UndefinedFogFactors,
+            });
+        }
+    }
+
     pub fn geometry_mode(&self) -> u32 {
         self.geom
     }
@@ -154,6 +201,10 @@ impl Rsp {
         geometry_names: &'a [crate::inspect::GeometryFlag],
     ) -> crate::inspect::StateView<'a> {
         crate::inspect::StateView {
+            microcode: self.microcode,
+            obj_render_mode: self.obj_render_mode,
+            mvp_valid: self.mvp_valid,
+            fog_factors_valid: self.fog_factors_valid,
             geometry_mode: self.geom,
             geometry_names,
             texture: self.texture_state,
@@ -202,6 +253,7 @@ impl Rsp {
     }
 
     fn recompute_mvp(&mut self) {
+        self.mvp_valid = true;
         self.mvp = mul4(self.model_stack[self.model_stack_size - 1], self.viewproj);
         // Append a new MVP table entry (dedup against the last to avoid trivial growth).
         if self.mvp_table.last() != Some(&self.mvp) {
@@ -243,6 +295,7 @@ impl Rsp {
     /// their state.
     pub fn force_matrix<M: Rdram>(&mut self, mem: &M, addr: u64) -> Result<(), MemoryError> {
         self.mvp = mem.read_matrix(addr, self.data_format)?;
+        self.mvp_valid = true;
         if self.mvp_table.last() != Some(&self.mvp) {
             self.mvp_table.push(self.mvp);
         }

@@ -174,6 +174,7 @@ fn recording_preserves_borrowed_bytes() {
 #[test]
 fn replay_huge_missing_range_does_not_require_proportional_allocation() {
     let task = Task {
+        bindings: Vec::new(),
         entry: 0,
         microcode: Microcode::F3dex2,
         data_format: DataFormat::Fixed,
@@ -212,6 +213,7 @@ fn replay_vertex_missing_fields_report_the_full_typed_span() {
         (MemoryLayout::HOST64_LE, DataFormat::Float, 21, 24),
     ] {
         let task = Task {
+            bindings: Vec::new(),
             entry: 0,
             microcode: Microcode::F3dex2,
             data_format: format,
@@ -385,6 +387,7 @@ fn recording_and_replay_reject_every_missing_input_kind() {
         );
 
         let task = Task {
+            bindings: Vec::new(),
             entry: 0,
             microcode: Microcode::F3dex2,
             data_format: DataFormat::Fixed,
@@ -478,7 +481,7 @@ fn fixture_container_rejects_corruption() {
             .unwrap(),
     );
     let b = f.to_bytes().unwrap();
-    assert_eq!(&b[..16], b"F3DCAP\0\0\x01\0\0\0\x01\x02\x03\x04");
+    assert_eq!(&b[..16], b"F3DCAP\0\0\x02\0\0\0\x01\x02\x03\x04");
     assert_eq!(Fixture::from_bytes(&b).unwrap(), f);
     for n in 0..b.len() {
         assert!(Fixture::from_bytes(&b[..n]).is_err(), "truncation at {n}");
@@ -622,8 +625,8 @@ mod host {
         mem.set_segment(3, base + 1);
         assert_eq!(mem.read_u8(mem.resolve(0x0300_0005).unwrap()).unwrap(), 17);
         assert_eq!(
-            mem.resolve_masked(0xfedc_ba98_7654_3217).unwrap(),
-            0xfedc_ba98_7654_3217
+            mem.resolve_masked(0xfedc_ba98_7354_3217).unwrap(),
+            0xfedc_ba98_7354_3217
         );
         replay.check().unwrap();
     }
@@ -1159,6 +1162,7 @@ fn final_color_image_follows_nested_lists_and_segments() {
         (0xff10_003f, 0x0030_0000),
     ];
     let task = Task {
+        bindings: Vec::new(),
         entry: 0x100,
         microcode: Microcode::F3d,
         data_format: DataFormat::Fixed,
@@ -1188,3 +1192,77 @@ fn final_color_image_follows_nested_lists_and_segments() {
     incomplete.spans[0].bytes.truncate(32);
     assert!(incomplete.final_color_image().is_err());
 }
+
+#[test]
+fn obj_bg_recording_replay_omits_padding_and_preserves_typed_failure() {
+    use crate::ObjBgKind;
+    let mut bytes = vec![0; 36];
+    bytes[32..36].copy_from_slice(&(-70000i32).to_be_bytes());
+    let hardware = Image(bytes);
+    let recording = RecordingHardware::new(&hardware);
+    let expected = recording.rdram().read_obj_bg(0, ObjBgKind::Scaled).unwrap();
+    let task = recording
+        .finish(0, Microcode::F3dex2, DataFormat::Fixed, 0)
+        .unwrap();
+    assert_eq!(
+        task.spans,
+        vec![MemorySpan {
+            address: 0,
+            bytes: hardware.0.clone()
+        }]
+    );
+    let replay = ReplayHardware::new(&task, None).unwrap();
+    assert_eq!(
+        replay.rdram().read_obj_bg(0, ObjBgKind::Scaled).unwrap(),
+        expected
+    );
+    assert_eq!(expected.image_y_orig, -70000);
+    replay.check().unwrap();
+
+    let hardware = TypedCommandFailure(vec![0; 40]);
+    let recording = RecordingHardware::new(&hardware);
+    let error = recording
+        .rdram()
+        .read_obj_bg(0, ObjBgKind::Copy)
+        .unwrap_err();
+    assert_eq!(error.kind, MemoryErrorKind::UnsupportedFormat);
+    assert!(recording
+        .finish(0, Microcode::F3dex2, DataFormat::Fixed, 0)
+        .is_err());
+}
+
+#[test]
+fn capture_snapshots_walk_bindings() {
+    let hardware = Image(
+        [0xe1000000u32, 0x8000, 0xdd0007ff, 0x1000, 0xdf000000, 0]
+            .into_iter()
+            .flat_map(u32::to_be_bytes)
+            .collect(),
+    );
+    let recording = RecordingHardware::new(&hardware);
+    let mut bindings = vec![(0x1000, Microcode::S2dex2)];
+    let result = super::super::interp::interpret_with_bindings(
+        recording.rdram(),
+        0,
+        Microcode::F3dex2.into(),
+        DataFormat::Fixed,
+        Default::default(),
+        Default::default(),
+        None,
+        Default::default(),
+        &bindings,
+    );
+    assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+    let task = recording
+        .finish_with_bindings(0, Microcode::F3dex2, DataFormat::Fixed, 0, &bindings)
+        .unwrap();
+    bindings[0].1 = Microcode::F3d;
+    assert_eq!(task.bindings, vec![(0x1000, Microcode::S2dex2)]);
+    assert_eq!(
+        task.interpret(Default::default()).unwrap().termination,
+        crate::inspect::WalkTermination::End
+    );
+}
+
+#[path = "s2dex_tests.rs"]
+mod s2dex;

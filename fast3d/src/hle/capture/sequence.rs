@@ -328,8 +328,13 @@ impl Sequence {
                 let mut task_diags = Vec::new();
                 renderer.set_data_format(task.data_format);
                 adapter_ms += now_ms() - start;
-                let summary =
-                    renderer.process_dl(&hardware, task.entry, task.microcode, &mut task_diags);
+                let summary = renderer.process_dl_with_bindings(
+                    &hardware,
+                    task.entry,
+                    task.microcode,
+                    &mut task_diags,
+                    &task.bindings,
+                );
                 let start = now_ms();
                 hardware.check()?;
                 commands.extend(hardware.commands.into_inner().into_iter().map(|command| {

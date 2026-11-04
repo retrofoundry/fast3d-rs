@@ -546,8 +546,11 @@ fn interleaving_fixture() -> crate::capture::Fixture {
 fn workload_interleaving_fixture_pixels() {
     let fixture = interleaving_fixture();
     assert_eq!(
-        fixture.to_bytes().unwrap(),
-        include_bytes!("../../tests/fixtures/workload-interleaving.f3dcap")
+        fixture,
+        crate::capture::Fixture::from_bytes(include_bytes!(
+            "../../tests/fixtures/workload-interleaving.f3dcap"
+        ))
+        .unwrap()
     );
     assert_eq!(
         fixture.tasks[0].source.memory,

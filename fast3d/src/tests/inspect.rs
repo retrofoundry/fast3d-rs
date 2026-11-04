@@ -102,6 +102,8 @@ pub(super) fn assert_emission(scene: &crate::scene::Scene, emission: Emission<'_
             assert_eq!((rect, color_raw), (actual_rect, actual_color));
         }
         Emission::TexRect {
+            material_index,
+            render_mode_index,
             target,
             op_index,
             rect,
@@ -124,11 +126,15 @@ pub(super) fn assert_emission(scene: &crate::scene::Scene, emission: Emission<'_
                 flip: actual_flip,
                 copy_mode: actual_copy_mode,
                 fb_source: actual_source,
+                material_index: actual_material,
+                render_mode_index: actual_render_mode,
                 ..
             } = scene.framebuffer_pairs[target.pair_index].ops[op_index as usize]
             else {
                 panic!("texture rectangle emission must resolve to a texture rectangle op");
             };
+            assert_eq!(material_index, actual_material);
+            assert_eq!(render_mode_index, actual_render_mode);
             assert_eq!(
                 (rect, tile, uls, ult, dsdx, dtdy, flip, copy_mode, fb_source),
                 (
@@ -154,14 +160,24 @@ fn bytes(words: impl IntoIterator<Item = (u32, u32)>) -> Vec<u8> {
         .collect()
 }
 
+fn cycle_type(ucode: Microcode, cycle: u32) -> (u32, u32) {
+    match ucode {
+        Microcode::S2dex2 => unreachable!("3D fixture"),
+        Microcode::F3dex2 => gdp_set_cycle_type(cycle),
+        Microcode::F3d => gdp_set_cycle_type_f3d(cycle),
+    }
+}
+
 fn end(ucode: Microcode) -> (u32, u32) {
     match ucode {
+        Microcode::S2dex2 => unreachable!("3D fixture"),
         Microcode::F3dex2 => gsp_enddl(),
         Microcode::F3d => gsp_enddl_f3d(),
     }
 }
 fn dl(ucode: Microcode, target: u32, branch: bool) -> (u32, u32) {
     let opcode = match ucode {
+        Microcode::S2dex2 => unreachable!("3D fixture"),
         Microcode::F3dex2 => 0xde,
         Microcode::F3d => 0x06,
     };
@@ -182,6 +198,7 @@ fn memory_read_discards_scene_and_observes_fault() {
         let fault = gdp_load_tlut(7, 3);
         let memory = bytes([
             gdp_set_color_image(0, 2, 320, 0x100000),
+            cycle_type(ucode, 3),
             gdp_fill_rectangle(0, 0, 16, 16),
             gdp_set_tile(0, 2, 0, 0x100, 7, 0, 0, 0, 0, 0, 0, 0),
             gdp_set_texture_image(0, 2, 1, 0x1000),
@@ -198,14 +215,14 @@ fn memory_read_discards_scene_and_observes_fault() {
         );
         assert_eq!(ordinary.termination, WalkTermination::Bounds);
         assert_eq!(ordinary.scene, crate::hle::rsp::Scene::default());
-        assert_eq!(ordinary.commands, 5);
+        assert_eq!(ordinary.commands, 6);
         assert_eq!(ordinary.dropped_runs, 1);
         assert_eq!(ordinary.rdp.env, [0; 4]);
         assert_eq!(ordinary.final_diagnostics_start, ordinary.diags.len());
         assert_eq!(
             ordinary.diags,
             [crate::Diagnostic {
-                at: 32,
+                at: 40,
                 kind: crate::DiagKind::MemoryRead {
                     access: crate::diag::MemoryAccess::Tlut,
                     error: crate::MemoryError {
@@ -228,17 +245,17 @@ fn memory_read_discards_scene_and_observes_fault() {
                     count += 1;
                     assert_eq!(step.diagnostics_start, diags.len());
                     diags.extend_from_slice(step.diagnostics);
-                    if step.seq == 1 {
+                    if step.seq == 2 {
                         assert!(matches!(step.emissions, [Emission::FillRect { .. }]));
                     }
-                    if step.seq == 4 {
-                        assert_eq!(step.pc, 32);
+                    if step.seq == 5 {
+                        assert_eq!(step.pc, 40);
                         assert_eq!(step.flow, WalkFlow::Fault);
                         assert_eq!(step.next_pc, None);
                         assert_eq!(
                             step.words,
                             &[CommandWord {
-                                pc: 32,
+                                pc: 40,
                                 w0: fault.0,
                                 w1: fault.1,
                                 w1_addr: u64::from(fault.1),
@@ -253,7 +270,7 @@ fn memory_read_discards_scene_and_observes_fault() {
                     ControlFlow::Continue(())
                 }),
             );
-            assert_eq!(count, 5);
+            assert_eq!(count, 6);
             assert_eq!(diags, observed.diags);
             assert_eq!(observed, ordinary);
         }
@@ -285,6 +302,7 @@ fn fixed_rectangles_have_exact_dispatches_words_and_targets() {
                 commands.push(gdp_set_scissor(0, 0, 0, 1280, 960));
             }
             commands.extend([
+                cycle_type(ucode, 3),
                 gdp_set_fill_color(0xcafecafe),
                 gdp_fill_rectangle(0, 0, 1280, 960),
                 end(ucode),
@@ -685,6 +703,7 @@ fn triangles_report_index_growth_even_when_runs_coalesce() {
                     }
                     if cull != 0 {
                         let mask = match ucode {
+                            Microcode::S2dex2 => unreachable!("3D fixture"),
                             Microcode::F3dex2 => {
                                 if cull == 1 {
                                     0x200
@@ -701,26 +720,31 @@ fn triangles_report_index_growth_even_when_runs_coalesce() {
                             }
                         };
                         commands.push(match ucode {
+                            Microcode::S2dex2 => unreachable!("3D fixture"),
                             Microcode::F3dex2 => gsp_set_geometrymode(mask),
                             Microcode::F3d => gsp_set_geometrymode_f3d(mask),
                         });
                     }
                     commands.push(gdp_set_combine_lerp(cc, ca, cc, ca));
                     commands.push(match ucode {
+                        Microcode::S2dex2 => unreachable!("3D fixture"),
                         Microcode::F3dex2 => gdp_set_render_mode(G_RM_OPA_SURF, G_RM_OPA_SURF2),
                         Microcode::F3d => gdp_set_render_mode_f3d(G_RM_OPA_SURF, G_RM_OPA_SURF2),
                     });
                     commands.push(match ucode {
+                        Microcode::S2dex2 => unreachable!("3D fixture"),
                         Microcode::F3dex2 => gsp_vertex(0, 4, 0x100),
                         Microcode::F3d => gsp_vertex_f3d(0, 4, 0x100),
                     });
                     if doubled {
                         commands.push(match ucode {
+                            Microcode::S2dex2 => unreachable!("3D fixture"),
                             Microcode::F3dex2 => gsp_2triangles(0, 1, 2, 0, 2, 3),
                             Microcode::F3d => gsp_quad_f3d(0, 1, 2, 3),
                         });
                     } else {
                         commands.extend(match ucode {
+                            Microcode::S2dex2 => unreachable!("3D fixture"),
                             Microcode::F3dex2 => [gsp_1triangle(0, 1, 2), gsp_1triangle(0, 2, 3)],
                             Microcode::F3d => {
                                 [gsp_1triangle_f3d(0, 1, 2), gsp_1triangle_f3d(0, 2, 3)]
@@ -813,6 +837,7 @@ fn float_rectangles_consume_continuations_and_preserve_sentinel() {
         let mut commands = vec![
             gdp_set_color_image(0, 2, 320, 0x100000),
             gdp_set_fill_color(0x12345678),
+            gdp_set_cycle_type(if tex { 0 } else { 3 }),
         ];
         commands.push((if tex { 0xe4000500 } else { 0xf6000500 }, 960));
         commands.push((0xe1000000, if tex { 0x000b000d } else { 0 }));
@@ -833,7 +858,7 @@ fn float_rectangles_consume_continuations_and_preserve_sentinel() {
             Microcode::F3dex2,
             DataFormat::Float,
             &mut |s: WalkStep<'_>| {
-                if s.seq == 2 {
+                if s.seq == 3 {
                     assert_eq!(s.words.len(), if tex { 3 } else { 2 });
                     assert_eq!(s.emissions.len(), 1);
                     match s.emissions[0] {
@@ -870,17 +895,17 @@ fn float_rectangles_consume_continuations_and_preserve_sentinel() {
                         other => panic!("{other:?}"),
                     }
                     for (i, w) in s.words.iter().enumerate() {
-                        assert_eq!(w.pc, (i as u64 + 2) * 8);
-                        assert_eq!((w.w0, w.w1), commands[i + 2]);
+                        assert_eq!(w.pc, (i as u64 + 3) * 8);
+                        assert_eq!((w.w0, w.w1), commands[i + 3]);
                     }
                 }
-                if s.seq == 3 {
+                if s.seq == 4 {
                     assert_eq!(s.state.prim_color, [0x12, 0x34, 0xab, 0xcd]);
                 }
                 ControlFlow::Continue(())
             },
         );
-        assert_eq!(summary.dispatched, 5);
+        assert_eq!(summary.dispatched, 6);
     }
     let memory = bytes([(0xf6000500, 960)]);
     let summary = walk(
@@ -1043,10 +1068,12 @@ fn observation_does_not_add_reads_or_truncate_operands() {
 fn post_command_projection_preserves_values_and_owned_snapshots() {
     for ucode in [Microcode::F3dex2, Microcode::F3d] {
         let geom = match ucode {
+            Microcode::S2dex2 => unreachable!("3D fixture"),
             Microcode::F3dex2 => gsp_set_geometrymode(0x200),
             Microcode::F3d => gsp_set_geometrymode_f3d(0x200),
         };
         let texture = match ucode {
+            Microcode::S2dex2 => unreachable!("3D fixture"),
             Microcode::F3dex2 => gsp_texture(123, 456, 2, 3, true),
             Microcode::F3d => gsp_texture_f3d(123, 456, 2, 3, true),
         };
@@ -1078,6 +1105,7 @@ fn post_command_projection_preserves_values_and_owned_snapshots() {
             &mut |s: WalkStep<'_>| {
                 if s.seq == 0 {
                     let name = match ucode {
+                        Microcode::S2dex2 => unreachable!("3D fixture"),
                         Microcode::F3dex2 => "G_CULL_FRONT",
                         Microcode::F3d => "G_SHADING_SMOOTH",
                     };
@@ -1260,10 +1288,12 @@ fn rejected_draws_and_final_warnings_have_distinct_diagnostic_slices() {
                 gdp_set_combine_lerp(cc, ca, cc, ca)
             };
             let vtx = match ucode {
+                Microcode::S2dex2 => unreachable!("3D fixture"),
                 Microcode::F3dex2 => gsp_vertex(0, 3, 0x100),
                 Microcode::F3d => gsp_vertex_f3d(0, 3, 0x100),
             };
             let tri = match ucode {
+                Microcode::S2dex2 => unreachable!("3D fixture"),
                 Microcode::F3dex2 => gsp_1triangle(0, 1, 2),
                 Microcode::F3d => gsp_1triangle_f3d(0, 1, 2),
             };
@@ -1390,6 +1420,7 @@ fn cancellation_on_call_never_fetches_target() {
 fn load_tile_and_f3d_only_geometry_flags_are_projected() {
     for ucode in [Microcode::F3dex2, Microcode::F3d] {
         let geom = match ucode {
+            Microcode::S2dex2 => unreachable!("3D fixture"),
             Microcode::F3dex2 => gsp_set_geometrymode(0x80000200),
             Microcode::F3d => gsp_set_geometrymode_f3d(0x80400202),
         };
@@ -1464,6 +1495,7 @@ fn texture_rectangle_keeps_prior_framebuffer_source_and_copy_mode() {
             gdp_set_color_image(0, 2, 320, 0x100000),
             gdp_set_scissor(0, 0, 0, 1280, 960),
             gdp_set_tile(0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            cycle_type(ucode, 3),
             gdp_fill_rectangle(0, 0, 1280, 960),
             gdp_set_color_image(0, 2, 320, 0x200000),
             gdp_set_texture_image(0, 2, 320, 0x100000),
@@ -1493,7 +1525,7 @@ fn texture_rectangle_keeps_prior_framebuffer_source_and_copy_mode() {
                         ..
                     } = emission
                     {
-                        assert_eq!(s.seq, 7);
+                        assert_eq!(s.seq, 8);
                         assert_eq!(target.pair_index, 1);
                         assert_eq!(target.color_image.addr, 0x200000);
                         assert_eq!(*fb_source, Some(0x100000));
@@ -1504,7 +1536,7 @@ fn texture_rectangle_keeps_prior_framebuffer_source_and_copy_mode() {
                 ControlFlow::Continue(())
             },
         );
-        assert_eq!(summary.dispatched, 9);
+        assert_eq!(summary.dispatched, 10);
         assert_eq!(rects, 1, "{:?}", summary.diagnostics);
     }
 }

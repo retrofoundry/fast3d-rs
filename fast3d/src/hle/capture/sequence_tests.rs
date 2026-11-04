@@ -65,6 +65,7 @@ fn draw_task() -> Task {
     );
     let built = b.finish("main");
     Task {
+        bindings: Vec::new(),
         entry: built.entry.into(),
         microcode: Microcode::F3dex2,
         data_format: DataFormat::Fixed,

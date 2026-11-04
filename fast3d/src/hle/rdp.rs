@@ -228,29 +228,57 @@ fn set_blend_color<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn set_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    let tile = c.p1(24, 3) as usize;
-    let t = &mut cx.rdp.tiles[tile];
-    t.siz = c.p0(19, 2) as u8;
-    t.fmt = c.p0(21, 3) as u8;
-    t.line = c.p0(9, 9) as u16;
-    t.tmem_addr = c.p0(0, 9) as u16;
-    t.palette = c.p1(20, 4) as u8;
-    t.cmt = c.p1(18, 2) as u8;
-    t.maskt = c.p1(14, 4) as u8;
-    t.shiftt = c.p1(10, 4) as u8;
-    t.cms = c.p1(8, 2) as u8;
-    t.masks = c.p1(4, 4) as u8;
-    t.shifts = c.p1(0, 4) as u8;
+    set_tile_typed(
+        c.p1(24, 3) as usize,
+        TileDescriptor {
+            siz: c.p0(19, 2) as u8,
+            fmt: c.p0(21, 3) as u8,
+            line: c.p0(9, 9) as u16,
+            tmem_addr: c.p0(0, 9) as u16,
+            palette: c.p1(20, 4) as u8,
+            cmt: c.p1(18, 2) as u8,
+            maskt: c.p1(14, 4) as u8,
+            shiftt: c.p1(10, 4) as u8,
+            cms: c.p1(8, 2) as u8,
+            masks: c.p1(4, 4) as u8,
+            shifts: c.p1(0, 4) as u8,
+            ..Default::default()
+        },
+        cx,
+    );
+}
+
+pub(crate) fn set_tile_typed<M: Rdram>(tile: usize, descriptor: TileDescriptor, cx: &mut Ctx<M>) {
+    let old = &cx.rdp.tiles[tile];
+    cx.rdp.tiles[tile] = TileDescriptor {
+        uls: old.uls,
+        ult: old.ult,
+        lrs: old.lrs,
+        lrt: old.lrt,
+        width: old.width,
+        height: old.height,
+        ..descriptor
+    };
     cx.rsp.material_dirty = true;
 }
 
 fn set_tile_size<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let tile = c.p1(24, 3) as usize;
+    set_tile_size_typed(
+        tile,
+        [
+            c.p0(12, 12) as u16,
+            c.p0(0, 12) as u16,
+            c.p1(12, 12) as u16,
+            c.p1(0, 12) as u16,
+        ],
+        cx,
+    );
+}
+
+pub(crate) fn set_tile_size_typed<M: Rdram>(tile: usize, bounds: [u16; 4], cx: &mut Ctx<M>) {
     let t = &mut cx.rdp.tiles[tile];
-    t.uls = c.p0(12, 12) as u16;
-    t.ult = c.p0(0, 12) as u16;
-    t.lrs = c.p1(12, 12) as u16;
-    t.lrt = c.p1(0, 12) as u16;
+    [t.uls, t.ult, t.lrs, t.lrt] = bounds;
     t.width = ((i32::from(t.lrs) - i32::from(t.uls)).div_euclid(4) + 1).max(1) as u16;
     t.height = ((i32::from(t.lrt) - i32::from(t.ult)).div_euclid(4) + 1).max(1) as u16;
     cx.rsp.material_dirty = true;
@@ -302,16 +330,26 @@ fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 }
 
 fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    // G_LOADTILE (0xF4): row-by-row load of a strided sub-rectangle of the current tex_image into
-    // TMEM. Params (w0: uls/ult, w1: tile/lrs/lrt) are 10.2
-    // fixed point; integer texel coords are the fields >> 2.
-    let (_fmt, siz, width, addr) = cx.rdp.tex_image;
-    let tile_idx = c.p1(24, 3) as usize; // load tile (7 for a well-formed LoadTextureTile)
-    let uls = c.p0(12, 12) >> 2;
-    let ult = c.p0(0, 12) >> 2;
-    let lrs = c.p1(12, 12) >> 2;
-    let lrt = c.p1(0, 12) >> 2;
+    let _ = load_tile_typed(
+        c.p1(24, 3) as usize,
+        [
+            c.p0(12, 12) as u16,
+            c.p0(0, 12) as u16,
+            c.p1(12, 12) as u16,
+            c.p1(0, 12) as u16,
+        ],
+        cx,
+    );
+}
 
+pub(crate) fn load_tile_typed<M: Rdram>(
+    tile_idx: usize,
+    bounds: [u16; 4],
+    cx: &mut Ctx<M>,
+) -> Result<(), ()> {
+    set_tile_size_typed(tile_idx, bounds, cx);
+    let (_fmt, siz, width, addr) = cx.rdp.tex_image;
+    let [uls, ult, lrs, lrt] = bounds.map(|v| u32::from(v) >> 2);
     // saturating_sub guards malformed input (uls > lrs / ult > lrt) against u32 underflow/panic.
     let tile_width = lrs.saturating_sub(uls);
     let row_count = 1 + lrt.saturating_sub(ult);
@@ -326,7 +364,7 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let bytes_per_row = (actual_width << siz) >> 1;
     let bytes_offset = (uls << siz) >> 1;
     let offset = u64::from(bytes_offset) + u64::from(bytes_per_row) * u64::from(ult);
-    let texture_start = memory_try!(cx, Texture, checked_span(addr, offset));
+    let texture_start = checked_span(addr, offset).map_err(|error| texture_error(cx, error))?;
     let src_len = (row_count as usize - 1) * bytes_per_row as usize + words_per_row as usize * 8;
     if let Some(diagnostic) = framebuffer_load(cx, texture_start, src_len) {
         let tile = &cx.rdp.tiles[tile_idx];
@@ -342,14 +380,11 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
                 siz,
             )
         });
-        return;
+        return Err(());
     }
-    let src = memory_try!(
-        cx,
-        Texture,
-        read_bytes_exact(cx.mem, texture_start, src_len)
-    )
-    .into_owned();
+    let src = read_bytes_exact(cx.mem, texture_start, src_len)
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|error| texture_error(cx, error))?;
 
     // Dest: the load tile's `tmem`/`line` set the destination base and the padded per-row stride.
     let dst_words = cx.rdp.tiles[tile_idx].tmem_addr as usize;
@@ -366,6 +401,17 @@ fn load_tile<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     cx.rdp.texture_loaded = true;
     cx.rdp.load_via_tile = true;
     cx.rsp.material_dirty = true;
+    Ok(())
+}
+
+fn texture_error<M: Rdram>(cx: &mut Ctx<M>, error: crate::MemoryError) {
+    cx.diags.push(Diagnostic {
+        at: cx.pc,
+        kind: DiagKind::MemoryRead {
+            access: crate::MemoryAccess::Texture,
+            error,
+        },
+    });
 }
 
 fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
@@ -476,6 +522,24 @@ mod tests {
         };
         t[cmd.opcode() as usize](&cmd, &mut cx);
         (rdp, diags)
+    }
+
+    #[test]
+    fn load_tile_updates_descriptor_bounds() {
+        let rdp = Rdp {
+            tex_image: (0, 2, 7, 0),
+            ..Rdp::default()
+        };
+        let (rdp, diags) = run_cmd(
+            &[0xff; 128],
+            rdp,
+            0xf400_0000 | (4 << 12) | 8,
+            (7 << 24) | (12 << 12) | 16,
+        );
+        assert!(diags.is_empty(), "{diags:?}");
+        let tile = &rdp.tiles[7];
+        assert_eq!([tile.uls, tile.ult, tile.lrs, tile.lrt], [4, 8, 12, 16]);
+        assert_eq!([tile.width, tile.height], [3, 3]);
     }
 
     #[test]

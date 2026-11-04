@@ -154,5 +154,5 @@ jobs:
         run: |
           cargo test -p fast3d --no-fail-fast --features capture,profiling --target wasm32-unknown-unknown \
             --test browser_sm64_fixture_replay --test capture_facade \
-            --test capture_memory_wasm --test profiling_capture \
+            --test capture_memory_wasm --test capture_s2dex_wasm --test profiling_capture \
             --test framebuffer_load_evidence -- --nocapture

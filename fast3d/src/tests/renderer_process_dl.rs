@@ -181,6 +181,7 @@ fn fill_hw(addr: u32, color: u32) -> ImgHw {
         rdram: [
             gdp_set_color_image(0, 2, 64, addr),
             gdp_set_scissor(0, 0, 0, 256, 256),
+            gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
             gdp_set_fill_color(color),
             gdp_fill_rectangle(0, 0, 252, 252),
             gsp_enddl(),
@@ -188,6 +189,85 @@ fn fill_hw(addr: u32, color: u32) -> ImgHw {
         .into_iter()
         .flat_map(|(w0, w1)| w0.to_be_bytes().into_iter().chain(w1.to_be_bytes()))
         .collect(),
+    }
+}
+
+#[test]
+fn fillrect_primitive_alpha_and_cycle_edges() {
+    use n64_gbi::consts::rdp::*;
+    use n64_gbi::encode::*;
+
+    let color = CcPass {
+        a: 15,
+        b: 15,
+        c: 31,
+        d: 3,
+    };
+    let alpha = CcPass {
+        a: 7,
+        b: 7,
+        c: 7,
+        d: 3,
+    };
+    let mode1 = IM_RD | CVG_DST_FULL | FORCE_BL | gbl_c1(CLR_IN, A_IN, CLR_MEM, B_1MA);
+    let mode2 = gbl_c2(CLR_IN, A_IN, CLR_MEM, B_1MA);
+    let mut renderer = headless_renderer();
+    for cycle in [0, G_CYC_FILL] {
+        for prim_alpha in [0, 255] {
+            renderer.begin_frame();
+            let mut diags = Vec::new();
+            renderer.process_dl(
+                &fill_hw(0x100000, 0x07c107c1),
+                0,
+                Microcode::F3dex2,
+                &mut diags,
+            );
+            assert!(diags.is_empty(), "{diags:?}");
+            let before = store_pixels(&mut renderer, 0x100000);
+            assert!(before
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [0, 255, 0, 255]));
+            let hw = ImgHw {
+                rdram: [
+                    gdp_set_cycle_type(cycle),
+                    gdp_set_render_mode(mode1, mode2),
+                    gdp_set_combine_lerp(color, alpha, color, alpha),
+                    gdp_set_prim_color(0, 0, 0xff000000 | prim_alpha),
+                    gdp_set_fill_color(0x003f003f),
+                    gdp_fill_rectangle(0, 0, 40, 40),
+                    gsp_enddl(),
+                ]
+                .into_iter()
+                .flat_map(|(w0, w1)| w0.to_be_bytes().into_iter().chain(w1.to_be_bytes()))
+                .collect(),
+            };
+            let summary = renderer.process_dl(&hw, 0, Microcode::F3dex2, &mut diags);
+            assert!(diags.is_empty(), "{diags:?}");
+            assert!(summary.renderable);
+            let pixels = store_pixels(&mut renderer, 0x100000);
+            for y in 0..64 {
+                for x in 0..64 {
+                    let expected = if cycle == G_CYC_FILL && x <= 10 && y <= 10 {
+                        [0, 0, 255, 255]
+                    } else if cycle == 0 && x < 10 && y < 10 {
+                        if prim_alpha == 0 {
+                            [0, 255, 0, 0]
+                        } else {
+                            [255, 0, 0, 255]
+                        }
+                    } else {
+                        [0, 255, 0, 255]
+                    };
+                    assert_eq!(
+                        crate::tests::common::pixel(&pixels, 64, x, y),
+                        expected,
+                        "cycle {cycle}, alpha {prim_alpha}, pixel ({x}, {y})"
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -237,7 +317,7 @@ fn cancelled_render_preserves_previous_dls_and_does_not_create_framebuffers() {
                 }
             },
         );
-        assert_eq!(summary.commands, 4);
+        assert_eq!(summary.commands, 5);
         assert_eq!(summary.commands, count);
         assert_eq!(summary.termination, WalkTermination::ObserverStopped);
         assert!(!summary.renderable);

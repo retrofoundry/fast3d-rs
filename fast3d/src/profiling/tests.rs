@@ -184,6 +184,7 @@ fn profiling_preserves_interpreter_summary_and_capture_bytes() {
     use crate::Hardware;
     let bytes = include_bytes!("../../tests/fixtures/host64-fill.f3dcap");
     let fixture = crate::capture::Fixture::from_bytes(bytes).unwrap();
+    let encoded = fixture.to_bytes().unwrap();
     let task = &fixture.tasks[0];
     let hardware = crate::capture::ReplayHardware::new(task, fixture.frame.vi).unwrap();
     let mut plain = CpuInterpreter::default();
@@ -207,7 +208,7 @@ fn profiling_preserves_interpreter_summary_and_capture_bytes() {
             ),
             expected
         );
-        assert_eq!(fixture.to_bytes().unwrap(), bytes);
+        assert_eq!(fixture.to_bytes().unwrap(), encoded);
     }
 }
 

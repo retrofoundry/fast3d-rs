@@ -380,8 +380,9 @@ fn hostptr_walks_native_dl_and_decodes_scene() {
 }
 
 /// `set_segment` must store the raw value and `resolve` then rebases segmented addresses; an
-/// address whose segment is UNSET passes through untouched (pointer passthrough). This is the
-/// branch the data pointers above rely on (their high byte selects an unset segment).
+/// address whose segment is UNSET resolves to itself. Full-width pointers at or above
+/// `SEGMENT_SPACE_END` pass through untouched whatever segments are set, which is the branch the
+/// data pointers above take.
 #[test]
 fn hostptr_segment_resolve_vs_passthrough() {
     use crate::hle::Rdram;
@@ -395,6 +396,7 @@ fn hostptr_segment_resolve_vs_passthrough() {
         host.resolve(0x0512_3456).unwrap(),
         0x1_0000_0000 + 0x0012_3456
     );
+    assert_eq!(host.resolve(0x1_0512_3456).unwrap(), 0x1_0512_3456);
     // resolve_masked must NOT mask a pointer (no &0x00FFFFF8).
     assert_eq!(
         host.resolve_masked(0x0512_3457).unwrap(),

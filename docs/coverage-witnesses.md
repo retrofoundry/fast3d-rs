@@ -50,8 +50,8 @@ with FullSync. Captures record the final color-image origin and width, vertical
 endpoints `0..2*height` and unit X/Y scales (`1024`). The decoded VI height equals
 the authored output height. They use F3D and F3DEX2, including direct XY
 modifications. An encoder test checks literal matrix, viewport and command words and independently
-recovers screen coordinates from the stored vertex bytes. Capture bytes are
-checked against regeneration. The shared native/browser replay requires a real
+recovers screen coordinates from the stored vertex bytes. Each capture file is
+decoded and compared with its builder. The shared native/browser replay requires a real
 adapter and compares each selected full frame with B. Primary-color pixels are exact;
 interpolated scalar output permits one UNORM rounding step at covered pixels.
 

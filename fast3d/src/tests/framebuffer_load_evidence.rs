@@ -295,8 +295,8 @@ fn f0_checked_captures_match_authored_commands() {
     for case in CASES {
         let built = scene(case);
         assert_eq!(
-            fixture(&built, case).to_bytes().unwrap(),
-            case.fixture_bytes()
+            fixture(&built, case),
+            Fixture::from_bytes(case.fixture_bytes()).unwrap()
         );
     }
 }
@@ -520,6 +520,7 @@ fn fixture(built: &Built, case: Case) -> Fixture {
             },
         },
         tasks: vec![Task {
+            bindings: Vec::new(),
             entry: built.entry.into(),
             microcode: Microcode::F3dex2,
             data_format: DataFormat::Fixed,

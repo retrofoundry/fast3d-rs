@@ -15,6 +15,15 @@ pub enum GbiDataFormat {
     Float,
 }
 
+/// Segmented addresses are `(segment << 24) | offset`, so they always sit below this bound. Values
+/// at or above it are already resolved and pass through untouched, even when bits 24..28 happen to
+/// name a segment that is set. Host reads below it fail, so native inputs must sit at or above it.
+#[cfg(any(
+    feature = "capture",
+    all(not(target_arch = "wasm32"), target_pointer_width = "64")
+))]
+pub(crate) const SEGMENT_SPACE_END: u64 = 0x1000_0000;
+
 /// Why a memory operation could not produce its complete requested value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -39,6 +48,89 @@ fn memory_error(address: u64, length: u64, kind: MemoryErrorKind) -> MemoryError
         length,
         kind,
     }
+}
+
+/// The background union variant consumed by a command.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjBgKind {
+    Copy,
+    Scaled,
+}
+
+/// A decoded S2DEX background; fields outside the requested variant are zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjBg {
+    pub image_x: u16,
+    pub image_w: u16,
+    pub frame_x: i16,
+    pub frame_w: u16,
+    pub image_y: u16,
+    pub image_h: u16,
+    pub frame_y: i16,
+    pub frame_h: u16,
+    pub image_ptr: u64,
+    pub image_load: u16,
+    pub image_fmt: u8,
+    pub image_siz: u8,
+    pub image_pal: u16,
+    pub image_flip: u16,
+    pub tmem_w: u16,
+    pub tmem_h: u16,
+    pub tmem_load_sh: u16,
+    pub tmem_load_th: u16,
+    pub tmem_size_w: u16,
+    pub tmem_size: u16,
+    pub scale_w: u16,
+    pub scale_h: u16,
+    pub image_y_orig: i32,
+}
+
+pub(crate) fn decode_obj_bg(
+    address: u64,
+    kind: ObjBgKind,
+    pointer_bytes: usize,
+    mut word: impl FnMut(u64, usize) -> Result<u64, MemoryError>,
+) -> Result<ObjBg, MemoryError> {
+    let mut read = |offset: u64, length: usize| {
+        let field = address
+            .checked_add(offset)
+            .ok_or_else(|| memory_error(address, offset, MemoryErrorKind::AddressOverflow))?;
+        word(field, length)
+    };
+    let tail = 16 + pointer_bytes as u64;
+    let mut bg = ObjBg {
+        image_x: read(0, 2)? as u16,
+        image_w: read(2, 2)? as u16,
+        frame_x: read(4, 2)? as i16,
+        frame_w: read(6, 2)? as u16,
+        image_y: read(8, 2)? as u16,
+        image_h: read(10, 2)? as u16,
+        frame_y: read(12, 2)? as i16,
+        frame_h: read(14, 2)? as u16,
+        image_ptr: read(16, pointer_bytes)?,
+        image_load: read(tail, 2)? as u16,
+        image_fmt: read(tail + 2, 1)? as u8,
+        image_siz: read(tail + 3, 1)? as u8,
+        image_pal: read(tail + 4, 2)? as u16,
+        image_flip: read(tail + 6, 2)? as u16,
+        ..ObjBg::default()
+    };
+    match kind {
+        ObjBgKind::Copy => {
+            bg.tmem_w = read(tail + 8, 2)? as u16;
+            bg.tmem_h = read(tail + 10, 2)? as u16;
+            bg.tmem_load_sh = read(tail + 12, 2)? as u16;
+            bg.tmem_load_th = read(tail + 14, 2)? as u16;
+            bg.tmem_size_w = read(tail + 16, 2)? as u16;
+            bg.tmem_size = read(tail + 18, 2)? as u16;
+        }
+        ObjBgKind::Scaled => {
+            bg.scale_w = read(tail + 8, 2)? as u16;
+            bg.scale_h = read(tail + 10, 2)? as u16;
+            bg.image_y_orig = read(tail + 12, 4)? as i32;
+        }
+    }
+    Ok(bg)
 }
 
 /// One memory address space for the interpreter.
@@ -77,6 +169,11 @@ pub trait Rdram {
     /// Returns exactly `length` bytes or an error.
     fn read_bytes(&self, address: u64, length: usize) -> Result<Cow<'_, [u8]>, MemoryError>;
     fn read_matrix(&self, address: u64, format: GbiDataFormat) -> Result<Matrix, MemoryError>;
+
+    /// Decodes the fields consumed by the requested background command.
+    fn read_obj_bg(&self, address: u64, _kind: ObjBgKind) -> Result<ObjBg, MemoryError> {
+        Err(memory_error(address, 0, MemoryErrorKind::UnsupportedFormat))
+    }
 
     /// Returns the byte stride for the requested vertex layout.
     ///
@@ -260,6 +357,15 @@ impl Rdram for RdramImage<'_> {
 
     fn resolve_masked(&self, address: u64) -> Result<u64, MemoryError> {
         self.from_segmented_masked(address)
+    }
+
+    fn read_obj_bg(&self, address: u64, kind: ObjBgKind) -> Result<ObjBg, MemoryError> {
+        decode_obj_bg(address, kind, 4, |address, length| {
+            Ok(self
+                .read_slice(address, length)?
+                .iter()
+                .fold(0, |v, &b| (v << 8) | b as u64))
+        })
     }
 
     fn read_command(&self, address: u64) -> Result<Command, MemoryError> {

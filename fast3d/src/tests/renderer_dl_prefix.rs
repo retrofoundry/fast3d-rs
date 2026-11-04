@@ -172,6 +172,7 @@ fn zero_preserves_pixels_scenes_scanout_backend_format_and_frame_serial_without_
         &hw([
             gdp_set_color_image(0, 2, 64, A),
             gdp_set_scissor(0, 0, 0, 256, 256),
+            gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
             gdp_set_fill_color(0x07c107c1),
             gdp_fill_rectangle(0, 0, 124, 252),
             gsp_enddl(),
@@ -179,7 +180,7 @@ fn zero_preserves_pixels_scenes_scanout_backend_format_and_frame_serial_without_
         0,
         Microcode::F3dex2,
         &mut NopSink,
-        4,
+        5,
     );
     let after = store_pixels(&mut r, A.into());
     assert_eq!(
@@ -368,6 +369,7 @@ fn two_target_fills() -> ImgHw {
     hw([
         gdp_set_color_image(0, 2, 64, A),
         gdp_set_scissor(0, 0, 0, 256, 256),
+        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
         gdp_set_fill_color(0xf801f801),
         gdp_fill_rectangle(0, 0, 124, 252),
         gdp_set_fill_color(0x07c107c1),
@@ -390,17 +392,19 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
     let middle = hw([
         gdp_set_color_image(0, 2, 64, A),
         gdp_set_scissor(0, 0, 0, 256, 256),
+        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
         gdp_set_fill_color(0xf801f801),
         gdp_fill_rectangle(0, 0, 124, 252),
         gsp_enddl(),
     ]);
-    let mut r = compare_prefix(&full, &middle, 0, 4, &[A, B]);
+    let mut r = compare_prefix(&full, &middle, 0, 5, &[A, B]);
     assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
     assert_eq!(pixel(&mut r, A, 16, 32), [255, 0, 0, 255]);
     assert_ne!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]);
     let switched = hw([
         gdp_set_color_image(0, 2, 64, A),
         gdp_set_scissor(0, 0, 0, 256, 256),
+        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
         gdp_set_fill_color(0xf801f801),
         gdp_fill_rectangle(0, 0, 124, 252),
         gdp_set_fill_color(0x07c107c1),
@@ -408,7 +412,7 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
         gdp_set_color_image(0, 2, 64, B),
         gsp_enddl(),
     ]);
-    let mut r = compare_prefix(&full, &switched, 0, 7, &[A, B]);
+    let mut r = compare_prefix(&full, &switched, 0, 8, &[A, B]);
     assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(A.into())));
     assert!(!r.inner.has_fb(u64::from(B)));
     assert_eq!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]);
@@ -417,7 +421,7 @@ fn shorter_lists_match_before_draw_mid_pair_and_after_cimg_switch() {
 #[test]
 fn depth_only_prefix_matches_shorter_list_and_keeps_prior_color_scanout() {
     let full = hw([
-        gdp_set_cycle_type(3),
+        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
         gdp_set_depth_image(Z),
         gdp_set_color_image(0, 2, 64, Z),
         gdp_set_scissor(0, 0, 0, 256, 256),
@@ -429,7 +433,7 @@ fn depth_only_prefix_matches_shorter_list_and_keeps_prior_color_scanout() {
         gsp_enddl(),
     ]);
     let short = hw([
-        gdp_set_cycle_type(3),
+        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
         gdp_set_depth_image(Z),
         gdp_set_color_image(0, 2, 64, Z),
         gdp_set_scissor(0, 0, 0, 256, 256),
@@ -454,6 +458,7 @@ fn offscreen_then_sample_prefix_matches_independent_shorter_list() {
     let full = hw([
         gdp_set_color_image(0, 2, 64, A),
         gdp_set_scissor(0, 0, 0, 256, 256),
+        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
         gdp_set_fill_color(0xf801f801),
         gdp_fill_rectangle(0, 0, 252, 252),
         gdp_set_color_image(0, 2, 64, B),
@@ -474,6 +479,7 @@ fn offscreen_then_sample_prefix_matches_independent_shorter_list() {
     let short = hw([
         gdp_set_color_image(0, 2, 64, A),
         gdp_set_scissor(0, 0, 0, 256, 256),
+        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
         gdp_set_fill_color(0xf801f801),
         gdp_fill_rectangle(0, 0, 252, 252),
         gdp_set_color_image(0, 2, 64, B),
@@ -487,7 +493,7 @@ fn offscreen_then_sample_prefix_matches_independent_shorter_list() {
         0, 0, 256, 256, 0, 0, 0, 1024, 1024, false,
     ))
     .chain([gsp_enddl()]));
-    let mut r = compare_prefix(&full, &short, 0, 10, &[A, B]);
+    let mut r = compare_prefix(&full, &short, 0, 11, &[A, B]);
     assert_eq!(r.last_scanout_addr, Some(TargetId::Guest(B.into())));
     assert_eq!(pixel(&mut r, B, 32, 32), [255, 0, 0, 255]);
     assert!(r.frame_scenes[0].framebuffer_pairs[1].ops.iter().any(|op| matches!(op, crate::scene::SceneOp::TexRect { fb_source: Some(addr), .. } if *addr == A as u64)));
@@ -505,14 +511,14 @@ fn backward_replay_clears_touched_targets_per_frame_and_retains_color_with_persi
         let mut r = headless_renderer();
         r.config.clear_policy = policy;
         r.begin_frame();
-        r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 9);
+        r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 10);
         let b = store_pixels(&mut r, B.into());
         assert_eq!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]);
-        r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 4);
+        r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 5);
         assert_eq!(pixel(&mut r, A, 48, 32), [0, 255, 0, 255]);
         r.begin_frame();
         let serial = r.inner.frame_serial;
-        let s = r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 4);
+        let s = r.process_dl_prefix(&two_target_fills(), 0, Microcode::F3dex2, &mut NopSink, 5);
         assert!(s.renderable);
         assert_eq!(r.inner.frame_serial, serial);
         assert_eq!(r.frame_scenes.len(), 1);
@@ -527,6 +533,7 @@ fn backward_replay_clears_touched_targets_per_frame_and_retains_color_with_persi
                     &hw([
                         gdp_set_color_image(0, 2, 64, A),
                         gdp_set_scissor(0, 0, 0, 256, 256),
+                        gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
                         gdp_set_fill_color(0xf801f801),
                         gdp_fill_rectangle(0, 0, 124, 252),
                         gsp_enddl(),

@@ -56,6 +56,7 @@ mod native {
             let microcode = match task.microcode {
                 Microcode::F3d => "f3d",
                 Microcode::F3dex2 => "f3dex2",
+                Microcode::S2dex2 => "s2dex2",
             };
             write!(
                 tasks,
@@ -134,6 +135,7 @@ mod native {
                     },
                 },
                 tasks: vec![Task {
+                    bindings: Vec::new(),
                     entry: 0x100,
                     microcode: Microcode::F3d,
                     data_format: DataFormat::Fixed,

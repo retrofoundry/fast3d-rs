@@ -16,12 +16,13 @@ fn sequence() -> Sequence {
 }
 
 #[test]
-fn sequence_container_preserves_original_serials_and_v1_payloads() {
+fn sequence_container_preserves_original_serials_and_versioned_payloads() {
     let sequence = sequence();
     let bytes = sequence.to_bytes().unwrap();
     assert_eq!(Sequence::from_bytes(&bytes).unwrap(), sequence);
     assert!(Fixture::from_bytes(&bytes).is_err());
     for frame in &sequence.frames {
+        assert_eq!(&frame.to_bytes().unwrap()[8..12], &2u32.to_le_bytes());
         assert_eq!(
             Fixture::from_bytes(&frame.to_bytes().unwrap()).unwrap(),
             *frame
@@ -65,4 +66,26 @@ fn sequence_decoder_rejects_truncation_reserved_fields_and_trailing_bytes() {
     let mut reserved = bytes;
     reserved[36] = 1;
     assert!(Sequence::from_bytes(&reserved).is_err());
+}
+
+#[test]
+fn sequence_reads_legacy_v1_frame_payload() {
+    let mut frame = include_bytes!("fixtures/host64-fill.f3dcap").to_vec();
+    frame[32..40].copy_from_slice(&1u64.to_le_bytes());
+    let mut bytes = b"F3DCAP\0\0".to_vec();
+    bytes.extend(2u32.to_le_bytes());
+    bytes.extend(0x04030201u32.to_le_bytes());
+    bytes.extend((56 + frame.len() as u64).to_le_bytes());
+    for value in [1u32, 0, 1, 0] {
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend(1u64.to_le_bytes());
+    bytes.extend((frame.len() as u64).to_le_bytes());
+    bytes.extend(frame.clone());
+    let sequence = Sequence::from_bytes(&bytes).unwrap();
+    assert_eq!(sequence.frames, vec![Fixture::from_bytes(&frame).unwrap()]);
+    assert!(Fixture::from_bytes(&bytes).is_err());
+    let encoded = sequence.to_bytes().unwrap();
+    assert!(Fixture::from_bytes(&encoded).is_err());
+    assert_eq!(Sequence::from_bytes(&encoded).unwrap(), sequence);
 }

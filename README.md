@@ -84,10 +84,17 @@ renderer.present_last()?;
 ```
 
 Native commands are 16-byte native-endian words with full-width addresses.
+Words below `0x1000_0000` are segmented addresses, and a read that resolves
+below that bound fails with `MemoryErrorKind::Unavailable`, so every input must
+sit at or above 256 MiB. Position-independent 64-bit builds do; a non-PIE
+Linux link or a Windows heap without high-entropy ASLR may not.
 Reads allow unaligned inputs; Fixed matrices use native packed words, and
 Fixed/Float vertices have 16/24-byte strides. Every reachable input must be
 allocated, readable, initialized in that layout and stable until consumption
-returns. The lifetime witness does not establish pointer validity, and the
+returns. That includes what the RDP reads around a texture: an S2DEX2
+one-cycle background can load the image row just before `imagePtr`, as the
+microcode does to keep TMEM row parity.
+The lifetime witness does not establish pointer validity, and the
 dispatch cap only bounds liveness. CIMG/ZIMG are GPU target identities and need
 not be readable unless a command uses them as input. `present_last_to(view)`
 scans out to a caller-owned view.

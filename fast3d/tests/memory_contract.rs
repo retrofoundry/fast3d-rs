@@ -259,3 +259,41 @@ fn default_vertex_uses_the_backends_decoded_scalars() {
         }
     );
 }
+
+#[test]
+fn external_rdram_without_bg_support_still_compiles() {
+    let memory = ExternalRam {
+        image: RdramImage::new(&[]),
+    };
+    assert_eq!(
+        memory.read_obj_bg(12, fast3d::ObjBgKind::Scaled),
+        Err(error(12, 0, MemoryErrorKind::UnsupportedFormat))
+    );
+}
+
+#[test]
+fn obj_bg_does_not_read_padding() {
+    let mut bytes = [0; 40];
+    bytes[32..36].copy_from_slice(&(-0x123456i32).to_be_bytes());
+    let scaled = RdramImage::new(&bytes[..36])
+        .read_obj_bg(0, fast3d::ObjBgKind::Scaled)
+        .unwrap();
+    assert_eq!(scaled.image_y_orig, -0x123456);
+    assert!(RdramImage::new(&bytes)
+        .read_obj_bg(0, fast3d::ObjBgKind::Copy)
+        .is_ok());
+}
+
+#[test]
+fn obj_bg_missing_field_reports_exact_span() {
+    for (end, kind, address, length) in [
+        (19, fast3d::ObjBgKind::Scaled, 16, 4),
+        (35, fast3d::ObjBgKind::Scaled, 32, 4),
+        (39, fast3d::ObjBgKind::Copy, 38, 2),
+    ] {
+        assert_eq!(
+            RdramImage::new(&[0; 40][..end]).read_obj_bg(0, kind),
+            Err(error(address, length, MemoryErrorKind::OutOfBounds))
+        );
+    }
+}

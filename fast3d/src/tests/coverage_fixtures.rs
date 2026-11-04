@@ -584,8 +584,8 @@ fn coverage_fixture_bytes_match_builders() {
             .join("tests/fixtures")
             .join(format!("{}.f3dcap", case.name));
         assert_eq!(
-            std::fs::read(path).unwrap(),
-            fixture(&case).to_bytes().unwrap(),
+            crate::capture::Fixture::from_bytes(&std::fs::read(path).unwrap()).unwrap(),
+            fixture(&case),
             "{}",
             case.name
         );

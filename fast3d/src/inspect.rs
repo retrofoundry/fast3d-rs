@@ -67,6 +67,10 @@ pub enum WalkTermination {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct StateView<'a> {
+    pub microcode: Microcode,
+    pub obj_render_mode: u32,
+    pub mvp_valid: bool,
+    pub fog_factors_valid: bool,
     pub geometry_mode: u32,
     /// Set single-bit flags in ascending mask order; unknown bits remain in `geometry_mode`.
     pub geometry_names: &'a [GeometryFlag],
@@ -144,6 +148,8 @@ pub enum Emission<'a> {
     },
     #[non_exhaustive]
     TexRect {
+        material_index: u32,
+        render_mode_index: u32,
         target: FramebufferTarget,
         /// Index into the target framebuffer pair's `ops`.
         op_index: u32,
@@ -163,6 +169,8 @@ pub enum Emission<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct WalkStep<'a> {
+    /// Microcode that decoded this command.
+    pub microcode: Microcode,
     /// Zero-based execution identity; addresses may repeat.
     pub seq: u32,
     /// Original dispatch address, even when the command changes control flow.
@@ -215,11 +223,33 @@ pub fn walk<M: Rdram>(
     format: DataFormat,
     observer: &mut dyn WalkObserver,
 ) -> WalkSummary {
+    walk_with_bindings(mem, entry, microcode, format, observer, &[])
+}
+
+/// Walks with immutable full-width microcode text-token bindings.
+pub fn walk_with_bindings<M: Rdram>(
+    mem: M,
+    entry: u64,
+    microcode: Microcode,
+    format: DataFormat,
+    observer: &mut dyn WalkObserver,
+    bindings: &[(u64, Microcode)],
+) -> WalkSummary {
     let mut adapter = CappedObserver {
         observer,
         capped: false,
     };
-    let result = crate::hle::interpret(mem, entry, microcode.into(), format, Some(&mut adapter));
+    let result = crate::hle::interp::interpret_with_bindings(
+        mem,
+        entry,
+        microcode.into(),
+        format,
+        Default::default(),
+        Default::default(),
+        Some(&mut adapter),
+        Default::default(),
+        bindings,
+    );
     let termination = if result.termination == WalkTermination::ObserverStopped && adapter.capped {
         WalkTermination::Cap
     } else {
@@ -264,6 +294,7 @@ pub(crate) fn geometry_flags(
         }};
     }
     let flags: &[GeometryFlag] = match microcode {
+        Microcode::S2dex2 => &[],
         Microcode::F3dex2 => flags!(rsp_f3dex2;
             G_ZBUFFER, G_SHADE, G_CULL_FRONT, G_CULL_BACK, G_FOG, G_LIGHTING,
             G_TEXTURE_GEN, G_TEXTURE_GEN_LINEAR, G_SHADING_SMOOTH, G_CLIPPING),
