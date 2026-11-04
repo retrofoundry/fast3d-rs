@@ -164,14 +164,15 @@ impl DecodePipeline {
         request: &EncodedTextureRequest,
         profiling: &Recorder,
         staging: Option<DecodeStaging>,
-        framebuffer: Option<Vec<u8>>,
+        framebuffer: Option<(Vec<u8>, bool)>,
     ) -> DecodeJob {
         let EncodedInput::Tmem(bank) = request.input();
         let mut input = Cow::Borrowed(&bank[..]);
         let mut params = DecodeParams::new(request);
-        if let Some(bytes) = framebuffer {
+        if let Some((bytes, materialize)) = framebuffer {
             input = Cow::Owned(bytes);
             params.words[3][1] = 1024;
+            params.words[3][2] = u32::from(materialize);
         }
         let staging = staging
             .filter(|v| v.capacity() >= input.len() as u64)

@@ -36,8 +36,9 @@ that comparison because capture recording excludes diagnostic depth-reset polici
 
 Real LoadTile, LoadBlock and LoadTLUT commands use ordered GPU snapshots separately
 from this convenience. They support interior offsets, source strides, rectangle and
-triangle consumers, and RGBA16/IA16/CI8 reinterpretation. The existing
-offscreen-then-sample golden remains a compatibility test for the load-free path.
+triangle consumers, exact RGBA16/IA16/CI8 reinterpretation, and other formats through
+quantised RGBA16 bytes. The existing offscreen-then-sample golden remains a
+compatibility test for the load-free path.
 [The authored real-load fixtures](framebuffer-load-evidence.md) check snapshot order
 and the unquantised render-target convention. GPU write-back and guest imports remain
 opt-in; framebuffer loads do not require that switch.

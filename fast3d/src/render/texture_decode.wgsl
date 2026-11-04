@@ -30,6 +30,7 @@ fn byte_at(address: u32) -> u32 {
     let pointer = framebuffer_pointer(address);
     if pointer != 0u {
         let color = vec4<u32>(round(framebuffer_color(pointer) * 255.0));
+        // RGBA16 keeps RGB's top five bits and bit 2 of the stored coverage alpha.
         let packed = ((color.r >> 3u) << 11u) | ((color.g >> 3u) << 6u) | ((color.b >> 3u) << 1u) | ((color.a >> 2u) & 1u);
         return (packed >> (8u * (1u - ((pointer - 1u) & 1u)))) & 255u;
     }
@@ -70,7 +71,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let address0 = (params.recipe.w + (relative ^ odd_swap)) & mask;
     let address1 = (params.recipe.w + ((relative + 1u) ^ odd_swap)) & mask;
     let pointer = framebuffer_pointer(address0);
-    if tlut < 2u && size == 2u && pointer != 0u && ((pointer - 1u) & 1u) == 0u && framebuffer_pointer(address1) == pointer + 1u {
+    if params.input.z == 0u && tlut < 2u && size == 2u && pointer != 0u && ((pointer - 1u) & 1u) == 0u && framebuffer_pointer(address1) == pointer + 1u {
         let color = framebuffer_color(pointer);
         if format == 0u {
             textureStore(output, vec2<i32>(id.xy), color);
