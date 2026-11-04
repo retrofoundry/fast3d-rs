@@ -40,7 +40,7 @@ impl HashAlgorithm {
 pub fn verify_hash_inputs(requests: &[Request]) -> serde_json::Value {
     let mut canonical = HashMap::new();
     for request in requests.iter().filter(|r| r.rejection.is_none()) {
-        let key = request.canonical(&request.executor().prepare().unwrap());
+        let key = request.canonical();
         if let Some(previous) = canonical.insert(key, &request.output) {
             assert_eq!(previous, &request.output, "equal keys must decode equally");
         }
@@ -209,8 +209,8 @@ pub fn trace_frame(
             row.rejected += 1;
             continue;
         }
-        let linear = request.executor().prepare().expect("trace reconstruction");
-        let key = request.canonical(&linear);
+        request.validate().expect("admitted trace input");
+        let key = request.canonical();
         row.encoded_bytes += request.reachable_bytes as u64;
         row.hashed_bytes += key.len() as u64;
         row.decoded_bytes += request.output.len() as u64;
@@ -344,13 +344,7 @@ pub fn benchmark(
     let minimum_ms = minimum_ms.max(resolution_ms * 100.0);
     let mut batch_counts: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let first = &requests[0];
-    let executors: Vec<_> = requests.iter().map(Request::executor).collect();
-    let linear: Vec<_> = executors.iter().map(|e| e.prepare().unwrap()).collect();
-    let keys: Vec<_> = requests
-        .iter()
-        .zip(&linear)
-        .map(|(r, l)| r.canonical(l))
-        .collect();
+    let keys: Vec<_> = requests.iter().map(Request::canonical).collect();
     let distinct_equal = keys.clone();
     let images: Vec<_> = requests
         .iter()
@@ -363,14 +357,11 @@ pub fn benchmark(
         .enumerate()
         .map(|(i, h)| (h, i))
         .collect();
-    for (executor, (linear, request)) in executors.iter().zip(linear.iter().zip(requests)) {
-        assert_eq!(executor.decode(linear).unwrap(), request.output);
-        assert_eq!(executor.baseline_decode().unwrap(), request.output);
+    for request in requests {
+        assert_eq!(request.decode().unwrap(), request.output);
     }
     let names = [
         "validation",
-        "reconstruction",
-        "common_validation_reconstruction",
         "snapshot",
         "canonical_copy_control",
         "snapshot_and_hash",
@@ -414,22 +405,16 @@ pub fn benchmark(
                 let j = i % requests.len();
                 match name {
                     "validation" => {
-                        black_box(executors[j].validate()).unwrap();
-                    }
-                    "reconstruction" => {
-                        black_box(executors[j].reconstruct().unwrap());
-                    }
-                    "common_validation_reconstruction" => {
-                        black_box(executors[j].prepare().unwrap());
+                        black_box(requests[j].validate()).unwrap();
                     }
                     "snapshot" => {
-                        black_box(requests[j].canonical(&linear[j]));
+                        black_box(requests[j].canonical());
                     }
                     "canonical_copy_control" => {
                         black_box(black_box(&keys[j]).clone());
                     }
                     "snapshot_and_hash" => {
-                        let key = requests[j].canonical(&linear[j]);
+                        let key = requests[j].canonical();
                         black_box(algorithm.digest(black_box(&key)));
                     }
                     "hash" => {
@@ -451,7 +436,7 @@ pub fn benchmark(
                         black_box(Arc::clone(black_box(&images[j])));
                     }
                     "decode_with_allocation" => {
-                        black_box(executors[j].decode(black_box(&linear[j])).unwrap());
+                        black_box(requests[j].decode().unwrap());
                     }
                     "allocation_only" => {
                         black_box(vec![0u8; requests[j].output.len()]);
@@ -460,11 +445,11 @@ pub fn benchmark(
                         black_box(black_box(&requests[j].output).clone());
                     }
                     "baseline_total" => {
-                        black_box(executors[j].baseline_decode().unwrap());
+                        black_box(requests[j].decode().unwrap());
                     }
                     "candidate_hit_total" => {
-                        let l = executors[j].prepare().unwrap();
-                        let key = requests[j].canonical(&l);
+                        requests[j].validate().unwrap();
+                        let key = requests[j].canonical();
                         black_box(
                             hits.lookup(&key, i as u64 + 1, algorithm.digest(&key))
                                 .expect("resident hit"),
@@ -474,14 +459,14 @@ pub fn benchmark(
                         if requests.len() == 1 {
                             retention.clear_for_miss();
                         }
-                        let l = executors[j].prepare().unwrap();
-                        let key = requests[j].canonical(&l);
+                        requests[j].validate().unwrap();
+                        let key = requests[j].canonical();
                         let hash = algorithm.digest(&key);
                         assert!(
                             retention.lookup(&key, i as u64 + 1, hash).is_none(),
                             "churning miss must miss"
                         );
-                        let decoded = executors[j].decode(&l).unwrap();
+                        let decoded = requests[j].decode().unwrap();
                         assert!(retention.insert(key, decoded, i as u64 + 1, hash));
                     }
                     _ => unreachable!(),
@@ -551,14 +536,14 @@ pub fn benchmark(
         hash_version: algorithm.version(),
         copy_multiplier_in_d: 0,
         baseline_model_residual_ns: median(&samples["baseline_total"])
-            - median(&samples["common_validation_reconstruction"])
+            - median(&samples["validation"])
             - d,
         hit_model_residual_ns: median(&samples["candidate_hit_total"])
-            - median(&samples["common_validation_reconstruction"])
+            - median(&samples["validation"])
             - k
             - h,
         miss_model_residual_ns: median(&samples["candidate_miss_total"])
-            - median(&samples["common_validation_reconstruction"])
+            - median(&samples["validation"])
             - k
             - d
             - m,
@@ -650,14 +635,9 @@ mod tests {
         let frame = trace_frame(&mut sim, 1, false, &[request.clone(), request.clone()]);
         let row = frame.classes.values().next().unwrap();
         assert_eq!((row.requests, row.hits, row.misses), (2, 1, 1));
-        assert_eq!(
-            row.hashed_bytes,
-            2 * request
-                .canonical(&request.executor().prepare().unwrap())
-                .len() as u64
-        );
+        assert_eq!(row.hashed_bytes, 2 * request.canonical().len() as u64);
         assert_eq!(row.decoded_bytes, 2 * request.output.len() as u64);
-        let expected = (request.canonical(&[]).len() + request.output.len()) as u64;
+        let expected = (request.canonical().len() + request.output.len()) as u64;
         assert_eq!(sim.retained_bytes() as u64, expected);
     }
 }

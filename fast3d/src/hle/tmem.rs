@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+#[cfg(any(test, feature = "profiling"))]
 use crate::diag::DiagKind;
 use crate::hle::rdp::TileDescriptor;
 #[cfg(any(test, feature = "profiling"))]
@@ -44,8 +45,7 @@ const SWAP_BIT: usize = 0x4;
 #[derive(Clone, Debug)]
 pub struct Tmem {
     bytes: Arc<[u8; TMEM_BYTES]>,
-    sources: Box<[ByteSource; TMEM_BYTES]>,
-    blocks: Vec<BlockLoad>,
+    written: [u64; TMEM_BYTES / 64],
     rejected: Box<[Option<crate::Diagnostic>; TMEM_BYTES]>,
     rejecting: Option<crate::Diagnostic>,
     pub(crate) framebuffer_tags: Option<super::framebuffer_load::Tags>,
@@ -58,39 +58,11 @@ pub struct Tmem {
     pub(super) profiling: crate::profiling::Recorder,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct ByteSource {
-    load: u16,
-    offset: u16,
-}
-
-impl ByteSource {
-    const BANK: Self = Self {
-        load: u16::MAX,
-        offset: 0,
-    };
-
-    fn block(self) -> Option<usize> {
-        match self.load {
-            0 | u16::MAX => None,
-            load => Some(usize::from(load) - 1),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-struct BlockLoad {
-    base: u16,
-    live_bytes: u16,
-    linear: bool,
-}
-
 impl Default for Tmem {
     fn default() -> Self {
         Tmem {
             bytes: Arc::new([0u8; TMEM_BYTES]),
-            sources: Box::new([ByteSource::default(); TMEM_BYTES]),
-            blocks: Vec::new(),
+            written: [0; TMEM_BYTES / 64],
             rejected: Box::new([None; TMEM_BYTES]),
             rejecting: None,
             framebuffer_tags: None,
@@ -107,22 +79,9 @@ impl Default for Tmem {
 
 impl Tmem {
     #[cfg(any(test, feature = "profiling"))]
-    pub(crate) fn profile_bank(&self, linear: bool) -> crate::profiling::Bank {
+    pub(crate) fn profile_bank(&self) -> crate::profiling::Bank {
         crate::profiling::Bank {
             bytes: self.bytes.to_vec(),
-            sources: if linear {
-                self.sources.iter().map(|s| [s.load, s.offset]).collect()
-            } else {
-                Vec::new()
-            },
-            blocks: if linear {
-                self.blocks
-                    .iter()
-                    .map(|b| (b.base, b.live_bytes, b.linear))
-                    .collect()
-            } else {
-                Vec::new()
-            },
         }
     }
 
@@ -130,21 +89,6 @@ impl Tmem {
     pub(crate) fn from_profile(bank: &crate::profiling::Bank) -> Self {
         let mut tmem = Self::default();
         Arc::make_mut(&mut tmem.bytes).copy_from_slice(&bank.bytes);
-        for (dst, src) in tmem.sources.iter_mut().zip(&bank.sources) {
-            *dst = ByteSource {
-                load: src[0],
-                offset: src[1],
-            };
-        }
-        tmem.blocks = bank
-            .blocks
-            .iter()
-            .map(|&(base, live_bytes, linear)| BlockLoad {
-                base,
-                live_bytes,
-                linear,
-            })
-            .collect();
         tmem
     }
 
@@ -157,7 +101,7 @@ impl Tmem {
         }
     }
 
-    fn writer(&mut self) -> impl FnMut(usize, u8, ByteSource, u32) + '_ {
+    fn writer(&mut self) -> impl FnMut(usize, u8, u32) + '_ {
         if Arc::strong_count(&self.bytes) > 1 {
             self.profiling.count("tmem.bank_cow_allocations", 1);
             self.profiling
@@ -169,15 +113,14 @@ impl Tmem {
         let load = self.census_load;
         let bytes = Arc::make_mut(&mut self.bytes);
         let Self {
-            sources,
-            blocks,
+            written,
             rejected,
             rejecting,
             framebuffer_tags,
             copying,
             ..
         } = self;
-        move |addr, value, source, offset| {
+        move |addr, value, offset| {
             #[cfg(any(test, feature = "profiling"))]
             if let Some(writers) = writers {
                 writers[addr] = load;
@@ -189,14 +132,8 @@ impl Tmem {
                         pointer: tags.copies[usize::from(copy)].pointer(offset),
                     });
             }
-            if let Some(previous) = sources[addr].block() {
-                blocks[previous].live_bytes -= 1;
-            }
-            if let Some(block) = source.block() {
-                blocks[block].live_bytes += 1;
-            }
             rejected[addr] = *rejecting;
-            sources[addr] = source;
+            written[addr / 64] |= 1 << (addr & 63);
             bytes[addr] = value;
         }
     }
@@ -347,96 +284,11 @@ impl Tmem {
         None
     }
 
-    pub(crate) fn tile_contains_block(&self, tile: &TileDescriptor) -> bool {
-        self.tile_has_source(tile, |source| source.block().is_some())
-    }
-
     pub(crate) fn tile_has_load(&self, tile: &TileDescriptor) -> bool {
-        self.reachable_byte(tile, |addr| (self.sources[addr].load != 0).then_some(()))
-            .is_some()
-    }
-
-    fn tile_has_source(&self, tile: &TileDescriptor, matches: impl Fn(ByteSource) -> bool) -> bool {
-        let base = usize::from(tile.tmem_addr) << 3;
-        let stride = usize::from(tile.line) << 3;
-        let shift = tile.siz.min(2);
-        let row_bytes = (usize::from(tile.width.max(1)) << shift).div_ceil(2);
-        let mask = if tile.fmt == 2 || tile.siz == 3 {
-            MASK16
-        } else {
-            MASK8
-        };
-        for y in 0..usize::from(tile.height.max(1)) {
-            for x in 0..row_bytes {
-                let addr = (base + Self::swap_odd_line(y * stride + x, y & 1 != 0)) & mask;
-                if matches(self.sources[addr])
-                    || (tile.siz == 3 && matches(self.sources[addr | PALETTE_BASE]))
-                {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    fn linear_source(
-        &self,
-        tile: &TileDescriptor,
-        needed: usize,
-    ) -> Result<(u16, usize), DiagKind> {
-        let error = DiagKind::TextureBytesUnavailable {
-            tmem_addr: tile.tmem_addr,
-        };
-        let mask = if tile.fmt == 2 { MASK16 } else { MASK8 };
-        let base = (usize::from(tile.tmem_addr) << 3) & mask;
-        let source = self.sources[base];
-        let load = source.load;
-        let slot = source.block().ok_or(error)?;
-        if needed > TMEM_BYTES
-            || self.tile_has_source(tile, |source| source.load != 0 && source.load != load)
-        {
-            return Err(error);
-        }
-        let block = &self.blocks[slot];
-        if !block.linear {
-            return Err(error);
-        }
-        let start = if base == usize::from(block.base) {
-            0
-        } else {
-            usize::from(source.offset) & !7
-        };
-        if start >= TMEM_BYTES {
-            return Err(error);
-        }
-        let found = self
-            .sources
-            .iter()
-            .filter(|source| {
-                source.load == load && (start..start + needed).contains(&usize::from(source.offset))
-            })
-            .count();
-        if found == needed {
-            Ok((load, start))
-        } else {
-            Err(error)
-        }
-    }
-
-    pub(crate) fn linear_bytes(
-        &self,
-        tile: &TileDescriptor,
-        needed: usize,
-    ) -> Result<Vec<u8>, DiagKind> {
-        let (load, start) = self.linear_source(tile, needed)?;
-        let mut bytes = vec![0; needed];
-        for (addr, source) in self.sources.iter().enumerate() {
-            let offset = usize::from(source.offset);
-            if source.load == load && (start..start + needed).contains(&offset) {
-                bytes[offset - start] = self.bytes[addr];
-            }
-        }
-        Ok(bytes)
+        self.reachable_byte(tile, |addr| {
+            (self.written[addr / 64] & (1 << (addr & 63)) != 0).then_some(())
+        })
+        .is_some()
     }
 
     /// The odd-line 32-bit word swap, shared by the write and read paths. When `odd`, flips bit
@@ -500,19 +352,6 @@ impl Tmem {
         let mut odd = false;
         let mut dxt_counter: u32 = 0;
         let mut tex = 0usize;
-        let block = BlockLoad {
-            base: tmem_addr as u16,
-            live_bytes: 0,
-            linear: !rgba32,
-        };
-        let slot = if let Some(slot) = self.blocks.iter().position(|block| block.live_bytes == 0) {
-            self.blocks[slot] = block;
-            slot
-        } else {
-            self.blocks.push(block);
-            self.blocks.len() - 1
-        };
-        let load = (slot + 1) as u16;
         let mut store_byte = self.writer();
 
         for _ in 0..word_count {
@@ -523,19 +362,11 @@ impl Tmem {
                     store_byte(
                         dst,
                         src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
-                        ByteSource {
-                            load,
-                            offset: (tex + LOW_SRC[i]) as u16,
-                        },
                         (tex + LOW_SRC[i]) as u32,
                     );
                     store_byte(
                         dst | PALETTE_BASE,
                         src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
-                        ByteSource {
-                            load,
-                            offset: (tex + HIGH_SRC[i]) as u16,
-                        },
                         (tex + HIGH_SRC[i]) as u32,
                     );
                 }
@@ -546,10 +377,6 @@ impl Tmem {
                     store_byte(
                         dst,
                         src.get(tex + i).copied().unwrap_or(0),
-                        ByteSource {
-                            load,
-                            offset: (tex + i) as u16,
-                        },
                         (tex + i) as u32,
                     );
                 }
@@ -627,13 +454,11 @@ impl Tmem {
                         store_byte(
                             dst,
                             src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
-                            ByteSource::BANK,
                             (tex + LOW_SRC[i]) as u32,
                         );
                         store_byte(
                             dst | PALETTE_BASE,
                             src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
-                            ByteSource::BANK,
                             (tex + HIGH_SRC[i]) as u32,
                         );
                     }
@@ -644,7 +469,6 @@ impl Tmem {
                         store_byte(
                             dst,
                             src.get(tex + i).copied().unwrap_or(0),
-                            ByteSource::BANK,
                             (tex + i) as u32,
                         );
                     }
@@ -694,7 +518,6 @@ impl Tmem {
                     store_byte(
                         addr + byte,
                         entries_be.get(offset).copied().unwrap_or(0),
-                        ByteSource::BANK,
                         offset as u32,
                     );
                 }
@@ -702,12 +525,8 @@ impl Tmem {
         }
     }
 
-    /// The palette (TLUT) region of TMEM — the upper 2 KiB starting at [`PALETTE_BASE`].
-    ///
-    /// Single source of truth for palette bytes: both the faithful CI sampler
-    /// ([`sample_tile`](Self::sample_tile)) and the legacy linear `texdec::decode_ci*` fallback
-    /// read from here. Entry `i` of palette 0 lives at byte `i*8` of this slice.
-    #[cfg(any(test, feature = "profiling"))]
+    /// Entry `i` of palette 0 lives at byte `i*8` of this slice.
+    #[cfg(test)]
     pub fn palette(&self) -> &[u8] {
         &self.bytes[PALETTE_BASE..]
     }
@@ -721,12 +540,12 @@ impl Tmem {
         &self.bytes
     }
 
-    #[cfg(any(test, feature = "profiling"))]
+    #[cfg(test)]
     pub fn sample_tile(&self, tile: &TileDescriptor, tlut: u8) -> Result<Vec<u8>, DiagKind> {
         BankDecoder::new(&self.bytes).sample_tile(tile, tlut)
     }
 
-    #[cfg(any(test, feature = "profiling"))]
+    #[cfg(test)]
     pub fn sampling_lookup(&self, tile: &TileDescriptor, tlut: u8) -> Result<Vec<u8>, DiagKind> {
         BankDecoder::new(&self.bytes).sampling_lookup(tile, tlut)
     }
@@ -771,8 +590,7 @@ impl Tmem {
 impl PartialEq for Tmem {
     fn eq(&self, other: &Self) -> bool {
         self.bytes == other.bytes
-            && self.sources == other.sources
-            && self.blocks == other.blocks
+            && self.written == other.written
             && self.rejected == other.rejected
             && self.framebuffer_tags == other.framebuffer_tags
             && self.copy_serial == other.copy_serial

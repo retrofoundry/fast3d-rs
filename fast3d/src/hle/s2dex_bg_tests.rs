@@ -221,7 +221,7 @@ fn bg_1cyc_oot_ci8_point_with_obj_bilerp() {
             );
         }
     }
-    let bank = result.rdp.tmem_bank.profile_bank(false).bytes;
+    let bank = result.rdp.tmem_bank.profile_bank().bytes;
     for i in 0..256 {
         for lane in 0..4 {
             assert_eq!(
@@ -262,7 +262,7 @@ fn bg_1cyc_wrap_split_state_matches_reference() {
             (SOURCE as u64 + 235 * 320, 1288)
         ]
     );
-    let bank = result.rdp.tmem_bank.profile_bank(false).bytes;
+    let bank = result.rdp.tmem_bank.profile_bank().bytes;
     let mut expected = vec![0; 4096];
     for row in 0..6 {
         for col in 0..328 {

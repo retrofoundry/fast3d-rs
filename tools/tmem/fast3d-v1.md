@@ -4,7 +4,9 @@ This format freezes Fast3dV1 preimages and XXH3 vectors at fast3d
 `bb0fea399793eb2aeb1ae93d5972763b9761da98`. The serializer lives in
 `fast3d/tests/common/tmem_preimage.rs` and serializes explicitly supplied selected
 bytes. It contains no footprint discovery, HLE validation, decoder or runtime
-cache. Production rendering still uses the existing CPU decoder.
+cache. Production uses compute decoding. Tile/Lookup streams remain byte-identical to
+this freeze. Representation 2 and its vectors are retired historical fixtures;
+production neither constructs nor accepts linear requests.
 
 ## Byte layout
 
@@ -18,7 +20,7 @@ JSON writes it as exactly 16 hexadecimal digits, most significant digit first.
 | --- | --- | --- |
 | 0 | 16 bytes | ASCII `fast3d-tmem-key` followed by `00` |
 | 16 | u16 | Version: `1` |
-| 18 | u8 | Representation: Tile `0`, Lookup4096x4 `1`, LinearCompat `2` |
+| 18 | u8 | Representation: Tile `0`, Lookup4096x4 `1`, retired LinearCompat `2` |
 | 19 | u8 | Output encoding: RGBA8 `0` |
 | 20 | u32 | Output width |
 | 24 | u32 | Output height |
@@ -45,7 +47,7 @@ contradictory values for one address are invalid fixture input.
 
 For Tile and Lookup4096x4, L and Q are zero. P is the union of the encoded texel
 bytes and, for CI, the selected palette halfwords. Palette entries retain their
-addresses even when two entries have the same colour. For LinearCompat, P is
+addresses even when two entries have the same colour. For retired LinearCompat, P is
 zero; L bytes preserve the reconstructed stream's order and flat nibble
 convention, followed by the selected palette pairs in Q. A non-CI request has
 no separate palette pairs. Physical and linear representations have disjoint
@@ -68,7 +70,7 @@ Modes 2 and 3 are the extracted values; they are not rt64's shifted othermode
 values `0x8000` and `0xc000`.
 
 Base, line, representation, output extent, and logical extent remain in the
-identity for all three representations, as required by the accepted design.
+identity for both active representations and the retired representation.
 This includes base/line on LinearCompat and line on Lookup4096x4. They are
 deliberate recipe distinctions, even where a different recipe yields equal
 pixels. Source descriptors must supply effective format/size before this

@@ -1,26 +1,31 @@
 # Texture decode and residency
 
 Supported HLE textures are decoded by compute during renderer preparation. The
-interpreter still performs TMEM loads, validates formats and rejected-source
-provenance, and owns the encoded bytes at each draw. A later load cannot change
+interpreter still performs TMEM loads, validates formats and framebuffer-load poison, and owns the encoded bytes at each draw. A later load cannot change
 an earlier request. There is no production CPU texture executor or executor
 selector. CPU decoding remains available to tests and explicit offline profiling
 tools; live trace collection records encoded state without expanding RGBA pixels.
 
-The three recipes preserve the existing representations:
+Every ordinary request samples the TMEM contents at draw time: loaded bytes,
+bytes retained from earlier loads, and initial zeros. Tile decodes the requested
+extent; Lookup4096x4 covers the complete physical address/odd-row/nibble domain
+when an unclamped mask period exceeds the logical extent. Load history does not
+select a decoder or reject an ordinary request.
 
-- Tile decodes an independent RGBA8 image with the requested output extent.
-- Lookup decodes the complete 4096×4 physical address/odd-row/nibble lookup.
-- Linear compatibility reconstructs the validated encoded stream on the CPU,
-  then expands it on the GPU with the existing flat-stream nibble convention.
+The bank starts at zero and both reset APIs clear it. `begin_frame` preserves it.
+This is fast3d's reset policy, not a hardware power-on claim. `NoTextureLoaded`
+still rejects ordinary textured draws before any texture load. A 4096-bit written
+map distinguishes untouched bytes from loaded zeros for the load-free framebuffer
+rectangle shortcut and its triangle rejection. Every load writer updates the map,
+including generated S2DEX loads. Guest-read failures roll back the task;
+unsupported framebuffer loads poison their destinations until overwritten.
 
 Physical requests upload the owned 4096-byte bank unchanged. Four encoded bytes
-occupy each storage-buffer word, with the first byte in bits 0–7. Compatibility
-streams are padded to a four-byte boundary and followed by the owned palette
-bank; padding and both upload lengths are counted. A separate 64-byte uniform
-uses explicit little-endian fields. Each 8×8 workgroup writes one RGBA8 texel per
-invocation, guarded by output bounds. Integer channel expansion precedes the
-UNORM conversion. Fragment addressing and filtering remain unchanged.
+occupy each storage-buffer word, with the first byte in bits 0–7. A separate
+64-byte uniform uses explicit little-endian fields. Each 8×8 workgroup writes
+one RGBA8 texel per invocation, guarded by output bounds. Integer channel
+expansion precedes the UNORM conversion. Fragment addressing and filtering
+remain unchanged.
 
 One renderer owns the image cache for its device. Fast3dV1 selects a bucket;
 exact canonical-witness equality authorizes every hit, including a repeated
@@ -71,8 +76,11 @@ compute their own keys, including equal-byte reloads. Physical selection marks
 row spans in a 4096-bit set, splits odd-row partial words and wrapped ranges,
 and mirrors RGBA32's selected low-bank bytes into the high bank. Lookup selects
 its complete physical bank directly. CI alone scans encoded indices for palette
-selection; CI4 excludes an unused final low nibble. The serializer emits the
-same sorted address/byte pairs and Fast3dV1 framing for every representation.
+selection; CI4 excludes an unused final low nibble. The serializer emits sorted address/byte pairs with unchanged Tile/Lookup
+Fast3dV1 framing. Material and capture admission compare those same sampled
+bytes directly without constructing identities. Unrelated inherited bytes do
+not prevent capture admission. History-dependent output requires a reset-prefix
+sequence; inspector walks and renderer prefixes start from default state.
 
 Profiling reports the following work and memory scopes. Gauges also emit `.peak`
 values within each recorder interval.
@@ -82,16 +90,15 @@ values within each recorder interval.
 | `hashes_computed`, `bytes_hashed` | Request-local hash executions and complete Fast3dV1 bytes fed to XXH3 |
 | `preimage_bytes_constructed` | Canonical bytes written on identity initialization, counted separately from hashing |
 | `identity_memo_hits` | Accesses reusing an initialized request identity, including binding checks; a residency resolution accesses key and witness together |
-| `footprint_span_bytes` | Physical range lengths selected before wrap/overlap deduplication, including both RGBA32 banks; excludes palette selection |
-| `palette_index_reads` | Encoded byte reads for CI palette selection; a CI4 byte can supply two indices |
+| `footprint_span_bytes` | Physical range lengths visited by identity or comparison before wrap/overlap deduplication, including both RGBA32 banks; excludes palette selection |
+| `palette_index_reads` | Encoded byte reads for CI palette selection in identity or comparison; a CI4 byte can supply two indices |
 | `bank_cow_allocations`, `bank_cow_bytes` | Load-time copies while old bank storage is owned |
-| `linear_reconstruction_bytes` | Owned compatibility stream construction |
-| `encoded_comparisons`, `witness_comparisons`, `bytes_compared` | Whole-input and residency-witness equality work; equal-length slices count in full |
+| `encoded_comparisons`, `encoded_bytes_compared`, `witness_comparisons`, `bytes_compared` | Sampled-footprint and residency-witness equality work; selected bytes and equal-length witnesses count in full |
 | `hits`, `pending_hits`, `misses`, `evictions`, `bypasses` | Image lookup and admission decisions |
 | `decode_dispatches`, `decode_compute_passes` | Actual encoded compute work |
-| `decode_input_upload_bytes`, `decode_input_upload_calls` | Raw encoded uploads, including alignment padding |
+| `decode_input_upload_bytes`, `decode_input_upload_calls` | Raw encoded uploads |
 | `decode_uniform_upload_bytes`, `decode_uniform_upload_calls` | Decode parameters, separately from raw input |
-| `decode_upload_padding_bytes`, `staging_reuses` | Compatibility padding and completed staging reuse |
+| `staging_reuses` | Completed staging reuse |
 | `resident_*`, `pinned_*`, `in_flight_*`, `transient_*` | GPU/CPU payload and image counts, deduplicated within each ownership scope |
 | `staging_pending_bytes`, `staging_free_bytes`, `staging_bytes` | Raw input plus uniform buffer capacities |
 | `resident_allocation_overhead_bytes`, `submission_allocation_overhead_bytes` | Estimates of Rust metadata, container capacity and control blocks; excludes allocator rounding and driver allocations |

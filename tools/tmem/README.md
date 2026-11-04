@@ -55,7 +55,7 @@ calls a decoder or derives a footprint by decoding pixels.
 | `layout-one-zero-line`, `layout-zero-line-nonci-tlut` | 1×1 bounds; zero-line odd-row addressing and erroneous TLUT masking on a non-CI format |
 | `layout-lookup-wrap`, `alias-wrapped-lookup` | nominal-extent lookup, missing wrap or any odd/nibble plane; all 16,384 texels are compared |
 | `layout-loadtile-padded`, `layout-block-dxt0`, `layout-block-dxt683` | conflated LoadTile/LoadBlock rows, padded source stride or DXT parity drift |
-| equal-bank linear provenance | bank/descriptor equality used as a substitute for resolved linear input; equal banks produce two explicitly different valid streams |
+| equal-bank load history | different load histories cannot split equal physical contents and recipes |
 | poison/reload and real GPU-source load sequence | validation after reuse, lost diagnostic PC, missing draw rejection or failed recovery after a valid guest reload; masked taps outside the nominal output remain part of rejection reach |
 | TLUT ordered snapshots | used/unused/duplicate palette colors, destination wrap and RGBA32-over-TLUT writes cannot change earlier draws |
 | role snapshots | changing tex1, detail or one non-halving LOD cannot alter other role bytes; level zero aliases its image; owned pixels survive source destruction |
@@ -63,8 +63,8 @@ calls a decoder or derives a footprint by decoding pixels.
 
 Existing `unsupported_formats`, `load_provenance`, `framebuffer_aliases`, role,
 LOD, capture, retained-scene and prefix tests remain part of validation. They cover
-all 23 unsupported format pairs, unsupported narrow RGBA32 compatibility decode,
-missing/mixed/overwritten provenance and cross-task source lifetime.
+all 23 unsupported format pairs, physical narrow RGBA32 decoding, mixed and
+partially overwritten loads, initial zeros and cross-task source lifetime.
 
 `dispatch-expectations.json` contains explicit CPU-side count expectations tied to
 the role fixture. Its tests check request inventories and alias arithmetic.

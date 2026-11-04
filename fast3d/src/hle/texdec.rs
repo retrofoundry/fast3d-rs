@@ -1,4 +1,4 @@
-//! N64 texture-format decoders → RGBA8. Authority: libultra/gbi. TMEM is linear.
+//! N64 texture-format validation and CPU decode formulas.
 //!
 //! Per-format decode formulas (nibble order + intensity replication) are documented on each
 //! decode function below. Nibble order for 4-bit formats: even column = high nibble.
@@ -22,21 +22,6 @@ impl FormatInfo {
         }
     }
 
-    /// Number of TMEM bytes occupied by a `w × h` texture in this format.
-    ///
-    /// Dispatches only on `siz` — all formats with the same `siz` share the same byte count:
-    /// - siz=0 (4b):  ceil(w*h / 2)  — 2 texels per byte  (I4, IA4)
-    /// - siz=1 (8b):  w*h             — 1 byte per texel   (I8, IA8)
-    /// - siz=2 (16b): w*h*2           — 2 bytes per texel  (RGBA16, IA16)
-    pub fn tmem_bytes(&self, w: u32, h: u32) -> usize {
-        let texels = (w * h) as usize;
-        match self.siz {
-            0 => texels.div_ceil(2),
-            1 => texels,
-            _ => texels * 2,
-        }
-    }
-
     /// Decode TMEM bytes to RGBA8 (`w × h × 4` bytes).
     ///
     /// Dispatches on `(fmt, siz)`:
@@ -49,7 +34,7 @@ impl FormatInfo {
     /// - other    → error; RGBA32 requires the dual-bank TMEM decoder
     ///
     /// `tlut`/`palette`/`tlut_fmt` carry TLUT state for CI formats (Task 3); non-CI ignore them.
-    #[cfg(any(test, feature = "profiling"))]
+    #[cfg(test)]
     pub fn decode(
         &self,
         src: &[u8],
@@ -80,7 +65,7 @@ impl FormatInfo {
 ///
 /// I8 expansion: the 8-bit intensity value broadcasts to all four RGBA components, so
 /// alpha = intensity (not opaque).
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub fn decode_i8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -104,7 +89,7 @@ pub fn decode_i8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 ///
 /// TODO: row-align nibbles for odd-width textures (N64 TMEM starts each row on a byte boundary;
 /// this flat-stream packing only matches hardware for even widths — all current test scenes are even).
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub fn decode_i4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -125,7 +110,7 @@ pub fn decode_i4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 /// second byte. IA formats are distinct from I formats: alpha is NOT the intensity.
 ///
 /// IA16 expansion: `i=(ia16>>8)&0xFF`, `a=ia16&0xFF`.
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub fn decode_ia16(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -146,7 +131,7 @@ pub fn decode_ia16(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 ///
 /// IA8 expansion:
 ///   `i=(ia8>>4)&0xF; a=(ia8>>0)&0xF; i=(i<<4)|i; a=(a<<4)|a`.
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub fn decode_ia8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -175,7 +160,7 @@ pub fn decode_ia8(src: &[u8], w: u32, h: u32) -> Vec<u8> {
 /// Nibble order: same as I4 (even column = high nibble).
 ///
 /// TODO: row-align nibbles for odd-width textures (same caveat as `decode_i4`).
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub fn decode_ia4(src: &[u8], w: u32, h: u32) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
@@ -224,31 +209,13 @@ pub(crate) fn decode_ia16_entry(v: u16) -> [u8; 4] {
 /// Decodes by `tlut_fmt`: 2=RGBA16 entry, 3=IA16 entry, else → transparent black.
 ///
 /// The `palette` field (CI4 sub-palette select) is IGNORED for CI8 — CI8 has no sub-palette.
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub fn decode_ci8(src: &[u8], w: u32, h: u32, tlut: &[u8], tlut_fmt: u8) -> Vec<u8> {
-    decode_ci8_observed(src, w, h, tlut, tlut_fmt, &mut |_| {})
-}
-
-#[cfg(any(test, feature = "profiling"))]
-pub(crate) fn decode_ci8_observed(
-    src: &[u8],
-    w: u32,
-    h: u32,
-    tlut: &[u8],
-    tlut_fmt: u8,
-    reads: &mut impl FnMut(usize),
-) -> Vec<u8> {
     let n = (w * h) as usize;
     let mut out = vec![0u8; n * 4];
     for i in 0..n {
         let index = src.get(i).copied().unwrap_or(0) as usize;
         let off = index << 3;
-        if off < tlut.len() {
-            reads(off);
-        }
-        if off + 1 < tlut.len() {
-            reads(off + 1);
-        }
         let entry = match (tlut.get(off), tlut.get(off + 1)) {
             (Some(&hi), Some(&lo)) => u16::from_be_bytes([hi, lo]),
             _ => 0, // out-of-range index -> 0 (silent zero-pad safety net)
@@ -276,21 +243,8 @@ pub(crate) fn decode_ci8_observed(
 /// packed RDRAM → stride-8, so entry `i` lives at byte `i*8`). Both `(palette<<7)` and
 /// `(index<<3)` index directly into this stride-8 buffer — no adjustment needed.
 /// Out-of-range index → 0 (zero-pad safety net, same as decode_ci8).
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub fn decode_ci4(src: &[u8], w: u32, h: u32, tlut: &[u8], palette: u8, tlut_fmt: u8) -> Vec<u8> {
-    decode_ci4_observed(src, w, h, tlut, palette, tlut_fmt, &mut |_| {})
-}
-
-#[cfg(any(test, feature = "profiling"))]
-pub(crate) fn decode_ci4_observed(
-    src: &[u8],
-    w: u32,
-    h: u32,
-    tlut: &[u8],
-    palette: u8,
-    tlut_fmt: u8,
-    reads: &mut impl FnMut(usize),
-) -> Vec<u8> {
     let n = (w * h) as usize;
     let base = (palette as usize) << 7;
     let mut out = vec![0u8; n * 4];
@@ -299,12 +253,6 @@ pub(crate) fn decode_ci4_observed(
         // Even column (i%2==0) → high nibble; odd column (i%2==1) → low nibble.
         let index = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F } as usize;
         let off = base + (index << 3);
-        if off < tlut.len() {
-            reads(off);
-        }
-        if off + 1 < tlut.len() {
-            reads(off + 1);
-        }
         let entry = match (tlut.get(off), tlut.get(off + 1)) {
             (Some(&hi), Some(&lo)) => u16::from_be_bytes([hi, lo]),
             _ => 0, // out-of-range index → 0 (silent zero-pad safety net)
@@ -354,13 +302,6 @@ mod tests {
                 .unwrap(),
             crate::hle::combiner::decode_rgba16(src)
         );
-    }
-
-    #[test]
-    fn format_info_tmem_bytes() {
-        assert_eq!(FormatInfo { fmt: 4, siz: 1 }.tmem_bytes(4, 4), 16); // I8:  w*h
-        assert_eq!(FormatInfo { fmt: 4, siz: 0 }.tmem_bytes(4, 4), 8); //  I4:  ceil(w*h/2)
-        assert_eq!(FormatInfo { fmt: 0, siz: 2 }.tmem_bytes(4, 4), 32); // RGBA16: w*h*2
     }
 
     #[test]
@@ -437,13 +378,6 @@ mod tests {
         // IA8: 0xF8 -> i4=0xF->i8=0xFF, a4=0x8->a8=0x88 (alpha != intensity)
         let out8 = decode_ia8(&[0xF8], 1, 1);
         assert_eq!(out8, vec![0xFF, 0xFF, 0xFF, 0x88]);
-    }
-
-    #[test]
-    fn format_info_ia_tmem_bytes() {
-        assert_eq!(FormatInfo { fmt: 3, siz: 2 }.tmem_bytes(4, 4), 32); // IA16: w*h*2
-        assert_eq!(FormatInfo { fmt: 3, siz: 1 }.tmem_bytes(4, 4), 16); // IA8:  w*h
-        assert_eq!(FormatInfo { fmt: 3, siz: 0 }.tmem_bytes(4, 4), 8); //  IA4:  ceil(w*h/2)
     }
 
     #[test]

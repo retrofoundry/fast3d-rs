@@ -23,7 +23,7 @@ Each workload directory contains:
 - `input.json`: capture path and XXH3-64 checksum, reset-prefix scope, frame counts,
   presentation selection and evidence limits.
 - `attempts.jsonl`: every observed role attempt, including rejections, with frame,
-  task, draw PC, original outcome, class, sampled count/hash, writer ranges and
+  task, draw PC, current outcome, class, sampled count/hash, writer ranges and
   links to its bank, tags, identity and descriptor. Each writer range is
   `[start_address, byte_count, load_id]`; load ID zero means unwritten.
 - `loads.jsonl`: load command PC, command words, image state, load tile, parameters, source
@@ -35,16 +35,14 @@ Each workload directory contains:
 - `identities/`: exact sampled witnesses. `sampled_ranges` stores each contiguous
   span as `[start_address, [bytes...]]`. Hashes choose file names; existing contents
   are compared byte for byte and collisions get a numeric suffix.
-- `witnesses/`: the original encoded request's Fast3dV1 witness, including palette
-  entries used by the linear representation that physical sampling might omit.
+- `witnesses/`: the encoded request's Fast3dV1 witness.
   Identities include this file reference, whose contents are deduplicated by exact
   equality with the same collision handling.
 - `textures/`: one descriptor per distinct witness, linked to its first attempt
-  and load IDs. Changed and newly admitted textures have physical decode PNGs and
-  a linear decode PNG when one exists. Other classes retain descriptors without
-  PNGs. Paths are relative to the JSON file containing them.
-- `summary.json`: attempt and distinct counts by class, roles, old outcomes, CPU
-  comparisons, frames, tasks, errors, caps and terminations.
+  and load IDs. Ordinary textures have physical decode PNGs. Framebuffer
+  candidates and failed decodes retain descriptors without PNGs. Paths are relative to the JSON file containing them.
+- `summary.json`: attempt and distinct counts by class, roles, current outcomes,
+  frames, tasks, errors, caps and terminations.
 
 `prefix_complete` becomes false at the first non-End task or missing capture read.
 That task and every later record carry the flag; the summary identifies the first
@@ -52,19 +50,21 @@ incomplete task. Replay continues with the interpreter's normal rollback rules.
 Counts after that point do not establish what the original recording rendered.
 
 Ordinary texture identity includes the descriptor, representations, sampled
-address/value pairs and linear bytes where available. It excludes unrelated bank
+address/value pairs. It excludes unrelated bank
 bytes, draw PC and load history. Framebuffer identities describe a candidate
 footprint only: placeholder bytes cannot establish the palette indices or texels
 that the GPU will read. The load-free framebuffer shortcut is also unverified and
 has no CPU image. Full bank/tag snapshots remain available for every attempt,
 and tagged-byte placeholder decodes are never written as PNGs.
 
-`equal`, `changed` and `newly_admitted` describe the CPU representation comparison;
-`unaffected`, `intentional_exception` and `unverified` retain the observer's scope
-classification. The separate `cpu_comparison` field reports `equal`, `changed` or
-`not_checked`. All four oracle axes stay `unverified`: this tool has no independent
-load/decode oracle, GPU readback or final sampling observation. These results do
-not close the S1 hardware or GPU evidence gates.
+Schema 2 records the current `outcome` and `witness`; it does not reconstruct
+retired linear streams. Classes are `unaffected`, `intentional_exception` or
+`unverified`. Compare saved runs by workload, frame/task, draw PC, role,
+descriptor, sampled bytes and exact witnesses to detect routing or content
+regressions. A formerly refused request becoming Tile/Lookup is newly admitted.
+All four oracle axes stay `unverified`: this tool has no independent load/decode
+oracle, GPU readback or final sampling observation. These results do not close
+hardware or GPU evidence gates.
 
 JSONL records are flushed after each task. Bank, source and witness deduplication
 compares files on disk, so the tool retains the decoded capture and the current

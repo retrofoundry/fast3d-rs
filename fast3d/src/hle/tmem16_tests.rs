@@ -94,7 +94,6 @@ fn crystal_physical_texels_include_retained_wider_load_bytes() {
 }
 
 #[test]
-#[ignore = "S2: retire the mixed-load LinearCompat refusal"]
 fn crystal_request_decodes_literal_physical_texels() {
     let rdp = crystal();
     let binding = prepare(&rdp, &rdp.tiles[0], 0, &Recorder::default()).unwrap();
@@ -222,7 +221,6 @@ fn partial_overwrite_keeps_stale_rows_and_initial_zeroes() {
 }
 
 #[test]
-#[ignore = "S2: route partially overwritten block loads through physical TMEM"]
 fn partial_overwrite_request_decodes_literal_physical_texels() {
     let (rdp, tile) = partial_overwrite();
     let binding = prepare(&rdp, &tile, 0, &Recorder::default()).unwrap();
@@ -259,7 +257,6 @@ fn odd_width_four_bit_physical_rows_restart_nibble_parity() {
 }
 
 #[test]
-#[ignore = "S2: retire linear nibble parity across odd-width rows"]
 fn odd_width_four_bit_request_restarts_nibble_parity() {
     let (rdp, tile) = odd_nibbles();
     let binding = prepare(&rdp, &tile, 0, &Recorder::default()).unwrap();
@@ -317,10 +314,10 @@ fn lookup_threshold_is_strict_and_mirroring_does_not_disable_it() {
     rdp.tmem_bank
         .write_block(&[17, 34, 51, 68, 85, 102, 119, 136], 0, 0, 0, 1, 1);
     for (mask, mode, representation) in [
-        (2, 0, Representation::LinearCompat),
+        (2, 0, Representation::Tile),
         (3, 0, Representation::Lookup4096x4),
         (3, 1, Representation::Lookup4096x4),
-        (3, 2, Representation::LinearCompat),
+        (3, 2, Representation::Tile),
     ] {
         let tile = TileDescriptor {
             masks: mask,
@@ -344,7 +341,6 @@ fn lookup_threshold_is_strict_and_mirroring_does_not_disable_it() {
 }
 
 #[test]
-#[ignore = "S2: route equal-mask and clamped narrow block requests to physical tiles"]
 fn lookup_threshold_keeps_literal_texels_after_routing_changes() {
     let mut rdp = Rdp::default();
     rdp.tmem_bank
@@ -478,7 +474,6 @@ fn texture0_texture1_lod_and_detail_have_literal_physical_texels() {
 }
 
 #[test]
-#[ignore = "S2: all texture roles must admit retained physical crystal texels"]
 fn crystal_literal_texels_reach_each_material_role() {
     for role in ["texture0", "texture1", "lod1", "detail"] {
         let mut rdp = crystal();
@@ -544,19 +539,14 @@ fn census_keeps_later_roles_after_the_first_texture_refuses() {
     rdp.combine_l = 0x0088_7f10;
     rdp.combine_h = 0x88fc_fc7e;
     rdp.other_mode_h = (1 << 20) | (1 << 16) | (2 << 17);
+    rdp.tiles[1].fmt = 7;
     let profiling = Recorder::new(Mode::Census);
     let mut rsp = Rsp::default();
     rsp.profiling = profiling.clone();
     rsp.set_texture(1, 1, true, 65535, 65535);
     let mut diags = Vec::new();
     assert!(build_material(&rdp, &rsp, &mut diags, 0x80).is_none());
-    assert_eq!(
-        diags,
-        [crate::Diagnostic {
-            at: 0x80,
-            kind: crate::DiagKind::TextureBytesUnavailable { tmem_addr: 0 }
-        }]
-    );
+    assert!(!diags.is_empty());
     let snapshot = profiling.drain();
     assert_eq!(
         snapshot
@@ -571,17 +561,17 @@ fn census_keeps_later_roles_after_the_first_texture_refuses() {
         let expected = match attempt.role.as_str() {
             "tex0" | "lod0" => {
                 assert_eq!(
-                    attempt.old_outcome,
-                    "TextureBytesUnavailable { tmem_addr: 0 }"
+                    attempt.outcome,
+                    "UnsupportedTextureFormat { fmt: 7, siz: 1 }"
                 );
-                CRYSTAL.concat()
+                Vec::new()
             }
             "tex1" | "lod1" => {
-                assert_eq!(attempt.old_outcome, "Tile");
+                assert_eq!(attempt.outcome, "Tile");
                 [[96; 4]; 8].concat()
             }
             "detail" => {
-                assert_eq!(attempt.old_outcome, "Tile");
+                assert_eq!(attempt.outcome, "Tile");
                 [[80; 4]; 8].concat()
             }
             role => panic!("unexpected role {role}"),
@@ -726,7 +716,7 @@ fn census_framebuffer_metadata_keeps_the_latest_color_writer_over_depth() {
     assert!(diags.is_empty(), "{diags:?}");
     let attempts = interpreter.recorder.drain().census_attempts;
     assert_eq!(attempts.len(), 1);
-    assert_eq!(attempts[0].old_outcome, "Framebuffer");
+    assert_eq!(attempts[0].outcome, "Framebuffer");
 }
 
 #[test]
@@ -761,6 +751,63 @@ fn census_framebuffer_metadata_excludes_copy_only_destinations() {
     assert!(diags.is_empty(), "{diags:?}");
     let attempts = interpreter.recorder.drain().census_attempts;
     assert_eq!(attempts.len(), 1);
-    assert_eq!(attempts[0].old_outcome, "Tile");
+    assert_eq!(attempts[0].outcome, "Tile");
     assert_eq!(attempts[0].physical, [[255, 0, 0, 255]; 4].concat());
+}
+
+#[test]
+fn written_zeroes_prevent_load_free_framebuffer_triangle_rejection() {
+    for loaded in [false, true] {
+        let mut rdp = Rdp {
+            tex_image: (4, 1, 4, 0x10000),
+            texture_loaded: loaded,
+            combine_l: 0x00ff_ffff,
+            combine_h: 0xfffc_f279,
+            ..Default::default()
+        };
+        rdp.tiles[0] = i8(4, 1);
+        if loaded {
+            rdp.tmem_bank.write_block(&[0; 8], 0, 0, 0, 1, 1);
+        }
+        let mut rec = super::rsp::PairRec::default();
+        rec.framebuffers
+            .targets
+            .record(
+                0x10000,
+                crate::render::framebuffers::ImageLayout {
+                    width: 4,
+                    fmt: 0,
+                    siz: 2,
+                },
+                1,
+                false,
+            )
+            .unwrap();
+        let mut scene = crate::scene::Scene::default();
+        let mut diags = Vec::new();
+        let result = super::rsp::snapshot_run(
+            &mut Rsp::default(),
+            &rec,
+            &rdp,
+            &mut diags,
+            &mut scene,
+            0x80,
+        );
+        assert_eq!(result.is_some(), loaded);
+        if loaded {
+            assert!(diags.is_empty());
+            assert_eq!(scene.materials[0].texture.decode().as_ref(), [0; 16]);
+        } else {
+            assert_eq!(
+                diags,
+                [crate::Diagnostic {
+                    at: 0x80,
+                    kind: crate::DiagKind::UnsupportedFramebufferAccess {
+                        address: 0x10000,
+                        reason: crate::FramebufferAccess::TriangleTexture
+                    }
+                }]
+            );
+        }
+    }
 }

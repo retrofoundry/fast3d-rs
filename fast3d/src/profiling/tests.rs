@@ -6,7 +6,7 @@ use crate::hle::{
 };
 
 #[test]
-fn decode_counters_distinguish_tile_linear_lookup() {
+fn decode_counters_distinguish_tile_lookup() {
     let cases = authored_requests();
     let toy = cases
         .iter()
@@ -21,7 +21,7 @@ fn decode_counters_distinguish_tile_linear_lookup() {
         (toy.reachable_bytes, toy.output.len(), toy.bank.bytes.len()),
         (2048, 4096, 4096)
     );
-    assert_eq!(toy.canonical(&[]).len(), 4096 + 45);
+    assert_eq!(toy.canonical().len(), 4096 + 45);
     let lookup = cases
         .iter()
         .find(|r| r.representation == Representation::Lookup && r.tile.fmt == 0 && r.tile.siz == 2)
@@ -40,42 +40,25 @@ fn decode_counters_distinguish_tile_linear_lookup() {
         })
         .unwrap();
     assert_eq!((ci.reachable_bytes, ci.palette_bytes), (3, 2));
-    let linear = cases
-        .iter()
-        .find(|r| r.representation == Representation::Linear && r.tile.fmt == 0 && r.tile.siz == 2)
-        .unwrap();
-    assert_eq!(
-        linear.reachable_bytes,
-        usize::from(linear.tile.width) * usize::from(linear.tile.height) * 2
-    );
-    assert_ne!(linear.bank.sources.len(), 0);
 }
 
 #[test]
 fn cache_preflight_matches_uncached_decode() {
     for request in authored_requests() {
-        let executor = request.executor();
-        let prepared = executor.prepare().unwrap();
         assert_eq!(
-            executor.decode(&prepared).unwrap(),
+            request.decode().unwrap(),
             request.output,
             "{}",
             request.class()
         );
-        assert_eq!(executor.baseline_decode().unwrap(), request.output);
         let equal = request.clone();
-        assert_eq!(request.canonical(&prepared), equal.canonical(&prepared));
+        assert_eq!(request.canonical(), equal.canonical());
         let mut changed = request.clone();
         changed.bank.bytes[0] ^= 0xff;
-        assert_ne!(request.canonical(&prepared), changed.canonical(&prepared));
-        if request.representation == Representation::Linear {
-            let mut lost = request.clone();
-            lost.bank.sources.fill([0, 0]);
-            assert!(lost.executor().prepare().is_err());
-        }
+        assert_ne!(request.canonical(), changed.canonical());
         let mut rejected = request;
         rejected.rejection = Some("lost source".into());
-        assert!(rejected.executor().prepare().is_err());
+        assert!(rejected.decode().is_err());
     }
 }
 
@@ -124,7 +107,7 @@ fn profiling_does_not_change_summaries() {
 }
 
 #[test]
-fn trace_keeps_linear_input_and_identity_after_provenance_is_gone() {
+fn trace_keeps_physical_input_and_identity_after_later_loads() {
     use crate::hle::texture_request::{prepare, TextureSource};
 
     let mut rdp = Rdp::default();
@@ -145,13 +128,10 @@ fn trace_keeps_linear_input_and_identity_after_provenance_is_gone() {
     let mut trace = Request::capture(&rdp, &tile, 0, "texture0", Ok(encoded));
     rdp.tmem_bank.write_tile(&[91; 8], 0, 1, 1, 1, 8, 1);
     drop((rdp, binding));
-    trace.bank.sources.clear();
-    trace.bank.blocks.clear();
     assert!(trace.output.is_empty());
-    assert_eq!(trace.linear.as_deref(), Some([61; 9].as_slice()));
     assert_eq!(trace.encoded_identity().unwrap(), expected);
     trace.analyze().unwrap();
-    assert_eq!(trace.output, [61; 36]);
+    assert_eq!(trace.output, [[61; 24].as_slice(), &[0; 12]].concat());
     assert_eq!(trace.reachable_bytes, 9);
     assert_eq!(trace.read_operations, 9);
 }
@@ -172,9 +152,6 @@ fn diagnostic_gpu_input_rejects_incomplete_banks_and_invalid_extents() {
     assert!(request.encoded_request().is_err());
     request.tlut = 0;
     request.representation = Representation::Lookup;
-    assert!(request.encoded_request().is_err());
-    request.representation = Representation::Linear;
-    request.linear = Some(vec![0]);
     assert!(request.encoded_request().is_err());
 }
 
@@ -231,4 +208,37 @@ fn recorder_inactive_and_nested_accounting() {
     );
     assert_eq!(snapshot.counters["tasks"], 1);
     assert!(recorder.drain().counters.is_empty());
+}
+
+#[cfg(feature = "profiling")]
+#[test]
+fn trace_version_two_rejects_old_linear_records() {
+    let request = authored_requests().remove(0);
+    let mut value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["version"], 2);
+    assert!(value.get("linear").is_none());
+    assert!(value["bank"].get("sources").is_none());
+    assert!(value["bank"].get("blocks").is_none());
+    value["version"] = 1.into();
+    let old: Request = serde_json::from_value(value.clone()).unwrap();
+    assert!(old.encoded_identity().is_err());
+    assert!(old.decode().is_err());
+    value.as_object_mut().unwrap().remove("version");
+    assert!(serde_json::from_value::<Request>(value.clone()).is_err());
+    value["version"] = 2.into();
+    value["representation"] = "Linear".into();
+    assert!(serde_json::from_value::<Request>(value).is_err());
+}
+
+#[test]
+fn diagnostic_tile_extent_must_match_its_descriptor() {
+    let mut request = authored_requests()
+        .into_iter()
+        .find(|r| r.representation == Representation::Tile && r.extent == [1, 1])
+        .unwrap();
+    request.extent = [2, 1];
+    assert!(request.validate().is_err());
+    assert!(request.decode().is_err());
+    assert!(request.analyze().is_err());
+    assert!(request.encoded_identity().is_err());
 }

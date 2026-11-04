@@ -4,7 +4,7 @@ A load-free TexRect can sample a previously rendered colour image at its exact b
 address. This is a fast3d convenience. It does not implement libultra framebuffer
 LoadTile or LoadBlock semantics and must not be exported as an rt64 agreement test.
 
-The render tile must have no TMEM load provenance. Its format and texel size must
+The render tile must have no written byte in its reachable TMEM footprint. Its format and texel size must
 match the source. SETTIMG must match the stored colour image layout. The tile
 line addresses TMEM and does not set the stride of this load-free GPU view; the rectangle's
 texel coordinates are scaled by the source extent, not the tile's. The

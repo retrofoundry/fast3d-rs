@@ -10,6 +10,7 @@ use super::{Image, TextureResources};
 
 fn request(value: u8) -> Result<EncodedTextureRequest, String> {
     let mut request = Request {
+        version: crate::profiling::TRACE_VERSION,
         representation: Representation::Tile,
         role: "pressure".into(),
         tile: Default::default(),
@@ -17,10 +18,7 @@ fn request(value: u8) -> Result<EncodedTextureRequest, String> {
         extent: [1, 1],
         bank: Bank {
             bytes: vec![value; 4096],
-            sources: Vec::new(),
-            blocks: Vec::new(),
         },
-        linear: None,
         reachable_bytes: 0,
         read_operations: 0,
         palette_bytes: 0,

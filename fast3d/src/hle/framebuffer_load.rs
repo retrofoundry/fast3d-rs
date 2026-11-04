@@ -91,8 +91,25 @@ impl Default for Tags {
 }
 
 /// A texture request whose TMEM includes rendered framebuffer pixels.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct FramebufferTexture {
     pub(crate) encoded: super::texture_request::EncodedTextureRequest,
     pub(crate) tags: Tags,
+}
+
+impl PartialEq for FramebufferTexture {
+    fn eq(&self, other: &Self) -> bool {
+        if self.tags != other.tags {
+            return false;
+        }
+        if self.encoded.recipe().tlut < 2 {
+            return self.encoded == other.encoded;
+        }
+        // Framebuffer indices can select palette entries absent from the CPU placeholders.
+        let (
+            super::texture_request::EncodedInput::Tmem(a),
+            super::texture_request::EncodedInput::Tmem(b),
+        ) = (self.encoded.input(), other.encoded.input());
+        self.encoded.recipe() == other.encoded.recipe() && a == b
+    }
 }

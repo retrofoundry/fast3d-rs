@@ -7,11 +7,11 @@ all-features. `goldens.json` freezes the SHA-256 ledger of all 27 committed gold
 files. Neither inventory is discovered from whatever output a test happens to write.
 
 GPU decode readbacks have a separate version-one `gpu-decode-manifest.json`.
-`tools/tmem/gpu-decode-inventory.json` freezes 1,909 named component/layout rows
-and their extents. Metal and Chrome execute all 1,909 cases; native Metal artifacts
-require 5,727 supplemental rows across default, debug-ui and all-features. Windows
-executes the 99 IDs in `tools/tmem/gpu-decode-warp.json` in each configuration,
-requiring 297 supplemental rows. The profile is fixed by the target OS in Rust and
+`tools/tmem/gpu-decode-inventory.json` freezes 1,263 named component/layout rows
+and their extents. Metal and Chrome execute all 1,263 cases; native Metal artifacts
+require 3,789 supplemental rows across default, debug-ui and all-features. Windows
+executes the 73 IDs in `tools/tmem/gpu-decode-warp.json` in each configuration,
+requiring 219 supplemental rows. The profile is fixed by the target OS in Rust and
 validated against the recorded runtime OS by the artifact loader. An artifact cannot
 choose a smaller profile. Both inventories retain the same input and expected bytes.
 A checkout containing `fast3d/tests/texture_decode_gpu.rs` requires the supplement. The
@@ -22,7 +22,7 @@ comparison inventory.
 
 The WARP subset retains all nine formats, CI4/CI8 in all four TLUT modes, low and
 high palette pages, each RGBA32 channel, tile and lookup layouts at TMEM base 511,
-odd-width linear compatibility, and all five independent layout literals. Those
+odd-width 3x3 tiles, and all five independent layout literals. Those
 literals exercise both nibble parities, odd-row swapping, split-bank wrap, zero
 line and the four wrapped lookup planes. CPU tests enforce the coverage and check
 every selected expected output against the CPU oracle. The full inventory is unchanged.

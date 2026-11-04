@@ -18,7 +18,6 @@ pub(super) fn verify(device: &wgpu::Device, vectors: &[Vector], decoded: &[Vec<u
         );
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let linear = vector.request.prepare().unwrap();
             export::write_row(
                 "FAST3D_GPU_DECODE_OUTPUT",
                 &vector.name,
@@ -28,7 +27,7 @@ pub(super) fn verify(device: &wgpu::Device, vectors: &[Vector], decoded: &[Vec<u
                 actual,
                 vector.request.extent[0],
                 vector.request.extent[1],
-                &vector.request.canonical(&linear),
+                &vector.request.canonical(),
                 Some(device),
             );
             if let Some(directory) = std::env::var_os("FAST3D_GPU_DECODE_OUTPUT") {

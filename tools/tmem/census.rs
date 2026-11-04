@@ -15,7 +15,7 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-fn witness(attempt: &CensusAttempt, old_witness: Option<&str>) -> Result<Vec<u8>> {
+fn identity_bytes(attempt: &CensusAttempt, witness: Option<&str>) -> Result<Vec<u8>> {
     let mut sampled: Vec<(u16, Vec<u8>)> = Vec::new();
     for &address in &attempt.sampled {
         if let Some((start, bytes)) = sampled.last_mut() {
@@ -30,14 +30,13 @@ fn witness(attempt: &CensusAttempt, old_witness: Option<&str>) -> Result<Vec<u8>
         "tile": attempt.tile,
         "tlut": attempt.tlut,
         "representation": attempt.physical_representation,
-        "old_outcome": attempt.old_outcome,
+        "outcome": attempt.outcome,
         "extent": attempt.extent,
         "sampled_ranges": sampled,
         "tags": attempt.framebuffer_tags.iter().filter(|(address, _, _)| {
             attempt.sampled.contains(address)
         }).collect::<Vec<_>>(),
-        "linear_bytes": attempt.linear_bytes,
-        "old_witness_file": old_witness.map(|path| format!("../{path}")),
+        "witness_file": witness.map(|path| format!("../{path}")),
         "framebuffer": attempt.framebuffer,
         "sampled_framebuffer": attempt.sampled_framebuffer,
     }))?)
@@ -121,14 +120,6 @@ fn axes() -> Value {
     })
 }
 
-fn cpu_comparison(attempt: &CensusAttempt) -> &'static str {
-    match &attempt.linear {
-        Some(linear) if !attempt.physical.is_empty() && linear == &attempt.physical => "equal",
-        Some(_) if !attempt.physical.is_empty() => "changed",
-        _ => "not_checked",
-    }
-}
-
 fn run(capture: &Path, out: &Path) -> Result<Value> {
     fs::create_dir(out)?;
     for directory in [
@@ -171,7 +162,7 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
     json_file(
         out.join("input.json"),
         &json!({
-            "schema": 1,
+            "schema": 2,
             "reset_prefix": prefix,
             "frames": frames.len(),
             "warmup_frames": warmup,
@@ -179,7 +170,7 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
             "frame_filter": null,
             "execution": "persistent CPU interpreter; no GPU submission",
             "oracle_axes": axes(),
-            "oracle_note": "No independent load/decode oracle supplied. CPU comparison is not a hardware verdict.",
+            "oracle_note": "No independent load/decode oracle supplied. CPU decodes are not a hardware verdict.",
             "framebuffer_note": "Tagged bytes are placeholders; sampled addresses may depend on unknown framebuffer palette indices. No tagged-byte PNG is emitted.",
         }),
     )?;
@@ -195,7 +186,6 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
     let mut distinct_classes = BTreeMap::new();
     let mut terminations = BTreeMap::new();
     let mut diagnostics = BTreeMap::new();
-    let mut comparisons = BTreeMap::new();
     let mut attempts_count = 0u64;
     let mut loads_count = 0u64;
     let mut distinct = 0u64;
@@ -302,8 +292,7 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
                 attempts_count += 1;
                 increment(&mut classes, &attempt.class);
                 increment(&mut roles, &attempt.role);
-                increment(&mut outcomes, &attempt.old_outcome);
-                increment(&mut comparisons, cpu_comparison(&attempt));
+                increment(&mut outcomes, &attempt.outcome);
                 let (bank, new_bank) = blob(out, "banks", &attempt.bank, "bin")?;
                 banks += u64::from(new_bank);
                 let (tags, _) = blob(
@@ -312,15 +301,15 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
                     &serde_json::to_vec(&attempt.framebuffer_tags)?,
                     "json",
                 )?;
-                let old_witness = attempt
-                    .old_witness
+                let witness = attempt
+                    .witness
                     .as_ref()
                     .map(|bytes| blob(out, "witnesses", bytes, "bin").map(|(path, _)| path))
                     .transpose()?;
                 let (identity, new_identity) = blob(
                     out,
                     "identities",
-                    &witness(&attempt, old_witness.as_deref())?,
+                    &identity_bytes(&attempt, witness.as_deref())?,
                     "json",
                 )?;
                 let id = Path::new(&identity).file_stem().unwrap().to_str().unwrap();
@@ -334,7 +323,7 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
                     "role": attempt.role,
                     "tile": attempt.tile,
                     "tlut": attempt.tlut,
-                    "old_outcome": attempt.old_outcome,
+                    "outcome": attempt.outcome,
                     "draw_rejection": attempt.draw_rejection,
                     "framebuffer": attempt.framebuffer,
                     "sampled_framebuffer": attempt.sampled_framebuffer,
@@ -348,26 +337,23 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
                 record["bank_file"] = json!(bank);
                 record["tags_file"] = json!(tags);
                 record["identity_file"] = json!(identity);
-                record["old_witness_file"] = json!(old_witness);
+                record["witness_file"] = json!(witness);
                 record["sampled_count"] = json!(attempt.sampled.len());
                 record["writer_ranges"] = json!(writer_ranges(&attempt.writers));
                 record["descriptor"] = json!(descriptor);
                 record["oracle_axes"] = axes();
-                record["cpu_comparison"] = json!(cpu_comparison(&attempt));
                 record["sampled_hash"] = json!(format!("{:016x}", attempt.sampled_hash));
                 record["identity_scope"] = json!(if attempt.framebuffer
-                    || attempt.old_outcome.starts_with("FramebufferShortcut")
+                    || attempt.outcome.starts_with("FramebufferShortcut")
                 {
                     "candidate_footprint_only; framebuffer indices and texels unverified"
                 } else {
                     "sampled_bytes_and_descriptor"
                 });
                 record["physical_decoded"] = json!(!attempt.physical.is_empty());
-                record["linear_available"] = json!(attempt.linear.is_some());
                 json_line(&mut attempts, &record)?;
                 if new_identity {
-                    let images = matches!(attempt.class.as_str(), "changed" | "newly_admitted");
-                    let physical = if attempt.physical.is_empty() || !images {
+                    let physical = if attempt.physical.is_empty() {
                         None
                     } else {
                         let path = format!("{id}-physical.png");
@@ -378,22 +364,13 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
                         )?;
                         Some(path)
                     };
-                    let linear = if let Some(rgba) = attempt.linear.as_ref().filter(|_| images) {
-                        let path = format!("{id}-linear.png");
-                        png(&out.join("textures").join(&path), attempt.extent, rgba)?;
-                        Some(path)
-                    } else {
-                        None
-                    };
                     record["context"]["reset_prefix"] = json!("../input.json");
                     record["bank_file"] = json!(format!("../{bank}"));
                     record["tags_file"] = json!(format!("../{tags}"));
                     record["identity_file"] = json!(format!("../{identity}"));
-                    record["old_witness_file"] =
-                        json!(old_witness.map(|path| format!("../{path}")));
+                    record["witness_file"] = json!(witness.map(|path| format!("../{path}")));
                     record.as_object_mut().unwrap().remove("descriptor");
                     record["physical_png"] = json!(physical);
-                    record["linear_png"] = json!(linear);
                     record["load_references"] = json!({"file": "../loads.jsonl", "ids": attempt.writers.iter().map(|(_, id)| id).filter(|&&id| id != 0).collect::<std::collections::BTreeSet<_>>()});
                     record["attempts_file"] = json!("../attempts.jsonl");
                     json_file(out.join(descriptor), &record)?;
@@ -414,11 +391,10 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
         "loads": loads_count,
         "classes": classes,
         "roles": roles,
-        "old_outcomes": outcomes,
+        "outcomes": outcomes,
         "distinct_textures": distinct,
         "distinct_classes": distinct_classes,
         "distinct_banks": banks,
-        "cpu_comparisons": comparisons,
         "caps": caps,
         "terminations": terminations,
         "warnings": warnings,
@@ -506,7 +482,7 @@ mod tests {
             role: "tex0".into(),
             tile: Default::default(),
             tlut: 0,
-            old_outcome: "LinearCompat".into(),
+            outcome: "Tile".into(),
             draw_rejection: None,
             framebuffer: false,
             sampled_framebuffer: false,
@@ -518,10 +494,8 @@ mod tests {
             physical_representation: "Tile".into(),
             extent: [2, 1],
             physical: vec![0; 8],
-            linear: Some(vec![0; 8]),
-            linear_bytes: Some(vec![0, 0]),
-            old_witness: None,
-            class: "equal".into(),
+            witness: None,
+            class: "unaffected".into(),
             decode_error: None,
         }
     }
@@ -535,40 +509,34 @@ mod tests {
         changed.pc = 0x100;
         changed.role = "tex1".into();
         assert_eq!(
-            witness(&original, None).unwrap(),
-            witness(&changed, None).unwrap()
+            identity_bytes(&original, None).unwrap(),
+            identity_bytes(&changed, None).unwrap()
         );
         changed.bank[1] = 255;
         assert_ne!(
-            witness(&original, None).unwrap(),
-            witness(&changed, None).unwrap()
+            identity_bytes(&original, None).unwrap(),
+            identity_bytes(&changed, None).unwrap()
         );
     }
 
     #[test]
-    fn identity_keeps_linear_bytes_and_reached_tag_pointers() {
+    fn identity_keeps_reached_tag_pointers() {
         let original = attempt();
         let mut changed = original.clone();
-        changed.linear_bytes = Some(vec![0, 1]);
-        assert_ne!(
-            witness(&original, None).unwrap(),
-            witness(&changed, None).unwrap()
-        );
-        changed = original.clone();
         changed.framebuffer_tags.push((0, 2, 4));
         assert_ne!(
-            witness(&original, None).unwrap(),
-            witness(&changed, None).unwrap()
+            identity_bytes(&original, None).unwrap(),
+            identity_bytes(&changed, None).unwrap()
         );
         changed = original.clone();
         changed.framebuffer_tags.push((4095, 2, 4));
         assert_eq!(
-            witness(&original, None).unwrap(),
-            witness(&changed, None).unwrap()
+            identity_bytes(&original, None).unwrap(),
+            identity_bytes(&changed, None).unwrap()
         );
         assert_ne!(
-            witness(&original, Some("witnesses/a.bin")).unwrap(),
-            witness(&original, Some("witnesses/a-1.bin")).unwrap(),
+            identity_bytes(&original, Some("witnesses/a.bin")).unwrap(),
+            identity_bytes(&original, Some("witnesses/a-1.bin")).unwrap(),
         );
     }
 

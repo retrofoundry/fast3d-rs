@@ -6,7 +6,6 @@ use super::profiling::{Bank, Request};
 enum Representation {
     Tile,
     Lookup4096x4,
-    LinearCompat,
 }
 
 #[derive(Clone)]
@@ -24,25 +23,15 @@ struct DecodeRecipe {
 
 enum EncodedInput {
     Tmem(Arc<[u8; 4096]>),
-    LinearCompat {
-        bytes: Arc<[u8]>,
-        palette_bank: Arc<[u8; 4096]>,
-    },
 }
 
 fn request(input: EncodedInput, recipe: DecodeRecipe) -> Request {
-    let (bank, linear) = match input {
-        EncodedInput::Tmem(bank) => (bank, None),
-        EncodedInput::LinearCompat {
-            bytes,
-            palette_bank,
-        } => (palette_bank, Some(bytes.to_vec())),
-    };
+    let EncodedInput::Tmem(bank) = input;
     let mut result = Request {
+        version: crate::profiling::TRACE_VERSION,
         representation: match recipe.representation {
             Representation::Tile => super::profiling::Representation::Tile,
             Representation::Lookup4096x4 => super::profiling::Representation::Lookup,
-            Representation::LinearCompat => super::profiling::Representation::Linear,
         },
         role: "decode-witness".into(),
         tile: Default::default(),
@@ -50,10 +39,7 @@ fn request(input: EncodedInput, recipe: DecodeRecipe) -> Request {
         extent: recipe.output,
         bank: Bank {
             bytes: bank.to_vec(),
-            sources: Vec::new(),
-            blocks: Vec::new(),
         },
-        linear,
         reachable_bytes: 0,
         read_operations: 0,
         palette_bytes: 0,
@@ -71,9 +57,7 @@ fn request(input: EncodedInput, recipe: DecodeRecipe) -> Request {
 }
 
 pub(super) fn oracle(request: &Request) -> Vec<u8> {
-    request
-        .decode_prepared(&request.prepare().unwrap())
-        .unwrap()
+    request.decode().unwrap()
 }
 
 pub(super) struct Vector {
@@ -86,7 +70,7 @@ pub(super) fn readback_vectors(warp: bool) -> Vec<Vector> {
     let mut vectors = component_vectors();
     vectors.extend(layout_vectors());
     vectors.extend(literal_layout_vectors());
-    assert_eq!(vectors.len(), 1909);
+    assert_eq!(vectors.len(), 1263);
     if warp {
         let ids: Vec<String> =
             serde_json::from_str(include_str!("../../../tools/tmem/gpu-decode-warp.json")).unwrap();
@@ -129,34 +113,14 @@ fn row_variants(
     vectors: &mut Vec<Vector>,
     name: &str,
     recipe: DecodeRecipe,
-    bytes: &[u8],
     bank: [u8; 4096],
     expected: &[u8],
 ) {
-    for representation in [Representation::Tile, Representation::LinearCompat] {
-        if representation == Representation::LinearCompat && recipe.siz == 3 {
-            continue;
-        }
-        let input = if representation == Representation::Tile {
-            EncodedInput::Tmem(Arc::new(bank))
-        } else {
-            EncodedInput::LinearCompat {
-                bytes: bytes.into(),
-                palette_bank: Arc::new(bank),
-            }
-        };
-        vectors.push(Vector {
-            name: format!("{name}-{}", representation as u8),
-            request: request(
-                input,
-                DecodeRecipe {
-                    representation,
-                    ..recipe.clone()
-                },
-            ),
-            expected: expected.to_vec(),
-        });
-    }
+    vectors.push(Vector {
+        name: format!("{name}-0"),
+        request: request(EncodedInput::Tmem(Arc::new(bank)), recipe),
+        expected: expected.to_vec(),
+    });
 }
 
 pub(super) fn component_vectors() -> Vec<Vector> {
@@ -182,7 +146,6 @@ pub(super) fn component_vectors() -> Vec<Vector> {
                 &mut vectors,
                 &format!("component-{fmt}-16-{page}"),
                 recipe(fmt, 2, 2048, 1),
-                &bytes,
                 bytes.as_slice().try_into().unwrap(),
                 &expected,
             );
@@ -229,7 +192,6 @@ pub(super) fn component_vectors() -> Vec<Vector> {
             &mut vectors,
             &format!("component-{fmt}-{siz}"),
             recipe(fmt, siz, if siz == 0 { 512 } else { 256 }, 1),
-            &bytes,
             bank,
             &expected,
         );
@@ -248,7 +210,6 @@ pub(super) fn component_vectors() -> Vec<Vector> {
             &mut vectors,
             &format!("component-rgba32-{channel}"),
             recipe(0, 3, 256, 1),
-            &[],
             bank,
             &expected,
         );
@@ -275,7 +236,6 @@ pub(super) fn component_vectors() -> Vec<Vector> {
                 &mut vectors,
                 &format!("component-ci8-{mode}-{page}"),
                 descriptor,
-                &bytes,
                 bank,
                 &expected,
             );
@@ -302,7 +262,6 @@ pub(super) fn component_vectors() -> Vec<Vector> {
                 &mut vectors,
                 &format!("component-ci4-{mode}-{palette}"),
                 descriptor,
-                &bytes,
                 bank,
                 &expected,
             );
@@ -375,24 +334,17 @@ pub(super) fn layout_vectors() -> Vec<Vector> {
         (4, 1),
     ] {
         let descriptor = DecodeRecipe {
-            representation: Representation::LinearCompat,
+            representation: Representation::Tile,
             base: 511,
             line: 511,
             palette: 15,
             tlut: 3,
             ..recipe(fmt, siz, 3, 3)
         };
-        let length = (9usize << siz).div_ceil(2);
-        let request = request(
-            EncodedInput::LinearCompat {
-                bytes: bank[..length].into(),
-                palette_bank: bank.clone(),
-            },
-            descriptor,
-        );
+        let request = request(EncodedInput::Tmem(bank.clone()), descriptor);
         let expected = oracle(&request);
         vectors.push(Vector {
-            name: format!("layout-linear-odd-{fmt}-{siz}"),
+            name: format!("layout-narrow-odd-{fmt}-{siz}"),
             request,
             expected,
         });
@@ -497,22 +449,18 @@ pub(super) fn literal_layout_vectors() -> Vec<Vector> {
         ),
         expected,
     });
-    let bytes = [0x12, 0x34, 0x56, 0x78, 0x90];
+    let mut bank = [0; 4096];
+    bank[..5].copy_from_slice(&[0x12, 0x34, 0x56, 0x78, 0x90]);
     vectors.push(Vector {
-        name: "literal-linear-odd-width-nibbles".into(),
+        name: "literal-narrow-odd-width-nibbles".into(),
         request: request(
-            EncodedInput::LinearCompat {
-                bytes: bytes.into(),
-                palette_bank: Arc::new([0; 4096]),
-            },
+            EncodedInput::Tmem(Arc::new(bank)),
             DecodeRecipe {
-                representation: Representation::LinearCompat,
-                base: 511,
-                line: 511,
+                line: 0,
                 ..recipe(4, 0, 3, 3)
             },
         ),
-        expected: [17, 34, 51, 68, 85, 102, 119, 136, 153]
+        expected: [17, 34, 51, 153, 0, 0, 17, 34, 51]
             .into_iter()
             .flat_map(|v| [v; 4])
             .collect(),

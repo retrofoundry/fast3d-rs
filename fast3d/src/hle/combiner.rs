@@ -453,7 +453,7 @@ pub fn decode_combine(w0: u32, w1: u32) -> CombinerSelectors {
 /// across the workspace: re-exported as `hle::decode_rgba16`, and `renderer` re-exports it
 /// in turn so the texture-upload path and the renderer tests share one implementation.
 /// Each 5-bit channel is bit-replicated: (c5 << 3) | (c5 >> 2) for full 8-bit range.
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub fn decode_rgba16(src: &[u8]) -> Vec<u8> {
     let n = src.len() / 2;
     let mut out = vec![0u8; n * 4];
@@ -593,38 +593,6 @@ fn cycle_uses_texel1(sel: &CombinerSelectors, cycle_type: u32) -> bool {
         return false;
     }
     cyc_sel_uses_texel1(&sel.cyc0) || cycle_uses_texel0(&sel.cyc1)
-}
-
-// Multi-row LoadBlock swaps cancel only for word-aligned rows.
-pub(crate) fn tile_takes_faithful_path(
-    rdp: &crate::hle::rdp::Rdp,
-    tile: &crate::hle::rdp::TileDescriptor,
-    tex_w: u32,
-) -> bool {
-    let row_bits = (tex_w as usize) << (tile.siz + 2);
-    row_bits.is_multiple_of(64)
-        || !rdp.tmem_bank.tile_contains_block(tile)
-        || TileSampling::from_tile(tile, 0).image[2] == 1
-}
-
-pub(crate) fn validate_tile_texture(
-    rdp: &crate::hle::rdp::Rdp,
-    tile: &crate::hle::rdp::TileDescriptor,
-) -> Result<(), crate::diag::DiagKind> {
-    crate::hle::texdec::FormatInfo {
-        fmt: tile.fmt,
-        siz: tile.siz,
-    }
-    .validate()?;
-    if tile.fmt == 0
-        && tile.siz == 3
-        && !tile_takes_faithful_path(rdp, tile, u32::from(tile.width.max(1)))
-    {
-        return Err(crate::diag::DiagKind::UnsupportedCommandParameters {
-            opcode: crate::hle::consts::G_LOADBLOCK,
-        });
-    }
-    Ok(())
 }
 
 fn texture_at_draw<T>(
@@ -1404,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn two_cycle_second_texture_recovers_its_own_linear_bytes() {
+    fn two_cycle_second_texture_samples_its_own_bank_region() {
         let mut rdp = rdp_two_distinct_rgba16_tiles(0x0088_7f10, 0x88fc_fc7e, 1);
         rdp.tiles[1].fmt = 4;
         rdp.tiles[1].siz = 1;
@@ -1629,7 +1597,7 @@ mod tests {
     }
 
     #[test]
-    fn rgba32_loadblock_layout_is_checked_at_draw() {
+    fn rgba32_loadblock_layout_uses_physical_banks() {
         let mut rdp = rdp_two_distinct_rgba16_tiles(0, 0, 2);
         rdp.tiles[0].siz = 3;
         rdp.tiles[0].width = 3;
@@ -1638,16 +1606,10 @@ mod tests {
         for height in [1, 2] {
             rdp.tiles[0].height = height;
             for pc in [0x40, 0x58] {
-                assert!(build_rect_material(&rdp, &rsp, 0, &mut diags, pc).is_none());
+                assert!(build_rect_material(&rdp, &rsp, 0, &mut diags, pc).is_some());
             }
         }
-        assert_eq!(
-            diags,
-            [crate::diag::Diagnostic {
-                at: 0x40,
-                kind: crate::diag::DiagKind::UnsupportedCommandParameters { opcode: 0xf3 },
-            }]
-        );
+        assert!(diags.is_empty());
         for (width, height, load_via_tile, lookup) in [
             (4, 2, false, false),
             (3, 2, true, false),
