@@ -13,6 +13,7 @@ pub mod hooks;
 pub mod inspect;
 pub mod microcode;
 pub(crate) mod render;
+pub mod replacement;
 pub(crate) mod scene;
 
 use crate::render::{workload::TargetId, SceneRenderer};
@@ -433,6 +434,16 @@ impl Renderer {
             config.height = h;
             surface.configure(&self.device, config); // disjoint borrow: self.target vs self.device
         }
+    }
+
+    /// Install an immutable replacement snapshot at the next `begin_frame`.
+    /// `None` restores native textures at that boundary, including warm bindings.
+    /// Reconfiguration clears both active and queued providers.
+    pub fn set_replacement_provider(
+        &mut self,
+        provider: Option<std::sync::Arc<replacement::ReplacementProvider>>,
+    ) {
+        self.inner.set_replacement_provider(provider);
     }
 
     /// Apply a new config. Drains in-flight work first, then does a FULL internal-renderer rebuild

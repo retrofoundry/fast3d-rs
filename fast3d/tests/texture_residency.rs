@@ -49,7 +49,7 @@ fn commands(fixture: &Fixture) -> Vec<(u32, u32)> {
     for index in 0..4096 {
         let command = memory.read_command(task.entry + index * 8).unwrap();
         commands.push((command.w0, command.w1));
-        if command.w0 >> 24 == 0xb8 {
+        if matches!(command.w0 >> 24, 0xb8 | 0xdf) {
             return commands;
         }
     }
@@ -653,6 +653,14 @@ fn public_interpreter_counts_reload_copies_before_renderer_lookup() {
 
 fn assert_work(snapshot: &Snapshot, misses: u64, hits: u64, tasks: u64) {
     for (name, expected) in [
+        ("replacement.provider_calls", 0),
+        ("replacement.v5_admission_checks", 0),
+        ("replacement.v5_hashes", 0),
+        ("replacement.v5_bytes_hashed", 0),
+        ("replacement.decision_hits", 0),
+        ("replacement.decision_misses", 0),
+        ("replacement.upload_calls", 0),
+        ("replacement.upload_bytes", 0),
         ("tmem.misses", misses),
         ("tmem.hits", hits),
         ("tmem.decode_dispatches", misses),
@@ -1052,3 +1060,6 @@ gpu_test!(
     lookup_and_narrow_cold_warm_changed_input_counts_and_pixels,
     lookup_and_narrow_residency
 );
+
+#[path = "texture_residency/replacements.rs"]
+mod replacements;

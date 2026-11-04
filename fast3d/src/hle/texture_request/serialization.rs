@@ -123,7 +123,7 @@ fn palette_indices(
     reads
 }
 
-pub(super) fn palette_lanes(
+pub(crate) fn palette_lanes(
     recipe: &DecodeRecipe,
     bank: &[u8; TMEM_BYTES],
     nonreplicated: &[u64; 4],

@@ -11,6 +11,7 @@ enum BindingImage {
     Framebuffer,
     Encoded(Image),
     Rgba(Arc<RgbaImage>),
+    Replacement(Arc<RgbaImage>),
     Dummy,
 }
 
@@ -18,6 +19,7 @@ enum PreparedImage {
     Framebuffer(wgpu::TextureView),
     Encoded(Image),
     Rgba(Arc<RgbaImage>),
+    Replacement(Arc<RgbaImage>),
     Dummy,
 }
 
@@ -25,6 +27,7 @@ impl PreparedImage {
     fn matches(&self, old: &BindingImage) -> bool {
         match (self, old) {
             (Self::Encoded(image), BindingImage::Encoded(old)) => Arc::ptr_eq(image, old),
+            (Self::Replacement(image), BindingImage::Replacement(old)) => Arc::ptr_eq(image, old),
             (Self::Rgba(image), BindingImage::Rgba(old)) => Arc::ptr_eq(image, old),
             (Self::Dummy, BindingImage::Dummy) => true,
             _ => false,
@@ -34,7 +37,7 @@ impl PreparedImage {
     fn view<'a>(&'a self, dummy: &'a wgpu::TextureView) -> &'a wgpu::TextureView {
         match self {
             Self::Encoded(image) => &image.value.view,
-            Self::Rgba(image) => &image.view,
+            Self::Rgba(image) | Self::Replacement(image) => &image.view,
             Self::Dummy => dummy,
             Self::Framebuffer(view) => view,
         }
@@ -44,6 +47,7 @@ impl PreparedImage {
         match self {
             Self::Encoded(image) => BindingImage::Encoded(image),
             Self::Rgba(image) => BindingImage::Rgba(image),
+            Self::Replacement(image) => BindingImage::Replacement(image),
             Self::Dummy => BindingImage::Dummy,
             Self::Framebuffer(_) => BindingImage::Framebuffer,
         }
@@ -66,6 +70,14 @@ impl MaterialBinding {
     ) -> bool {
         if self.sampling != mat.sampling || self.wrap != [mat.wrap_s, mat.wrap_t] {
             return false;
+        }
+        if resources.replacements.active.is_some()
+            && !self
+                .images
+                .iter()
+                .any(|image| matches!(image, BindingImage::Framebuffer))
+        {
+            return true;
         }
         roles(mat)
             .into_iter()
@@ -124,6 +136,7 @@ impl BindingBuilder<'_> {
     pub fn build(&mut self, mat: &TextureInputs, old: Option<MaterialBinding>) -> MaterialBinding {
         let _span = self.profiling.span("resources");
         let roles = roles(mat);
+        let mut mapped_sampling = None;
         let mut images = Vec::with_capacity(roles.len());
         for (index, role) in roles.into_iter().enumerate() {
             let Some(binding) = role else {
@@ -151,13 +164,27 @@ impl BindingBuilder<'_> {
                     self.copies
                         .texture(self.device, self.queue, request, self.profiling),
                 ),
-                TextureSource::Encoded(request) => PreparedImage::Encoded(self.resources.resolve(
-                    self.device,
-                    self.queue,
-                    request,
-                    name,
-                    self.profiling,
-                )),
+                TextureSource::Encoded(request) => {
+                    let replacement = self.resources.resolve_replacement(
+                        self.device,
+                        self.queue,
+                        request,
+                        &binding.sampling,
+                        self.profiling,
+                    );
+                    if let Some((image, scale)) = replacement {
+                        mapped_sampling.get_or_insert(mat.sampling)[index].image[3] = scale;
+                        PreparedImage::Replacement(image)
+                    } else {
+                        PreparedImage::Encoded(self.resources.resolve(
+                            self.device,
+                            self.queue,
+                            request,
+                            name,
+                            self.profiling,
+                        ))
+                    }
+                }
                 TextureSource::Rgba(bytes) => {
                     let extent = if index == 0 {
                         mat.allocation_extent
@@ -198,7 +225,11 @@ impl BindingBuilder<'_> {
                 return old;
             }
         }
-        let sampling = super::sampling_buffer_profiled(self.device, &mat.sampling, self.profiling);
+        let sampling = super::sampling_buffer_profiled(
+            self.device,
+            mapped_sampling.as_ref().unwrap_or(&mat.sampling),
+            self.profiling,
+        );
         let samp1 = mat.tex1.as_ref().map_or(&self.samplers[2][2], |input| {
             &self.samplers[(input.sampling.modes[0] as usize).min(2)]
                 [(input.sampling.modes[1] as usize).min(2)]
@@ -244,6 +275,9 @@ impl BindingBuilder<'_> {
 }
 
 fn roles(mat: &TextureInputs) -> [Option<&crate::hle::texture_request::TextureBindingInput>; 10] {
+    if mat.framebuffer_only {
+        return [None; 10];
+    }
     let count = super::uploaded_level_count(mat.num_levels);
     std::array::from_fn(|index| match index {
         0 => Some(&mat.texture),

@@ -8,6 +8,8 @@ with wgpu, so the same renderer runs natively and on the web (WebGPU/wasm).
 
 Texture preparation uses GPU decode with renderer-owned residency. See
 [texture decode and residency](docs/texture-residency.md) for ownership, limits and counters.
+Optional [texture replacements](docs/texture-replacements.md) use exact Fast3dV1 targets
+or proved Rt64V5 aliases; they are disabled by default.
 
 ## Use it
 

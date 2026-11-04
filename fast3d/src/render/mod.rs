@@ -8,6 +8,7 @@ mod tmem_sampling_tests;
 
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;
+mod replacement_resources;
 mod texture_bindings;
 pub(crate) mod texture_decode;
 mod texture_residency;
@@ -2475,9 +2476,17 @@ impl SceneRenderer {
         self.dither_seed = 0;
     }
 
+    pub(crate) fn set_replacement_provider(
+        &mut self,
+        provider: Option<std::sync::Arc<crate::replacement::ReplacementProvider>>,
+    ) {
+        self.texture_resources.set_provider(provider);
+    }
+
     /// Explicit frame boundary (D2): reset the per-frame first-touch-clear set. Does NOT drop the
     /// textures (cross-frame persistence). `Renderer::begin_frame` delegates here.
     pub fn begin_frame(&mut self) {
+        self.texture_resources.begin_frame();
         self.texture_resources.collect(&self.profiling);
 
         #[cfg(feature = "capture")]

@@ -414,6 +414,30 @@ fn tile_interpolate(c00: vec4<f32>, c10: vec4<f32>, c01: vec4<f32>, c11: vec4<f3
     return c11 + (1.0 - fraction.x) * (c01 - c11) + (1.0 - fraction.y) * (c10 - c11);
 }
 
+fn replacement_axis(tap: i32, mode: u32, mask: u32, extent: u32, scale: u32) -> i32 {
+    var addressed = tap;
+    if (mode & 2u) != 0u || mask == 0u {
+        addressed = clamp(addressed, 0, i32(extent * scale) - 1);
+    }
+    if mask != 0u {
+        let period = i32((1u << mask) * scale);
+        let cycle = select(period, period * 2, (mode & 1u) != 0u);
+        var phase = addressed % cycle;
+        if phase < 0 { phase += cycle; }
+        addressed = select(cycle - 1 - phase, phase, phase < period);
+    }
+    return addressed;
+}
+
+fn replacement_taps(tile: TileSampling, base: vec2<i32>) -> TileTaps {
+    let scale = tile.image.w;
+    let x0 = replacement_axis(base.x, tile.modes.x, tile.shift_mask.z, tile.modes.z, scale);
+    let x1 = replacement_axis(base.x + 1, tile.modes.x, tile.shift_mask.z, tile.modes.z, scale);
+    let y0 = replacement_axis(base.y, tile.modes.y, tile.shift_mask.w, tile.modes.w, scale);
+    let y1 = replacement_axis(base.y + 1, tile.modes.y, tile.shift_mask.w, tile.modes.w, scale);
+    return TileTaps(vec2<i32>(x0, y0), vec2<i32>(x1, y0), vec2<i32>(x0, y1), vec2<i32>(x1, y1));
+}
+
 struct TilePlan {
     taps: TileTaps,
     mode: u32,
@@ -442,13 +466,16 @@ fn tile_plan(index: u32, uv: vec2<f32>, cycle: u32, dimensions: vec2<u32>) -> Ti
     } else {
         coordinate = tile_coordinate(tile, uv);
     }
+    let scaled = tile.image.z == 0u && tile.image.w > 1u;
+    if scaled { coordinate *= f32(tile.image.w); }
     let base = vec2<i32>(floor(coordinate));
     var plan: TilePlan;
     plan.taps = tile_taps(tile, base);
+    if scaled { plan.taps = replacement_taps(tile, base); }
     plan.mode = u32(combiner.inv_tex1_size.w);
     let tlut = tile.palette.y >= 2u && tile.image.z != 2u;
     let bilerp = (tile.palette.w & select(2u, 1u, cycle != 0u)) != 0u;
-    if tlut && (tile.palette.w & 8u) == 0u && bilerp && combiner.cycle_type != 2u {
+    if tlut && !scaled && (tile.palette.w & 8u) == 0u && bilerp && combiner.cycle_type != 2u {
         plan.mode = select(2u, 3u, (tile.palette.w & 4u) != 0u);
     }
     if plan.mode == 0u {

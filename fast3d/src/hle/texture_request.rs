@@ -234,13 +234,17 @@ impl EncodedTextureRequest {
         serialization::matches(&self.recipe, a, b, profiling)
     }
 
-    #[cfg(test)]
-    pub(crate) fn from_test_parts(input: EncodedInput, recipe: DecodeRecipe) -> Self {
+    pub(crate) fn from_owned_parts(input: EncodedInput, recipe: DecodeRecipe) -> Self {
         Self {
             input,
             recipe,
             identity: OnceLock::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(input: EncodedInput, recipe: DecodeRecipe) -> Self {
+        Self::from_owned_parts(input, recipe)
     }
 
     #[cfg(any(test, feature = "profiling"))]
@@ -377,6 +381,7 @@ pub(crate) fn prepare(
 }
 
 mod serialization;
+pub(crate) use serialization::palette_lanes;
 #[cfg(test)]
 pub(crate) use serialization::serialize;
 

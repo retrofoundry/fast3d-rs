@@ -34,6 +34,8 @@ pub struct CensusAttempt {
     pub tile: TileDescriptor,
     pub tlut: u8,
     pub outcome: String,
+    pub replacement_native: bool,
+    pub replacement_rt64_v5: bool,
     pub witness: Option<Vec<u8>>,
     pub draw_rejection: Option<String>,
     pub framebuffer: bool,
@@ -114,6 +116,10 @@ pub(crate) fn census_material(
             blocked = Some(format!("{}: {}", attempt.role, attempt.outcome));
             attempt.draw_rejection = blocked.clone();
         }
+        if attempt.draw_rejection.is_some() || attempt.outcome == "NoTextureLoaded" {
+            attempt.replacement_native = false;
+            attempt.replacement_rt64_v5 = false;
+        }
         rsp.profiling.census_attempt(attempt);
     }
 }
@@ -132,6 +138,22 @@ impl CensusAttempt {
             },
             Err(kind) => format!("{kind:?}"),
         };
+        let (replacement_native, replacement_rt64_v5) =
+            old.as_ref()
+                .ok()
+                .map_or((false, false), |binding| match &binding.source {
+                    TextureSource::Encoded(request) => (
+                        true,
+                        crate::replacement::rt64_v5::allowed(&binding.sampling, request.recipe())
+                            && crate::replacement::ReplacementTarget::for_request(
+                                request,
+                                crate::replacement::TextureKeyScheme::Rt64V5,
+                                &Default::default(),
+                            )
+                            .is_some(),
+                    ),
+                    _ => (false, false),
+                });
         let framebuffer_decode = old.as_ref().ok().and_then(|binding| match &binding.source {
             TextureSource::Framebuffer(request) => Some(if request.materialize {
                 "materialized".into()
@@ -238,6 +260,8 @@ impl CensusAttempt {
             tile: tile.clone(),
             tlut,
             outcome,
+            replacement_native,
+            replacement_rt64_v5,
             witness,
             draw_rejection: None,
             framebuffer,
@@ -318,6 +342,8 @@ mod tests {
             );
             assert!(attempt.physical.is_empty());
             assert!(attempt.witness.is_none());
+            assert!(!attempt.replacement_native);
+            assert!(!attempt.replacement_rt64_v5);
             assert!(attempt.framebuffer && attempt.sampled_framebuffer);
             let mut rsp = Rsp::default();
             rsp.profiling = crate::profiling::Recorder::new(crate::profiling::Mode::Trace);
@@ -451,6 +477,8 @@ mod tests {
             ..Default::default()
         };
         let equal = CensusAttempt::capture(&rdp, &tile, 0x20, "tex0".into());
+        assert!(equal.replacement_native);
+        assert!(equal.replacement_rt64_v5);
         assert_eq!(equal.class, "unaffected");
         assert_eq!(equal.physical, [[1; 4], [2; 4], [3; 4], [4; 4]].concat());
         rdp.tmem_bank.write_block(
@@ -472,6 +500,38 @@ mod tests {
             changed.physical,
             [[17; 4], [34; 4], [51; 4], [85; 4], [102; 4], [119; 4]].concat()
         );
+    }
+
+    #[test]
+    fn replacement_rt64_v5_follows_rt64_sample_extent() {
+        let mut rdp = Rdp::default();
+        rdp.tmem_bank
+            .write_block(&[1, 2, 3, 4, 0, 0, 0, 0], 0, 0, 0, 1, 1);
+        for (masks, cms, eligible) in [
+            (0, 0, true),
+            (2, 0, true),
+            (3, 2, true),
+            (1, 0, false),
+            (1, 2, false),
+        ] {
+            let tile = TileDescriptor {
+                fmt: 4,
+                siz: 1,
+                width: 4,
+                height: 1,
+                line: 1,
+                masks,
+                cms,
+                ..Default::default()
+            };
+            let attempt = CensusAttempt::capture(&rdp, &tile, 0x20, "tex0".into());
+            assert_eq!(attempt.outcome, "Tile");
+            assert!(attempt.replacement_native);
+            assert_eq!(
+                attempt.replacement_rt64_v5, eligible,
+                "masks {masks}, cms {cms}"
+            );
+        }
     }
 
     #[test]

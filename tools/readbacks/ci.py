@@ -11,6 +11,8 @@ import tempfile
 import time
 import zipfile
 
+import replacements
+
 from readbacks import artifact_file, compare, file_hash, gpu_decode_inventory, gpu_decode_profile, json_hash, load_capture
 
 
@@ -34,7 +36,7 @@ def test_commands(checkout, config, system):
                            "render::texture_decode::gpu_tests::"]]
     if config == "all-features":
         targets = ["--test", "tmem_fixture_replay"]
-        for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure"]:
+        for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure", "rt64_v5"]:
             if (checkout / "fast3d/tests" / (target + ".rs")).is_file():
                 targets.extend(["--test", target])
         commands.append(command + targets)
@@ -144,6 +146,7 @@ def save_gpu_decode_manifest(output, manifest, inventory=None):
 def save_manifest(output, manifest):
     manifest["rows"], manifest["errors"] = collect_rows(output)
     save_gpu_decode_manifest(output, manifest)
+    replacements.save(output, manifest)
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
 
@@ -205,11 +208,14 @@ def capture(checkout, output, base_sha, harness_checkout):
                                   ["CARGO_BUILD_JOBS", "CARGO_INCREMENTAL", "CARGO_PROFILE_DEV_DEBUG", "CARGO_PROFILE_TEST_DEBUG"]},
         },
         "gpu_decode": gpu_decode_requirement(checkout),
+        "replacements": replacements.requirement(checkout),
         "configurations": {config: {"commands": test_commands(checkout, config, platform.system()), "exit_code": None}
                            for config in COMMANDS}, "rows": [], "errors": [],
     }
     if manifest["gpu_decode"]["source_test_sha256"] is not None:
         shutil.copyfile(checkout / GPU_DECODE_TEST, output / "gpu-decode-source.rs")
+    if manifest["replacements"]["source_test_sha256"] is not None:
+        shutil.copyfile(checkout / replacements.SOURCE, output / "replacement-source.rs")
     save_manifest(output, manifest)
     target = tempfile.TemporaryDirectory(prefix="readback-target-", dir=checkout) if platform.system() == "Windows" else None
     try:
@@ -219,7 +225,8 @@ def capture(checkout, output, base_sha, harness_checkout):
             env = dict(os.environ, FAST3D_GOLDEN_OUTPUT=str(directory / "final"),
                        FAST3D_DECODE_OUTPUT=str(directory / "decode"),
                        FAST3D_GPU_DECODE_OUTPUT=str(directory / "gpu-decode"),
-                       FAST3D_RESIDENCY_OUTPUT=str(directory / "residency"))
+                       FAST3D_RESIDENCY_OUTPUT=str(directory / "residency"),
+                       FAST3D_REPLACEMENT_OUTPUT=str(directory / "replacements"))
             if target is not None:
                 env["CARGO_TARGET_DIR"] = target.name
             binaries = {}
@@ -255,7 +262,7 @@ def capture(checkout, output, base_sha, harness_checkout):
                 "failed_tests": sorted(set(re.findall(r"(?m)^test (\S+) \.\.\. FAILED\s*$", test_log))),
                 "failed_targets": sorted(set(re.findall(r"(?m)^error: test failed, to rerun pass (.+)$", test_log))),
                 "build_log": f"{config}/build.log", "test_log": f"{config}/test.log",
-                "binaries": binaries, "environment": {key: env[key] for key in ["FAST3D_GOLDEN_OUTPUT", "FAST3D_DECODE_OUTPUT", "FAST3D_GPU_DECODE_OUTPUT", "FAST3D_RESIDENCY_OUTPUT", "CARGO_TARGET_DIR"] if key in env},
+                "binaries": binaries, "environment": {key: env[key] for key in ["FAST3D_GOLDEN_OUTPUT", "FAST3D_DECODE_OUTPUT", "FAST3D_GPU_DECODE_OUTPUT", "FAST3D_RESIDENCY_OUTPUT", "FAST3D_REPLACEMENT_OUTPUT", "CARGO_TARGET_DIR"] if key in env},
             }
             save_manifest(output, manifest)
     finally:
@@ -283,7 +290,7 @@ def overlay(base, candidate, source_sha):
     for name in files:
         if name in ["Cargo.lock", "fast3d/Cargo.toml#dev-dependencies"]:
             continue
-        if not name.startswith(("fast3d/src/tests/", "fast3d/tests/", "tools/readbacks/")) and name not in ["tools/tmem/vectors.json", "tools/tmem/gpu-decode-inventory.json", "tools/tmem/gpu-decode-warp.json"]:
+        if not name.startswith(("fast3d/src/tests/", "fast3d/tests/", "tools/readbacks/")) and name not in ["tools/tmem/vectors.json", "tools/tmem/gpu-decode-inventory.json", "tools/tmem/gpu-decode-warp.json", replacements.INVENTORY]:
             raise ValueError(f"production file forbidden in test harness overlay: {name}")
         destination = base / name
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -348,15 +355,16 @@ def gate(args):
     candidate = output / "candidate"
     manifest = capture(args.checkout, candidate, args.base_sha, args.checkout)
     require_gpu_decode = (args.checkout / GPU_DECODE_TEST).is_file()
+    require_replacements = (args.checkout / replacements.SOURCE).is_file()
     if not args.base_checkout:
-        load_capture(candidate, INVENTORY, manifest["source_sha"], manifest["run_id"], require_gpu_decode=require_gpu_decode)
+        load_capture(candidate, INVENTORY, manifest["source_sha"], manifest["run_id"], require_gpu_decode=require_gpu_decode, require_replacements=require_replacements)
         return
     history = []
     base = output / "downloaded-base"
     try:
-        load_capture(candidate, INVENTORY, manifest["source_sha"], manifest["run_id"], require_gpu_decode=require_gpu_decode)
+        load_capture(candidate, INVENTORY, manifest["source_sha"], manifest["run_id"], require_gpu_decode=require_gpu_decode, require_replacements=require_replacements)
         run_id = fetch_base(args.repository, args.base_sha, args.artifact_name, base)
-        report = compare(base, candidate, INVENTORY, args.base_sha, manifest["source_sha"], run_id, manifest["run_id"], require_gpu_decode=require_gpu_decode)
+        report = compare(base, candidate, INVENTORY, args.base_sha, manifest["source_sha"], run_id, manifest["run_id"], require_gpu_decode=require_gpu_decode, require_replacements=require_replacements)
         if not report["passed"]:
             (output / "cross-run-comparison.json").write_text(json.dumps(report, indent=2) + "\n")
             raise ValueError("cross-run RGBA delta; recapture both revisions on this runner")
@@ -369,7 +377,7 @@ def gate(args):
         base_manifest = capture(args.base_checkout, base, args.base_sha, args.checkout)
         try:
             report = compare(base, candidate, INVENTORY, args.base_sha, manifest["source_sha"],
-                             base_manifest["run_id"], manifest["run_id"], allow_incomplete=True, require_gpu_decode=require_gpu_decode)
+                             base_manifest["run_id"], manifest["run_id"], allow_incomplete=True, require_gpu_decode=require_gpu_decode, require_replacements=require_replacements)
         except (ValueError, KeyError, OSError) as error:
             report = {"passed": False, "complete": False, "error": str(error)}
     (output / "comparison.json").write_text(json.dumps(report, indent=2) + "\n")
