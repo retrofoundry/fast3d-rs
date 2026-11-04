@@ -99,7 +99,7 @@ impl Copies {
             &request.encoded,
             profiling,
             None,
-            Some(bytes),
+            Some((bytes, request.materialize)),
         );
         let view = job.view.clone();
         self.pending
@@ -271,3 +271,7 @@ impl Copies {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "copies_tests.rs"]
+mod tests;

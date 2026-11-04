@@ -73,13 +73,30 @@ its device and renderer. No device handles transfer between epochs.
 
 Synthetic or debug RGBA sources upload their supplied pixels. Framebuffer loads
 retain immutable GPU snapshots and per-byte tags with source pointer offsets.
-Complete tagged pairs with TLUT disabled use the unquantised RGBA16/IA16 path; CI8 with TLUT 2/3
-uses the existing framebuffer reinterpretation. Split pairs use the existing
-byte quantisation path. Ordinary writes replace only their destination tags.
-These requests bypass ordinary identity and residency, so placeholder bank bytes
-under tags never enter a Fast3dV1 key. Other tagged formats remain unsupported
-until quantised materialisation is implemented. The load-free framebuffer-view
-path retains its ordered framebuffer descriptors.
+A request keeps the exact path when its recipe is RGBA16/IA16 with TLUT off or
+CI8 with TLUT 2/3, every reachable tag belongs to a complete aligned halfword from
+one copy, and no byte in the selected palette range is tagged. RGBA16 preserves RGBA8 precision;
+IA16 preserves the R10G10B10A2-to-I16A16 reinterpretation. CI8 still reconstructs
+indices byte by byte before the TLUT lookup.
+
+All other framebuffer requests materialise every tagged byte as RGBA16, including
+complete pairs in a request containing a split or mismatched pair. RGB uses its
+upper five bits without dithering. Alpha is `(a >> 2) & 1`, the existing coverage
+convention: the low three bits cross the threshold at 4. It is not an RGBA8 alpha
+threshold of 128. The high byte precedes the low byte. `byte_at` in
+`render/texture_decode.wgsl` applies this before the ordinary decoder, including
+TLUT indices, all four palette lanes, both RGBA32 banks and T wrapping. Ordinary
+writes replace only their destination tags; stale tags follow the current recipe.
+
+Both paths bypass Fast3dV1 identity and ordinary residency. `Copies` caches decoded
+views by the immutable request's `Arc` identity for one submission, clearing that
+map at `begin`. Copy buffers use the copy's `Arc` identity and remain alive while
+TMEM or a retained request references the snapshot. Decode jobs wait for the last
+referenced copy operation. Equality includes the recipe, mode, tags and immutable
+copy descriptors; TLUT requests conservatively compare the whole bank because
+GPU-produced indices can select entries absent from CPU placeholders. No GPU bytes
+are hashed or represented by placeholder bytes in a content key.
+The load-free framebuffer-view path retains its ordered framebuffer descriptors.
 
 Each request memoizes its identity on first use. Separately prepared requests
 compute their own keys, including equal-byte reloads. Physical selection marks

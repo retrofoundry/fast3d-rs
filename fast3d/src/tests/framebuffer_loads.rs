@@ -192,10 +192,7 @@ fn framebuffer_load_requests_keep_copy_identity_and_reinterpretation() {
     let result = crate::hle::interpret_rdram(&built.rdram, built.entry);
     assert!(result.diags.iter().any(|diag| matches!(
         diag.kind,
-        crate::DiagKind::UnsupportedFramebufferAccess {
-            reason: crate::FramebufferAccess::Reinterpretation,
-            ..
-        }
+        crate::DiagKind::UnsupportedTextureFormat { fmt: 4, siz: 2 }
     )));
     assert_eq!(result.dropped_runs, 2);
 }
@@ -533,8 +530,8 @@ fn framebuffer_load_tags_follow_padding_swaps_and_guest_overwrites() {
             2,
             &Default::default()
         ),
-        Err(crate::DiagKind::UnsupportedFramebufferAccess {
-            reason: crate::FramebufferAccess::Reinterpretation,
+        Ok(crate::hle::texture_request::TextureBindingInput {
+            source: TextureSource::Framebuffer(_),
             ..
         })
     ));

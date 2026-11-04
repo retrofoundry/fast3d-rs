@@ -181,10 +181,14 @@ loads. Texture preparation decodes those tags on the GPU into the existing sampl
 texture representation, for rectangles and triangles. Reloads get distinct identities;
 ordinary TMEM writes replace only the tags they touch.
 
-RGBA16 sampling preserves the unquantised color. IA16 follows rt64's R10G10B10A2 to
-I16A16 conversion. CI8 reconstructs RGBA16 bytes, high byte first, then looks up the
-current RGBA16 or IA16 TLUT. Other sampling interpretations report
-`UnsupportedFramebufferAccess::Reinterpretation`. Pure depth sources remain unsupported.
+RGBA16/IA16 requests with TLUT disabled keep their unquantised path, and CI8 with
+TLUT 2/3 its byte-index lookup, only when every reachable tag belongs to a complete
+pair from one copy and no palette entry is tagged. Any other request, complete pairs
+included, uses byte-wise RGBA16 materialisation before ordinary decoding. RGB truncates
+to five bits and alpha uses bit 2 of the stored coverage byte, with no dithering. See
+[texture residency](texture-residency.md) for routing and caching. Sources must be
+RGBA16 color images: depth sources report `DepthTexture` and other color layouts
+`Reinterpretation`. Missing sources and reads past the source extent are also refused.
 In coherent mode, copy execution consults byte ownership; pending overlapping GPU writes
 are resolved before selecting color sources. This can submit and wait during rendering,
 after the interpreter has accepted the whole task. The copy itself reads no guest bytes.
@@ -196,7 +200,9 @@ resulting words.
 
 The capture container is unchanged: commands reproduce copies, and generated pixels
 add no memory spans. Framebuffer requests are counted separately in profiling and omit
-the encoded-TMEM CPU oracle trace. Coherent capture keeps its existing admission rules.
+the encoded-TMEM CPU oracle trace. Counters distinguish exact and materialised requests;
+the census records their mode and marks decoded texels unavailable on the CPU.
+Coherent capture keeps its existing admission rules.
 
 `fast3d/src/tests/framebuffer_loads.rs` adds reload, later-task, 320-wide interior,
 six-row save/restore, IA16, CI8 byte pairing and GPU TLUT tests. The TLUT test loads

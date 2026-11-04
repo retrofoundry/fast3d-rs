@@ -95,11 +95,36 @@ impl Default for Tags {
 pub struct FramebufferTexture {
     pub(crate) encoded: super::texture_request::EncodedTextureRequest,
     pub(crate) tags: Tags,
+    pub(crate) materialize: bool,
+}
+
+impl FramebufferTexture {
+    pub(crate) fn new(encoded: super::texture_request::EncodedTextureRequest, tags: Tags) -> Self {
+        let recipe = encoded.recipe();
+        let exact_format = matches!(
+            (recipe.fmt, recipe.siz, recipe.tlut),
+            (0 | 3, 2, 0 | 1) | (2, 1, 2 | 3)
+        );
+        let palette_tags = recipe.tlut >= 2 && tags.bytes[2048..].iter().any(|tag| tag.copy != 0);
+        let complete_pairs = tags.bytes.as_chunks::<2>().0.iter().all(|pair| {
+            let [hi, lo] = [pair[0], pair[1]];
+            (hi.copy == 0 && lo.copy == 0)
+                || (hi.copy != 0
+                    && hi.copy == lo.copy
+                    && hi.pointer & 1 == 0
+                    && lo.pointer == hi.pointer + 1)
+        });
+        Self {
+            materialize: !exact_format || palette_tags || !complete_pairs,
+            encoded,
+            tags,
+        }
+    }
 }
 
 impl PartialEq for FramebufferTexture {
     fn eq(&self, other: &Self) -> bool {
-        if self.tags != other.tags {
+        if self.materialize != other.materialize || self.tags != other.tags {
             return false;
         }
         if self.encoded.recipe().tlut < 2 {
