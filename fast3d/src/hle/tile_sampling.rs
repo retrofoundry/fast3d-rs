@@ -13,7 +13,7 @@ pub struct TileSampling {
     pub image: [u32; 4],
     /// TMEM base and line in bytes, format, size.
     pub tmem: [u32; 4],
-    /// Palette index, TLUT format, padding.
+    /// Palette index, TLUT format, lane plane height, othermode bits 10..13.
     pub palette: [u32; 4],
 }
 
@@ -56,14 +56,23 @@ impl TileSampling {
                 sampling.image[2] = 1;
             }
         }
+        if (height > 256 && tile.line & 1 != 0 && tlut_fmt < 2 && !(tile.fmt == 0 && tile.siz == 3))
+            || (tile.fmt == 1 && tlut_fmt >= 2)
+        {
+            sampling.image[2] = 1;
+        }
         sampling
     }
 
     pub fn allocation_extent(self) -> [u32; 2] {
-        if self.image[2] == 1 {
+        let extent = if self.image[2] == 1 {
             [4096, 4]
         } else {
             [self.image[0], self.image[1]]
-        }
+        };
+        [
+            extent[0],
+            extent[1] * if self.palette[2] != 0 { 4 } else { 1 },
+        ]
     }
 }

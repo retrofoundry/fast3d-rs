@@ -72,7 +72,7 @@ fn check(id: &str, tmem: &Tmem, tile: &TileDescriptor, mode: u8, expected: &[u8]
 }
 
 #[test]
-fn tmem_decode_formats_independent_literals() {
+fn tmem_decode_formats_follow_angrylion_literals() {
     let mut encoded = Vec::new();
     let mut expected = Vec::new();
     for channel in 0..3 {
@@ -191,7 +191,13 @@ fn tmem_decode_formats_independent_literals() {
             let expected = match mode {
                 2 => vec![24, 41, 140, 255, 165, 247, 198, 0],
                 3 => vec![25, 25, 25, 99, 167, 167, 167, 176],
-                _ => vec![0; 8],
+                _ => {
+                    if siz == 0 {
+                        vec![240, 240, 240, 240, 255, 255, 255, 255]
+                    } else {
+                        vec![0, 0, 0, 0, 255, 255, 255, 255]
+                    }
+                }
             };
             let mut descriptor = tile(2, siz, 2, 1, 1, 0);
             descriptor.palette = 15;
@@ -558,7 +564,7 @@ fn tmem_loadtile_and_dxt_literals() {
 }
 
 #[test]
-fn tmem_zero_line_and_nonci_tlut_do_not_alias_low_bank() {
+fn tmem_zero_line_nonci_tlut_follows_angrylion_low_bank_dispatch() {
     let mut bytes = vec![193; 4096];
     bytes[4088] = 1;
     bytes[4092] = 5;
@@ -571,11 +577,12 @@ fn tmem_zero_line_and_nonci_tlut_do_not_alias_low_bank() {
         0,
         &expected,
     );
-    for mode in [1, 2, 3] {
-        assert_eq!(
-            bank(&bytes).sample_tile(&descriptor, mode).unwrap(),
-            expected
-        );
+    for (mode, pixels) in [
+        (1, expected.to_vec()),
+        (2, [198, 57, 0, 255].repeat(3)),
+        (3, vec![193; 12]),
+    ] {
+        assert_eq!(bank(&bytes).sample_tile(&descriptor, mode).unwrap(), pixels);
     }
 }
 

@@ -928,10 +928,10 @@ pub(crate) fn snapshot_run(
     let selectors = crate::hle::combiner::decode_combine(rdp.combine_l, rdp.combine_h);
     let (uses_texture, uses_second) =
         crate::hle::combiner::physical_texture_uses(&selectors, (rdp.other_mode_h >> 20) & 3);
-    if !rdp
-        .tmem_bank
-        .tile_has_load(&rdp.tiles[usize::from(rsp.texture_state.tile & 7)])
-        && (uses_texture || uses_second)
+    if !rdp.tmem_bank.tile_has_load(
+        &rdp.tiles[usize::from(rsp.texture_state.tile & 7)],
+        ((rdp.other_mode_h >> 14) & 3) as u8,
+    ) && (uses_texture || uses_second)
         && crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, 0)
             .blend_class
             != crate::hle::BlendClass::BlendColor

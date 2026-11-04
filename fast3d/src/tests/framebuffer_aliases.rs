@@ -283,8 +283,8 @@ fn rejected_framebuffer_load_covers_masked_tmem_taps() {
         masks: 3,
         ..Default::default()
     };
-    assert_eq!(tmem.rejection(&tile), Some(diagnostic));
-    assert_eq!(tmem.rejection(&TileDescriptor { cms: 2, ..tile }), None);
+    assert_eq!(tmem.rejection(&tile, 0), Some(diagnostic));
+    assert_eq!(tmem.rejection(&TileDescriptor { cms: 2, ..tile }, 0), None);
 }
 
 #[test]

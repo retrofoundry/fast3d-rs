@@ -49,7 +49,7 @@ fn palette(b: &mut DlBuilder, commands: &mut Vec<(u32, u32)>, destination: u32, 
     let address = b.bytes(8, entries);
     commands.extend([
         gdp_set_texture_image(0, 2, 1, address),
-        gdp_set_tile(0, 2, 0, destination, 7, 0, 0, 0, 0, 0, 0, 0),
+        gdp_set_tile(0, 0, 0, destination, 7, 0, 0, 0, 0, 0, 0, 0),
         gdp_load_tlut(7, (entries.len() / 2 - 1) as u32),
         gdp_pipe_sync(),
     ]);
@@ -146,7 +146,7 @@ fn tlut_mutation() -> Built {
     {
         palette(&mut b, &mut commands, destination, &entries);
         if draw == 4 {
-            // Destination 512 wraps to byte zero; reload index zero after the TLUT write.
+            // The wrapped TLUT word overlaps the index row; reload it.
             commands.extend([
                 gdp_set_texture_image(2, 1, 8, indices),
                 gdp_set_tile(2, 1, 1, 0, 7, 0, 2, 0, 0, 2, 0, 0),

@@ -209,25 +209,27 @@ fn tlut_count_and_destination_roundtrip() {
     assert_eq!(result.rdp.tiles[3].tmem_addr, 0x1fe);
     assert_eq!(
         &result.rdp.tmem_bank.palette()[0x7f0..],
-        &[
-            0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x56, 0x78, 0x56, 0x78, 0x56, 0x78,
-            0x56, 0x78,
-        ]
+        &[0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0x12, 0x34, 0, 0, 0, 0, 0, 0, 0, 0],
     );
-    let tile = crate::hle::rdp::TileDescriptor {
-        fmt: 3,
-        siz: 2,
-        width: 8,
-        height: 1,
-        ..Default::default()
-    };
-    assert_eq!(
-        result.rdp.tmem_bank.sample_tile(&tile, 0).unwrap(),
-        [
-            0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a, 0x9a, 0xbc, 0x9a, 0x9a,
-            0x9a, 0xbc, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        ]
-    );
+    // Angrylion's 32-byte RGBA16 TLUT spacing wraps the next entries to words 2 and 6.
+    for (tmem_addr, pixel) in [
+        (0, [0; 4]),
+        (2, [0x56, 0x56, 0x56, 0x78]),
+        (6, [0x9a, 0x9a, 0x9a, 0xbc]),
+    ] {
+        let tile = crate::hle::rdp::TileDescriptor {
+            fmt: 3,
+            siz: 2,
+            tmem_addr,
+            width: 4,
+            height: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            result.rdp.tmem_bank.sample_tile(&tile, 0).unwrap(),
+            pixel.repeat(4)
+        );
+    }
 }
 
 fn modifyvtx_scene(commands: &[(u32, u32)], geometry: u32) -> crate::hle::Scene {

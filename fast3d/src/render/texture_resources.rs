@@ -100,7 +100,7 @@ impl TextureResources {
         profiling: &Recorder,
     ) -> Image {
         let (key, witness) = request.identity_profiled(profiling);
-        let [w, h] = request.recipe().output;
+        let [w, h] = request.recipe().allocation_extent();
         let bytes = u64::from(w) * u64::from(h) * 4;
         let mut created = false;
         let image = self.cache.resolve(key, witness, bytes, profiling, || {

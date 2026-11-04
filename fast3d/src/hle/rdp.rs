@@ -340,12 +340,11 @@ fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
                            // saturating_sub guards malformed input (uls > lrs) against u32 underflow/panic.
     let words = (lrs.saturating_sub(uls) >> (4 - siz as u32)) + 1; // RGBA16 siz=2
     let bytes = (words as usize) << 3; // 8 bytes/word (siz<=2)
-    let tile = &cx.rdp.tiles[tile_idx];
+    let tile = cx.rdp.tiles[tile_idx].clone();
     #[cfg(any(test, feature = "profiling"))]
-    cx.rsp.profiling.census_load_tile(tile, cx.rdp.tex_image);
-    let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
+    cx.rsp.profiling.census_load_tile(&tile, cx.rdp.tex_image);
     if framebuffer_load(cx, addr, bytes as u32, bytes as u32, 1, |tmem| {
-        tmem.write_block(&[], dst, line, dxt, words as usize, siz)
+        tmem.write_block_for_tile(&[], &tile, dxt, words as usize, siz)
     })
     .is_some()
     {
@@ -354,11 +353,9 @@ fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     }
     let src = memory_try!(cx, Texture, read_bytes_exact(cx.mem, addr, bytes)).into_owned();
 
-    let dst_words = cx.rdp.tiles[tile_idx].tmem_addr as usize;
-    let line_words = cx.rdp.tiles[tile_idx].line as usize;
     cx.rdp
         .tmem_bank
-        .write_block(&src, dst_words, line_words, dxt, words as usize, siz);
+        .write_block_for_tile(&src, &tile, dxt, words as usize, siz);
     cx.rdp.texture_loaded = true;
     cx.rdp.load_via_tile = false;
     cx.rsp.material_dirty = true;
@@ -401,10 +398,9 @@ pub(crate) fn load_tile_typed<M: Rdram>(
     let offset = u64::from(bytes_offset) + u64::from(bytes_per_row) * u64::from(ult);
     let texture_start = checked_span(addr, offset).map_err(|error| texture_error(cx, error))?;
     let src_len = (row_count as usize - 1) * bytes_per_row as usize + words_per_row as usize * 8;
-    let tile = &cx.rdp.tiles[tile_idx];
+    let tile = cx.rdp.tiles[tile_idx].clone();
     #[cfg(any(test, feature = "profiling"))]
-    cx.rsp.profiling.census_load_tile(tile, cx.rdp.tex_image);
-    let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
+    cx.rsp.profiling.census_load_tile(&tile, cx.rdp.tex_image);
     if let Some(loaded) = framebuffer_load(
         cx,
         texture_start,
@@ -412,10 +408,9 @@ pub(crate) fn load_tile_typed<M: Rdram>(
         bytes_per_row,
         row_count,
         |tmem| {
-            tmem.write_tile(
+            tmem.write_tile_for_tile(
                 &[],
-                dst,
-                line,
+                &tile,
                 row_count as usize,
                 words_per_row as usize,
                 bytes_per_row as usize,
@@ -430,13 +425,9 @@ pub(crate) fn load_tile_typed<M: Rdram>(
         .map(std::borrow::Cow::into_owned)
         .map_err(|error| texture_error(cx, error))?;
 
-    // Dest: the load tile's `tmem`/`line` set the destination base and the padded per-row stride.
-    let dst_words = cx.rdp.tiles[tile_idx].tmem_addr as usize;
-    let line_words = cx.rdp.tiles[tile_idx].line as usize;
-    cx.rdp.tmem_bank.write_tile(
+    cx.rdp.tmem_bank.write_tile_for_tile(
         &src,
-        dst_words,
-        line_words,
+        &tile,
         row_count as usize,
         words_per_row as usize,
         bytes_per_row as usize,
@@ -467,26 +458,31 @@ fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let stride = ((u32::from(width) + 1) << siz) >> 1;
     let offset = u64::from((uls << siz) >> 1) + u64::from(ult * stride);
     let addr = memory_try!(cx, Tlut, checked_span(base, offset));
-    let tile = &cx.rdp.tiles[c.p1(24, 3) as usize];
+    let tile = cx.rdp.tiles[c.p1(24, 3) as usize].clone();
     #[cfg(any(test, feature = "profiling"))]
-    cx.rsp.profiling.census_load_tile(tile, cx.rdp.tex_image);
-    let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
+    cx.rsp.profiling.census_load_tile(&tile, cx.rdp.tex_image);
     let write = |tmem: &mut crate::hle::tmem::Tmem, bytes: &[u8]| {
-        tmem.write_tlut_rows(
+        tmem.write_tlut_for_tile(
             bytes,
+            &tile,
             count as usize,
-            dst,
             rows as usize,
             stride as usize,
-            line,
+            siz,
         );
     };
+    let (pixels, advance) = if siz == 2 || siz == 0 || rows > 1 {
+        (1, 2)
+    } else {
+        (16 >> siz, 8)
+    };
+    let row_bytes = ((count - 1) / pixels) * advance + 2;
     let texture_loaded = cx.rdp.texture_loaded;
-    if framebuffer_load(cx, addr, count * 2, stride, rows, |tmem| write(tmem, &[])).is_some() {
+    if framebuffer_load(cx, addr, row_bytes, stride, rows, |tmem| write(tmem, &[])).is_some() {
         cx.rdp.texture_loaded = texture_loaded;
         return;
     }
-    let length = (rows - 1) * stride + count * 2;
+    let length = (rows - 1) * stride + row_bytes;
     let packed = memory_try!(cx, Tlut, read_bytes_exact(cx.mem, addr, length as usize));
     write(&mut cx.rdp.tmem_bank, &packed);
     cx.rsp.material_dirty = true;
@@ -678,13 +674,14 @@ mod tests {
     }
 
     #[test]
-    fn load_block_byte_count_matches_hardware_formula() {
+    fn load_block_byte_count_matches_angrylion_image_formula() {
         // siz=2 (RGBA16), lrs=1021 (NOT a multiple of 4 after +1) -> hardware words=256, bytes=2048.
         // The naive (lrs+1)*2 = 2044 would diverge; assert the hardware count.
-        let rdp = Rdp {
+        let mut rdp = Rdp {
             tex_image: (0, 2, 1, 0),
             ..Rdp::default()
         }; // fmt=0, siz=2 (RGBA16), addr=0
+        rdp.tiles[7].siz = 2;
         let rdram_bytes = vec![0x70u8; 4096];
         // LoadBlock: tile=7, uls=0, ult=0, lrs=1021, dxt=0
         // w0 = shiftl(G_LOADBLOCK, 24, 8) | shiftl(0, 12, 12) | shiftl(0, 0, 12)
@@ -695,17 +692,8 @@ mod tests {
         let w1 = (7u32 << 24) | (1021u32 << 12);
         let (rdp, diags) = run_cmd(&rdram_bytes, rdp, w0, w1);
         assert!(diags.is_empty());
-        let tile = TileDescriptor {
-            fmt: 4,
-            siz: 1,
-            width: 8,
-            height: 257,
-            line: 1,
-            ..Default::default()
-        };
-        let decoded = rdp.tmem_bank.sample_tile(&tile, 0).unwrap();
-        assert_eq!(&decoded[..2048 * 4], vec![0x70; 2048 * 4]);
-        assert_eq!(&decoded[2048 * 4..], [0; 32]);
+        assert_eq!(&rdp.tmem_bank.encoded_bank()[..2048], &[0x70; 2048]);
+        assert_eq!(&rdp.tmem_bank.encoded_bank()[2048..], &[0; 2048]);
     }
 
     #[test]
@@ -937,9 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn load_block_linear_decode_two_rows() {
-        // 32x32 RGBA16 LoadBlock -> linear RGBA8 decode.
-        // Guards the conscious linear-decode / swizzle-cancellation decision.
+    fn angrylion_load_block_swizzle_cancels_on_matching_tile_rows() {
         // Row 0 texel 0: red RGBA16 = 0xF801 (r=31, g=0, b=0, a=1)
         // Row 1 texel 0: blue RGBA16 = 0x003F (r=0, g=0, b=31, a=1)
         let mut src = vec![0u8; 2048]; // 32*32*2 bytes
@@ -949,12 +935,13 @@ mod tests {
         src[64] = 0x00;
         src[65] = 0x3F;
 
-        let rdp = Rdp {
+        let mut rdp = Rdp {
             tex_image: (0, 2, 1, 0),
             ..Rdp::default()
         }; // siz=2, addr=0
            // LoadBlock: lrs=1023, dxt=256 (standard 32x32 RGBA16)
            // w0 = 0xF3000000, w1 = (7 << 24) | (1023 << 12) | 256
+        rdp.tiles[7].siz = 2;
         let w0 = 0xF300_0000u32;
         let w1 = (7u32 << 24) | (1023u32 << 12) | 256u32;
         let (rdp, diags) = run_cmd(&src, rdp, w0, w1);

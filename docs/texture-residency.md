@@ -9,7 +9,8 @@ tools; live trace collection records encoded state without expanding RGBA pixels
 Every ordinary request samples the TMEM contents at draw time: loaded bytes,
 bytes retained from earlier loads, and initial zeros. Tile decodes the requested
 extent; Lookup4096x4 covers the complete physical address/odd-row/nibble domain
-when an unclamped mask period exceeds the logical extent. Load history does not
+when an unclamped mask period exceeds the logical extent, a tall full-bank tile
+needs T wrapping, or YUV TLUT filtering can fetch outside the nominal tile. Load history does not
 select a decoder or reject an ordinary request.
 
 The bank starts at zero and both reset APIs clear it. `begin_frame` preserves it.
@@ -24,8 +25,17 @@ Physical requests upload the owned 4096-byte bank unchanged. Four encoded bytes
 occupy each storage-buffer word, with the first byte in bits 0–7. A separate
 64-byte uniform uses explicit little-endian fields. Each 8×8 workgroup writes
 one RGBA8 texel per invocation, guarded by output bounds. Integer channel
-expansion precedes the UNORM conversion. Fragment addressing and filtering
-remain unchanged.
+expansion precedes the UNORM conversion. CI without TLUT reads the full bank;
+TLUT modes apply to every format, with YUV byte addressing. Ordinary fetches
+mask the base T to eight bits before adding a filtered neighbour's delta.
+
+Each bank caches which palette slots have unequal lanes. Loads invalidate that
+mask. A bank whose slots are replicated requires no per-request index scan for
+lane selection. Otherwise the request checks its used slots. Non-replicated
+requests decode four stacked planes, selected by filter tap and triangle;
+replicated slots retain the one-plane allocation and sampling path. Tagged
+palette lanes are replicated only when their source tags agree. Unknown tagged
+indices conservatively depend on the complete palette.
 
 One renderer owns the image cache for its device. Fast3dV1 selects a bucket;
 exact canonical-witness equality authorizes every hit, including a repeated
@@ -63,7 +73,7 @@ its device and renderer. No device handles transfer between epochs.
 
 Synthetic or debug RGBA sources upload their supplied pixels. Framebuffer loads
 retain immutable GPU snapshots and per-byte tags with source pointer offsets.
-Complete tagged pairs use the unquantised RGBA16/IA16 path; CI8 with TLUT 2/3
+Complete tagged pairs with TLUT disabled use the unquantised RGBA16/IA16 path; CI8 with TLUT 2/3
 uses the existing framebuffer reinterpretation. Split pairs use the existing
 byte quantisation path. Ordinary writes replace only their destination tags.
 These requests bypass ordinary identity and residency, so placeholder bank bytes
@@ -75,9 +85,11 @@ Each request memoizes its identity on first use. Separately prepared requests
 compute their own keys, including equal-byte reloads. Physical selection marks
 row spans in a 4096-bit set, splits odd-row partial words and wrapped ranges,
 and mirrors RGBA32's selected low-bank bytes into the high bank. Lookup selects
-its complete physical bank directly. CI alone scans encoded indices for palette
-selection; CI4 excludes an unused final low nibble. The serializer emits sorted address/byte pairs with unchanged Tile/Lookup
-Fast3dV1 framing. Material and capture admission compare those same sampled
+its complete physical bank directly. Every TLUT-enabled format scans encoded
+indices for palette selection; packed 4-bit indices exclude an unused final low
+nibble. The serializer emits sorted address/byte pairs in Fast3dV1 framing, with
+semantic flags for corrected CI-off and tall-T decoding and four-plane output.
+Unaffected streams remain byte-identical to the frozen vectors. Material and capture admission compare those same sampled
 bytes directly without constructing identities. Unrelated inherited bytes do
 not prevent capture admission. History-dependent output requires a reset-prefix
 sequence; inspector walks and renderer prefixes start from default state.
@@ -91,7 +103,9 @@ values within each recorder interval.
 | `preimage_bytes_constructed` | Canonical bytes written on identity initialization, counted separately from hashing |
 | `identity_memo_hits` | Accesses reusing an initialized request identity, including binding checks; a residency resolution accesses key and witness together |
 | `footprint_span_bytes` | Physical range lengths visited by identity or comparison before wrap/overlap deduplication, including both RGBA32 banks; excludes palette selection |
-| `palette_index_reads` | Encoded byte reads for CI palette selection in identity or comparison; a CI4 byte can supply two indices |
+| `palette_index_reads` | Encoded byte reads for TLUT palette selection in identity or comparison; a packed 4-bit byte can supply two indices |
+| `palette_lane_slot_checks` | Palette slots checked when a bank's replication mask is first needed after a write |
+| `palette_lane_index_reads` | Index bytes examined for lane selection when the bank contains non-replicated slots |
 | `bank_cow_allocations`, `bank_cow_bytes` | Load-time copies while old bank storage is owned |
 | `encoded_comparisons`, `encoded_bytes_compared`, `witness_comparisons`, `bytes_compared` | Sampled-footprint and residency-witness equality work; selected bytes and equal-length witnesses count in full |
 | `hits`, `pending_hits`, `misses`, `evictions`, `bypasses` | Image lookup and admission decisions |
@@ -110,8 +124,7 @@ including tracing, has zero `cpu_decode_executions` and
 `cpu_decode_output_bytes`. Bank snapshot counters remain zero because requests
 share the bank; load-time copy-on-write work is reported separately.
 
-The existing 27 goldens, 60-row oracle ledger and 171 configuration readback rows
-remain frozen. The compute corpus has a separate required inventory and compares
+Golden baselines and prior readback artifacts remain frozen. The compute corpus has a separate required inventory and compares
 raw GPU output to the CPU oracle plus independent literals. Native and Chrome
 tests also exercise default renderer residency, independent roles, realistic
 reloads, pressure, completion and device epochs. Hardware and timing acceptance

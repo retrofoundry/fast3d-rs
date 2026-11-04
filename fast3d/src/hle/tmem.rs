@@ -4,17 +4,16 @@
 //! LoadBlock write path of the N64 RDP. Rendering decodes immutable requests on the
 //! GPU; the byte-addressed CPU decoder remains the test and offline-tool oracle.
 //!
-//! The odd-line word swap: on an odd TMEM line the two 4-byte halves of every 8-byte word are
-//! swapped. Both the write path (LoadBlock) and the read path (sample) key this swap on the SAME
-//! address bit (`0x4`) via the shared [`Tmem::swap_odd_line`] helper, so for a well-formed
-//! LoadBlock the two swaps CANCEL — a texel written on an odd line is read back byte-for-byte.
+//! Loads and fetches swap the two 4-byte halves of each word on odd rows.
 //!
-//! Supported formats: the six non-paletted RGBA16 (0,2), I8 (4,1), I4 (4,0), IA16 (3,2),
-//! IA8 (3,1), IA4 (3,0); the paletted CI4 (2,0)/CI8 (2,1) whose palette (TLUT) lives in the upper
-//! 2 KiB of this same array (loaded via [`Tmem::write_tlut`]); and RGBA32 (0,3), the dual-bank
-//! format whose 32-bit texel is split R,G → low bank / B,A → high bank across the two 2 KiB halves.
+//! TLUT modes use the upper bank as four-lane palette slots for every format. Without TLUT,
+//! RGBA32 splits R,G and B,A across the two banks; other supported formats read the full bank.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+#[cfg(test)]
+#[path = "tmem_load_tests.rs"]
+pub(crate) mod load_tests;
 
 #[cfg(any(test, feature = "profiling"))]
 use crate::diag::DiagKind;
@@ -33,18 +32,13 @@ pub const PALETTE_BASE: usize = 0x800;
 /// The DXT accumulator threshold: crossing it advances one virtual row and flips the swap.
 pub const DXT_SWAP: u32 = 0x800;
 
-/// The address bit toggled by the odd-line 32-bit word swap.
-///
-/// Flipping this bit within an 8-byte-aligned word exchanges its two 4-byte halves. The
-/// write path expresses this as `tmemXorMask ^= 0x4`; the read path expresses it as
-/// `wordIndex ^ 1` (which, since a word is 4 bytes and rows are 8-byte-aligned, is the same
-/// `^ 0x4` on the byte address). Keeping both on one bit is what makes the swaps cancel.
 const SWAP_BIT: usize = 0x4;
 
 /// Byte-addressable RDP texture memory (4 KiB).
 #[derive(Clone, Debug)]
 pub struct Tmem {
     bytes: Arc<[u8; TMEM_BYTES]>,
+    palette_nonreplicated: OnceLock<[u64; 4]>,
     written: [u64; TMEM_BYTES / 64],
     rejected: Box<[Option<crate::Diagnostic>; TMEM_BYTES]>,
     rejecting: Option<crate::Diagnostic>,
@@ -62,6 +56,7 @@ impl Default for Tmem {
     fn default() -> Self {
         Tmem {
             bytes: Arc::new([0u8; TMEM_BYTES]),
+            palette_nonreplicated: OnceLock::new(),
             written: [0; TMEM_BYTES / 64],
             rejected: Box::new([None; TMEM_BYTES]),
             rejecting: None,
@@ -102,6 +97,7 @@ impl Tmem {
     }
 
     fn writer(&mut self) -> impl FnMut(usize, u8, u32) + '_ {
+        self.palette_nonreplicated.take();
         if Arc::strong_count(&self.bytes) > 1 {
             self.profiling.count("tmem.bank_cow_allocations", 1);
             self.profiling
@@ -170,14 +166,15 @@ impl Tmem {
     pub(crate) fn framebuffer_tags_for(
         &self,
         tile: &TileDescriptor,
+        tlut: u8,
     ) -> super::framebuffer_load::Tags {
         let mut tags = self.framebuffer_tags.as_ref().unwrap().clone();
         let mut visible = [false; TMEM_BYTES];
-        self.reachable_byte(tile, |address| {
+        self.reachable_byte(tile, tlut, |address| {
             visible[address] = true;
             None::<()>
         });
-        if tile.fmt == 2 {
+        if tlut >= 2 {
             let range = if tile.siz == 0 {
                 PALETTE_BASE + usize::from(tile.palette) * 128
                     ..PALETTE_BASE + (usize::from(tile.palette) + 1) * 128
@@ -205,7 +202,7 @@ impl Tmem {
         tags
     }
 
-    pub(crate) fn has_framebuffer(&self, tile: &TileDescriptor) -> bool {
+    pub(crate) fn has_framebuffer(&self, tile: &TileDescriptor, tlut: u8) -> bool {
         self.framebuffer_tags.as_ref().is_some_and(|tags| {
             let palette = if tile.siz == 0 {
                 let start = PALETTE_BASE + usize::from(tile.palette) * 128;
@@ -213,9 +210,11 @@ impl Tmem {
             } else {
                 PALETTE_BASE..TMEM_BYTES
             };
-            self.reachable_byte(tile, |addr| (tags.bytes[addr].copy != 0).then_some(()))
-                .is_some()
-                || tile.fmt == 2 && tags.bytes[palette].iter().any(|tag| tag.copy != 0)
+            self.reachable_byte(tile, tlut, |addr| {
+                (tags.bytes[addr].copy != 0).then_some(())
+            })
+            .is_some()
+                || tlut >= 2 && tags.bytes[palette].iter().any(|tag| tag.copy != 0)
         })
     }
 
@@ -229,11 +228,11 @@ impl Tmem {
         self.rejecting = None;
     }
 
-    pub(crate) fn rejection(&self, tile: &TileDescriptor) -> Option<crate::Diagnostic> {
-        if let Some(diag) = self.reachable_byte(tile, |addr| self.rejected[addr]) {
+    pub(crate) fn rejection(&self, tile: &TileDescriptor, tlut: u8) -> Option<crate::Diagnostic> {
+        if let Some(diag) = self.reachable_byte(tile, tlut, |addr| self.rejected[addr]) {
             return Some(diag);
         }
-        if tile.fmt == 2 {
+        if tlut >= 2 {
             let (start, end) = if tile.siz == 0 {
                 (
                     PALETTE_BASE + usize::from(tile.palette) * 128,
@@ -250,6 +249,7 @@ impl Tmem {
     fn reachable_byte<T>(
         &self,
         tile: &TileDescriptor,
+        tlut: u8,
         mut find: impl FnMut(usize) -> Option<T>,
     ) -> Option<T> {
         let base = usize::from(tile.tmem_addr) << 3;
@@ -266,17 +266,32 @@ impl Tmem {
         let row_bytes = ((width << tile.siz.min(2)).div_ceil(2)).min(TMEM_BYTES);
         // TMEM addressing repeats after this many rows, including the odd-row swap.
         let row_period = (TMEM_BYTES >> stride.trailing_zeros().min(12)).max(2);
-        let mask = if tile.fmt == 2 || tile.siz == 3 {
+        let mask = if tlut >= 2 || (tile.fmt == 0 && tile.siz == 3) {
             MASK16
         } else {
             MASK8
         };
+        if super::tile_sampling::TileSampling::from_tile(tile, tlut).image[2] == 1 {
+            for address in 0..=mask {
+                if let Some(value) = find(address).or_else(|| {
+                    (tlut < 2 && tile.fmt == 0 && tile.siz == 3)
+                        .then(|| find(address | PALETTE_BASE))
+                        .flatten()
+                }) {
+                    return Some(value);
+                }
+            }
+            return None;
+        }
+        let step = if tlut >= 2 && tile.siz >= 2 { 2 } else { 1 };
         for y in 0..height.min(row_period) {
-            for x in 0..row_bytes {
+            for x in (0..row_bytes).step_by(step) {
                 let addr = (base + Self::swap_odd_line(y * stride + x, y & 1 != 0)) & mask;
-                if let Some(value) = find(addr)
-                    .or_else(|| (tile.siz == 3).then(|| find(addr | PALETTE_BASE)).flatten())
-                {
+                if let Some(value) = find(addr).or_else(|| {
+                    (tlut < 2 && tile.fmt == 0 && tile.siz == 3)
+                        .then(|| find(addr | PALETTE_BASE))
+                        .flatten()
+                }) {
                     return Some(value);
                 }
             }
@@ -284,16 +299,13 @@ impl Tmem {
         None
     }
 
-    pub(crate) fn tile_has_load(&self, tile: &TileDescriptor) -> bool {
-        self.reachable_byte(tile, |addr| {
+    pub(crate) fn tile_has_load(&self, tile: &TileDescriptor, tlut: u8) -> bool {
+        self.reachable_byte(tile, tlut, |addr| {
             (self.written[addr / 64] & (1 << (addr & 63)) != 0).then_some(())
         })
         .is_some()
     }
 
-    /// The odd-line 32-bit word swap, shared by the write and read paths. When `odd`, flips bit
-    /// `0x4` to exchange the two 4-byte halves of the enclosing 8-byte word; routing both paths
-    /// through this one helper is what makes the swaps cancel for a well-formed LoadBlock.
     #[inline]
     fn swap_odd_line(addr: usize, odd: bool) -> usize {
         if odd {
@@ -303,21 +315,7 @@ impl Tmem {
         }
     }
 
-    /// Hardware-faithful LoadBlock write.
-    ///
-    /// Copies `word_count` contiguous 8-byte words from `src` (already in texture byte order —
-    /// fast3d's RDRAM accessor does not need the `^3` byte-swap) into TMEM starting at
-    /// `dst_tmem_addr_words << 3`. A `dxt` accumulator advances one word per step; each time it
-    /// crosses [`DXT_SWAP`] the destination advances by `stride = line_words << 3` and the odd-line
-    /// swap flips (`xor ^= 0x4`). For a well-formed LoadBlock the load tile's `line` is 0, so
-    /// `stride` is 0 and the crossing only toggles the swap; the general formula is kept so a
-    /// non-zero load line degrades correctly.
-    ///
-    /// RGBA32 (`siz == 3`) splits its 32-bit texel across the two 2 KiB banks: each 8-byte word
-    /// holds two texels; R,G land in the low bank and
-    /// B,A in the high bank (`| `[`PALETTE_BASE`]), so `tmem_addr` advances 4 (not 8) and is masked
-    /// with [`MASK16`]. The swap runs through the same helper BEFORE the high-bank OR. Every other
-    /// format is 8-bytes-per-word and takes the verbatim copy path.
+    #[cfg(test)]
     pub fn write_block(
         &mut self,
         src: &[u8],
@@ -327,86 +325,52 @@ impl Tmem {
         word_count: usize,
         siz: u8,
     ) {
+        let tile = TileDescriptor {
+            siz,
+            tmem_addr: dst_tmem_addr_words as u16,
+            line: line_words as u16,
+            ..Default::default()
+        };
+        self.write_block_for_tile(src, &tile, dxt, word_count, siz);
+    }
+
+    pub(crate) fn write_block_for_tile(
+        &mut self,
+        src: &[u8],
+        tile: &TileDescriptor,
+        dxt: u32,
+        word_count: usize,
+        image_siz: u8,
+    ) {
         #[cfg(any(test, feature = "profiling"))]
         self.census_load(
             "block",
             &[
-                dst_tmem_addr_words as u64,
-                line_words as u64,
+                tile.tmem_addr as u64,
+                tile.line as u64,
                 u64::from(dxt),
                 word_count as u64,
-                u64::from(siz),
+                u64::from(image_siz),
+                u64::from(tile.fmt),
+                u64::from(tile.siz),
             ],
             src,
         );
-        let rgba32 = siz == 3;
-        let mask = if rgba32 { MASK16 } else { MASK8 };
-        let advance = if rgba32 { 4 } else { 8 };
-        // Per-texel RDRAM byte offsets feeding the low bank (R,G of each of the two texels) and the
-        // high bank (B,A of each).
-        const LOW_SRC: [usize; 4] = [0, 1, 4, 5];
-        const HIGH_SRC: [usize; 4] = [2, 3, 6, 7];
-
-        let mut tmem_addr = (dst_tmem_addr_words << 3) & mask;
-        let stride = line_words << 3;
-        let mut odd = false;
-        let mut dxt_counter: u32 = 0;
-        let mut tex = 0usize;
-        let mut store_byte = self.writer();
-
-        for _ in 0..word_count {
-            if rgba32 {
-                // loadWord<true, false>: split R,G → low bank, B,A → high bank (dst | 0x800).
-                for i in 0..4 {
-                    let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                    store_byte(
-                        dst,
-                        src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
-                        (tex + LOW_SRC[i]) as u32,
-                    );
-                    store_byte(
-                        dst | PALETTE_BASE,
-                        src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
-                        (tex + HIGH_SRC[i]) as u32,
-                    );
-                }
-            } else {
-                // loadWord<false, false>: copy the whole 8-byte word, applying the odd-line swap.
-                for i in 0..8 {
-                    let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                    store_byte(
-                        dst,
-                        src.get(tex + i).copied().unwrap_or(0),
-                        (tex + i) as u32,
-                    );
-                }
-            }
-
-            // loadWordStep, BLOCK branch: advance the DXT accumulator, crossing rows.
-            dxt_counter = dxt_counter.wrapping_add(dxt);
-            while dxt_counter >= DXT_SWAP {
-                tmem_addr = (tmem_addr + stride) & mask;
-                dxt_counter -= DXT_SWAP;
-                odd = !odd;
-            }
-            tex += 8;
-            tmem_addr = (tmem_addr + advance) & mask;
+        let image4_tile = TileDescriptor {
+            tmem_addr: tile.tmem_addr,
+            line: tile.line,
+            ..Default::default()
+        };
+        let tile = if image_siz == 0 { &image4_tile } else { tile };
+        let mut store = self.writer();
+        for word in 0..word_count {
+            let s = word * (16 >> image_siz);
+            let t = (word * dxt as usize) / DXT_SWAP as usize;
+            Self::write_load_word(src, tile, s, t, word * 8, false, &mut store);
         }
     }
 
-    /// Hardware-faithful LoadTile write.
-    ///
-    /// Copies a `words_per_row × row_count` region out of a strided RDRAM image into TMEM. Unlike
-    /// LoadBlock there is NO DXT accumulator; the odd-line swap flips ONCE PER ROW (`loadRowStep`
-    /// `tmemXorMask ^= 0x4`), i.e. keyed on `row & 1` through the same [`swap_odd_line`] helper the
-    /// sampler uses, so it cancels against the read swap.
-    ///
-    /// Row `r` reads its words from `src[r * src_stride_bytes]` (`src_stride_bytes` = tex-image
-    /// `bytesPerRow`), gathering a sub-rectangle from a wider image, and writes them to TMEM row
-    /// `(dst_tmem_word << 3) + r * (line_words << 3)`. That padded `line_words << 3` is a GENUINE
-    /// per-row stride (unlike LoadBlock's contiguous rows), which lets [`sample_tile`] read a
-    /// LoadTile tile correctly even for sub-word widths via the render tile's `line`. RGBA32
-    /// (`siz == 3`) uses the same dual-bank split as [`write_block`], with the per-row swap.
+    #[cfg(any(test, feature = "profiling"))]
     #[allow(clippy::too_many_arguments)]
     pub fn write_tile(
         &mut self,
@@ -418,63 +382,158 @@ impl Tmem {
         src_stride_bytes: usize,
         siz: u8,
     ) {
+        let tile = TileDescriptor {
+            siz,
+            tmem_addr: dst_tmem_word as u16,
+            line: line_words as u16,
+            ..Default::default()
+        };
+        self.write_tile_for_tile(src, &tile, row_count, words_per_row, src_stride_bytes, siz);
+    }
+
+    pub(crate) fn write_tile_for_tile(
+        &mut self,
+        src: &[u8],
+        tile: &TileDescriptor,
+        row_count: usize,
+        words_per_row: usize,
+        src_stride_bytes: usize,
+        image_siz: u8,
+    ) {
         #[cfg(any(test, feature = "profiling"))]
         self.census_load(
             "tile",
             &[
-                dst_tmem_word as u64,
-                line_words as u64,
+                tile.tmem_addr as u64,
+                tile.line as u64,
                 row_count as u64,
                 words_per_row as u64,
                 src_stride_bytes as u64,
-                u64::from(siz),
+                u64::from(image_siz),
+                u64::from(tile.fmt),
+                u64::from(tile.siz),
             ],
             src,
         );
-        let rgba32 = siz == 3;
-        let mask = if rgba32 { MASK16 } else { MASK8 };
-        let advance = if rgba32 { 4 } else { 8 };
-        const LOW_SRC: [usize; 4] = [0, 1, 4, 5];
-        const HIGH_SRC: [usize; 4] = [2, 3, 6, 7];
-
-        let tmem_start = (dst_tmem_word << 3) & mask;
-        let tmem_stride = line_words << 3;
-        let mut store_byte = self.writer();
-
-        for r in 0..row_count {
-            let odd = (r & 1) == 1;
-            let mut tmem_addr = (tmem_start + r * tmem_stride) & mask;
-            let src_row = r * src_stride_bytes;
-            for w in 0..words_per_row {
-                let tex = src_row + w * 8;
-                if rgba32 {
-                    // loadWord<true, false>: split R,G → low bank, B,A → high bank (dst | 0x800).
-                    for i in 0..4 {
-                        let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                        store_byte(
-                            dst,
-                            src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
-                            (tex + LOW_SRC[i]) as u32,
-                        );
-                        store_byte(
-                            dst | PALETTE_BASE,
-                            src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
-                            (tex + HIGH_SRC[i]) as u32,
-                        );
-                    }
-                } else {
-                    // loadWord<false, false>: copy the whole 8-byte word, applying the odd-line swap.
-                    for i in 0..8 {
-                        let dst = Self::swap_odd_line(tmem_addr + i, odd) & mask;
-                        store_byte(
-                            dst,
-                            src.get(tex + i).copied().unwrap_or(0),
-                            (tex + i) as u32,
-                        );
-                    }
-                }
-                tmem_addr = (tmem_addr + advance) & mask;
+        let image4_tile = TileDescriptor {
+            tmem_addr: tile.tmem_addr,
+            line: tile.line,
+            ..Default::default()
+        };
+        let tile = if image_siz == 0 { &image4_tile } else { tile };
+        let mut store = self.writer();
+        for row in 0..row_count {
+            for word in 0..words_per_row {
+                let s = word * (16 >> image_siz);
+                let source = row * src_stride_bytes + word * 8;
+                Self::write_load_word(src, tile, s, row, source, false, &mut store);
             }
+        }
+    }
+
+    fn write_load_word(
+        src: &[u8],
+        tile: &TileDescriptor,
+        s: usize,
+        t: usize,
+        source: usize,
+        replicate: bool,
+        store: &mut impl FnMut(usize, u8, u32),
+    ) {
+        let halfword = match (tile.fmt, tile.siz) {
+            (1, _) | (_, 1) => s >> 1,
+            (_, 0) => s >> 2,
+            _ => s,
+        } & 0x7ff;
+        let base = ((usize::from(tile.line) * t) & 0x1ff) + usize::from(tile.tmem_addr);
+        let first = ((base << 2) + halfword) & 0x7fd;
+        let odd = (t & 1) * 2;
+        let mut indices = [0; 4];
+        for i in 0..4 {
+            let index = ((first + i) & 0x7ff) ^ odd;
+            indices[index & 3] = (index & 0x3ff) * 2;
+        }
+        let mut byte = |address, offset| {
+            let offset = source + if replicate { offset & 1 } else { offset };
+            store(
+                address,
+                src.get(offset).copied().unwrap_or(0),
+                offset as u32,
+            );
+        };
+        if tile.fmt == 1 || (tile.fmt == 0 && tile.siz == 3) {
+            let bank = (halfword & 2) ^ odd;
+            let low = if tile.fmt == 1 {
+                [0, 2, 4, 6]
+            } else {
+                [0, 1, 4, 5]
+            };
+            let high = if tile.fmt == 1 {
+                [1, 3, 5, 7]
+            } else {
+                [2, 3, 6, 7]
+            };
+            for i in 0..4 {
+                let address = indices[bank + i / 2] + (i & 1);
+                byte(address, low[i]);
+                byte(address | PALETTE_BASE, high[i]);
+            }
+        } else {
+            let high = (first & 0x400) * 2;
+            for (bank, address) in indices.into_iter().enumerate() {
+                for i in 0..2 {
+                    byte((address | high) + i, ((bank ^ odd) * 2) + i);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn write_tlut_for_tile(
+        &mut self,
+        src: &[u8],
+        tile: &TileDescriptor,
+        count: usize,
+        rows: usize,
+        source_stride: usize,
+        image_siz: u8,
+    ) {
+        // Angrylion crashes for these inputs; preserve fast3d's defined extension.
+        if rows > 1 || image_siz == 0 {
+            self.write_tlut_rows(
+                src,
+                count,
+                tile.tmem_addr.into(),
+                rows,
+                source_stride,
+                tile.line.into(),
+            );
+            return;
+        }
+        #[cfg(any(test, feature = "profiling"))]
+        self.census_load(
+            "tlut",
+            &[
+                count as u64,
+                tile.tmem_addr as u64,
+                rows as u64,
+                source_stride as u64,
+                tile.line as u64,
+                image_siz as u64,
+                tile.fmt as u64,
+                tile.siz as u64,
+            ],
+            src,
+        );
+        let (pixels, advance) = if image_siz == 2 {
+            (1, 2)
+        } else {
+            (16 >> image_siz, 8)
+        };
+        let iterations = count.div_ceil(pixels);
+        let mut store = self.writer();
+        for word in 0..iterations {
+            let s = word * (64 >> image_siz);
+            Self::write_load_word(src, tile, s, 0, word * advance, true, &mut store);
         }
     }
 
@@ -531,6 +590,46 @@ impl Tmem {
         &self.bytes[PALETTE_BASE..]
     }
 
+    pub(crate) fn palette_nonreplicated(&self) -> &[u64; 4] {
+        self.palette_nonreplicated.get_or_init(|| {
+            self.profiling.count("tmem.palette_lane_slot_checks", 256);
+            let mut slots = Self::palette_nonreplicated_bytes(&self.bytes);
+            if let Some(tags) = &self.framebuffer_tags {
+                for (index, slot) in tags.bytes[PALETTE_BASE..]
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .enumerate()
+                {
+                    if slot[2..]
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .any(|pair| pair != &slot[..2])
+                    {
+                        slots[index / 64] |= 1 << (index & 63);
+                    }
+                }
+            }
+            slots
+        })
+    }
+
+    pub(crate) fn palette_nonreplicated_bytes(bank: &[u8; TMEM_BYTES]) -> [u64; 4] {
+        let mut slots = [0; 4];
+        for (index, slot) in bank[PALETTE_BASE..].as_chunks::<8>().0.iter().enumerate() {
+            if slot[2..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .any(|pair| pair != &slot[..2])
+            {
+                slots[index / 64] |= 1 << (index & 63);
+            }
+        }
+        slots
+    }
+
     pub(crate) fn share_bank(&self) -> Arc<[u8; TMEM_BYTES]> {
         self.bytes.clone()
     }
@@ -578,6 +677,7 @@ impl Tmem {
     /// Raw byte write into TMEM (for hand-computed tests that place bytes at exact addresses).
     #[cfg(test)]
     fn raw_set(&mut self, i: usize, v: u8) {
+        self.palette_nonreplicated.take();
         Arc::make_mut(&mut self.bytes)[i] = v;
     }
 }
@@ -612,8 +712,8 @@ impl<'a> BankDecoder<'a> {
     /// final address with `mask`. Mirrors `implLoadTMEM`: on an odd row the row-relative address
     /// has its word swapped (bit `0x4`) before adding `base`, then the sum is masked.
     ///
-    /// `mask` is [`MASK8`] for the six non-paletted formats (whole 4 KiB) and [`MASK16`] for the
-    /// CI **index** read (TLUT sampling addresses only the low 2 KiB bank, matching the RDP's
+    /// `mask` is [`MASK8`] for ordinary reads and [`MASK16`] for a TLUT index read
+    /// (TLUT sampling addresses only the low 2 KiB bank, matching the RDP's
     /// `addressMask = usesTlut ? RDP_TMEM_MASK16 : RDP_TMEM_MASK8`).
     #[inline]
     fn load_byte_masked(
@@ -662,8 +762,7 @@ impl<'a> BankDecoder<'a> {
     /// Read a 16-bit big-endian palette entry DIRECTLY from the TLUT region and decode it by
     /// `tlut_fmt`. The palette read is a direct load of `paletteAddress & MASK8` — it applies
     /// NO odd-line swap (unlike the index read); `paddr` addresses the
-    /// high byte, `paddr+1` the low byte. `tlut_fmt`: 2 => RGBA16 entry, 3 => IA16 entry, else
-    /// transparent black (matching `texdec::decode_ci*`).
+    /// high byte, `paddr+1` the low byte. `tlut_fmt`: 2 => RGBA16 entry, 3 => IA16 entry.
     #[inline]
     fn load_palette_entry(
         &self,
@@ -685,13 +784,8 @@ impl<'a> BankDecoder<'a> {
 
     /// Decode a whole tile from TMEM to RGBA8 (`width * height * 4` bytes), row-major.
     ///
-    /// For texel `(x, y)`:
-    /// `rel = y * (line << 3) + ((x << tmemShift) >> 1)`, `tmemShift = {4b:0, 8b:1, 16b:2}`,
-    /// with the odd-row swap applied per byte via [`load_byte`](Self::load_byte). The decode
-    /// expansions are byte-identical to `texdec`.
-    ///
-    /// `tlut_fmt` (othermode TT: 0=NONE, 2=RGBA16, 3=IA16) is consulted only by the CI4/CI8
-    /// arms, which read a palette index from the low bank and resolve it against the TLUT region.
+    /// TLUT modes 2/3 read indices from the low bank for every format.
+    #[cfg(test)]
     pub fn sample_tile(&self, tile: &TileDescriptor, tlut_fmt: u8) -> Result<Vec<u8>, DiagKind> {
         self.sample_tile_observed(tile, tlut_fmt, &mut |_| {})
     }
@@ -702,11 +796,21 @@ impl<'a> BankDecoder<'a> {
         tlut_fmt: u8,
         reads: &mut impl FnMut(usize),
     ) -> Result<Vec<u8>, DiagKind> {
+        self.sample_tile_lane(tile, tlut_fmt, 0, reads)
+    }
+
+    pub(crate) fn sample_tile_lane(
+        &self,
+        tile: &TileDescriptor,
+        tlut_fmt: u8,
+        lane: usize,
+        reads: &mut impl FnMut(usize),
+    ) -> Result<Vec<u8>, DiagKind> {
         FormatInfo {
             fmt: tile.fmt,
             siz: tile.siz,
         }
-        .validate()?;
+        .validate_tlut(tlut_fmt)?;
         let w = tile.width as usize;
         let h = tile.height as usize;
         let base = (tile.tmem_addr as usize) << 3;
@@ -724,9 +828,14 @@ impl<'a> BankDecoder<'a> {
         for y in 0..h {
             let odd = (y & 1) == 1;
             for x in 0..w {
-                let rel = y * stride + ((x << tmem_shift) >> 1);
-                let px = self.decode_texel(
-                    tile.fmt, tile.siz, base, rel, odd, x, tlut_fmt, palette, reads,
+                let rel = (y & 255) * stride
+                    + if tile.fmt == 1 && tlut_fmt >= 2 {
+                        x
+                    } else {
+                        (x << tmem_shift) >> 1
+                    };
+                let px = self.decode_texel_lane(
+                    tile.fmt, tile.siz, base, rel, odd, x, tlut_fmt, palette, lane, reads,
                 )?;
                 let o = (y * w + x) * 4;
                 out[o..o + 4].copy_from_slice(&px);
@@ -735,6 +844,7 @@ impl<'a> BankDecoder<'a> {
         Ok(out)
     }
 
+    #[cfg(test)]
     pub fn sampling_lookup(
         &self,
         tile: &TileDescriptor,
@@ -749,16 +859,26 @@ impl<'a> BankDecoder<'a> {
         tlut_fmt: u8,
         reads: &mut impl FnMut(usize),
     ) -> Result<Vec<u8>, DiagKind> {
+        self.sampling_lookup_lane(tile, tlut_fmt, 0, reads)
+    }
+
+    pub(crate) fn sampling_lookup_lane(
+        &self,
+        tile: &TileDescriptor,
+        tlut_fmt: u8,
+        lane: usize,
+        reads: &mut impl FnMut(usize),
+    ) -> Result<Vec<u8>, DiagKind> {
         FormatInfo {
             fmt: tile.fmt,
             siz: tile.siz,
         }
-        .validate()?;
+        .validate_tlut(tlut_fmt)?;
         let mut out = Vec::with_capacity(TMEM_BYTES * 4 * 4);
         for odd in [false, true] {
             for parity in 0..2 {
                 for rel in 0..TMEM_BYTES {
-                    out.extend_from_slice(&self.decode_texel(
+                    out.extend_from_slice(&self.decode_texel_lane(
                         tile.fmt,
                         tile.siz,
                         usize::from(tile.tmem_addr) * 8,
@@ -767,6 +887,7 @@ impl<'a> BankDecoder<'a> {
                         parity,
                         tlut_fmt,
                         usize::from(tile.palette),
+                        lane,
                         reads,
                     )?);
                 }
@@ -775,12 +896,9 @@ impl<'a> BankDecoder<'a> {
         Ok(out)
     }
 
-    /// Decode a single texel to RGBA8, reproducing the `texdec` expansions exactly.
-    ///
-    /// `tlut_fmt` / `palette` are used only by the CI4/CI8 arms.
     #[inline]
     #[allow(clippy::too_many_arguments)]
-    fn decode_texel(
+    fn decode_texel_lane(
         &self,
         fmt: u8,
         siz: u8,
@@ -790,8 +908,27 @@ impl<'a> BankDecoder<'a> {
         x: usize,
         tlut_fmt: u8,
         palette: usize,
+        lane: usize,
         reads: &mut impl FnMut(usize),
     ) -> Result<[u8; 4], DiagKind> {
+        if tlut_fmt >= 2 {
+            let byte = self.load_byte_masked(base, rel, odd_row, MASK16, reads);
+            let index = if siz == 0 {
+                (palette << 4)
+                    | usize::from(if fmt == 1 || x & 1 == 0 {
+                        byte >> 4
+                    } else {
+                        byte & 15
+                    })
+            } else {
+                usize::from(byte)
+            };
+            return Ok(self.load_palette_entry(
+                PALETTE_BASE + index * 8 + lane * 2,
+                tlut_fmt,
+                reads,
+            ));
+        }
         Ok(match (fmt, siz) {
             // RGBA16: big-endian 5/5/5/1 word, channel bit-replicated (c<<3)|(c>>2).
             (0, 2) => {
@@ -810,21 +947,16 @@ impl<'a> BankDecoder<'a> {
                 let a = self.load_byte_rgba32(base, rel + 1, odd_row, PALETTE_BASE, reads);
                 [r, g, b, a]
             }
-            // CI4: 4-bit palette index (even column = high nibble). The index read honors the
-            // odd-line swap and is confined to the low 2 KiB bank (MASK16); the palette entry is
-            // then read directly (no swap) from a 32-entry sub-palette selected by `palette<<7`.
             (2, 0) => {
-                let byte = self.load_byte_masked(base, rel, odd_row, MASK16, reads);
-                let index = if x & 1 == 0 { byte >> 4 } else { byte & 0x0F } as usize;
-                let paddr = PALETTE_BASE + (palette << 7) + (index << 3);
-                self.load_palette_entry(paddr, tlut_fmt, reads)
+                let byte = self.load_byte(base, rel, odd_row, reads);
+                let nibble = if x & 1 == 0 { byte >> 4 } else { byte & 15 };
+                [(palette as u8) << 4 | nibble; 4]
             }
-            // CI8: 8-bit palette index into the full table (palette ignored). Same swap/mask
-            // discipline as CI4 on the index read; palette entry read directly.
-            (2, 1) => {
-                let index = self.load_byte_masked(base, rel, odd_row, MASK16, reads) as usize;
-                let paddr = PALETTE_BASE + (index << 3);
-                self.load_palette_entry(paddr, tlut_fmt, reads)
+            (2, 1) => [self.load_byte(base, rel, odd_row, reads); 4],
+            (2, 2 | 3) => {
+                let hi = self.load_byte(base, rel, odd_row, reads);
+                let lo = self.load_byte(base, rel + 1, odd_row, reads);
+                [hi, lo, hi, lo]
             }
             // I8: 8-bit intensity broadcast to all four channels (alpha = intensity).
             (4, 1) => {
@@ -901,7 +1033,7 @@ mod tests {
                         for rel in 0..4096 {
                             let offset = ((odd * 2 + parity) * 4096 + rel) * 4;
                             let expected = BankDecoder::new(&tmem.bytes)
-                                .decode_texel(
+                                .decode_texel_lane(
                                     fmt,
                                     siz,
                                     usize::from(base) * 8,
@@ -910,6 +1042,7 @@ mod tests {
                                     parity,
                                     tlut,
                                     usize::from(palette),
+                                    0,
                                     &mut |_| {},
                                 )
                                 .unwrap();

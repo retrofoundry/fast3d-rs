@@ -3,6 +3,8 @@ use bytemuck::{Pod, Zeroable};
 
 #[cfg(test)]
 mod texrect_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tmem_sampling_tests;
 
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;

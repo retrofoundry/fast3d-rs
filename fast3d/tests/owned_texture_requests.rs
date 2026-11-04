@@ -5,7 +5,7 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn production_requests_reproduce_frozen_preimages_on_this_target() {
+fn angrylion_requests_preserve_unaffected_frozen_preimages_on_this_target() {
     let document: serde_json::Value =
         serde_json::from_str(include_str!("../../tools/tmem/vectors.json")).unwrap();
     let unhex = |text: &str| -> Vec<u8> {
@@ -17,6 +17,8 @@ fn production_requests_reproduce_frozen_preimages_on_this_target() {
             .collect()
     };
     let prototype = fast3d::profiling::authored_requests().remove(0);
+    let mut unchanged = 0;
+    let mut changed = 0;
     for row in document["vectors"].as_array().unwrap() {
         let recipe = &row["recipe"];
         let n = |name: &str| recipe[name].as_u64().unwrap();
@@ -44,21 +46,31 @@ fn production_requests_reproduce_frozen_preimages_on_this_target() {
                 trace.bank.bytes[usize::from(u16::from_le_bytes([pair[0], pair[1]]))] = pair[2];
             }
         }
+        if trace.tile.fmt == 2 && trace.tlut >= 2 {
+            for slot in trace.bank.bytes[2048..].as_chunks_mut::<8>().0 {
+                let pair = [slot[0], slot[1]];
+                for lane in slot[2..].as_chunks_mut::<2>().0 {
+                    lane.copy_from_slice(&pair);
+                }
+            }
+        }
         trace.extent = [
             recipe["output"][0].as_u64().unwrap() as u32,
             recipe["output"][1].as_u64().unwrap() as u32,
         ];
         trace.rejection = None;
         let (key, witness) = trace.encoded_identity().unwrap();
-        assert_eq!(
-            witness,
-            unhex(row["canonical_preimage_hex"].as_str().unwrap()),
-            "{}",
-            row["name"]
-        );
-        assert_eq!(
-            key,
-            u64::from_str_radix(row["xxh3_64"].as_str().unwrap(), 16).unwrap()
-        );
+        let frozen = unhex(row["canonical_preimage_hex"].as_str().unwrap());
+        let frozen_key = u64::from_str_radix(row["xxh3_64"].as_str().unwrap(), 16).unwrap();
+        if (trace.tile.fmt == 2 && trace.tlut < 2) || (trace.tile.fmt != 2 && trace.tlut >= 2) {
+            assert_ne!(witness, frozen, "{}", row["name"]);
+            assert_ne!(key, frozen_key, "{}", row["name"]);
+            changed += 1;
+        } else {
+            assert_eq!(witness, frozen, "{}", row["name"]);
+            assert_eq!(key, frozen_key, "{}", row["name"]);
+            unchanged += 1;
+        }
     }
+    assert_eq!((unchanged, changed), (9, 3));
 }

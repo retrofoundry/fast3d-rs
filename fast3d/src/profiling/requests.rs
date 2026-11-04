@@ -4,7 +4,7 @@ use crate::hle::{
         EncodedInput, EncodedTextureRequest, Representation as EncodedRepresentation,
     },
     tile_sampling::TileSampling,
-    tmem::{BankDecoder, Tmem},
+    tmem::Tmem,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -46,7 +46,7 @@ pub struct Request {
     pub rejection: Option<String>,
 }
 
-pub const TRACE_VERSION: u32 = 2;
+pub const TRACE_VERSION: u32 = 3;
 
 impl Request {
     pub(crate) fn capture(
@@ -98,30 +98,16 @@ impl Request {
     /// Offline CPU analysis for developer tools. Live trace capture leaves these fields empty.
     pub fn analyze(&mut self) -> Result<(), &'static str> {
         self.validate()?;
-        let tmem = BankDecoder::new(
-            self.bank
-                .bytes
-                .as_slice()
-                .try_into()
-                .expect("validated bank"),
-        );
         let mut reads = [false; 4096];
         let mut read_operations = 0;
-        let mut read = |addr| {
+        let output = self.encoded_request()?.decode_observed(&mut |addr| {
             reads[addr] = true;
             read_operations += 1;
-        };
-        let output = match self.representation {
-            Representation::Tile => tmem.sample_tile_observed(&self.tile, self.tlut, &mut read),
-            Representation::Lookup => {
-                tmem.sampling_lookup_observed(&self.tile, self.tlut, &mut read)
-            }
-        }
-        .map_err(|_| "unsupported texture format")?;
+        });
         self.output = output;
         self.read_operations = read_operations;
         self.reachable_bytes = reads.iter().filter(|&&read| read).count();
-        self.palette_bytes = if self.tile.fmt == 2 {
+        self.palette_bytes = if self.tlut >= 2 {
             reads[2048..].iter().filter(|&&read| read).count()
         } else {
             0
@@ -149,7 +135,8 @@ impl Request {
             fmt: tile.fmt,
             siz: tile.siz,
         };
-        fi.validate().map_err(|_| "unsupported texture format")?;
+        fi.validate_tlut(request.tlut)
+            .map_err(|_| "unsupported texture format")?;
         let unavailable = "invalid diagnostic texture request";
         if request.version != crate::profiling::TRACE_VERSION
             || request.rejection.is_some()
@@ -187,23 +174,12 @@ impl Request {
 
     pub fn decode(&self) -> Result<Vec<u8>, &'static str> {
         self.validate()?;
-        let bank = BankDecoder::new(
-            self.bank
-                .bytes
-                .as_slice()
-                .try_into()
-                .expect("validated bank"),
-        );
-        match self.representation {
-            Representation::Tile => bank.sample_tile(&self.tile, self.tlut),
-            Representation::Lookup => bank.sampling_lookup(&self.tile, self.tlut),
-        }
-        .map_err(|_| "unsupported texture format")
+        Ok(self.encoded_request()?.decode())
     }
 
     /// Conservative diagnostic identity, with explicit little-endian metadata and bank bytes.
     pub fn canonical(&self) -> Vec<u8> {
-        let mut bytes = b"fast3d-b1-bank-v2\0".to_vec();
+        let mut bytes = b"fast3d-b1-bank-v3\0".to_vec();
         bytes.push(self.representation as u8);
         let t = &self.tile;
         for value in [

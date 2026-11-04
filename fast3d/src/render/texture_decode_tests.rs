@@ -25,6 +25,7 @@ fn texture_decode_packs_raw_bank_bytes() {
     let request = EncodedTextureRequest::from_test_parts(
         EncodedInput::Tmem(bank.clone()),
         DecodeRecipe {
+            palette_lanes: false,
             representation: Representation::Tile,
             output: [3, 1],
             logical: [3, 1],
@@ -116,7 +117,7 @@ fn texture_decode_vectors_match_the_frozen_artifact_inventory() {
             serde_json::json!({
                 "id": vector.name,
                 "width": vector.request.extent[0],
-                "height": vector.request.extent[1],
+                "height": vector.expected.len() as u32 / (vector.request.extent[0] * 4),
             })
         })
         .collect();

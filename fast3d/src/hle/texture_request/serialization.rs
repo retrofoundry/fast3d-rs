@@ -31,9 +31,9 @@ impl Selection {
         }
     }
 
-    fn palette_entry(&mut self, palette: u8, index: u8) {
-        let address = (2048 + usize::from(palette) * 128 + usize::from(index) * 8) & 4095;
-        self.0[address / 64] |= 3 << (address & 63);
+    fn palette_entry(&mut self, index: u8, lanes: bool) {
+        let address = (2048 + usize::from(index) * 8) & 4095;
+        self.0[address / 64] |= if lanes { 255 } else { 3 } << (address & 63);
     }
 
     fn count(&self) -> usize {
@@ -74,21 +74,92 @@ impl Selection {
     }
 }
 
+fn palette_indices(
+    recipe: &DecodeRecipe,
+    bank: &[u8; TMEM_BYTES],
+    mut visit: impl FnMut(usize, u8),
+) -> u64 {
+    let mut reads = 0;
+    let mut index = |address: usize, low: bool| {
+        let byte = bank[address];
+        reads += 1;
+        if recipe.siz == 0 {
+            visit(address, (recipe.palette << 4) | (byte >> 4));
+            if low && recipe.fmt != 1 {
+                visit(address, (recipe.palette << 4) | (byte & 15));
+            }
+        } else {
+            visit(address, byte);
+        }
+    };
+    match recipe.representation {
+        Representation::Tile => {
+            let width = recipe.output[0] as usize;
+            let bytes = if recipe.fmt == 1 {
+                width
+            } else {
+                (width << recipe.siz.min(2)).div_ceil(2)
+            };
+            let step = if recipe.siz >= 2 && recipe.fmt != 1 {
+                2
+            } else {
+                1
+            };
+            for y in 0..recipe.output[1] as usize {
+                let row = (y & 255) * usize::from(recipe.line) * 8;
+                for x in (0..bytes).step_by(step) {
+                    let address =
+                        (usize::from(recipe.base) * 8 + ((row + x) ^ ((y & 1) * 4))) & 2047;
+                    index(address, x + 1 < bytes || width & 1 == 0);
+                }
+            }
+        }
+        Representation::Lookup4096x4 => {
+            for address in 0..2048 {
+                index(address, true);
+            }
+        }
+    }
+    reads
+}
+
+pub(super) fn palette_lanes(
+    recipe: &DecodeRecipe,
+    bank: &[u8; TMEM_BYTES],
+    nonreplicated: &[u64; 4],
+    profiling: &Recorder,
+) -> bool {
+    if recipe.tlut < 2 || nonreplicated.iter().all(|&bits| bits == 0) {
+        return false;
+    }
+    let mut used = false;
+    let reads = palette_indices(recipe, bank, |_, index| {
+        used |= nonreplicated[usize::from(index) / 64] & (1 << (index & 63)) != 0;
+    });
+    profiling.count("tmem.palette_lane_index_reads", reads);
+    used
+}
+
 fn select(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], profiling: &Recorder) -> Selection {
     let mut selected = Selection::default();
-    let mut palette = Selection::default();
-    let size = if recipe.fmt == 2 || recipe.siz == 3 {
-        2048
-    } else {
-        TMEM_BYTES
-    };
+    if recipe.tlut >= 2 {
+        let reads = palette_indices(recipe, bank, |address, index| {
+            selected.range(address, address + 1);
+            selected.palette_entry(index, recipe.palette_lanes);
+        });
+        profiling.count("tmem.footprint_span_bytes", reads);
+        profiling.count("tmem.palette_index_reads", reads);
+        return selected;
+    }
+    let rgba32 = recipe.fmt == 0 && recipe.siz == 3;
+    let size = if rgba32 { 2048 } else { TMEM_BYTES };
     let base = usize::from(recipe.base) * 8;
     let row_bytes = ((recipe.output[0] as usize) << recipe.siz.min(2)).div_ceil(2);
     let mut span_bytes = 0;
     match recipe.representation {
         Representation::Tile => {
             for y in 0..recipe.output[1] as usize {
-                let start = base + y * usize::from(recipe.line) * 8;
+                let start = base + (y & 255) * usize::from(recipe.line) * 8;
                 if y & 1 == 0 {
                     selected.wrapped_range(start, row_bytes, size);
                 } else {
@@ -107,51 +178,13 @@ fn select(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], profiling: &Recorder) 
             span_bytes = size;
         }
     }
-    if recipe.siz == 3 {
+    if rgba32 {
         for i in 0..32 {
             selected.0[i + 32] = selected.0[i];
         }
         span_bytes *= 2;
     }
-
-    let mut palette_reads = 0;
-    if recipe.fmt == 2 {
-        let mut indices = |byte: u8, low: bool| {
-            palette_reads += 1;
-            if recipe.siz == 0 {
-                palette.palette_entry(recipe.palette, byte >> 4);
-                if low {
-                    palette.palette_entry(recipe.palette, byte & 15);
-                }
-            } else {
-                palette.palette_entry(recipe.palette, byte);
-            }
-        };
-        match recipe.representation {
-            Representation::Tile => {
-                for y in 0..recipe.output[1] as usize {
-                    let row = y * usize::from(recipe.line) * 8;
-                    for x in 0..row_bytes {
-                        let address = (base + ((row + x) ^ ((y & 1) * 4))) & 2047;
-                        indices(
-                            bank[address],
-                            x + 1 < row_bytes || recipe.output[0] & 1 == 0,
-                        );
-                    }
-                }
-            }
-            Representation::Lookup4096x4 => {
-                for &byte in &bank[..2048] {
-                    indices(byte, true);
-                }
-            }
-        }
-        for (selected, palette) in selected.0.iter_mut().zip(palette.0) {
-            *selected |= palette;
-        }
-    }
     profiling.count("tmem.footprint_span_bytes", span_bytes as u64);
-    profiling.count("tmem.palette_index_reads", palette_reads);
     selected
 }
 
@@ -188,7 +221,7 @@ pub(super) fn serialize_profiled(
     let mut out = Vec::with_capacity(56 + physical_count * 3);
     out.extend_from_slice(b"fast3d-tmem-key\0");
     out.extend_from_slice(&1u16.to_le_bytes());
-    out.extend_from_slice(&[recipe.representation as u8, 0]);
+    out.extend_from_slice(&[recipe.representation as u8, recipe.semantic_flags()]);
     for dimension in recipe.output.into_iter().chain(recipe.logical) {
         out.extend_from_slice(&dimension.to_le_bytes());
     }

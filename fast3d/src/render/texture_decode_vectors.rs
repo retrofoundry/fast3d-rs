@@ -227,8 +227,11 @@ pub(super) fn component_vectors() -> Vec<Vector> {
                 expected.extend(match mode {
                     2 => rgba(value),
                     3 => [page as u8, page as u8, page as u8, index as u8],
-                    _ => [0; 4],
+                    _ => [index as u8; 4], // Angrylion CI8 without TLUT uses index intensity.
                 });
+            }
+            if mode >= 2 {
+                expected.resize(expected.len() * 4, 0);
             }
             let mut descriptor = recipe(2, 1, 256, 1);
             descriptor.tlut = mode;
@@ -252,8 +255,12 @@ pub(super) fn component_vectors() -> Vec<Vector> {
                 expected.extend(match mode {
                     2 => rgba(value),
                     3 => [value as u8; 4],
-                    _ => [0; 4],
+                    // Angrylion CI4 without TLUT retains the palette selector in the intensity.
+                    _ => [(palette * 16 + index) as u8; 4],
                 });
+            }
+            if mode >= 2 {
+                expected.resize(expected.len() * 4, 0);
             }
             let mut descriptor = recipe(2, 0, 16, 1);
             descriptor.palette = palette as u8;
@@ -415,7 +422,8 @@ pub(super) fn literal_layout_vectors() -> Vec<Vector> {
                 ..recipe(4, 1, 1, 3)
             },
         ),
-        expected: vec![1, 1, 1, 1, 5, 5, 5, 5, 1, 1, 1, 1],
+        // Angrylion tex.c tlutswitch applies TLUT to I8 too.
+        expected: vec![193; 12],
     });
     let mut bank = [0x12; 4096];
     bank[0] = 0xab;

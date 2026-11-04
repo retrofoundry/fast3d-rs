@@ -212,20 +212,22 @@ fn recorder_inactive_and_nested_accounting() {
 
 #[cfg(feature = "profiling")]
 #[test]
-fn trace_version_two_rejects_old_linear_records() {
+fn trace_version_three_rejects_old_decode_semantics_and_linear_records() {
     let request = authored_requests().remove(0);
     let mut value = serde_json::to_value(&request).unwrap();
-    assert_eq!(value["version"], 2);
+    assert_eq!(value["version"], 3);
     assert!(value.get("linear").is_none());
     assert!(value["bank"].get("sources").is_none());
     assert!(value["bank"].get("blocks").is_none());
-    value["version"] = 1.into();
-    let old: Request = serde_json::from_value(value.clone()).unwrap();
-    assert!(old.encoded_identity().is_err());
-    assert!(old.decode().is_err());
+    for version in [1, 2] {
+        value["version"] = version.into();
+        let old: Request = serde_json::from_value(value.clone()).unwrap();
+        assert!(old.encoded_identity().is_err());
+        assert!(old.decode().is_err());
+    }
     value.as_object_mut().unwrap().remove("version");
     assert!(serde_json::from_value::<Request>(value.clone()).is_err());
-    value["version"] = 2.into();
+    value["version"] = 3.into();
     value["representation"] = "Linear".into();
     assert!(serde_json::from_value::<Request>(value).is_err());
 }

@@ -762,7 +762,10 @@ fn build_material_inner(
         }
     }
     for index in used_tiles {
-        if let Some(diagnostic) = rdp.tmem_bank.rejection(&rdp.tiles[index]) {
+        if let Some(diagnostic) = rdp
+            .tmem_bank
+            .rejection(&rdp.tiles[index], ((rdp.other_mode_h >> 14) & 3) as u8)
+        {
             if !diags.contains(&diagnostic) {
                 diags.push(diagnostic);
             }
