@@ -174,3 +174,86 @@ fn host_scanout_selects_full_width_address_and_falls_back() {
             .all(|pixel| *pixel == expected));
     }
 }
+
+#[test]
+fn vi_scanout_maps_rows_and_alternates_stored_buffers() {
+    use crate::tests::common::{pixel, pixels_from_render};
+    use crate::ViRegisters;
+    use n64_gbi::encode::*;
+
+    let (device, queue, _) = crate::render::headless_device();
+    let format = wgpu::TextureFormat::Rgba8Unorm;
+    let mut renderer = Renderer::with_device(
+        device.clone(),
+        queue.clone(),
+        PresentTarget::Headless {
+            format,
+            width: 512,
+            height: 237,
+        },
+        cfg(),
+    );
+    let bases = [0x0013_6780, 0x003c_3fc0];
+    for (buffer, base) in bases.into_iter().enumerate() {
+        let mut commands = vec![
+            gdp_set_color_image(0, 2, 512, base),
+            gdp_set_scissor(0, 0, 0, 512 * 4, 240 * 4),
+            gdp_set_cycle_type(3),
+        ];
+        for row in 0..240 {
+            let color = ((row & 31) << 11) | ((row >> 5) << 6) | ((buffer as u32 + 1) << 1) | 1;
+            commands.extend([
+                gdp_set_fill_color(color << 16 | color),
+                gdp_fill_rectangle(0, row * 4, 511 * 4, row * 4),
+            ]);
+        }
+        commands.push(gsp_enddl());
+        let hw = ImgHw {
+            rdram: commands
+                .into_iter()
+                .flat_map(|(a, b)| [a.to_be_bytes(), b.to_be_bytes()].concat())
+                .collect(),
+        };
+        renderer.process_dl(&hw, 0, Microcode::F3dex2, &mut NopSink);
+    }
+    for (origin, buffer, offset, height) in [
+        (bases[0] + 1024, 0, 1, 237),
+        (bases[1] + 1024, 1, 1, 237),
+        (bases[0] + 2048, 0, 2, 237),
+        (bases[0] + 4096, 0, 4, 236),
+        (bases[1] + 239 * 1024, 1, 239, 1),
+        (bases[0], 0, 0, 237),
+        (bases[0] + 1024, 0, 1, 237),
+        (0x0090_0000, 1, 0, 240),
+        (bases[1], 1, 0, 237),
+    ] {
+        let vi = ViRegisters {
+            origin,
+            status: 2,
+            width: 512,
+            v_start: 0x0025_01ff,
+            y_scale: 1024,
+            ..Default::default()
+        };
+        let pixels = pixels_from_render(&device, &queue, 512, height, format, |view| {
+            renderer.present_to_source(renderer.scanout_source(Some(vi)), view);
+        });
+        for row in 0..height {
+            let source = row + offset;
+            let expand = |value: u32| ((value << 3) | (value >> 2)) as u8;
+            let expected = [
+                expand(source & 31),
+                expand(source >> 5),
+                expand(buffer + 1),
+                255,
+            ];
+            for x in [0, 256, 511] {
+                assert_eq!(
+                    pixel(&pixels, 512, x, row),
+                    expected,
+                    "origin={origin:#x}, output ({x},{row}), source row {source}"
+                );
+            }
+        }
+    }
+}

@@ -35,7 +35,13 @@ fn scanout_reuses_ntsc_extent_across_frames() {
         renderer.render_into_store(&device, &queue, &bottom, ClearPolicy::Persist);
         let pixels = common::pixels_from_render(&device, &queue, 64, 237, FORMAT, |view| {
             let mut encoder = device.create_command_encoder(&Default::default());
-            renderer.scanout(&device, &mut encoder, view, address, height);
+            renderer.scanout(
+                &device,
+                &mut encoder,
+                view,
+                address,
+                height.map(|height| 0..height),
+            );
             queue.submit([encoder.finish()]);
         });
         assert_eq!(
@@ -90,7 +96,13 @@ fn scanout_rows_leave_retained_pixels_available() {
         let pixels =
             common::pixels_from_render(&device, &queue, 64, output_height, FORMAT, |view| {
                 let mut encoder = device.create_command_encoder(&Default::default());
-                renderer.scanout(&device, &mut encoder, view, address, height);
+                renderer.scanout(
+                    &device,
+                    &mut encoder,
+                    view,
+                    address,
+                    height.map(|height| 0..height),
+                );
                 queue.submit([encoder.finish()]);
             });
         assert_eq!(

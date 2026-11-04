@@ -24,7 +24,7 @@ pub(super) struct Framebuffer {
     pub sampled: wgpu::TextureView,
     pub present_bg: wgpu::BindGroup,
     pub present_extent: wgpu::BindGroup,
-    pub present_height: u32,
+    pub present_rows: std::ops::Range<u32>,
     pub height: u32,
     pub sampling: wgpu::Buffer,
     pub layout: ImageLayout,
