@@ -254,6 +254,49 @@ impl<'a> RenderInputs<'a> {
         }
     }
 
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) fn census_update_targets(
+        &self,
+        descriptors: &mut super::framebuffers::targets::TargetDescriptors,
+    ) {
+        for target in &self.targets {
+            if !target.operations.is_empty()
+                && target
+                    .operations
+                    .iter()
+                    .all(|op| matches!(op.draw, DrawInputs::FramebufferCopy(_)))
+            {
+                continue;
+            }
+            if !matches!(target.record_descriptors(descriptors), Ok(true)) {
+                continue;
+            }
+            let depth = target.depth_image.filter(|_| target.any_depth);
+            if target.depth_clear {
+                if let Some(address) = depth {
+                    descriptors.written(address, true);
+                }
+                continue;
+            }
+            if let TargetId::Guest(address) = target.id {
+                if target.operations.iter().any(|op| {
+                    !matches!(
+                        op.draw,
+                        DrawInputs::FramebufferCopy(_) | DrawInputs::Rejected
+                    )
+                }) {
+                    descriptors.written(address, false);
+                }
+            }
+            let writes_depth = target.operations.iter().any(|op| {
+                matches!(&op.draw, DrawInputs::Tris { mode, .. } | DrawInputs::Rectangle { mode, .. } if mode.z_write)
+            });
+            if let Some(address) = depth.filter(|_| writes_depth) {
+                descriptors.written(address, true);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub fn new(scene: &'a Scene, legacy_extent: (u32, u32), frame: [u32; 2]) -> Option<Self> {
         Self::with_targets(scene, legacy_extent, frame, &Default::default())

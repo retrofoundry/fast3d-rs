@@ -8,6 +8,7 @@ pub enum Mode {
     Coarse,
     Detailed,
     Trace,
+    Census,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -26,6 +27,8 @@ pub struct Snapshot {
     pub decodes: BTreeMap<String, super::DecodeCounts>,
     pub requests: Vec<super::Request>,
     pub gauges: BTreeMap<String, u64>,
+    pub census_attempts: Vec<super::CensusAttempt>,
+    pub census_loads: Vec<super::CensusLoad>,
 }
 
 #[derive(Debug)]
@@ -33,6 +36,9 @@ struct State {
     mode: Mode,
     snapshot: Snapshot,
     children: Vec<f64>,
+    command: super::CensusCommand,
+    load_serial: u64,
+    load_tile: Option<crate::hle::rdp::TileDescriptor>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -44,6 +50,9 @@ impl Recorder {
             mode,
             snapshot: Snapshot::default(),
             children: Vec::new(),
+            command: Default::default(),
+            load_serial: 0,
+            load_tile: None,
         }))))
     }
 
@@ -69,6 +78,75 @@ impl Recorder {
         self.0
             .as_ref()
             .is_some_and(|state| state.borrow().mode == Mode::Trace)
+    }
+
+    pub fn censusing(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|state| state.borrow().mode == Mode::Census)
+    }
+
+    pub(crate) fn census_command(&self, pc: u64, words: [u32; 2], image: (u8, u8, u16, u64)) {
+        if self.censusing() {
+            self.0.as_ref().unwrap().borrow_mut().command =
+                super::CensusCommand { pc, words, image };
+        }
+    }
+
+    pub(crate) fn census_load_tile(
+        &self,
+        tile: &crate::hle::rdp::TileDescriptor,
+        image: (u8, u8, u16, u64),
+    ) {
+        if self.censusing() {
+            let mut state = self.0.as_ref().unwrap().borrow_mut();
+            state.load_tile = Some(tile.clone());
+            state.command.image = image;
+        }
+    }
+
+    pub(crate) fn census_load(&self, kind: &str, parameters: &[u64], source: &[u8]) -> u64 {
+        let mut state = self.0.as_ref().unwrap().borrow_mut();
+        state.load_serial += 1;
+        let load = super::CensusLoad {
+            id: state.load_serial,
+            command: state.command.clone(),
+            kind: kind.into(),
+            tile: state.load_tile.clone(),
+            parameters: parameters.into(),
+            source_hash: twox_hash::XxHash3_64::oneshot(source),
+            source: source.into(),
+        };
+        let id = load.id;
+        state.snapshot.census_loads.push(load);
+        id
+    }
+
+    pub(crate) fn census_framebuffer_shortcut(&self, pc: u64, address: u64) {
+        if self.censusing() {
+            let mut state = self.0.as_ref().unwrap().borrow_mut();
+            if let Some(attempt) = state
+                .snapshot
+                .census_attempts
+                .last_mut()
+                .filter(|attempt| attempt.pc == pc)
+            {
+                attempt.old_outcome = format!("FramebufferShortcut {{ address: {address} }}");
+                attempt.class = "intentional_exception".into();
+                attempt.physical.clear();
+                attempt.old_witness = None;
+            }
+        }
+    }
+
+    pub(crate) fn census_attempt(&self, attempt: super::CensusAttempt) {
+        self.0
+            .as_ref()
+            .unwrap()
+            .borrow_mut()
+            .snapshot
+            .census_attempts
+            .push(attempt);
     }
 
     pub fn count(&self, name: &'static str, value: u64) {
@@ -161,7 +239,7 @@ impl Recorder {
             .is_some_and(|state| match state.borrow().mode {
                 Mode::Detailed => true,
                 Mode::Coarse => matches!(name, "process_dl" | "begin_frame" | "presentation"),
-                Mode::Counters | Mode::Trace => false,
+                Mode::Counters | Mode::Trace | Mode::Census => false,
             });
         if active {
             self.0.as_ref().unwrap().borrow_mut().children.push(0.0);

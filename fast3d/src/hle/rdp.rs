@@ -341,6 +341,8 @@ fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let words = (lrs.saturating_sub(uls) >> (4 - siz as u32)) + 1; // RGBA16 siz=2
     let bytes = (words as usize) << 3; // 8 bytes/word (siz<=2)
     let tile = &cx.rdp.tiles[tile_idx];
+    #[cfg(any(test, feature = "profiling"))]
+    cx.rsp.profiling.census_load_tile(tile, cx.rdp.tex_image);
     let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
     if framebuffer_load(cx, addr, bytes as u32, bytes as u32, 1, |tmem| {
         tmem.write_block(&[], dst, line, dxt, words as usize, siz)
@@ -400,6 +402,8 @@ pub(crate) fn load_tile_typed<M: Rdram>(
     let texture_start = checked_span(addr, offset).map_err(|error| texture_error(cx, error))?;
     let src_len = (row_count as usize - 1) * bytes_per_row as usize + words_per_row as usize * 8;
     let tile = &cx.rdp.tiles[tile_idx];
+    #[cfg(any(test, feature = "profiling"))]
+    cx.rsp.profiling.census_load_tile(tile, cx.rdp.tex_image);
     let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
     if let Some(loaded) = framebuffer_load(
         cx,
@@ -464,6 +468,8 @@ fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     let offset = u64::from((uls << siz) >> 1) + u64::from(ult * stride);
     let addr = memory_try!(cx, Tlut, checked_span(base, offset));
     let tile = &cx.rdp.tiles[c.p1(24, 3) as usize];
+    #[cfg(any(test, feature = "profiling"))]
+    cx.rsp.profiling.census_load_tile(tile, cx.rdp.tex_image);
     let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
     let write = |tmem: &mut crate::hle::tmem::Tmem, bytes: &[u8]| {
         tmem.write_tlut_rows(

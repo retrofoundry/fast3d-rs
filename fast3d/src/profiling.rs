@@ -6,7 +6,11 @@ mod recorder;
 #[cfg(any(test, feature = "profiling"))]
 pub use recorder::*;
 #[cfg(any(test, feature = "profiling"))]
+mod census;
+#[cfg(any(test, feature = "profiling"))]
 mod requests;
+#[cfg(any(test, feature = "profiling"))]
+pub use census::*;
 #[cfg(any(test, feature = "profiling"))]
 pub use requests::*;
 
@@ -41,10 +45,15 @@ pub struct CpuInterpreter {
     rdp: crate::hle::rdp::Rdp,
     framebuffers: crate::hle::interp::FramebufferState,
     pub recorder: Recorder,
+    extent: Option<(u32, u32)>,
 }
 
 #[cfg(any(test, feature = "profiling"))]
 impl CpuInterpreter {
+    pub fn begin_frame(&mut self, width: u32, height: u32) {
+        self.extent = Some((width, height));
+    }
+
     /// Diagnostic interpretation only; this does not submit or present GPU work.
     pub fn process(
         &mut self,
@@ -83,15 +92,23 @@ impl CpuInterpreter {
             .count("geometry.indices", result.scene.indices.len() as u64);
         if result.commits_rdp() {
             self.rdp = result.rdp.clone();
-            self.framebuffers = result.framebuffers.clone();
+            if self.recorder.censusing() {
+                self.framebuffers.color_image_epoch = result.framebuffers.color_image_epoch;
+            } else {
+                self.framebuffers = result.framebuffers.clone();
+            }
             if let Some(inputs) = crate::render::inputs::RenderInputs::with_targets(
                 &result.scene,
-                (320, 240),
+                self.extent.unwrap_or((320, 240)),
                 [0, 0],
                 &self.framebuffers.targets,
             ) {
                 inputs.profile_targets(&self.recorder);
-                inputs.update_target_descriptors(&mut self.framebuffers.targets);
+                if self.recorder.censusing() {
+                    inputs.census_update_targets(&mut self.framebuffers.targets);
+                } else {
+                    inputs.update_target_descriptors(&mut self.framebuffers.targets);
+                }
             }
         }
         (result.summary(false), result.diags)

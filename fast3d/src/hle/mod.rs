@@ -48,3 +48,6 @@ mod s2dex_bg_tests;
 mod s2dex_tests;
 
 pub mod framebuffer_load;
+
+#[cfg(test)]
+mod tmem16_tests;

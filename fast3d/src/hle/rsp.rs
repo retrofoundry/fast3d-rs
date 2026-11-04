@@ -950,10 +950,17 @@ pub(crate) fn snapshot_run(
                 reason: crate::FramebufferAccess::TriangleTexture,
             },
         });
+        #[cfg(any(test, feature = "profiling"))]
+        crate::profiling::census_material(rdp, rsp, pc, None, diags.last().map(|diag| diag.kind));
         return None;
     }
 
-    validate_depth_alias(rdp, false, diags, pc)?;
+    let depth_valid = validate_depth_alias(rdp, false, diags, pc);
+    #[cfg(any(test, feature = "profiling"))]
+    if depth_valid.is_none() {
+        crate::profiling::census_material(rdp, rsp, pc, None, diags.last().map(|diag| diag.kind));
+    }
+    depth_valid?;
     // --- Material ---
     let material_index = if rsp.material_dirty {
         // Rebuild: build_material borrows rdp + rsp immutably; ? early-exits (None) on failure.
@@ -1111,7 +1118,18 @@ pub(crate) fn snapshot_rect_run(
     scene: &mut Scene,
     pc: u64,
 ) -> Option<(u32, u32)> {
-    validate_depth_alias(rdp, false, diags, pc)?;
+    let depth_valid = validate_depth_alias(rdp, false, diags, pc);
+    #[cfg(any(test, feature = "profiling"))]
+    if depth_valid.is_none() {
+        crate::profiling::census_material(
+            rdp,
+            rsp,
+            pc,
+            Some(tile),
+            diags.last().map(|diag| diag.kind),
+        );
+    }
+    depth_valid?;
     let m = crate::hle::combiner::build_rect_material(rdp, rsp, tile, diags, pc)?;
     let material_index = match scene.materials.last() {
         Some(last) if last.matches(&m, &rsp.profiling) => (scene.materials.len() - 1) as u32,

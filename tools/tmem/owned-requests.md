@@ -8,7 +8,7 @@ retain their supplied bytes; framebuffer views retain their ordered descriptors.
 
 Renderer preparation sends supported TMEM requests to compute and reuses resident
 images by Fast3dV1 identity with exact witness equality. The request CPU decoder is
-compiled only for tests. Synthetic RGBA sources upload their supplied pixels.
+compiled for tests and offline profiling. Synthetic RGBA sources upload their supplied pixels.
 There is no runtime executor selector or CPU fallback for a TMEM request.
 
 TMEM owns its bytes in an Arc. Request construction shares that storage without
