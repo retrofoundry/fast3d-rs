@@ -8,6 +8,34 @@ pub(super) fn vectors() -> Vec<Vector> {
 }
 
 pub(super) fn verify(device: &wgpu::Device, vectors: &[Vector], decoded: &[Vec<u8>]) {
+    #[cfg(not(target_arch = "wasm32"))]
+    for (vector, actual) in vectors.iter().zip(decoded) {
+        export::write_row(
+            "FAST3D_GPU_DECODE_OUTPUT",
+            &vector.name,
+            "decode",
+            "gpu-compute",
+            "none",
+            actual,
+            vector.request.extent[0],
+            actual.len() as u32 / (vector.request.extent[0] * 4),
+            &vector.request.canonical(),
+            Some(device),
+        );
+        if let Some(directory) = std::env::var_os("FAST3D_GPU_DECODE_OUTPUT") {
+            std::fs::write(
+                std::path::Path::new(&directory).join(format!("{}.expected.bin", vector.name)),
+                &vector.expected,
+            )
+            .unwrap();
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = device;
+    assert_decoded(vectors, decoded);
+}
+
+pub(super) fn assert_decoded(vectors: &[Vector], decoded: &[Vec<u8>]) {
     assert_eq!(decoded.len(), vectors.len());
     for (vector, actual) in vectors.iter().zip(decoded) {
         assert_eq!(
@@ -16,30 +44,6 @@ pub(super) fn verify(device: &wgpu::Device, vectors: &[Vector], decoded: &[Vec<u
             "{}: CPU oracle",
             vector.name
         );
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            export::write_row(
-                "FAST3D_GPU_DECODE_OUTPUT",
-                &vector.name,
-                "decode",
-                "gpu-compute",
-                "none",
-                actual,
-                vector.request.extent[0],
-                vector.request.extent[1],
-                &vector.request.canonical(),
-                Some(device),
-            );
-            if let Some(directory) = std::env::var_os("FAST3D_GPU_DECODE_OUTPUT") {
-                std::fs::write(
-                    std::path::Path::new(&directory).join(format!("{}.expected.bin", vector.name)),
-                    &vector.expected,
-                )
-                .unwrap();
-            }
-        }
-        #[cfg(target_arch = "wasm32")]
-        let _ = device;
         assert_eq!(
             actual.len(),
             vector.expected.len(),

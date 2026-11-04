@@ -293,5 +293,5 @@ fn tlut_truncated_source_rejects_task() {
     let complete = crate::hle::interpret_rdram(&bytes, 0);
     assert!(complete.diags.is_empty(), "{:?}", complete.diags);
     assert_eq!(complete.rdp.env, [255, 0, 0, 255]);
-    assert_eq!(&complete.rdp.tmem_bank.palette()[24..32], &[0xff; 8]);
+    assert_eq!(&complete.rdp.tmem_bank.palette()[96..104], &[0xff; 8]);
 }

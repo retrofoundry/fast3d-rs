@@ -109,15 +109,15 @@ fn zero_loads_are_written_even_when_bank_bytes_do_not_change() {
     let mut rdp = Rdp::default();
     let tile = i8(4, 1);
     let before = *rdp.tmem_bank.encoded_bank();
-    assert!(!rdp.tmem_bank.tile_has_load(&tile));
+    assert!(!rdp.tmem_bank.tile_has_load(&tile, 0));
     rdp.tmem_bank.write_block(&[0; 8], 0, 0, 0, 1, 1);
     assert_eq!(rdp.tmem_bank.encoded_bank(), &before);
-    assert!(rdp.tmem_bank.tile_has_load(&tile));
+    assert!(rdp.tmem_bank.tile_has_load(&tile, 0));
     let untouched = TileDescriptor {
         tmem_addr: 1,
         ..tile.clone()
     };
-    assert!(!rdp.tmem_bank.tile_has_load(&untouched));
+    assert!(!rdp.tmem_bank.tile_has_load(&untouched, 0));
     let binding = prepare(&rdp, &tile, 0, &Recorder::default()).unwrap();
     assert_eq!(binding.source.decode().as_ref(), [[0; 4]; 4].concat());
 }
@@ -208,16 +208,22 @@ fn partial_overwrite_keeps_stale_rows_and_initial_zeroes() {
         rdp.tmem_bank.sample_tile(&tile, 0).unwrap(),
         PARTIAL.concat()
     );
-    assert!(rdp.tmem_bank.tile_has_load(&TileDescriptor {
-        height: 1,
-        tmem_addr: 1,
-        ..tile.clone()
-    }));
-    assert!(!rdp.tmem_bank.tile_has_load(&TileDescriptor {
-        height: 1,
-        tmem_addr: 3,
-        ..tile
-    }));
+    assert!(rdp.tmem_bank.tile_has_load(
+        &TileDescriptor {
+            height: 1,
+            tmem_addr: 1,
+            ..tile.clone()
+        },
+        0
+    ));
+    assert!(!rdp.tmem_bank.tile_has_load(
+        &TileDescriptor {
+            height: 1,
+            tmem_addr: 3,
+            ..tile
+        },
+        0
+    ));
 }
 
 #[test]
@@ -661,7 +667,7 @@ fn s2dex_generated_zero_loads_reach_the_encoded_texture_boundary() {
     );
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     assert_eq!(result.termination, WalkTermination::End);
-    assert!(result.rdp.tmem_bank.tile_has_load(&result.rdp.tiles[0]));
+    assert!(result.rdp.tmem_bank.tile_has_load(&result.rdp.tiles[0], 0));
     assert_eq!(result.rdp.tiles[0].masks, 15);
     assert!(!result.scene.materials.is_empty());
     for material in &result.scene.materials {

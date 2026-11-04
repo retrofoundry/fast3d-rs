@@ -97,12 +97,14 @@ fn unsupported_format_emits_once_at_draw() {
 }
 
 #[test]
-fn unsupported_format_never_decodes_rgba16() {
+fn unsupported_format_never_decodes_rgba16_with_angrylion_ci16_and_ci32_admitted() {
     let supported = [
         (0, 2),
         (0, 3),
         (2, 0),
         (2, 1),
+        (2, 2),
+        (2, 3),
         (3, 0),
         (3, 1),
         (3, 2),
@@ -138,7 +140,7 @@ fn unsupported_format_never_decodes_rgba16() {
             assert_eq!(Tmem::default().sample_tile(&empty, 0), Err(error));
         }
     }
-    assert_eq!(encoded_unsupported, 23);
+    assert_eq!(encoded_unsupported, 21);
     assert_eq!(
         FormatInfo { fmt: 0, siz: 3 }.decode(&[0xf8, 1], 1, 1, &[], 0, 0),
         Err(DiagKind::UnsupportedTextureFormat { fmt: 0, siz: 3 })

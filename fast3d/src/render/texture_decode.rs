@@ -48,8 +48,8 @@ impl DecodeParams {
         Self {
             words: [
                 [
-                    recipe.output[0],
-                    recipe.output[1],
+                    recipe.allocation_extent()[0],
+                    recipe.allocation_extent()[1],
                     recipe.logical[0],
                     recipe.logical[1],
                 ],
@@ -63,7 +63,11 @@ impl DecodeParams {
                     u32::from(recipe.line) * 8,
                     recipe.palette.into(),
                     recipe.tlut.into(),
-                    0,
+                    if recipe.palette_lanes {
+                        recipe.output[1]
+                    } else {
+                        0
+                    },
                 ],
                 [0; 4],
             ],
@@ -202,7 +206,7 @@ impl DecodePipeline {
         profiling.count("tmem.decode_uniform_upload_calls", 1);
         profiling.count("tmem.decode_input_upload_bytes", input.len() as u64);
         profiling.count("tmem.decode_uniform_upload_bytes", PARAM_BYTES);
-        let extent = request.recipe().output;
+        let extent = request.recipe().allocation_extent();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("texture-decode-output"),
             size: wgpu::Extent3d {

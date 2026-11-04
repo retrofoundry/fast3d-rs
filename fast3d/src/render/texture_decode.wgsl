@@ -50,19 +50,27 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let representation = params.recipe.x;
     let format = params.recipe.y;
     let size = params.recipe.z;
+    let tlut = params.addressing.z;
+    var y = id.y;
+    var lane = 0u;
+    if params.addressing.w != 0u {
+        y = id.y % params.addressing.w;
+        lane = id.y / params.addressing.w;
+    }
     var parity = id.x & 1u;
-    var odd_swap = (id.y & 1u) * 4u;
-    var relative = id.y * params.addressing.x + ((id.x << min(size, 2u)) >> 1u);
+    var odd_swap = (y & 1u) * 4u;
+    let column = select((id.x << min(size, 2u)) >> 1u, id.x, format == 1u && tlut >= 2u);
+    var relative = (y & 255u) * params.addressing.x + column;
     if representation == 1u {
         relative = id.x;
-        parity = id.y & 1u;
-        odd_swap = (id.y >> 1u) * 4u;
+        parity = y & 1u;
+        odd_swap = (y >> 1u) * 4u;
     }
-    let mask = select(4095u, 2047u, format == 2u || size == 3u);
+    let mask = select(4095u, 2047u, tlut >= 2u || (format == 0u && size == 3u));
     let address0 = (params.recipe.w + (relative ^ odd_swap)) & mask;
     let address1 = (params.recipe.w + ((relative + 1u) ^ odd_swap)) & mask;
     let pointer = framebuffer_pointer(address0);
-    if size == 2u && pointer != 0u && ((pointer - 1u) & 1u) == 0u && framebuffer_pointer(address1) == pointer + 1u {
+    if tlut < 2u && size == 2u && pointer != 0u && ((pointer - 1u) & 1u) == 0u && framebuffer_pointer(address1) == pointer + 1u {
         let color = framebuffer_color(pointer);
         if format == 0u {
             textureStore(output, vec2<i32>(id.xy), color);
@@ -75,10 +83,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     let first = byte_at(address0);
     var second = 0u;
-    if size >= 2u {
+    if size >= 2u && tlut < 2u {
         second = byte_at(address1);
     }
-    let nibble = (first >> ((1u - parity) * 4u)) & 15u;
+    let nibble = (first >> select((1u - parity) * 4u, 4u, format == 1u && tlut >= 2u)) & 15u;
+    if tlut >= 2u {
+        let index = select(first, (params.addressing.y << 4u) | nibble, size == 0u);
+        let palette = 2048u + index * 8u + lane * 2u;
+        let hi = byte_at(palette);
+        let lo = byte_at(palette + 1u);
+        var color = vec4<u32>(hi, hi, hi, lo);
+        if tlut == 2u { color = rgba16((hi << 8u) | lo); }
+        textureStore(output, vec2<i32>(id.xy), vec4<f32>(color) / 255.0);
+        return;
+    }
     var color = vec4<u32>(0u);
     switch format * 4u + size {
         case 2u: {
@@ -89,20 +107,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let alpha = byte_at(address1 | 2048u);
             color = vec4<u32>(first, second, blue, alpha);
         }
-        case 8u, 9u: {
-            var index = first;
-            if size == 0u {
-                index = params.addressing.y * 16u + nibble;
-            }
-            let palette = (2048u + index * 8u) & 4095u;
-            let hi = byte_at(palette);
-            let lo = byte_at(palette + 1u);
-            if params.addressing.z == 2u {
-                color = rgba16((hi << 8u) | lo);
-            } else if params.addressing.z == 3u {
-                color = vec4<u32>(hi, hi, hi, lo);
-            }
-        }
+        case 8u: { color = vec4<u32>((params.addressing.y << 4u) | nibble); }
+        case 9u: { color = vec4<u32>(first); }
+        case 10u, 11u: { color = vec4<u32>(first, second, first, second); }
         case 12u: {
             let intensity = nibble & 14u;
             let expanded = (intensity << 4u) | (intensity << 1u) | (intensity >> 2u);

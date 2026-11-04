@@ -156,10 +156,14 @@ fn tmem_tiles_and_registers_survive_without_reloading_guest_memory() {
         expected.depth_changed = false;
         assert_eq!(expected.load_via_tile, via_tile);
         assert!(expected.texture_loaded);
-        assert_eq!(
-            &expected.tmem_bank.palette()[..128],
-            [0x07, 0xc1].repeat(64)
-        );
+        // Angrylion's RGBA16 TLUT load spaces these sixteen entries 32 bytes apart.
+        for slot in expected.tmem_bank.palette()[..512].as_chunks::<32>().0 {
+            assert_eq!(&slot[..8], [0x07, 0xc1].repeat(4));
+            assert_eq!(&slot[8..], [0; 24]);
+        }
+        assert!(expected.tmem_bank.palette()[512..]
+            .iter()
+            .all(|byte| *byte == 0));
         assert_eq!(expected.prim, [0x12, 0x34, 0x56, 0x78]);
         assert_eq!(expected.convert, [1, -2, 3, -4, 5, -6]);
         let draw = hw(

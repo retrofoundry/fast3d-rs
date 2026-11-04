@@ -63,7 +63,7 @@ fn unhex(text: &str) -> Vec<u8> {
 }
 
 #[test]
-fn production_preimages_match_every_frozen_vector() {
+fn angrylion_preserves_unaffected_frozen_streams_and_separates_changed_semantics() {
     let vectors: serde_json::Value =
         serde_json::from_str(include_str!("../../../tools/tmem/vectors.json")).unwrap();
     for row in vectors["vectors"].as_array().unwrap() {
@@ -81,6 +81,7 @@ fn production_preimages_match_every_frozen_vector() {
             continue;
         }
         let recipe = DecodeRecipe {
+            palette_lanes: false,
             representation: [Representation::Tile, Representation::Lookup4096x4]
                 [n("representation") as usize],
             output: extent("output"),
@@ -102,17 +103,25 @@ fn production_preimages_match_every_frozen_vector() {
                 bank[usize::from(u16::from_le_bytes([pair[0], pair[1]]))] = pair[2];
             }
         }
+        if fmt == 2 && recipe.tlut >= 2 {
+            for slot in bank[2048..].as_chunks_mut::<8>().0 {
+                let pair = [slot[0], slot[1]];
+                for lane in slot[2..].as_chunks_mut::<2>().0 {
+                    lane.copy_from_slice(&pair);
+                }
+            }
+        }
         let bytes = serialize(&recipe, &bank);
-        assert_eq!(
-            bytes,
-            unhex(row["canonical_preimage_hex"].as_str().unwrap()),
-            "{}",
-            row["name"]
-        );
-        assert_eq!(
-            format!("{:016x}", twox_hash::XxHash3_64::oneshot(&bytes)),
-            row["xxh3_64"].as_str().unwrap()
-        );
+        let frozen = unhex(row["canonical_preimage_hex"].as_str().unwrap());
+        if fmt == 2 && recipe.tlut < 2 {
+            assert_ne!(bytes, frozen, "{}", row["name"]);
+        } else {
+            assert_eq!(bytes, frozen, "{}", row["name"]);
+            assert_eq!(
+                format!("{:016x}", twox_hash::XxHash3_64::oneshot(&bytes)),
+                row["xxh3_64"].as_str().unwrap()
+            );
+        }
         let rdp = Rdp {
             tmem_bank: super::super::tmem::Tmem::from_profile(&crate::profiling::Bank {
                 bytes: bank.to_vec(),
@@ -125,7 +134,11 @@ fn production_preimages_match_every_frozen_vector() {
             tile.masks = 10;
         }
         let binding = prepare(&rdp, &tile, n("tlut") as u8, &Recorder::default()).unwrap();
-        assert_eq!(request(&binding).witness(), bytes);
+        if fmt != 2 && n("tlut") >= 2 {
+            assert_ne!(request(&binding).witness(), bytes);
+        } else {
+            assert_eq!(request(&binding).witness(), bytes);
+        }
     }
 }
 
@@ -148,7 +161,8 @@ fn unused_identity_stays_lazy_across_frames_recipes_and_equal_reloads() {
     tile.shifts = 2;
     tile.cms = 2;
     tile.palette = 15;
-    let binding = prepare(&rdp, &tile, 3, &profiler).unwrap();
+    // Angrylion enables TLUT for every format in modes 2/3; mode 1 stays disabled.
+    let binding = prepare(&rdp, &tile, 1, &profiler).unwrap();
     assert_eq!(request(&first).recipe(), request(&binding).recipe());
     assert_ne!(first.sampling, binding.sampling);
     assert_work("sampling-only", &profiler.drain());
@@ -603,13 +617,25 @@ fn physical_footprints_keep_retained_bytes_and_ignore_unrelated_mutations_even_o
             line: 1,
             ..Default::default()
         };
-        let first = prepare(&rdp, &tile, 3, &Recorder::default()).unwrap();
+        let first = prepare(
+            &rdp,
+            &tile,
+            if fmt == 2 { 3 } else { 0 },
+            &Recorder::default(),
+        )
+        .unwrap();
         let pixels = first.source.decode().into_owned();
         let witness = request(&first).witness().to_vec();
         let mut bank = rdp.tmem_bank.profile_bank();
         bank.bytes[address] = 0x91;
         rdp.tmem_bank = super::super::tmem::Tmem::from_profile(&bank);
-        let mut second = prepare(&rdp, &tile, 3, &Recorder::default()).unwrap();
+        let mut second = prepare(
+            &rdp,
+            &tile,
+            if fmt == 2 { 3 } else { 0 },
+            &Recorder::default(),
+        )
+        .unwrap();
         drop(rdp);
         assert_eq!(first.source.decode().as_ref(), pixels);
         assert_eq!(request(&first).witness(), witness);
@@ -634,4 +660,219 @@ fn physical_footprints_keep_retained_bytes_and_ignore_unrelated_mutations_even_o
             !changes
         );
     }
+}
+
+#[test]
+fn angrylion_tlut_state_lanes_and_full_bank_indices_have_mutation_witnesses() {
+    use super::super::tmem::Tmem;
+    let tile = TileDescriptor {
+        fmt: 4,
+        siz: 0,
+        width: 1,
+        height: 1,
+        palette: 10,
+        ..Default::default()
+    };
+    let mut bank = crate::profiling::Bank {
+        bytes: vec![0; 4096],
+    };
+    bank.bytes[0] = 0x12;
+    for slot in bank.bytes[2048..].as_chunks_mut::<8>().0 {
+        slot.copy_from_slice(&[0x10, 255, 0x10, 255, 0x10, 255, 0x10, 255]);
+    }
+    let make = |bank: &crate::profiling::Bank, tile: &TileDescriptor, tlut| {
+        let rdp = Rdp {
+            tmem_bank: Tmem::from_profile(bank),
+            ..Default::default()
+        };
+        prepare(&rdp, tile, tlut, &Recorder::default()).unwrap()
+    };
+    let original = make(&bank, &tile, 3);
+    assert_eq!(original.sampling.allocation_extent(), [1, 1]);
+    assert_ne!(
+        request(&original).key(),
+        request(&make(&bank, &tile, 0)).key()
+    );
+    assert_ne!(
+        request(&original).key(),
+        request(&make(&bank, &tile, 2)).key()
+    );
+    assert_ne!(
+        request(&original).key(),
+        request(&make(
+            &bank,
+            &TileDescriptor {
+                palette: 9,
+                ..tile.clone()
+            },
+            3
+        ))
+        .key()
+    );
+    let original_pixels = original.source.decode().into_owned();
+    for address in 2048 + 0xa1 * 8..2056 + 0xa1 * 8 {
+        let mut changed = bank.clone();
+        changed.bytes[address] ^= 0x80;
+        let next = make(&changed, &tile, 3);
+        assert_ne!(
+            request(&original).key(),
+            request(&next).key(),
+            "lane byte {address}"
+        );
+        assert_ne!(request(&original).witness(), request(&next).witness());
+        assert!(!request(&original).matches(request(&next), &Recorder::default()));
+    }
+    bank.bytes[2048 + 0xa2 * 8 + 2] ^= 0x80;
+    assert_eq!(
+        request(&original).key(),
+        request(&make(&bank, &tile, 3)).key()
+    );
+    assert_eq!(original.source.decode().as_ref(), original_pixels);
+    let ci = TileDescriptor {
+        fmt: 2,
+        siz: 1,
+        tmem_addr: 256,
+        ..tile.clone()
+    };
+    let off = make(&bank, &ci, 0);
+    bank.bytes[0] ^= 0x80;
+    assert_eq!(request(&off).key(), request(&make(&bank, &ci, 0)).key());
+    bank.bytes[2048] ^= 0x80;
+    assert_ne!(request(&off).key(), request(&make(&bank, &ci, 0)).key());
+}
+
+#[test]
+fn angrylion_tlut_halfword_indices_ignore_low_bytes_and_rgba32_high_bank() {
+    use super::super::tmem::Tmem;
+    for fmt in [0, 2, 3, 4, 5, 6, 7] {
+        for siz in [2, 3] {
+            let tile = TileDescriptor {
+                fmt,
+                siz,
+                width: 1,
+                height: 1,
+                ..Default::default()
+            };
+            let mut bank = crate::profiling::Bank {
+                bytes: vec![0; 4096],
+            };
+            bank.bytes[0] = 12;
+            let first = prepare(
+                &Rdp {
+                    tmem_bank: Tmem::from_profile(&bank),
+                    ..Default::default()
+                },
+                &tile,
+                3,
+                &Recorder::default(),
+            )
+            .unwrap();
+            bank.bytes[1] = 255;
+            bank.bytes[2048] = 255;
+            let next = prepare(
+                &Rdp {
+                    tmem_bank: Tmem::from_profile(&bank),
+                    ..Default::default()
+                },
+                &tile,
+                3,
+                &Recorder::default(),
+            )
+            .unwrap();
+            assert_eq!(request(&first).key(), request(&next).key());
+            assert_eq!(first.source.decode(), next.source.decode());
+        }
+    }
+}
+
+#[test]
+fn angrylion_routing_checks_yuv_neighbors() {
+    let diagnostic = crate::Diagnostic {
+        at: 0x40,
+        kind: DiagKind::UnsupportedFramebufferAccess {
+            address: 0,
+            reason: crate::FramebufferAccess::Reinterpretation,
+        },
+    };
+    let mut rdp = Rdp::default();
+    rdp.tmem_bank
+        .reject_load(diagnostic, |tmem| tmem.write_tlut(&[], 1, 1));
+    let yuv = TileDescriptor {
+        fmt: 1,
+        siz: 1,
+        width: 8,
+        height: 1,
+        masks: 3,
+        ..Default::default()
+    };
+    assert_eq!(
+        prepare(&rdp, &yuv, 3, &Recorder::default()).unwrap_err(),
+        diagnostic.kind
+    );
+}
+
+#[test]
+fn replicated_loadtlut_skips_index_probes_until_a_palette_write_invalidates_it() {
+    let (mut rdp, mut tile, profiling) = state();
+    tile.fmt = 2;
+    rdp.tmem_bank.write_tile(&[0; 8], 0, 0, 1, 1, 8, 1);
+    rdp.tmem_bank.write_tlut(&[0x10, 255], 1, 256);
+    profiling.drain();
+    let first = prepare(&rdp, &tile, 3, &profiling).unwrap();
+    assert_eq!(first.sampling.allocation_extent(), [1, 1]);
+    let counts = profiling.drain();
+    assert_eq!(count(&counts, "palette_lane_slot_checks"), 256);
+    assert_eq!(count(&counts, "palette_lane_index_reads"), 0);
+    prepare(&rdp, &tile, 3, &profiling).unwrap();
+    let counts = profiling.drain();
+    assert_eq!(count(&counts, "palette_lane_slot_checks"), 0);
+    assert_eq!(count(&counts, "palette_lane_index_reads"), 0);
+    rdp.tmem_bank.write_tile(
+        &[0x10, 255, 0x30, 255, 0x50, 255, 0x70, 255],
+        256,
+        0,
+        1,
+        1,
+        8,
+        1,
+    );
+    let changed = prepare(&rdp, &tile, 3, &profiling).unwrap();
+    assert_eq!(changed.sampling.allocation_extent(), [1, 4]);
+    let counts = profiling.drain();
+    assert_eq!(count(&counts, "palette_lane_slot_checks"), 256);
+    assert_eq!(count(&counts, "palette_lane_index_reads"), 1);
+    assert_eq!(first.source.decode().as_ref(), [0x10, 0x10, 0x10, 255]);
+}
+
+#[test]
+fn angrylion_encoding_flags_separate_old_meanings_of_the_same_bank() {
+    let (rdp, mut tile, profiling) = state();
+    tile.fmt = 2;
+    let off = prepare(&rdp, &tile, 0, &profiling).unwrap();
+    let witness = request(&off).witness();
+    assert_eq!(witness[19], 1);
+    let mut old = witness.to_vec();
+    old[19] = 0;
+    assert_ne!(
+        request(&off).key().xxh3_64,
+        twox_hash::XxHash3_64::oneshot(&old)
+    );
+
+    tile.fmt = 4;
+    tile.height = 257;
+    let tall = prepare(&rdp, &tile, 0, &profiling).unwrap();
+    assert_eq!(request(&tall).witness()[19], 4);
+    tile.line = 2;
+    let already_wrapped = prepare(&rdp, &tile, 0, &profiling).unwrap();
+    assert_eq!(request(&already_wrapped).witness()[19], 0);
+
+    let original = request(&off);
+    let mut recipe = original.recipe().clone();
+    recipe.tlut = 3;
+    let one = EncodedTextureRequest::from_test_parts(original.input().clone(), recipe.clone());
+    recipe.palette_lanes = true;
+    let four = EncodedTextureRequest::from_test_parts(original.input().clone(), recipe);
+    assert_ne!(one.key(), four.key());
+    assert_eq!(one.witness()[19], 0);
+    assert_eq!(four.witness()[19], 2);
 }

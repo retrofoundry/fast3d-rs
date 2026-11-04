@@ -43,6 +43,7 @@ pub struct DecodeRecipe {
     pub line: u16,
     pub palette: u8,
     pub tlut: u8,
+    pub palette_lanes: bool,
 }
 
 impl DecodeRecipe {
@@ -65,13 +66,31 @@ impl DecodeRecipe {
             siz: tile.siz,
             base: tile.tmem_addr,
             line: tile.line,
-            palette: if tile.fmt == 2 && tile.siz == 0 {
+            palette: if (tile.fmt == 2 || tlut >= 2) && tile.siz == 0 {
                 tile.palette
             } else {
                 0
             },
-            tlut: if tile.fmt == 2 { tlut } else { 0 },
+            tlut: if tile.fmt == 2 || tlut >= 2 { tlut } else { 0 },
+            palette_lanes: false,
         }
+    }
+    pub(crate) fn allocation_extent(&self) -> [u32; 2] {
+        [
+            self.output[0],
+            self.output[1] * if self.palette_lanes { 4 } else { 1 },
+        ]
+    }
+
+    fn semantic_flags(&self) -> u8 {
+        u8::from(self.fmt == 2 && self.tlut < 2)
+            | (u8::from(self.palette_lanes) << 1)
+            | (u8::from(
+                self.logical[1] > 256
+                    && self.line & 1 != 0
+                    && self.tlut < 2
+                    && !(self.fmt == 0 && self.siz == 3),
+            ) << 2)
     }
 }
 
@@ -186,6 +205,12 @@ impl EncodedTextureRequest {
             TileSampling::from_tile(tile, request.tlut),
         );
         recipe.output = request.extent;
+        recipe.palette_lanes = serialization::palette_lanes(
+            &recipe,
+            bank,
+            &super::tmem::Tmem::palette_nonreplicated_bytes(bank),
+            &Recorder::default(),
+        );
         let input = EncodedInput::Tmem(Arc::new(*bank));
         Ok(Self {
             input,
@@ -220,16 +245,27 @@ impl EncodedTextureRequest {
 
     #[cfg(any(test, feature = "profiling"))]
     pub fn decode(&self) -> Vec<u8> {
+        self.decode_observed(&mut |_| {})
+    }
+
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) fn decode_observed(&self, reads: &mut impl FnMut(usize)) -> Vec<u8> {
         let tile = self.recipe().tile();
-        let result = match self.input() {
-            EncodedInput::Tmem(bank) => match self.recipe.representation {
-                Representation::Tile => BankDecoder::new(bank).sample_tile(&tile, self.recipe.tlut),
-                Representation::Lookup4096x4 => {
-                    BankDecoder::new(bank).sampling_lookup(&tile, self.recipe.tlut)
+        let EncodedInput::Tmem(bank) = self.input();
+        let decoder = BankDecoder::new(bank);
+        let mut out = Vec::new();
+        for lane in 0..if self.recipe.palette_lanes { 4 } else { 1 } {
+            let result = match self.recipe.representation {
+                Representation::Tile => {
+                    decoder.sample_tile_lane(&tile, self.recipe.tlut, lane, reads)
                 }
-            },
-        };
-        result.expect("owned texture requests are validated before construction")
+                Representation::Lookup4096x4 => {
+                    decoder.sampling_lookup_lane(&tile, self.recipe.tlut, lane, reads)
+                }
+            };
+            out.extend(result.expect("owned texture requests are validated before construction"));
+        }
+        out
     }
 }
 
@@ -293,12 +329,17 @@ pub(crate) fn prepare(
     profiling: &Recorder,
 ) -> Result<TextureBindingInput, DiagKind> {
     let _span = profiling.span("texture_request");
-    if let Some(diagnostic) = rdp.tmem_bank.rejection(tile) {
+    if let Some(diagnostic) = rdp.tmem_bank.rejection(tile, tlut) {
         return Err(diagnostic.kind);
     }
-    let sampling = TileSampling::from_tile(tile, tlut);
-    let framebuffer = rdp.tmem_bank.has_framebuffer(tile);
-    if framebuffer && !matches!((tile.fmt, tile.siz, tlut), (0 | 3, 2, _) | (2, 1, 2 | 3)) {
+    let mut sampling = TileSampling::from_tile(tile, tlut);
+    let framebuffer = rdp.tmem_bank.has_framebuffer(tile, tlut);
+    if framebuffer
+        && !matches!(
+            (tile.fmt, tile.siz, tlut),
+            (0 | 3, 2, 0 | 1) | (2, 1, 2 | 3)
+        )
+    {
         return Err(DiagKind::UnsupportedFramebufferAccess {
             address: rdp.tex_image.3,
             reason: crate::FramebufferAccess::Reinterpretation,
@@ -308,13 +349,27 @@ pub(crate) fn prepare(
         fmt: tile.fmt,
         siz: tile.siz,
     }
-    .validate()?;
+    .validate_tlut(tlut)?;
     let representation = if sampling.image[2] == 1 {
         Representation::Lookup4096x4
     } else {
         Representation::Tile
     };
-    let recipe = DecodeRecipe::new(tile, tlut, representation, sampling);
+    let mut recipe = DecodeRecipe::new(tile, tlut, representation, sampling);
+    if tlut >= 2 {
+        let nonreplicated = rdp.tmem_bank.palette_nonreplicated();
+        recipe.palette_lanes = (framebuffer && nonreplicated.iter().any(|&bits| bits != 0))
+            || serialization::palette_lanes(
+                &recipe,
+                &rdp.tmem_bank.share_bank(),
+                nonreplicated,
+                profiling,
+            );
+    }
+    if recipe.palette_lanes {
+        sampling.palette[2] = recipe.output[1];
+    }
+    sampling.palette[3] = (rdp.other_mode_h >> 10) & 15;
     let input = EncodedInput::Tmem(rdp.tmem_bank.share_bank());
     let request = EncodedTextureRequest {
         input,
@@ -324,7 +379,7 @@ pub(crate) fn prepare(
     let source = if framebuffer {
         TextureSource::Framebuffer(Arc::new(super::framebuffer_load::FramebufferTexture {
             encoded: request,
-            tags: rdp.tmem_bank.framebuffer_tags_for(tile),
+            tags: rdp.tmem_bank.framebuffer_tags_for(tile, tlut),
         }))
     } else {
         TextureSource::Encoded(Arc::new(request))
