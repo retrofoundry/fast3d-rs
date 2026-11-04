@@ -643,7 +643,7 @@ impl Rsp {
                 scene.modify_flags[gi] |= 1;
             }
             0x1C => {
-                scene.modify_screen[gi][2] = value as f32 / 65536.0;
+                scene.modify_screen[gi][2] = value as f32 / (65536.0 * DEPTH_RANGE);
                 self.screen_z[slot] = self.screen_z[slot].map(|_| f64::from(value) / 65536.0);
                 scene.modify_flags[gi] |= 2;
             }

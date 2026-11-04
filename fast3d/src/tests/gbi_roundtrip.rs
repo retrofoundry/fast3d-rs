@@ -340,7 +340,10 @@ fn modifyvtx_four_attributes() {
                 assert_eq!(scene.modify_flags[4..], [2, 2]);
                 assert_eq!(
                     scene.modify_screen[4..],
-                    [[0.0, 0.0, 1023.5, 0.0], [0.0, 0.0, 32768.25, 0.0]]
+                    [
+                        [0.0, 0.0, 1023.5 / 1024.0, 0.0],
+                        [0.0, 0.0, 32768.25 / 1024.0, 0.0]
+                    ]
                 );
             }
             _ => unreachable!(),
@@ -403,10 +406,10 @@ fn modifyvtx_preserves_previous_screen_changes() {
     assert_eq!(scene.modify_flags[4..], [1, 3, 3, 3, 3, 3]);
     assert_eq!(scene.modify_screen[4], [32.25, 64.5, 0.0, 0.0]);
     for i in 5..=7 {
-        assert_eq!(scene.modify_screen[i], [32.25, 64.5, 512.5, 0.0]);
+        assert_eq!(scene.modify_screen[i], [32.25, 64.5, 512.5 / 1024.0, 0.0]);
     }
-    assert_eq!(scene.modify_screen[8], [64.0, 128.0, 512.5, 0.0]);
-    assert_eq!(scene.modify_screen[9], [64.0, 128.0, 256.0, 0.0]);
+    assert_eq!(scene.modify_screen[8], [64.0, 128.0, 512.5 / 1024.0, 0.0]);
+    assert_eq!(scene.modify_screen[9], [64.0, 128.0, 256.0 / 1024.0, 0.0]);
     for i in 6..=9 {
         assert_eq!(scene.cn[i], 0xddcc_bbaa);
     }

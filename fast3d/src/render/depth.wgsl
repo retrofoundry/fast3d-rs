@@ -15,7 +15,7 @@ fn fill_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f3
     let exponent = packed >> 13u;
     let mantissa = (packed & 0x1ffcu) >> 2u;
     let fixed = (mantissa << (6u - min(6u, exponent))) + 0x40000u - (0x40000u >> exponent);
-    return f32(fixed) / 262143.0;
+    return f32(fixed) / 262144.0;
 }
 
 @fragment

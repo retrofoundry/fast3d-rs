@@ -312,6 +312,7 @@ impl SceneRenderer {
         clear_policy: ClearPolicy,
     ) -> Option<TargetId> {
         self.diagnostics.clear();
+        self.depth_writes.clear();
         self.dropped_runs = 0;
         let preparation = self.profiling.span("render_inputs");
         let inputs = RenderInputs::with_targets(
@@ -415,6 +416,25 @@ impl SceneRenderer {
                     },
                     clear_policy,
                 );
+            }
+            for operation in &target.operations {
+                let writes_depth = match &operation.draw {
+                    DrawInputs::DepthFill { .. } => true,
+                    DrawInputs::Tris { mode, .. } => mode.z_test || mode.z_write || mode.read_depth,
+                    _ => false,
+                };
+                let (_, y, width, height) = operation.scissor;
+                if let Some(TargetId::Guest(address)) = depth_id {
+                    if writes_depth && width != 0 && height != 0 {
+                        self.depth_writes
+                            .entry(address)
+                            .and_modify(|rows| {
+                                rows.start = rows.start.min(y);
+                                rows.end = rows.end.max(y + height);
+                            })
+                            .or_insert(y..y + height);
+                    }
+                }
             }
             if target.depth_clear {
                 let depth = &self.depthbuffers[&depth_id.unwrap()];

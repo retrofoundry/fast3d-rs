@@ -88,6 +88,9 @@ is an error. Review live images and independent semantic assertions before pinni
 regression golden. `fast3d/tests/fixtures/host64-fill.f3dcap` is a synthetic full-frame red fill,
 with literal F3D commands and addresses above 4 GiB; it contains no game assets.
 
+Helix applies depth write-back during captured tasks before releasing the guest. The
+current capture format does not store write-back patches.
+
 ## Reset-rooted sequences
 
 `Sequence` wraps existing frame payloads in a version-two container. It requires every frame

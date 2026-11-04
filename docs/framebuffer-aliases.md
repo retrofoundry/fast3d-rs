@@ -35,7 +35,7 @@ empty replay history, advancing each between tasks. Switch epochs are ignored in
 that comparison because capture recording excludes diagnostic depth-reset policies.
 
 General range ownership, offset copies, triangle framebuffer textures, same-target
-snapshots, bit reinterpretation, CPU/GPU coherence and GPU write-back remain
+snapshots, bit reinterpretation, CPU/GPU coherence and color write-back remain
 unsupported. The existing offscreen-then-sample golden is a compatibility test for
 the convenience only. [The authored real-load fixtures](framebuffer-load-evidence.md)
 pin this rejection and provide independent offset, packing and snapshot probes
