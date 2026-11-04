@@ -1,14 +1,6 @@
-// decal_dual.wgsl — dual-source DECAL fragment entry (E2). Concatenated in lib.rs AFTER
-// blender_dualsrc.wgsl (only on a DUAL_SOURCE_BLENDING device), so it reuses that file's
-// `blend_p`/`blend_a`/`blend_b` helpers and `FragOut`, plus the prelude's `eval_combiner`.
-// It is the dual-source twin of decal.wgsl: the same in-shader ZMODE_DEC occlusion + coplanar
-// discard, then the framebuffer-cycle dual-source blend output. Bound to the dual-source decal
-// pipelines (decal layout g0+g1+g2). `fs_main` (the non-decal dual entry) is left untouched.
-
 @group(2) @binding(0) var decal_depth_tex: texture_depth_2d;
 
-@fragment
-fn fs_decal(in: VsOut) -> FragOut {
+fn shade_decal_dual(in: VsOut) -> FragOut {
     let r = eval_combiner(in);
     let p1 = (combiner.blender_mux >> 14u) & 3u;
     var comb3 = r.rgb;
@@ -18,10 +10,10 @@ fn fs_decal(in: VsOut) -> FragOut {
     let out_a = r.alpha;
     alpha_discard(r, in.clip_position.xy);
 
-    // ── ZMODE_DEC in-shader test against the scene depth written by pass 1 (see decal.wgsl). ──
+    // ── ZMODE_DEC in-shader test against the scene depth written by earlier draws (see decal.wgsl). ──
     let coord = vec2<i32>(i32(in.clip_position.x), i32(in.clip_position.y));
     let sampled = textureLoad(decal_depth_tex, coord, 0);
-    let pixel_z = in.clip_position.z;
+    let pixel_z = fragment_depth(in.clip_position.z);
     let eps = 1.0e-4;
     if (pixel_z > sampled + eps) {
         discard;
@@ -47,4 +39,15 @@ fn fs_decal(in: VsOut) -> FragOut {
     o.color0 = vec4<f32>(pcol * (a / denom), 1.0);
     o.color1 = vec4<f32>(vec3<f32>(b / denom), 1.0);
     return o;
+}
+
+@fragment
+fn fs_decal(in: VsOut) -> FragOut {
+    return shade_decal_dual(in);
+}
+
+@fragment
+fn fs_decal_depth(in: VsOut) -> DualDepthOutput {
+    let color = shade_decal_dual(in);
+    return DualDepthOutput(color.color0, color.color1, fragment_depth(in.clip_position.z));
 }

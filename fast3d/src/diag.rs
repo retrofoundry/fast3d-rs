@@ -109,7 +109,6 @@ pub enum DiagKind {
         address: u64,
         depth: bool,
     },
-    UnsupportedPrimitiveDepthSource,
     UnsupportedKeyInput {
         selector: KeyInput,
     },
@@ -196,7 +195,6 @@ impl DiagKind {
             | DiagKind::UnsupportedChromaKey
             | DiagKind::UnsupportedDepthAlias { .. }
             | DiagKind::UnsupportedLegacyDepthExtent { .. }
-            | DiagKind::UnsupportedPrimitiveDepthSource
             | DiagKind::UnsupportedCommandParameters { .. }
             | DiagKind::RunawayDl { .. }
             | DiagKind::DlPastRdram
@@ -285,9 +283,6 @@ impl std::fmt::Display for DiagKind {
                 "unsupported preservation across {} image reinterpretation at {address:#018x}",
                 if *depth { "depth" } else { "color" }
             ),
-            DiagKind::UnsupportedPrimitiveDepthSource => {
-                write!(f, "primitive depth source is unsupported")
-            }
             DiagKind::UnsupportedCommandParameters { opcode } => {
                 write!(f, "unsupported parameters for opcode 0x{opcode:02X}")
             }
@@ -427,7 +422,6 @@ mod tests {
                 data_address: None,
             },
             DiagKind::UnsupportedTextureFormat { fmt: 1, siz: 2 },
-            DiagKind::UnsupportedPrimitiveDepthSource,
             DiagKind::UnsupportedLegacyDepthExtent {
                 address: 0x200000,
                 canvas: (640, 480),

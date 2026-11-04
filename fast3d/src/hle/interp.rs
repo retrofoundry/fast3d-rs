@@ -242,7 +242,10 @@ pub(crate) fn emit_texrect<M: Rdram>(rect: TexRect, cx: &mut Ctx<M>) -> Option<E
         (rdp.other_mode_h >> 20) & 3,
     );
     let load_free = !rdp.tmem_bank.tile_has_load(tile_desc);
-    let source = if uses_texture && load_free {
+    let blend_color =
+        crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, 0).blend_class
+            == crate::hle::BlendClass::BlendColor;
+    let source = if uses_texture && load_free && !blend_color {
         rec.framebuffers.targets.source(
             rdp.tex_image.3,
             rdp.color_image.addr,
@@ -1041,19 +1044,22 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
             pc = walk_try!(Command, checked_span(pc, stride));
         }
         if scene.draw_origins.len() > origin_start {
-            let depth_clear = rdp.depth_image == Some(rdp.color_image.addr);
+            let depth_clear = scene.draw_origins[origin_start..].iter().any(|origin| {
+                origin
+                    .rectangle
+                    .is_some_and(|(pair, _)| scene.framebuffer_pairs[pair].is_depth_clear)
+            });
             if rdp.color_image_set && !depth_clear {
                 rec.framebuffers
                     .targets
                     .written(rdp.color_image.addr, false);
             }
+            let cycle = (rdp.other_mode_h >> 20) & 3;
+            let z_update = rdp.other_mode_l & crate::hle::consts::Z_UPD != 0
+                && cycle != crate::hle::consts::G_CYC_FILL
+                && cycle != crate::hle::consts::G_CYC_COPY;
             if let Some(address) = rdp.depth_image {
-                if depth_clear
-                    || (rdp.other_mode_l & 0x30 == 0x30
-                        && scene.draw_origins[origin_start..]
-                            .iter()
-                            .any(|origin| origin.rectangle.is_none()))
-                {
+                if depth_clear || z_update {
                     rec.framebuffers.targets.written(address, true);
                 }
             }

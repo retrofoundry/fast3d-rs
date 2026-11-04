@@ -1,33 +1,21 @@
-// decal.wgsl — base decal fragment entry (E2): combiner + in-shader Z occlusion + coplanar discard.
-// Assembled in lib.rs AFTER combiner_prelude.wgsl + skeleton.wgsl (it adds the decal-only entry
-// `fs_decal` alongside skeleton's non-decal `fs_main`). Bound to the Replace/AlphaOver decal
-// pipelines (decal layout g0+g1+g2). The decal pass has NO depth attachment, so the ROP cannot
-// do the Z test; instead we sample the prior depth pass's output (`@group(2)`) and do the
-// ZMODE_DEC test in-shader:
-//   - occlusion (Z_CMP): a decal strictly BEHIND the stored scene surface is hidden;
-//   - coplanar bind: paint only where the decal lies ON (within tolerance of) that surface, so a
-//     coplanar decal shows WITHOUT z-fighting.
-// NDC-space epsilon (a small constant), NOT the N64's hardware-encoded exponent bands [IMP11].
-
 @group(2) @binding(0) var depth_tex: texture_depth_2d;
 
-@fragment
-fn fs_decal(in: VsOut) -> @location(0) vec4<f32> {
+fn shade_decal(in: VsOut) -> vec4<f32> {
     let r = eval_combiner(in);
     var rgb = r.rgb;
     // C3: fog mix — applied when cyc1 blender P == CLR_FOG (3). Matches skeleton.wgsl/fs_main.
     let p1 = (combiner.blender_mux >> 14u) & 3u;
-    if (p1 == 3u) {
+    if (p1 == 3u && combiner.primitive_depth.w == 0u) {
         rgb = mix(rgb, combiner.fog_color.rgb, in.color.a);
     }
     alpha_discard(r, in.clip_position.xy);
 
-    // ── ZMODE_DEC in-shader test against the scene depth written by pass 1. ──
+    // ── ZMODE_DEC in-shader test against the scene depth written by earlier draws. ──
     // `in.clip_position` is the rasterizer @builtin(position): .xy are framebuffer pixel coords,
     // .z is the NDC depth (post perspective-divide), matching the Depth32Float buffer.
     let coord = vec2<i32>(i32(in.clip_position.x), i32(in.clip_position.y));
     let sampled = textureLoad(depth_tex, coord, 0);
-    let pixel_z = in.clip_position.z;
+    let pixel_z = fragment_depth(in.clip_position.z);
     let eps = 1.0e-4;
     // Occlusion (Z_CMP): a strictly-nearer surface in the depth buffer hides the decal.
     if (pixel_z > sampled + eps) {
@@ -40,4 +28,14 @@ fn fs_decal(in: VsOut) -> @location(0) vec4<f32> {
         discard;
     }
     return vec4<f32>(rgb, r.alpha);
+}
+
+@fragment
+fn fs_decal(in: VsOut) -> @location(0) vec4<f32> {
+    return shade_decal(in);
+}
+
+@fragment
+fn fs_decal_depth(in: VsOut) -> DepthOutput {
+    return DepthOutput(shade_decal(in), fragment_depth(in.clip_position.z));
 }

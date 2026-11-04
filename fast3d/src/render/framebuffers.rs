@@ -186,7 +186,7 @@ impl DepthPipeline {
         }
     }
 
-    fn copy(
+    pub(super) fn copy(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -479,6 +479,9 @@ impl SceneRenderer {
     }
 
     fn reinterpretation(&mut self, id: TargetId, depth: bool, pc: u64) {
+        if self.coherence.is_some() {
+            return;
+        }
         if let TargetId::Guest(address) = id {
             self.diagnostics.push(Diagnostic {
                 at: pc,

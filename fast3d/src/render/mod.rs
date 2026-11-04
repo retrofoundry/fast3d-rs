@@ -198,8 +198,10 @@ pub struct CombinerUniform {
     pub coverage_slot: u32, // draw slot + 1, written to the guest write-back coverage target
     pub fill_word: u32,     // FillRect's raw fill-color register
     pub fill_siz: u32,      // FillRect color-image siz + 1; 0 for other draws
+    /// Primitive depth select and Z; `[3]` selects blend-color-only output.
+    pub primitive_depth: [u32; 4],
 }
-const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 192);
+const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 208);
 
 impl CombinerUniform {
     fn alpha_flags(rm: &crate::hle::RenderMode) -> u32 {
@@ -298,6 +300,12 @@ impl CombinerUniform {
             coverage_slot: 0,
             fill_word: 0,
             fill_siz: 0,
+            primitive_depth: [
+                0,
+                0,
+                0,
+                u32::from(rm.blend_class == crate::hle::BlendClass::BlendColor),
+            ],
         }
     }
 
@@ -387,6 +395,7 @@ impl CombinerUniform {
             coverage_slot: 0,
             fill_word: color_raw,
             fill_siz: u32::from(siz) + 1,
+            primitive_depth: [0; 4],
         }
     }
 
@@ -425,6 +434,7 @@ impl CombinerUniform {
             coverage_slot: 0,
             fill_word: 0,
             fill_siz: 0,
+            primitive_depth: [0; 4],
         }
     }
 }
@@ -435,7 +445,7 @@ mod tests {
 
     #[test]
     fn tile_sampling_uniform_and_shaders_fit_webgpu() {
-        assert_eq!(std::mem::size_of::<CombinerUniform>(), 192);
+        assert_eq!(std::mem::size_of::<CombinerUniform>(), 208);
         assert_eq!(std::mem::size_of::<TileSamplingArray>(), 960);
         let limits = wgpu::Limits::default();
         assert!(
@@ -745,6 +755,7 @@ pub struct TexturedPipeline {
     /// WebGPU requires all pipelines in a depth-attached pass to declare the same depth format.
     pipeline_depth_compat_nocull: wgpu::RenderPipeline,
     pipeline_depth_compat_cull: wgpu::RenderPipeline,
+    pipeline_depth_write_only: [wgpu::RenderPipeline; 2],
     pipeline_depth_test_write_nocull: wgpu::RenderPipeline,
     pipeline_depth_test_write_cull: wgpu::RenderPipeline,
     pipeline_depth_test_nowrite_nocull: wgpu::RenderPipeline,
@@ -754,6 +765,7 @@ pub struct TexturedPipeline {
     pipeline_ao_no_depth_cull: wgpu::RenderPipeline,
     pipeline_ao_depth_compat_nocull: wgpu::RenderPipeline,
     pipeline_ao_depth_compat_cull: wgpu::RenderPipeline,
+    pipeline_ao_depth_write_only: [wgpu::RenderPipeline; 2],
     pipeline_ao_depth_test_write_nocull: wgpu::RenderPipeline,
     pipeline_ao_depth_test_write_cull: wgpu::RenderPipeline,
     pipeline_ao_depth_test_nowrite_nocull: wgpu::RenderPipeline,
@@ -763,26 +775,19 @@ pub struct TexturedPipeline {
     /// runs take the AlphaOver fallback path instead. Selected for runs whose `blend_class` is
     /// `DualSrc` (B4 primary path).
     dual: Option<DualSrcSet>,
-    /// Decal pipelines, built for the distinct decal pipeline layout `(group0, group1, group2)`.
-    /// Used for ZMODE_DEC runs in the SECOND (decal) render pass, which has NO depth attachment
-    /// (so only no-depth variants exist) and binds the prior pass's depth as a sampled texture at
-    /// `@group(2)` (E1). group0/group1 BGLs are byte-identical to the non-decal layout's, so
-    /// group0/group1 bindings survive `set_pipeline` across the two passes.
     decal: DecalSet,
+    decal_write: DecalSet,
     group0_bgl: wgpu::BindGroupLayout,
     group1_bgl: wgpu::BindGroupLayout,
     group2_depth_bgl: wgpu::BindGroupLayout,
 }
 
-/// The no-depth decal pipelines (decal layout `g0+g1+g2`). The decal pass carries no depth
-/// attachment, so only the no-depth Replace/AlphaOver (and, on a dual-source device, the
-/// dual-source) variants are needed. Mirrors the no-depth slice of `TexturedPipeline::select`.
 struct DecalSet {
-    no_depth_nocull: wgpu::RenderPipeline,
-    no_depth_cull: wgpu::RenderPipeline,
-    ao_no_depth_nocull: wgpu::RenderPipeline,
-    ao_no_depth_cull: wgpu::RenderPipeline,
-    /// `(nocull, cull)` dual-source no-depth variants; `Some` only on a DUAL_SOURCE_BLENDING device.
+    nocull: wgpu::RenderPipeline,
+    cull: wgpu::RenderPipeline,
+    ao_nocull: wgpu::RenderPipeline,
+    ao_cull: wgpu::RenderPipeline,
+    /// `(nocull, cull)` dual-source variants; `Some` only on a DUAL_SOURCE_BLENDING device.
     dual: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
 }
 
@@ -793,6 +798,7 @@ struct DualSrcSet {
     no_depth_cull: wgpu::RenderPipeline,
     depth_compat_nocull: wgpu::RenderPipeline,
     depth_compat_cull: wgpu::RenderPipeline,
+    depth_write_only: [wgpu::RenderPipeline; 2],
     depth_test_write_nocull: wgpu::RenderPipeline,
     depth_test_write_cull: wgpu::RenderPipeline,
     depth_test_nowrite_nocull: wgpu::RenderPipeline,
@@ -809,6 +815,9 @@ impl DualSrcSet {
         z_write: bool,
         any_depth: bool,
     ) -> &wgpu::RenderPipeline {
+        if z_write && !z_test {
+            return &self.depth_write_only[usize::from(cull == crate::hle::CullKind::Cull)];
+        }
         match (cull, z_test, z_write) {
             (crate::hle::CullKind::None, false, _) => {
                 if any_depth {
@@ -1024,7 +1033,11 @@ impl TexturedPipeline {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(if depth_stencil.is_some() {
+                        "fs_depth"
+                    } else {
+                        "fs_main"
+                    }),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: target_format,
                         blend: Some(blend),
@@ -1071,6 +1084,10 @@ impl TexturedPipeline {
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         };
+        let ds_write_only = || wgpu::DepthStencilState {
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            ..ds_write()
+        };
         // depth-test only, no write (A9 will wire this for decal/transparent runs)
         let ds_nowrite = || wgpu::DepthStencilState {
             format: depth_format,
@@ -1092,6 +1109,16 @@ impl TexturedPipeline {
         };
         let back = Some(wgpu::Face::Back);
         // ── Replace pipelines (opaque / G_RM_OPA_SURF family) ─────────────────────────────────
+        let pipeline_depth_write_only = [None, back]
+            .map(|cull| make("tp-depth-write-only", Some(ds_write_only()), cull, replace));
+        let pipeline_ao_depth_write_only = [None, back].map(|cull| {
+            make(
+                "tp-ao-depth-write-only",
+                Some(ds_write_only()),
+                cull,
+                alphaover,
+            )
+        });
         let pipeline_no_depth_nocull = make("tp-nodepth-nocull", None, None, replace);
         let pipeline_no_depth_cull = make("tp-nodepth-cull", None, back, replace);
         let pipeline_depth_compat_nocull =
@@ -1141,46 +1168,44 @@ impl TexturedPipeline {
             back,
             alphaover,
         );
-        // ── Decal pipelines (E1, decal layout g0+g1+g2; no depth attachment) ──────────────────
-        // The decal pass has no depth-stencil attachment, so all decal pipelines are depth_stencil:
-        // None. They use the base module's `fs_decal` entry (E2: combiner + in-shader Z occlusion +
-        // coplanar discard). Built against `decal_layout` so `@group(2)` (sampled depth) is in scope.
-        let make_decal = |label: &str, cull_mode: Option<wgpu::Face>, blend: wgpu::BlendState| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&decal_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[OutVertex::layout()],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_decal"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: Some(blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        };
-        let decal_no_depth_nocull = make_decal("tp-decal-nodepth-nocull", None, replace);
-        let decal_no_depth_cull = make_decal("tp-decal-nodepth-cull", back, replace);
-        let decal_ao_no_depth_nocull = make_decal("tp-decal-ao-nodepth-nocull", None, alphaover);
-        let decal_ao_no_depth_cull = make_decal("tp-decal-ao-nodepth-cull", back, alphaover);
+        let make_decal =
+            |label: &str, cull_mode: Option<wgpu::Face>, blend: wgpu::BlendState, write: bool| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&decal_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[OutVertex::layout()],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some(if write { "fs_decal_depth" } else { "fs_decal" }),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: target_format,
+                            blend: Some(blend),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode,
+                        ..Default::default()
+                    },
+                    depth_stencil: write.then(ds_write_only),
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+        let decal_no_depth_nocull = make_decal("tp-decal-nodepth-nocull", None, replace, false);
+        let decal_no_depth_cull = make_decal("tp-decal-nodepth-cull", back, replace, false);
+        let decal_ao_no_depth_nocull =
+            make_decal("tp-decal-ao-nodepth-nocull", None, alphaover, false);
+        let decal_ao_no_depth_cull = make_decal("tp-decal-ao-nodepth-cull", back, alphaover, false);
         // ── Dual-source primary pipelines (B4) ────────────────────────────────────────────────
         // Built ONLY on a DUAL_SOURCE_BLENDING device: the dual module contains `@blend_src`, which
         // naga rejects at create_shader_module on a device without the feature [§5.3]. The whole
@@ -1226,7 +1251,11 @@ impl TexturedPipeline {
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &dual_shader,
-                        entry_point: Some("fs_main"),
+                        entry_point: Some(if depth_stencil.is_some() {
+                            "fs_depth"
+                        } else {
+                            "fs_main"
+                        }),
                         targets: &[Some(wgpu::ColorTargetState {
                             format: target_format,
                             blend: Some(dualsrc),
@@ -1246,8 +1275,7 @@ impl TexturedPipeline {
                     cache: None,
                 })
             };
-            // Dual-source DECAL pipelines (decal layout g0+g1+g2; no depth attachment).
-            let make_dual_decal = |label: &str, cull_mode: Option<wgpu::Face>| {
+            let make_dual_decal = |label: &str, cull_mode: Option<wgpu::Face>, write: bool| {
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some(label),
                     layout: Some(&decal_layout),
@@ -1259,7 +1287,7 @@ impl TexturedPipeline {
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &dual_shader,
-                        entry_point: Some("fs_decal"),
+                        entry_point: Some(if write { "fs_decal_depth" } else { "fs_decal" }),
                         targets: &[Some(wgpu::ColorTargetState {
                             format: target_format,
                             blend: Some(dualsrc),
@@ -1273,15 +1301,19 @@ impl TexturedPipeline {
                         cull_mode,
                         ..Default::default()
                     },
-                    depth_stencil: None,
+                    depth_stencil: write.then(ds_write_only),
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
                     cache: None,
                 })
             };
             let decal_dual = (
-                make_dual_decal("tp-ds-decal-nodepth-nocull", None),
-                make_dual_decal("tp-ds-decal-nodepth-cull", back),
+                make_dual_decal("tp-ds-decal-nodepth-nocull", None, false),
+                make_dual_decal("tp-ds-decal-nodepth-cull", back, false),
+            );
+            let decal_write = (
+                make_dual_decal("tp-ds-decal-write", None, true),
+                make_dual_decal("tp-ds-decal-write-cull", back, true),
             );
             let dualset = DualSrcSet {
                 no_depth_nocull: make_dual("tp-ds-nodepth-nocull", None, None),
@@ -1292,6 +1324,8 @@ impl TexturedPipeline {
                     None,
                 ),
                 depth_compat_cull: make_dual("tp-ds-depth-compat-cull", Some(ds_compat()), back),
+                depth_write_only: [None, back]
+                    .map(|cull| make_dual("tp-ds-depth-write-only", Some(ds_write_only()), cull)),
                 depth_test_write_nocull: make_dual(
                     "tp-ds-depth-write-nocull",
                     Some(ds_write()),
@@ -1309,22 +1343,22 @@ impl TexturedPipeline {
                     back,
                 ),
             };
-            (dualset, decal_dual)
+            (dualset, decal_dual, decal_write)
         });
-        // Split the optional (DualSrcSet, decal-dual-pair) into the `dual` field + the decal set's
-        // dual variants (both `Some` together, on a DUAL_SOURCE_BLENDING device, or both `None`).
-        let (dual, decal_dual) = match dual {
-            Some((ds, dd)) => (Some(ds), Some(dd)),
-            None => (None, None),
+        let (dual, decal_dual, decal_write_dual) = match dual {
+            Some((ds, dd, dw)) => (Some(ds), Some(dd), Some(dw)),
+            None => (None, None, None),
         };
         let decal = DecalSet {
-            no_depth_nocull: decal_no_depth_nocull,
-            no_depth_cull: decal_no_depth_cull,
-            ao_no_depth_nocull: decal_ao_no_depth_nocull,
-            ao_no_depth_cull: decal_ao_no_depth_cull,
+            nocull: decal_no_depth_nocull,
+            cull: decal_no_depth_cull,
+            ao_nocull: decal_ao_no_depth_nocull,
+            ao_cull: decal_ao_no_depth_cull,
             dual: decal_dual,
         };
         Self {
+            pipeline_depth_write_only,
+            pipeline_ao_depth_write_only,
             pipeline_no_depth_nocull,
             pipeline_no_depth_cull,
             pipeline_depth_compat_nocull,
@@ -1343,6 +1377,13 @@ impl TexturedPipeline {
             pipeline_ao_depth_test_nowrite_cull,
             dual,
             decal,
+            decal_write: DecalSet {
+                nocull: make_decal("tp-decal-write", None, replace, true),
+                cull: make_decal("tp-decal-write-cull", back, replace, true),
+                ao_nocull: make_decal("tp-decal-ao-write", None, alphaover, true),
+                ao_cull: make_decal("tp-decal-ao-write-cull", back, alphaover, true),
+                dual: decal_write_dual,
+            },
             group0_bgl,
             group1_bgl,
             group2_depth_bgl,
@@ -1366,16 +1407,19 @@ impl TexturedPipeline {
         &self.group2_depth_bgl
     }
 
-    /// Pick the decal pipeline (decal layout, no depth attachment) for a run's cull/blend state.
-    /// Mirrors the no-depth slice of `select`: dual-source primary on a capable device for DualSrc
-    /// runs, else the Replace/AlphaOver fallback keyed on `fallback_class`.
     fn select_decal(
         &self,
         cull: crate::hle::CullKind,
         fallback_class: crate::hle::BlendClass,
         blend_class: crate::hle::BlendClass,
+        write: bool,
     ) -> &wgpu::RenderPipeline {
-        if let Some((nocull, cull_pl)) = &self.decal.dual {
+        let decal = if write {
+            &self.decal_write
+        } else {
+            &self.decal
+        };
+        if let Some((nocull, cull_pl)) = &decal.dual {
             if blend_class == crate::hle::BlendClass::DualSrc {
                 return match cull {
                     crate::hle::CullKind::None => nocull,
@@ -1385,10 +1429,10 @@ impl TexturedPipeline {
         }
         let ao = fallback_class == crate::hle::BlendClass::AlphaOver;
         match (ao, cull) {
-            (false, crate::hle::CullKind::None) => &self.decal.no_depth_nocull,
-            (false, crate::hle::CullKind::Cull) => &self.decal.no_depth_cull,
-            (true, crate::hle::CullKind::None) => &self.decal.ao_no_depth_nocull,
-            (true, crate::hle::CullKind::Cull) => &self.decal.ao_no_depth_cull,
+            (false, crate::hle::CullKind::None) => &decal.nocull,
+            (false, crate::hle::CullKind::Cull) => &decal.cull,
+            (true, crate::hle::CullKind::None) => &decal.ao_nocull,
+            (true, crate::hle::CullKind::Cull) => &decal.ao_cull,
         }
     }
 
@@ -1414,6 +1458,14 @@ impl TexturedPipeline {
         fallback_class: crate::hle::BlendClass,
     ) -> &wgpu::RenderPipeline {
         let ao = fallback_class == crate::hle::BlendClass::AlphaOver;
+        if z_write && !z_test {
+            let index = usize::from(cull == crate::hle::CullKind::Cull);
+            return if ao {
+                &self.pipeline_ao_depth_write_only[index]
+            } else {
+                &self.pipeline_depth_write_only[index]
+            };
+        }
         match (ao, cull, z_test, z_write) {
             // ── Replace ──────────────────────────────────────────────────────────────────
             (false, crate::hle::CullKind::None, false, _) => {
@@ -2186,16 +2238,25 @@ impl SceneRenderer {
             ) => material_bgs[*material_index as usize],
             _ => &self.fill_bind_group,
         };
-        let inputs::DrawInputs::Rectangle { blend_class, .. } = op else {
+        let inputs::DrawInputs::Rectangle { mode, .. } = op else {
             unreachable!("rectangle draw inputs required");
         };
-        let pipeline = self.textured_fb.select(
-            crate::hle::CullKind::None,
-            false,
-            false,
-            any_depth,
-            *blend_class,
-        );
+        let pipeline = if mode.read_depth {
+            self.textured_fb.select_decal(
+                crate::hle::CullKind::None,
+                mode.fallback_class,
+                mode.blend_class,
+                mode.z_write,
+            )
+        } else {
+            self.textured_fb.select(
+                crate::hle::CullKind::None,
+                mode.z_test,
+                mode.z_write,
+                any_depth,
+                mode.fallback_class,
+            )
+        };
         pass.set_pipeline(coverage_pipeline.unwrap_or(pipeline));
         if let Some(rv) = rect_vbuf {
             pass.set_vertex_buffer(0, rv.slice(..));

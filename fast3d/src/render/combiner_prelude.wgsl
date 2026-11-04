@@ -17,6 +17,19 @@ struct VsOut {
     @location(1) uv:    vec2<f32>,
 };
 
+struct DepthOutput {
+    @location(0) color: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+};
+
+fn fragment_depth(pixel_z: f32) -> f32 {
+    if combiner.primitive_depth.x != 0u {
+        let z18 = (combiner.primitive_depth.y & 0x7fffu) << 3u;
+        return f32(z18) / 262144.0;
+    }
+    return pixel_z;
+}
+
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
@@ -62,6 +75,7 @@ struct Combiner {
     coverage_slot:   u32,       // draw slot + 1, written to the guest write-back coverage target
     fill_word:       u32,       // FillRect's raw fill-color register
     fill_siz:        u32,       // FillRect color-image siz + 1; 0 for other draws
+    primitive_depth: vec4<u32>,
 };
 
 @group(0) @binding(0) var tex0:  texture_2d<f32>;
@@ -430,6 +444,9 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     let ddy_uv = dpdy(in.uv);
     let uv = in.uv * combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
 
+    if combiner.primitive_depth.w != 0u {
+        return CycleResult(1.0, combiner.blend_color.rgb, 1.0);
+    }
     let pixel = u32(in.clip_position.y) * combiner.frame.z + u32(in.clip_position.x);
     if combiner.fill_siz == 3u {
         let word = select(combiner.fill_word >> 16u, combiner.fill_word & 0xffffu, (pixel & 1u) != 0u);

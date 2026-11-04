@@ -195,17 +195,17 @@ pub(super) enum DrawInputs {
         index_start: u32,
         index_count: u32,
         material_index: u32,
-        mode: TriangleMode,
+        mode: DrawMode,
     },
     Rectangle {
         material_index: Option<u32>,
         fb_source: Option<super::framebuffers::targets::ImageDescriptor>,
-        blend_class: BlendClass,
+        mode: DrawMode,
     },
 }
 
-#[derive(Debug, PartialEq)]
-pub(super) struct TriangleMode {
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct DrawMode {
     pub z_test: bool,
     pub z_write: bool,
     pub read_depth: bool,
@@ -213,9 +213,25 @@ pub(super) struct TriangleMode {
     pub blend_class: BlendClass,
 }
 
+impl DrawMode {
+    fn new(mode: &crate::hle::RenderMode, any_depth: bool) -> Self {
+        Self {
+            z_test: any_depth && mode.z_test,
+            z_write: any_depth && mode.z_write,
+            read_depth: any_depth && mode.z_test && mode.z_mode == ZMode::Decal,
+            fallback_class: mode.fallback_class,
+            blend_class: mode.blend_class,
+        }
+    }
+}
+
 impl OperationInputs {
     pub fn reads_depth(&self) -> bool {
-        matches!(&self.draw, DrawInputs::Tris { mode, .. } if mode.read_depth)
+        matches!(&self.draw, DrawInputs::Tris { mode, .. } | DrawInputs::Rectangle { mode, .. } if mode.read_depth)
+    }
+
+    pub fn writes_depth(&self) -> bool {
+        matches!(&self.draw, DrawInputs::Tris { mode, .. } | DrawInputs::Rectangle { mode, .. } if mode.z_write)
     }
 }
 
@@ -337,6 +353,10 @@ impl<'a> RenderInputs<'a> {
                                     let mode = &scene.render_modes[run.render_mode_index as usize];
                                     let mut uniform =
                                         CombinerUniform::from_run(mat, mode, run.fog_color);
+                                    uniform.primitive_depth[..2].copy_from_slice(&[
+                                        u32::from(mode.z_source_prim),
+                                        u32::from(run.prim_depth.z),
+                                    ]);
                                     uniform.inv_tex_size = super::triangle_inv_tex_size(mat);
                                     (
                                         DrawInputs::Tris {
@@ -344,14 +364,7 @@ impl<'a> RenderInputs<'a> {
                                             index_start: run.index_start,
                                             index_count: run.index_count,
                                             material_index: run.material_index,
-                                            mode: TriangleMode {
-                                                z_test: any_depth && mode.z_test,
-                                                z_write: any_depth && mode.z_write,
-                                                read_depth: any_depth
-                                                    && mode.z_mode == ZMode::Decal,
-                                                fallback_class: mode.fallback_class,
-                                                blend_class: mode.blend_class,
-                                            },
+                                            mode: DrawMode::new(mode, any_depth),
                                         },
                                         uniform,
                                     )
@@ -368,6 +381,7 @@ impl<'a> RenderInputs<'a> {
                                     render_mode_index,
                                     fog_color,
                                     fb_source,
+                                    prim_depth,
                                     ..
                                 } => {
                                     let mat = &scene.materials[*material_index as usize];
@@ -383,6 +397,13 @@ impl<'a> RenderInputs<'a> {
                                             *fog_color,
                                         )
                                     };
+                                    if !copy_mode {
+                                        let mode = &scene.render_modes[*render_mode_index as usize];
+                                        uniform.primitive_depth[..2].copy_from_slice(&[
+                                            u32::from(mode.z_source_prim),
+                                            u32::from(prim_depth.z),
+                                        ]);
+                                    }
                                     let fb_source = fb_source
                                         .and_then(|address| descriptors.get(address, false));
                                     // A load-free framebuffer view is bound at the source's own extent, so
@@ -409,11 +430,14 @@ impl<'a> RenderInputs<'a> {
                                         DrawInputs::Rectangle {
                                             material_index: Some(*material_index),
                                             fb_source,
-                                            blend_class: if *copy_mode {
-                                                BlendClass::Replace
+                                            mode: if *copy_mode {
+                                                DrawMode::default()
                                             } else {
-                                                scene.render_modes[*render_mode_index as usize]
-                                                    .fallback_class
+                                                DrawMode::new(
+                                                    &scene.render_modes
+                                                        [*render_mode_index as usize],
+                                                    any_depth,
+                                                )
                                             },
                                         },
                                         uniform,
@@ -455,7 +479,7 @@ impl<'a> RenderInputs<'a> {
                                         DrawInputs::Rectangle {
                                             material_index: None,
                                             fb_source: None,
-                                            blend_class: BlendClass::Replace,
+                                            mode: DrawMode::default(),
                                         },
                                         CombinerUniform::fill_rect(
                                             *color_raw,
