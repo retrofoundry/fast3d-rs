@@ -167,7 +167,7 @@ pub struct CombinerUniform {
     pub blend_color: [f32; 4], // blend color RGBA, normalized 0..1 (from mat.blend_color / G_SETBLENDCOLOR)
     pub fog_color: [f32; 4],   // normalized draw fog color RGBA
     /// `.xy` = 1/(tex_w, tex_h) for texel-space triangle and rectangle coordinates.
-    /// `.z` = 1 for rectangles, 0 for triangles; `.w` is padding.
+    /// `.z` = 1 for rectangles, 0 for triangles; `.w` enables NoN depth clamping.
     pub inv_tex_size: [f32; 4],
     /// TEXEL1 mirror of `inv_tex_size` (second-texture params). `.xy` = 1/(tex1_w, tex1_h); `.z` =
     /// `tex_enable1` (1.0 when the material carries a second texture — `tile_count == 2` — else 0.0);
@@ -748,28 +748,28 @@ fn clamp_scissor(s: &crate::hle::Scissor, fb_w: u32, fb_h: u32) -> (u32, u32, u3
 /// at draw time by `run.render_mode.fallback_class` (B3: fixed-function fallback path).
 pub struct TexturedPipeline {
     // ── Replace blend (src_factor=One, dst_factor=Zero) ──────────────────────────────────────
-    pipeline_no_depth_nocull: wgpu::RenderPipeline,
-    pipeline_no_depth_cull: wgpu::RenderPipeline,
+    pipeline_no_depth_nocull: [wgpu::RenderPipeline; 2],
+    pipeline_no_depth_cull: [wgpu::RenderPipeline; 2],
     /// Depth-format-compatible but depth-passthrough (Always compare, no write).
     /// Used when the render pass has a depth attachment but this run does not test/write depth.
     /// WebGPU requires all pipelines in a depth-attached pass to declare the same depth format.
-    pipeline_depth_compat_nocull: wgpu::RenderPipeline,
-    pipeline_depth_compat_cull: wgpu::RenderPipeline,
-    pipeline_depth_write_only: [wgpu::RenderPipeline; 2],
-    pipeline_depth_test_write_nocull: wgpu::RenderPipeline,
-    pipeline_depth_test_write_cull: wgpu::RenderPipeline,
-    pipeline_depth_test_nowrite_nocull: wgpu::RenderPipeline,
-    pipeline_depth_test_nowrite_cull: wgpu::RenderPipeline,
+    pipeline_depth_compat_nocull: [wgpu::RenderPipeline; 2],
+    pipeline_depth_compat_cull: [wgpu::RenderPipeline; 2],
+    pipeline_depth_write_only: [[wgpu::RenderPipeline; 2]; 2],
+    pipeline_depth_test_write_nocull: [wgpu::RenderPipeline; 2],
+    pipeline_depth_test_write_cull: [wgpu::RenderPipeline; 2],
+    pipeline_depth_test_nowrite_nocull: [wgpu::RenderPipeline; 2],
+    pipeline_depth_test_nowrite_cull: [wgpu::RenderPipeline; 2],
     // ── AlphaOver blend (color: SrcAlpha/OneMinusSrcAlpha, alpha: One/Zero) ─────────────────
-    pipeline_ao_no_depth_nocull: wgpu::RenderPipeline,
-    pipeline_ao_no_depth_cull: wgpu::RenderPipeline,
-    pipeline_ao_depth_compat_nocull: wgpu::RenderPipeline,
-    pipeline_ao_depth_compat_cull: wgpu::RenderPipeline,
-    pipeline_ao_depth_write_only: [wgpu::RenderPipeline; 2],
-    pipeline_ao_depth_test_write_nocull: wgpu::RenderPipeline,
-    pipeline_ao_depth_test_write_cull: wgpu::RenderPipeline,
-    pipeline_ao_depth_test_nowrite_nocull: wgpu::RenderPipeline,
-    pipeline_ao_depth_test_nowrite_cull: wgpu::RenderPipeline,
+    pipeline_ao_no_depth_nocull: [wgpu::RenderPipeline; 2],
+    pipeline_ao_no_depth_cull: [wgpu::RenderPipeline; 2],
+    pipeline_ao_depth_compat_nocull: [wgpu::RenderPipeline; 2],
+    pipeline_ao_depth_compat_cull: [wgpu::RenderPipeline; 2],
+    pipeline_ao_depth_write_only: [[wgpu::RenderPipeline; 2]; 2],
+    pipeline_ao_depth_test_write_nocull: [wgpu::RenderPipeline; 2],
+    pipeline_ao_depth_test_write_cull: [wgpu::RenderPipeline; 2],
+    pipeline_ao_depth_test_nowrite_nocull: [wgpu::RenderPipeline; 2],
+    pipeline_ao_depth_test_nowrite_cull: [wgpu::RenderPipeline; 2],
     /// Dual-source primary blender pipelines (`(P·A+M·B)/(A+B)` via @blend_src). `Some` ONLY on a
     /// device with `DUAL_SOURCE_BLENDING` enabled — `None` on the fallback device, where DualSrc
     /// runs take the AlphaOver fallback path instead. Selected for runs whose `blend_class` is
@@ -782,27 +782,55 @@ pub struct TexturedPipeline {
     group2_depth_bgl: wgpu::BindGroupLayout,
 }
 
+fn depth_clip_pipeline(
+    device: &wgpu::Device,
+    descriptor: &wgpu::RenderPipelineDescriptor<'_>,
+    unclipped_depth: bool,
+) -> wgpu::RenderPipeline {
+    let mut descriptor = descriptor.clone();
+    descriptor.primitive.unclipped_depth = unclipped_depth;
+    let constants = [("depth_clip_control", u32::from(unclipped_depth) as f64)];
+    descriptor.vertex.compilation_options.constants = &constants;
+    device.create_render_pipeline(&descriptor)
+}
+
+fn depth_clip_pipelines(
+    device: &wgpu::Device,
+    descriptor: &wgpu::RenderPipelineDescriptor<'_>,
+) -> [wgpu::RenderPipeline; 2] {
+    let clipped = depth_clip_pipeline(device, descriptor, false);
+    let unclipped = if device
+        .features()
+        .contains(wgpu::Features::DEPTH_CLIP_CONTROL)
+    {
+        depth_clip_pipeline(device, descriptor, true)
+    } else {
+        clipped.clone()
+    };
+    [clipped, unclipped]
+}
+
 struct DecalSet {
-    nocull: wgpu::RenderPipeline,
-    cull: wgpu::RenderPipeline,
-    ao_nocull: wgpu::RenderPipeline,
-    ao_cull: wgpu::RenderPipeline,
+    nocull: [wgpu::RenderPipeline; 2],
+    cull: [wgpu::RenderPipeline; 2],
+    ao_nocull: [wgpu::RenderPipeline; 2],
+    ao_cull: [wgpu::RenderPipeline; 2],
     /// `(nocull, cull)` dual-source variants; `Some` only on a DUAL_SOURCE_BLENDING device.
-    dual: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
+    dual: Option<([wgpu::RenderPipeline; 2], [wgpu::RenderPipeline; 2])>,
 }
 
 /// The eight depth×cull dual-source primary blender pipelines (mirrors the Replace/AlphaOver
 /// matrices). Built only on a `DUAL_SOURCE_BLENDING` device; see `TexturedPipeline::dual`.
 struct DualSrcSet {
-    no_depth_nocull: wgpu::RenderPipeline,
-    no_depth_cull: wgpu::RenderPipeline,
-    depth_compat_nocull: wgpu::RenderPipeline,
-    depth_compat_cull: wgpu::RenderPipeline,
-    depth_write_only: [wgpu::RenderPipeline; 2],
-    depth_test_write_nocull: wgpu::RenderPipeline,
-    depth_test_write_cull: wgpu::RenderPipeline,
-    depth_test_nowrite_nocull: wgpu::RenderPipeline,
-    depth_test_nowrite_cull: wgpu::RenderPipeline,
+    no_depth_nocull: [wgpu::RenderPipeline; 2],
+    no_depth_cull: [wgpu::RenderPipeline; 2],
+    depth_compat_nocull: [wgpu::RenderPipeline; 2],
+    depth_compat_cull: [wgpu::RenderPipeline; 2],
+    depth_write_only: [[wgpu::RenderPipeline; 2]; 2],
+    depth_test_write_nocull: [wgpu::RenderPipeline; 2],
+    depth_test_write_cull: [wgpu::RenderPipeline; 2],
+    depth_test_nowrite_nocull: [wgpu::RenderPipeline; 2],
+    depth_test_nowrite_cull: [wgpu::RenderPipeline; 2],
 }
 
 impl DualSrcSet {
@@ -814,7 +842,7 @@ impl DualSrcSet {
         z_test: bool,
         z_write: bool,
         any_depth: bool,
-    ) -> &wgpu::RenderPipeline {
+    ) -> &[wgpu::RenderPipeline; 2] {
         if z_write && !z_test {
             return &self.depth_write_only[usize::from(cull == crate::hle::CullKind::Cull)];
         }
@@ -1022,7 +1050,7 @@ impl TexturedPipeline {
                     depth_stencil: Option<wgpu::DepthStencilState>,
                     cull_mode: Option<wgpu::Face>,
                     blend: wgpu::BlendState| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            let descriptor = wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
@@ -1057,7 +1085,8 @@ impl TexturedPipeline {
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
-            })
+            };
+            depth_clip_pipelines(device, &descriptor)
         };
         // B3: two blend states — Replace (opaque) and AlphaOver (src_alpha / 1-src_alpha).
         // Replace: color {One, Zero, Add}, alpha {One, Zero, Add} — unchanged from Phase A.
@@ -1170,7 +1199,7 @@ impl TexturedPipeline {
         );
         let make_decal =
             |label: &str, cull_mode: Option<wgpu::Face>, blend: wgpu::BlendState, write: bool| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                let descriptor = wgpu::RenderPipelineDescriptor {
                     label: Some(label),
                     layout: Some(&decal_layout),
                     vertex: wgpu::VertexState {
@@ -1199,7 +1228,8 @@ impl TexturedPipeline {
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
                     cache: None,
-                })
+                };
+                depth_clip_pipelines(device, &descriptor)
             };
         let decal_no_depth_nocull = make_decal("tp-decal-nodepth-nocull", None, replace, false);
         let decal_no_depth_cull = make_decal("tp-decal-nodepth-cull", back, replace, false);
@@ -1240,7 +1270,7 @@ impl TexturedPipeline {
             let make_dual = |label: &str,
                              depth_stencil: Option<wgpu::DepthStencilState>,
                              cull_mode: Option<wgpu::Face>| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                let descriptor = wgpu::RenderPipelineDescriptor {
                     label: Some(label),
                     layout: Some(&layout),
                     vertex: wgpu::VertexState {
@@ -1273,10 +1303,11 @@ impl TexturedPipeline {
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
                     cache: None,
-                })
+                };
+                depth_clip_pipelines(device, &descriptor)
             };
             let make_dual_decal = |label: &str, cull_mode: Option<wgpu::Face>, write: bool| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                let descriptor = wgpu::RenderPipelineDescriptor {
                     label: Some(label),
                     layout: Some(&decal_layout),
                     vertex: wgpu::VertexState {
@@ -1305,7 +1336,8 @@ impl TexturedPipeline {
                     multisample: wgpu::MultisampleState::default(),
                     multiview_mask: None,
                     cache: None,
-                })
+                };
+                depth_clip_pipelines(device, &descriptor)
             };
             let decal_dual = (
                 make_dual_decal("tp-ds-decal-nodepth-nocull", None, false),
@@ -1413,7 +1445,7 @@ impl TexturedPipeline {
         fallback_class: crate::hle::BlendClass,
         blend_class: crate::hle::BlendClass,
         write: bool,
-    ) -> &wgpu::RenderPipeline {
+    ) -> &[wgpu::RenderPipeline; 2] {
         let decal = if write {
             &self.decal_write
         } else {
@@ -1456,7 +1488,7 @@ impl TexturedPipeline {
         z_write: bool,
         any_depth: bool,
         fallback_class: crate::hle::BlendClass,
-    ) -> &wgpu::RenderPipeline {
+    ) -> &[wgpu::RenderPipeline; 2] {
         let ao = fallback_class == crate::hle::BlendClass::AlphaOver;
         if z_write && !z_test {
             let index = usize::from(cull == crate::hle::CullKind::Cull);
@@ -1585,7 +1617,7 @@ impl TexturedPipeline {
                 }
                 _ => self.select(run.cull, z_test, z_write, any_depth, rm.fallback_class),
             };
-            pass.set_pipeline(pipeline);
+            pass.set_pipeline(&pipeline[usize::from(run.unclipped_depth)]);
             pass.set_bind_group(0, material_bind_groups[run.material_index as usize], &[]);
             pass.set_bind_group(1, uniform_bind_group, &[(i as u32) * uniform_stride]);
             pass.draw_indexed(run.index_start..run.index_start + run.index_count, 0, 0..1);
@@ -2257,7 +2289,7 @@ impl SceneRenderer {
                 mode.fallback_class,
             )
         };
-        pass.set_pipeline(coverage_pipeline.unwrap_or(pipeline));
+        pass.set_pipeline(coverage_pipeline.unwrap_or(&pipeline[0]));
         if let Some(rv) = rect_vbuf {
             pass.set_vertex_buffer(0, rv.slice(..));
         }
@@ -2486,11 +2518,8 @@ pub fn headless_device() -> (wgpu::Device, wgpu::Queue, bool) {
     let dual = adapter
         .features()
         .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
-    let required_features = if dual {
-        wgpu::Features::DUAL_SOURCE_BLENDING
-    } else {
-        wgpu::Features::empty()
-    };
+    let required_features = adapter.features()
+        & (wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::DEPTH_CLIP_CONTROL);
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("headless"),
         required_features,

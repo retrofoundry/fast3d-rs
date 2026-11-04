@@ -25,6 +25,8 @@ pub struct DrawRun {
     pub fog_color: [u8; 4],
     pub prim_depth: PrimitiveDepth,
     pub cull: CullKind,
+    /// Clamp depth instead of clipping triangles at the near and far planes.
+    pub unclipped_depth: bool,
     pub index_count: u32,
     pub index_start: u32,
 }

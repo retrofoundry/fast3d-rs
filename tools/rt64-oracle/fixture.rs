@@ -138,6 +138,7 @@ pub(super) fn make_image(
                 ..Default::default()
             }),
             dual_source_blending: false,
+            depth_clip_control: false,
         },
         tasks: vec![task],
         provenance,

@@ -474,6 +474,7 @@ fn fixture(built: &Built, case: Case) -> Fixture {
             height: 240,
             vi: None,
             dual_source_blending: false,
+            depth_clip_control: false,
             config: RendererConfig {
                 resolution_multiplier: 1,
                 sample_count: 1,

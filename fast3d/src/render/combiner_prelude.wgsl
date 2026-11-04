@@ -27,13 +27,20 @@ fn fragment_depth(pixel_z: f32) -> f32 {
         let z18 = (combiner.primitive_depth.y & 0x7fffu) << 3u;
         return f32(z18) / 262144.0;
     }
-    return pixel_z;
+    return clamp(pixel_z, 0.0, 1.0);
 }
+
+override depth_clip_control: bool = false;
 
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
     out.clip_position = in.position;
+    if !depth_clip_control && combiner.inv_tex_size.w != 0.0 && in.position.w > 0.0 {
+        // Without depth-clip control, vertex clamping approximates depth across crossing triangles.
+        // Vertices behind the eye keep their depth so near clipping still removes them.
+        out.clip_position.z = clamp(in.position.z, 0.0, in.position.w);
+    }
     if combiner.is_rect == 0u {
         out.clip_position.x += in.position.w / f32(combiner.frame.z);
         out.clip_position.y -= in.position.w / f32(combiner.frame.w);
@@ -57,7 +64,7 @@ struct Combiner {
     blend_color:     vec4<f32>, // blend color RGBA — wired in B3
     fog_color:       vec4<f32>, // fog color RGBA — wired in Phase C
     inv_tex_size:    vec4<f32>, // .xy = 1/(tex_w, tex_h) for texel-space triangle and rectangle UVs.
-                                // .z = 1 for rectangles, 0 for triangles.
+                                // .z = 1 for rectangles, 0 for triangles; .w enables NoN depth clamping.
     inv_tex1_size:   vec4<f32>, // TEXEL1 mirror of inv_tex_size: .xy = 1/(tex1_w, tex1_h); .z =
                                 // tex_enable1 flag (1.0 when the second texture is used, else 0.0);
                                 // .w = filter mode (0 = point, 2 = bilerp, 3 = average).

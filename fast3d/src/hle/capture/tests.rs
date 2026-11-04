@@ -448,6 +448,7 @@ fn frame() -> Frame {
         height: 48,
         vi: None,
         dual_source_blending: false,
+        depth_clip_control: false,
         config: crate::RendererConfig {
             resolution_multiplier: 1,
             sample_count: 1,
@@ -468,6 +469,36 @@ fn fixture(task: Task) -> Fixture {
             ..Default::default()
         },
     }
+}
+
+#[test]
+fn capture_v2_non_task_roundtrips() {
+    let mut fixture =
+        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    fixture.provenance = Provenance::default();
+    let mut bytes = fixture.to_bytes().unwrap();
+    bytes[76..80].copy_from_slice(&2u32.to_le_bytes());
+    bytes[136..140].copy_from_slice(&3u32.to_le_bytes());
+    let decoded = Fixture::from_bytes(&bytes).unwrap();
+    assert!(decoded.frame.depth_clip_control);
+    assert_eq!(decoded.tasks[0].microcode, Microcode::F3dex2NoN);
+    assert_eq!(decoded.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn capture_v2_non_binding_roundtrips() {
+    let mut fixture =
+        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    fixture.provenance = Provenance::default();
+    fixture.tasks[0].bindings = vec![(0x123456789abcdef0, Microcode::F3dex2)];
+    let mut bytes = fixture.to_bytes().unwrap();
+    bytes[308..312].copy_from_slice(&3u32.to_le_bytes());
+    let decoded = Fixture::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        decoded.tasks[0].bindings,
+        vec![(0x123456789abcdef0, Microcode::F3dex2NoN)]
+    );
+    assert_eq!(decoded.to_bytes().unwrap(), bytes);
 }
 
 #[test]

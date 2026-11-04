@@ -348,11 +348,8 @@ impl Renderer {
         let dual_source = adapter
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
-        let required_features = if dual_source {
-            wgpu::Features::DUAL_SOURCE_BLENDING
-        } else {
-            wgpu::Features::empty()
-        };
+        let required_features = adapter.features()
+            & (wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::DEPTH_CLIP_CONTROL);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("fast3d-device"),

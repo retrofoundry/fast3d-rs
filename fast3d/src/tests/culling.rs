@@ -81,6 +81,7 @@ fn cull_back_marks_cull_run_no_swap() {
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::Cull,
+            unclipped_depth: false,
             index_count: 3,
             index_start: 0,
         }]
@@ -99,6 +100,7 @@ fn cull_front_marks_cull_run_and_swaps() {
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::Cull,
+            unclipped_depth: false,
             index_count: 3,
             index_start: 0,
         }]
@@ -124,6 +126,7 @@ fn no_cull_bits_records_none_run() {
             material_index: 0,
             render_mode_index: 0,
             cull: CullKind::None,
+            unclipped_depth: false,
             index_count: 3,
             index_start: 0,
         }]

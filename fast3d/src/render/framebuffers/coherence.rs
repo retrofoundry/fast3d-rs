@@ -558,7 +558,8 @@ mod tests {
 
 pub(crate) struct Coverage {
     shader: wgpu::ShaderModule,
-    pipelines: std::collections::HashMap<(bool, bool, bool, bool, bool), wgpu::RenderPipeline>,
+    pipelines:
+        std::collections::HashMap<(bool, bool, bool, bool, bool, bool), wgpu::RenderPipeline>,
 }
 
 fn coverage_shader(prelude: &str) -> String {
@@ -614,7 +615,20 @@ impl Coverage {
             }
             _ => (false, false, false, false),
         };
-        self.pipeline_for(device, textured, (cull, test, write, decal, any_depth))
+        let unclipped_depth = matches!(
+            draw,
+            DrawInputs::Tris {
+                unclipped_depth: true,
+                ..
+            }
+        ) && device
+            .features()
+            .contains(wgpu::Features::DEPTH_CLIP_CONTROL);
+        self.pipeline_for(
+            device,
+            textured,
+            (cull, test, write, decal, any_depth, unclipped_depth),
+        )
     }
 
     /// Build every pipeline variant up front: a cold first use compiles one mid-frame, and enough of
@@ -624,16 +638,19 @@ impl Coverage {
         device: &wgpu::Device,
         textured: &super::super::TexturedPipeline,
     ) {
-        for bits in 0..32u8 {
+        let unclipped = device
+            .features()
+            .contains(wgpu::Features::DEPTH_CLIP_CONTROL);
+        for bits in 0..64u8 {
             let flag = |bit: u8| bits & (1 << bit) != 0;
             // A depth-writing decal always has a depth attachment; no draw reaches the other case.
-            if flag(3) && flag(2) && !flag(4) {
+            if (flag(5) && !unclipped) || (flag(3) && flag(2) && !flag(4)) {
                 continue;
             }
             self.pipeline_for(
                 device,
                 textured,
-                (flag(0), flag(1), flag(2), flag(3), flag(4)),
+                (flag(0), flag(1), flag(2), flag(3), flag(4), flag(5)),
             );
         }
     }
@@ -642,9 +659,9 @@ impl Coverage {
         &mut self,
         device: &wgpu::Device,
         textured: &super::super::TexturedPipeline,
-        key: (bool, bool, bool, bool, bool),
+        key: (bool, bool, bool, bool, bool, bool),
     ) -> &wgpu::RenderPipeline {
-        let (cull, test, write, decal, any_depth) = key;
+        let (cull, test, write, decal, any_depth, unclipped_depth) = key;
         self.pipelines.entry(key).or_insert_with(|| {
             let mut groups = vec![
                 Some(textured.bind_group_layout()),
@@ -707,7 +724,7 @@ impl Coverage {
                 multiview_mask: None,
                 cache: None,
             };
-            device.create_render_pipeline(&descriptor)
+            super::super::depth_clip_pipeline(device, &descriptor, unclipped_depth)
         })
     }
 }
