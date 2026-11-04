@@ -75,3 +75,13 @@ hardware or GPU evidence gates.
 JSONL records are flushed after each task. Bank, source and witness deduplication
 compares files on disk, so the tool retains the decoded capture and the current
 task's observation batch rather than accumulating every attempt in memory.
+
+`replacement_native` and `replacement_rt64_v5` record eligibility per attempt,
+and their summary fields count eligible attempts. They describe potential
+provider requests, not matches or installed packs. Framebuffer sources, the
+load-free shortcut, NoTextureLoaded and attempts with a recorded draw refusal
+are excluded. Native
+eligibility uses the native decode request; v5 uses the same admission as the live
+provider, including raw TLUT mode, rt64's mask-derived extent and palette-lane
+exclusions. This work runs only in census mode. Prefix incompleteness still
+applies to these counts.

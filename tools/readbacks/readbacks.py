@@ -184,7 +184,7 @@ def authenticate_rows(root, actual, expected, windows, *, roles=("render", "cpu-
 
 
 def load_capture(root, inventory, source_sha, run_id, *, allow_incomplete=False,
-                 supplemental_inventory=None, require_gpu_decode=None):
+                 supplemental_inventory=None, require_gpu_decode=None, require_replacements=None):
     root = Path(root)
     manifest = json.loads(artifact_file(root, "manifest.json").read_text(encoding="utf-8"))
     if manifest["schema"] != 1:
@@ -224,15 +224,17 @@ def load_capture(root, inventory, source_sha, run_id, *, allow_incomplete=False,
     manifest["_gpu_decode"] = load_gpu_decode(
         root, manifest, supplemental_inventory, allow_incomplete=allow_incomplete,
         require_gpu_decode=require_gpu_decode)
+    import replacements
+    manifest["_replacements"] = replacements.load(root, manifest, allow_incomplete=allow_incomplete, require=require_replacements)
     return manifest, rows
 
 
 def compare(base, candidate, inventory, base_sha, candidate_sha, base_run_id, candidate_run_id,
-            *, allow_incomplete=False, supplemental_inventory=None, require_gpu_decode=None):
+            *, allow_incomplete=False, supplemental_inventory=None, require_gpu_decode=None, require_replacements=None):
     parent, parent_rows = load_capture(base, inventory, base_sha, base_run_id, allow_incomplete=allow_incomplete,
                                      supplemental_inventory=supplemental_inventory)
     head, head_rows = load_capture(candidate, inventory, candidate_sha, candidate_run_id, allow_incomplete=allow_incomplete,
-                                  supplemental_inventory=supplemental_inventory, require_gpu_decode=require_gpu_decode)
+                                  supplemental_inventory=supplemental_inventory, require_gpu_decode=require_gpu_decode, require_replacements=require_replacements)
     if head["base_sha"] != base_sha:
         raise ValueError("candidate base SHA does not match requested base")
     for field in ["runtime", "harness_sha256"]:
@@ -242,9 +244,10 @@ def compare(base, candidate, inventory, base_sha, candidate_sha, base_run_id, ca
                for label, rows in [("base", parent_rows), ("candidate", head_rows)]}
     failures = {"base": capture_failures(parent), "candidate": capture_failures(head)}
     gpu_decode = {"base": parent["_gpu_decode"], "candidate": head["_gpu_decode"]}
+    replacements = {"base": parent["_replacements"], "candidate": head["_replacements"]}
     complete = not any(missing.values()) and not any(failures.values()) and all(
-        not result["missing_rows"] and not result["errors"] for result in gpu_decode.values())
-    report = {"passed": complete, "complete": complete, "missing_rows": missing, "failures": failures, "gpu_decode": gpu_decode,
+        not result["missing_rows"] and not result["errors"] for result in list(gpu_decode.values()) + list(replacements.values()))
+    report = {"passed": complete, "complete": complete, "missing_rows": missing, "failures": failures, "gpu_decode": gpu_decode, "replacements": replacements,
               "threshold": 0, "base_sha": base_sha, "candidate_sha": candidate_sha,
               "base_run_id": str(base_run_id), "candidate_run_id": str(candidate_run_id), "rows": []}
     for key, row in head_rows.items():

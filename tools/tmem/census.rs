@@ -188,6 +188,8 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
     let mut terminations = BTreeMap::new();
     let mut diagnostics = BTreeMap::new();
     let mut attempts_count = 0u64;
+    let mut replacement_native = 0u64;
+    let mut replacement_rt64_v5 = 0u64;
     let mut loads_count = 0u64;
     let mut distinct = 0u64;
     let mut banks = 0u64;
@@ -291,6 +293,8 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
             }
             for attempt in snapshot.census_attempts {
                 attempts_count += 1;
+                replacement_native += u64::from(attempt.replacement_native);
+                replacement_rt64_v5 += u64::from(attempt.replacement_rt64_v5);
                 increment(&mut classes, &attempt.class);
                 increment(&mut roles, &attempt.role);
                 increment(&mut outcomes, &attempt.outcome);
@@ -325,6 +329,8 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
                     "tile": attempt.tile,
                     "tlut": attempt.tlut,
                     "outcome": attempt.outcome,
+                    "replacement_native": attempt.replacement_native,
+                    "replacement_rt64_v5": attempt.replacement_rt64_v5,
                     "draw_rejection": attempt.draw_rejection,
                     "framebuffer": attempt.framebuffer,
                     "framebuffer_decode": attempt.framebuffer_decode,
@@ -390,6 +396,8 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
         "tasks": task_count,
         "commands": commands,
         "attempts": attempts_count,
+        "replacement_native": replacement_native,
+        "replacement_rt64_v5": replacement_rt64_v5,
         "loads": loads_count,
         "classes": classes,
         "roles": roles,
@@ -485,6 +493,8 @@ mod tests {
             tile: Default::default(),
             tlut: 0,
             outcome: "Tile".into(),
+            replacement_native: true,
+            replacement_rt64_v5: true,
             draw_rejection: None,
             framebuffer: false,
             framebuffer_decode: None,

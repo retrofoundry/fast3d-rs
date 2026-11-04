@@ -133,6 +133,8 @@ impl Recorder {
             {
                 attempt.outcome = format!("FramebufferShortcut {{ address: {address} }}");
                 attempt.class = "intentional_exception".into();
+                attempt.replacement_native = false;
+                attempt.replacement_rt64_v5 = false;
                 attempt.physical.clear();
                 attempt.witness = None;
             }

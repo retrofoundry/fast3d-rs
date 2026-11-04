@@ -15,6 +15,7 @@ pub(crate) struct RenderInputs<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct TextureInputs {
+    pub framebuffer_only: bool,
     pub sampling: super::TileSamplingArray,
     pub allocation_extent: [u32; 2],
     pub tex_w: u32,
@@ -31,6 +32,7 @@ pub(super) struct TextureInputs {
 impl From<&Material> for TextureInputs {
     fn from(mat: &Material) -> Self {
         Self {
+            framebuffer_only: false,
             sampling: super::material_sampling(mat),
             allocation_extent: mat.sampling.allocation_extent(),
             tex_w: mat.tex_w,
@@ -608,6 +610,26 @@ impl<'a> RenderInputs<'a> {
                 })
                 .collect(),
         };
+        let mut uses = vec![(false, false); result.textures.len()];
+        for op in result.targets.iter().flat_map(|target| &target.operations) {
+            match op.draw {
+                DrawInputs::Rectangle {
+                    material_index: Some(index),
+                    fb_source: Some(_),
+                    ..
+                } => uses[index as usize].0 = true,
+                DrawInputs::Tris { material_index, .. }
+                | DrawInputs::Rectangle {
+                    material_index: Some(material_index),
+                    fb_source: None,
+                    ..
+                } => uses[material_index as usize].1 = true,
+                _ => {}
+            }
+        }
+        for (texture, (framebuffer, ordinary)) in result.textures.iter_mut().zip(uses) {
+            texture.framebuffer_only = framebuffer && !ordinary;
+        }
         result.diagnostics = diagnostics;
         result.dropped_runs = dropped_runs;
         Some(result)
@@ -647,6 +669,49 @@ impl<T> std::ops::DerefMut for BufferData<T> {
 mod tests {
     use super::*;
     use crate::hle::{gbi::GbiUcode, interp::interpret, mem::GbiDataFormat};
+
+    #[test]
+    fn framebuffer_shortcut_preserves_shared_material_textures() {
+        let scene = crate::tests::common::scene_from_fixture("offscreen-then-sample");
+        let (pair, op, index) = scene
+            .framebuffer_pairs
+            .iter()
+            .enumerate()
+            .find_map(|(pair, target)| {
+                target
+                    .ops
+                    .iter()
+                    .enumerate()
+                    .find_map(|(op, draw)| match draw {
+                        SceneOp::TexRect {
+                            material_index,
+                            fb_source: Some(_),
+                            ..
+                        } => Some((pair, op, *material_index as usize)),
+                        _ => None,
+                    })
+            })
+            .unwrap();
+        let inputs = RenderInputs::new(&scene, (320, 240), [0; 2]).unwrap();
+        assert!(inputs.textures[index].framebuffer_only);
+        for before in [false, true] {
+            let mut shared = scene.clone();
+            let mut ordinary = shared.framebuffer_pairs[pair].ops[op].clone();
+            let SceneOp::TexRect { fb_source, .. } = &mut ordinary else {
+                unreachable!()
+            };
+            *fb_source = None;
+            shared.framebuffer_pairs[pair]
+                .ops
+                .insert(op + usize::from(!before), ordinary);
+            let inputs = RenderInputs::new(&shared, (320, 240), [0; 2]).unwrap();
+            assert!(!inputs.textures[index].framebuffer_only);
+            assert_eq!(
+                inputs.textures[index],
+                TextureInputs::from(&scene.materials[index])
+            );
+        }
+    }
 
     #[test]
     fn coverage_target_extent_and_draw_kind() {

@@ -146,3 +146,8 @@ raw GPU output to the CPU oracle plus independent literals. Native and Chrome
 tests also exercise default renderer residency, independent roles, realistic
 reloads, pressure, completion and device epochs. Hardware and timing acceptance
 must be recorded for the candidate revision before merge.
+
+Optional exact-witness replacement snapshots are described in
+[texture-replacements.md](texture-replacements.md). Both framebuffer source modes
+bypass replacement lookup and alias construction; native decoded residency keeps
+its original Fast3dV1 keys.
