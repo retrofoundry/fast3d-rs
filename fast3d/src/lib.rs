@@ -560,11 +560,12 @@ impl Renderer {
     /// Consume native display-list memory before returning; retained scenes own their inputs.
     ///
     /// # Safety
-    /// Every command and reachable input span must be allocated, readable, initialized, in
+    /// Every command and reachable input span within the registered ranges (or every reachable
+    /// span when no ranges are supplied) must be allocated, readable, initialized, in
     /// [`HostRam`]'s native layout, and stable until return. Borrowed texture bytes must not be
     /// mutated concurrently. The descriptor's witness is only a lifetime aid. Numeric CIMG/ZIMG
     /// identities need not be readable unless used as inputs. The dispatch cap only bounds
-    /// liveness; it cannot validate a native pointer.
+    /// liveness; without registered ranges it cannot validate a native pointer.
     ///
     /// ```compile_fail,E0133
     /// use fast3d::{HostRam, Microcode, NopSink, Renderer};
@@ -784,6 +785,8 @@ impl Renderer {
         if self.inner.depth_reset_policy == DepthResetPolicy::TaskBoundary {
             self.inner.discard_depth();
         }
+        // Released bytes are already foreign, so import them even if this task is rejected.
+        self.inner.import_existing(&self.device, &self.queue);
         let is_image = mem.is_rdram_image();
         let rdp = if submission == Submission::RasterizePrefix {
             Default::default()
@@ -834,7 +837,14 @@ impl Renderer {
             return result.summary(false);
         }
 
-        if result.commits_rdp() {
+        if !result.commits_rdp() {
+            released = Ok(());
+        }
+        if self.guest_writeback {
+            released = released.and_then(|_| {
+                crate::render::workload::Workload::new(&result.scene)
+                    .check_writeback(&result.scene, &mem)
+            });
             if let Err(error) = released {
                 let diagnostic = Diagnostic {
                     at: entry,
@@ -848,9 +858,6 @@ impl Renderer {
                 result.termination = inspect::WalkTermination::Rejected;
                 return result.summary(false);
             }
-        }
-        if self.guest_writeback && result.commits_rdp() {
-            self.inner.import_existing(&self.device, &self.queue);
         }
         if submission == Submission::DiscardOnStop && result.commits_rdp() {
             self.rdp = result.rdp.clone();

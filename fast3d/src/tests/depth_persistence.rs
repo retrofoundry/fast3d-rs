@@ -1734,6 +1734,46 @@ mod writeback {
         assert_eq!(memory[0], 0x07c1);
     }
 
+    #[test]
+    fn rejected_task_imports_edits_before_the_next_task() {
+        let mut r = renderer(7, 5);
+        r.set_guest_writeback(true);
+        let invalid = 0x0000_fed0_0029_0003;
+        let mut writeback = color_fill(invalid, 7, 5, 0, 2, 0, [0, 0, 6, 4]);
+        writeback.push([0xdf00_0000, 0]);
+        let read = [[0x0100_3006, invalid], [0xdf00_0000, 0]];
+        for rejected in [&writeback[..], &read] {
+            r.reset();
+            let mut memory = [0u16; 35];
+            let address = memory.as_mut_ptr() as u64;
+            apply(run(
+                &mut r,
+                color_fill(address, 7, 5, 0, 2, 0xf801_f801, [0, 0, 6, 4]),
+            ));
+            memory[0] = 0x07c1;
+            let entry = rejected.as_ptr() as u64;
+            let ranges = [
+                entry..entry + size_of_val(rejected) as u64,
+                address..address + 70,
+            ];
+            let summary = unsafe {
+                r.process_dl_host(
+                    HostRam::with_ranges(&[], &ranges),
+                    entry,
+                    Microcode::F3dex2,
+                    &mut NopSink,
+                )
+            };
+            assert!(!summary.renderable);
+            assert_eq!(&color_pixels(&mut r, address, 7, 5)[..4], &GREEN);
+            apply(run(
+                &mut r,
+                color_fill(address, 7, 5, 0, 2, 0x003f_003f, [6, 4, 6, 4]),
+            ));
+            assert_eq!(memory[0], 0x07c1);
+        }
+    }
+
     #[cfg(feature = "capture")]
     #[test]
     fn writeback_capture_records_import_reads_and_refuses_foreign_uploads() {

@@ -32,6 +32,37 @@ pub(crate) struct Workload {
 }
 
 impl Workload {
+    pub(crate) fn check_writeback(
+        &self,
+        scene: &Scene,
+        memory: &impl crate::Rdram,
+    ) -> Result<(), crate::MemoryError> {
+        for target in &self.targets {
+            if target
+                .operations
+                .iter()
+                .all(|op| matches!(op.draw, SceneOp::FramebufferCopy(_)))
+            {
+                continue;
+            }
+            let (width, height) = target.logical_extent;
+            if !target.depth_clear {
+                if let TargetId::Guest(address) = target.id {
+                    let layout = ImageLayout {
+                        width,
+                        fmt: target.color_image.fmt,
+                        siz: target.color_image.siz,
+                    };
+                    memory.check_write(address, layout.row_bytes().unwrap() * u64::from(height))?;
+                }
+            }
+            if let Some(address) = target.depth_image.filter(|_| target.uses_depth(scene)) {
+                memory.check_write(address, u64::from(width) * u64::from(height) * 2)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn new(scene: &Scene) -> Self {
         let triangles: Vec<_> = scene
             .draw_origins

@@ -95,7 +95,10 @@ returns. That includes what the RDP reads around a texture: an S2DEX2
 one-cycle background can load the image row just before `imagePtr`, as the
 microcode does to keep TMEM row parity.
 The lifetime witness does not establish pointer validity, and the
-dispatch cap only bounds liveness. CIMG/ZIMG are GPU target identities and need
+dispatch cap only bounds liveness. `HostRam::with_ranges(frame, ranges)` limits
+reads and write-back extents to spans inside one registered range. A span
+outside every range fails as a memory read and discards the task, so only the
+ranges themselves must stay valid. CIMG/ZIMG are GPU target identities and need
 not be readable unless a command uses them as input. `present_last_to(view)`
 scans out to a caller-owned view.
 
