@@ -423,12 +423,22 @@ def audit(out):
     timing_policy(version, plan.get('backend'), plan.get('workload'), plan.get('configuration'))
     reasons = []
     if version == V4:
-        warmup = plan.get('warmup', {})
-        if (plan.get('settle_seconds') != 90 or warmup.get('full_prefix_runs') != 1 or
-                not (out/'warmup/frames.jsonl').exists()):
-            reasons.append('missing one throwaway full-prefix warm-up before fixed 90-second settle')
+        change = plan.get('same_binary_for_both_labels') is False
+        warmups = plan.get('warmup', {})
+        if change:
+            labels = list(dict.fromkeys(a['revision'] for a in plan['attempts']))
+            if not isinstance(warmups, list) or [w.get('revision') for w in warmups] != labels:
+                reasons.append('missing per-label throwaway full-prefix warm-up in attempt order')
+                warmups = []
         else:
-            reasons.extend(frame_errors(list(rows(out/'warmup/frames.jsonl'))))
+            warmups = [warmups]
+        for warmup in warmups:
+            frames = out/('warmup-'+warmup['revision'] if change else 'warmup')/'frames.jsonl'
+            if (plan.get('settle_seconds') != 90 or warmup.get('full_prefix_runs') != 1 or
+                    not frames.exists()):
+                reasons.append('missing one throwaway full-prefix warm-up before fixed 90-second settle')
+            else:
+                reasons.extend(frame_errors(list(rows(frames))))
         if not (out/'settle.json').exists() or read(out/'settle.json').get('elapsed_seconds', 0) < 90:
             reasons.append('missing completed 90-second settle record')
     if any(not Path(a['quiet_run']).exists() for a in plan['attempts']):
@@ -522,8 +532,15 @@ def native(args):
     if plan['floors_ms'] != {'cpu_ms':.01, 'emission_interval_ms':.01}:
         raise ValueError('v4 requires frozen 0.01 ms per-frame CPU and elapsed floors')
     plan.update(settle_seconds=90, reservation=reservation, kit_sha256=sha(root/'kit.json'))
-    plan['warmup'] = {'full_prefix_runs': 1, 'command': [plan['attempts'][0]['command'][0], 'sequence',
-                      str(root/'captures/demo1-dense.f3dcap'), str(out/'warmup'), 'coarse']}
+    warmups = {}
+    for entry in plan['attempts']:
+        label = entry['revision'] if change else ''
+        if label not in warmups:
+            warmups[label] = {'full_prefix_runs': 1, 'command': [entry['command'][0], 'sequence',
+                str(root/'captures/demo1-dense.f3dcap'), str(out/('warmup-'+label if label else 'warmup')), 'coarse']}
+            if change:
+                warmups[label]['revision'] = label
+    plan['warmup'] = list(warmups.values()) if change else warmups['']
     write(out/'attempts.json', plan)
     try:
         if not change:
@@ -540,7 +557,8 @@ def native(args):
                                 '--binary', str(binary), '--out', str(checks)],
                                stdout=log, stderr=log, check=True)
         with (out/'warmup.log').open('x') as log:
-            subprocess.run(plan['warmup']['command'], stdout=log, stderr=log, check=True)
+            for warmup in warmups.values():
+                subprocess.run(warmup['command'], stdout=log, stderr=log, check=True)
         warmup_finished = utc()
         settle_start = time.monotonic()
         time.sleep(90)
