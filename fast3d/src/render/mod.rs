@@ -2307,7 +2307,7 @@ impl SceneRenderer {
         &self,
         device: &wgpu::Device,
         width: u32,
-        height: u32,
+        rows: std::ops::Range<u32>,
         attachment_height: u32,
     ) -> wgpu::BindGroup {
         let buffer = buffer_init(
@@ -2317,10 +2317,10 @@ impl SceneRenderer {
             &wgpu::util::BufferInitDescriptor {
                 label: Some("present-extent"),
                 contents: bytemuck::cast_slice(&[
-                    1.0_f32,
-                    height as f32 / attachment_height as f32,
+                    (rows.end - rows.start) as f32 / attachment_height as f32,
+                    rows.start as f32 / attachment_height as f32,
                     (width as f32 - 0.5) / width as f32,
-                    (height as f32 - 0.5) / attachment_height as f32,
+                    (rows.end as f32 - 0.5) / attachment_height as f32,
                 ]),
                 usage: wgpu::BufferUsages::UNIFORM,
             },
@@ -2402,7 +2402,7 @@ impl SceneRenderer {
             .chain([sampling_entry(&self.image_sampling)])
             .collect::<Vec<_>>(),
         });
-        let present_extent = self.make_present_extent(device, w, logical_height, h);
+        let present_extent = self.make_present_extent(device, w, 0..logical_height, h);
         let sampling = framebuffers::color_sampling(device, w, logical_height);
         self.profiling.buffer(
             "uniforms",
@@ -2413,7 +2413,7 @@ impl SceneRenderer {
             height: logical_height,
             sampling,
             present_extent,
-            present_height: logical_height,
+            present_rows: 0..logical_height,
             color,
             attach,
             sampled,
@@ -2422,35 +2422,41 @@ impl SceneRenderer {
         }
     }
 
-    /// True if the store holds a framebuffer for `addr` (the VI source-selection guard `present` uses).
+    pub(crate) fn scanout_images(
+        &self,
+    ) -> impl Iterator<Item = (workload::TargetId, ImageLayout, u32)> + '_ {
+        self.framebuffers
+            .iter()
+            .map(|(&target, fb)| (target, fb.layout, fb.height))
+    }
+
     pub fn has_fb(&self, addr: impl Into<workload::TargetId>) -> bool {
         self.framebuffers.contains_key(&addr.into())
     }
 
     /// VI scanout (D2): blit the stored FB at `src_addr` to `target` via the present pipeline
     /// (Clamp/Linear — identity at 1:1, sampler-stretch otherwise). Records into the CALLER's
-    /// `encoder` (present owns acquire+submit). Without a VI row count, uses the target's
-    /// retained logical height. Panics on a missing key — callers gate on `has_fb`.
+    /// `encoder` (present owns acquire+submit). Without a VI row range, uses `0..retained_height`. Panics on a missing key.
     pub fn scanout(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         src_addr: impl Into<workload::TargetId>,
-        height: Option<u32>,
+        rows: Option<std::ops::Range<u32>>,
     ) {
         let src_addr = src_addr.into();
         let fb = self
             .framebuffers
             .get(&src_addr)
-            .expect("scanout: src_addr not in the store (gate on has_fb)");
-        let height = height.unwrap_or(fb.height);
-        if height != fb.present_height {
+            .expect("scanout: src_addr not in the store");
+        let rows = rows.unwrap_or(0..fb.height);
+        if rows != fb.present_rows {
             let extent =
-                self.make_present_extent(device, fb.layout.width, height, fb.color.height());
+                self.make_present_extent(device, fb.layout.width, rows.clone(), fb.color.height());
             let fb = self.framebuffers.get_mut(&src_addr).unwrap();
             fb.present_extent = extent;
-            fb.present_height = height;
+            fb.present_rows = rows;
         }
         let fb = &self.framebuffers[&src_addr];
         self.blit_to(encoder, target, &fb.present_bg, &fb.present_extent);

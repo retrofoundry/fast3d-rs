@@ -1041,50 +1041,88 @@ impl Renderer {
 
 /// A `VI_ORIGIN` register is an RDRAM framebuffer offset masked to 24 bits (spec §3.3). Store keys
 /// are the recorded `color_image.addr` (a physical offset for `RdramImage`).
-#[allow(dead_code)] // RJ bridge: consumed by `present_to`/`present` (P3.9b/P3.9c); test-only until then.
 pub(crate) fn fb_address(origin: u32) -> u64 {
     (origin & 0x00FF_FFFF) as u64
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ScanoutSource {
     target: TargetId,
-    height: Option<u32>,
+    rows: Option<std::ops::Range<u32>>,
 }
 
-/// Pick the framebuffer to scan out. With a live VI over a unified-RDRAM (`RdramImage`) frame,
-/// `VI_ORIGIN` is authoritative IF that framebuffer exists in the store; otherwise, and for every
-/// host-pointer frame (`last_backend_was_image == false`, contract #3) and every no-VI consumer,
-/// fall back to the last-rendered color image (spec §4).
-#[allow(dead_code)] // RJ bridge: consumed by `present_to`/`present` (P3.9b/P3.9c); test-only until then.
+fn vi_rows(
+    vi: ViRegisters,
+    base: u64,
+    layout: render::framebuffers::ImageLayout,
+    height: u32,
+) -> Option<std::ops::Range<u32>> {
+    if layout.fmt != 0
+        || !matches!(layout.siz, 2 | 3)
+        || u32::from(layout.siz) != vi.status & 3
+        || layout.width == 0
+        || layout.width != vi.width & 0xfff
+    {
+        return None;
+    }
+    let stride = layout.row_bytes()?;
+    let offset = fb_address(vi.origin).checked_sub(base)?;
+    if offset % stride != 0 {
+        return None;
+    }
+    let start = u32::try_from(offset / stride).ok()?;
+    if start >= height {
+        return None;
+    }
+    Some(start..start.saturating_add(vi.scanout_height()?).min(height))
+}
+
+/// Host-pointer frames and consumers without VI registers use the last rendered target.
+/// Guest VI origins select an exact key first, then a whole row inside a compatible image.
 pub(crate) fn select_scanout_source(
     vi: Option<ViRegisters>,
     last_backend_was_image: bool,
     last_scanout_addr: Option<TargetId>,
-    fb_present: impl Fn(u64) -> bool,
+    images: impl IntoIterator<Item = (TargetId, render::framebuffers::ImageLayout, u32)>,
 ) -> Option<ScanoutSource> {
-    vi.filter(|_| last_backend_was_image)
-        .filter(|v| fb_present(fb_address(v.origin)))
-        .map(|v| ScanoutSource {
-            target: TargetId::Guest(fb_address(v.origin)),
-            height: v.scanout_height(),
-        })
-        .or_else(|| {
-            last_scanout_addr.map(|target| ScanoutSource {
+    let fallback = last_scanout_addr.map(|target| ScanoutSource { target, rows: None });
+    let Some(vi) = vi.filter(|_| last_backend_was_image) else {
+        return fallback;
+    };
+    let mut selected: Option<ScanoutSource> = None;
+    for (target, layout, height) in images {
+        let TargetId::Guest(base) = target else {
+            continue;
+        };
+        if base == fb_address(vi.origin) {
+            return Some(ScanoutSource {
                 target,
-                height: None,
-            })
-        })
+                rows: vi.scanout_height().map(|height| 0..height),
+            });
+        }
+        let Some(rows) = vi_rows(vi, base, layout, height) else {
+            continue;
+        };
+        if selected
+            .as_ref()
+            .is_none_or(|source| rows.start < source.rows.as_ref().unwrap().start)
+        {
+            selected = Some(ScanoutSource {
+                target,
+                rows: Some(rows),
+            });
+        }
+    }
+    selected.or(fallback)
 }
 
 impl Renderer {
-    #[allow(dead_code)] // RJ bridge: consumed by `present_to`/`present` (P3.9b/P3.9c).
     fn scanout_source(&self, vi: Option<ViRegisters>) -> Option<ScanoutSource> {
         select_scanout_source(
             vi,
             self.last_backend_was_image,
             self.last_scanout_addr,
-            |a| self.inner.has_fb(a),
+            self.inner.scanout_images(),
         )
     }
 
@@ -1150,7 +1188,7 @@ impl Renderer {
             .filter(|address| self.inner.has_fb(*address))
             .map(|address| ScanoutSource {
                 target: TargetId::Guest(address),
-                height: None,
+                rows: None,
             })
             .or_else(|| self.scanout_source(None))
     }
@@ -1168,7 +1206,7 @@ impl Renderer {
             });
         if let Some(src) = src {
             self.inner
-                .scanout(&self.device, &mut encoder, target, src.target, src.height);
+                .scanout(&self.device, &mut encoder, target, src.target, src.rows);
         }
         self.record_and_submit(encoder, target);
     }
@@ -1228,7 +1266,7 @@ impl Renderer {
             });
         if let Some(src) = src {
             self.inner
-                .scanout(&self.device, &mut encoder, &view, src.target, src.height);
+                .scanout(&self.device, &mut encoder, &view, src.target, src.rows);
         }
         // ── SEAM (P4): hook draw() records over `view` (LoadOp::Load); its pre-frame CommandBuffers
         //    submit STRICTLY BEFORE this encoder.
@@ -1280,139 +1318,268 @@ mod present_headless_tests {
 
 #[cfg(test)]
 mod source_select_tests {
-    use super::{fb_address, select_scanout_source, ScanoutSource, TargetId};
-    use crate::hardware::ViRegisters;
+    use super::{select_scanout_source, ScanoutSource, TargetId, ViRegisters};
+    use crate::render::framebuffers::ImageLayout;
+
+    const BASE: u64 = 0x0013_6780;
+    const LAST: TargetId = TargetId::Guest(0x003c_3fc0);
+    const LAYOUT: ImageLayout = ImageLayout {
+        width: 512,
+        fmt: 0,
+        siz: 2,
+    };
 
     fn vi(origin: u32) -> ViRegisters {
         ViRegisters {
             origin,
+            status: 2,
+            width: 512,
+            v_start: 0x0025_01ff,
+            y_scale: 1024,
             ..Default::default()
         }
     }
 
     #[test]
     fn rdram_image_with_vi_in_store_picks_vi_origin() {
-        let origin = 0x0020_0000u32;
-        let got = select_scanout_source(
-            Some(vi(origin)),
-            true,
-            Some(TargetId::Guest(0x10_0000)),
-            |a| a == fb_address(origin),
-        );
-        assert_eq!(
-            got.map(|src| src.target),
-            Some(TargetId::Guest(fb_address(origin)))
-        );
-    }
-
-    #[test]
-    fn rdram_image_with_vi_not_in_store_falls_back() {
-        let got = select_scanout_source(
-            Some(vi(0x0090_0000)),
-            true,
-            Some(TargetId::Guest(0x10_0000)),
-            |_| false,
-        );
-        assert_eq!(
-            got.map(|src| src.target),
-            Some(TargetId::Guest(0x10_0000)),
-            "VI origin absent from store → last_scanout_addr"
-        );
-    }
-
-    #[test]
-    fn host_ram_ignores_vi_and_uses_last_scanout() {
-        let got = select_scanout_source(
-            Some(vi(0x0020_0000)),
-            false,
-            Some(TargetId::Guest(0x10_0000)),
-            |_| true,
-        );
-        assert_eq!(got.map(|src| src.target), Some(TargetId::Guest(0x10_0000)));
-    }
-
-    #[test]
-    fn legacy_scanout_is_distinct_from_vi_zero() {
-        assert_eq!(
-            select_scanout_source(Some(vi(0)), true, Some(TargetId::Legacy), |_| false)
-                .map(|src| src.target),
-            Some(TargetId::Legacy)
-        );
-        assert_eq!(
-            select_scanout_source(Some(vi(0)), true, Some(TargetId::Legacy), |address| address
-                == 0)
-            .map(|src| src.target),
-            Some(TargetId::Guest(0))
-        );
-    }
-
-    #[test]
-    fn no_vi_uses_last_scanout() {
-        let got = select_scanout_source(None, true, Some(TargetId::Guest(0x10_0000)), |_| true);
-        assert_eq!(got.map(|src| src.target), Some(TargetId::Guest(0x10_0000)));
-    }
-
-    #[test]
-    fn nothing_rendered_yet_is_none() {
-        assert_eq!(select_scanout_source(None, true, None, |_| true), None);
+        for (layout, height) in [
+            (LAYOUT, 236),
+            (ImageLayout { fmt: 3, ..LAYOUT }, 240),
+            (ImageLayout { siz: 3, ..LAYOUT }, 240),
+            (ImageLayout { width: 0, ..LAYOUT }, 240),
+        ] {
+            for status in [0, 1, 2, 3] {
+                let registers = ViRegisters {
+                    status,
+                    width: 256,
+                    ..vi(BASE as u32)
+                };
+                assert_eq!(
+                    select_scanout_source(
+                        Some(registers),
+                        true,
+                        Some(LAST),
+                        [(TargetId::Guest(BASE), layout, height)]
+                    ),
+                    Some(ScanoutSource {
+                        target: TargetId::Guest(BASE),
+                        rows: Some(0..237)
+                    })
+                );
+            }
+        }
     }
 
     #[test]
     fn vi_rows_apply_only_to_the_selected_image_origin() {
-        let vi = ViRegisters {
+        let registers = ViRegisters {
             origin: 0x8020_0000,
             v_start: (32 << 16) | 288,
             y_scale: 1024,
             ..Default::default()
         };
-        for (image, present, last, expected) in [
+        for (image, present, last, target, rows) in [
             (
                 true,
                 true,
                 TargetId::Legacy,
-                ScanoutSource {
-                    target: TargetId::Guest(0x20_0000),
-                    height: Some(128),
-                },
+                TargetId::Guest(0x20_0000),
+                Some(0..128),
             ),
-            (
-                true,
-                false,
-                TargetId::Guest(0x10_0000),
-                ScanoutSource {
-                    target: TargetId::Guest(0x10_0000),
-                    height: None,
-                },
-            ),
-            (
-                true,
-                false,
-                TargetId::Legacy,
-                ScanoutSource {
-                    target: TargetId::Legacy,
-                    height: None,
-                },
-            ),
+            (true, false, LAST, LAST, None),
+            (true, false, TargetId::Legacy, TargetId::Legacy, None),
             (
                 false,
                 true,
                 TargetId::Guest(0x20_0000),
-                ScanoutSource {
-                    target: TargetId::Guest(0x20_0000),
-                    height: None,
+                TargetId::Guest(0x20_0000),
+                None,
+            ),
+        ] {
+            let images = present.then_some((TargetId::Guest(0x20_0000), LAYOUT, 64));
+            assert_eq!(
+                select_scanout_source(Some(registers), image, Some(last), images),
+                Some(ScanoutSource { target, rows })
+            );
+        }
+    }
+
+    #[test]
+    fn interior_vi_rows_clamp_to_retained_height() {
+        for (offset, height) in [(1, 237), (4, 240), (239, 240)] {
+            assert_eq!(
+                select_scanout_source(
+                    Some(vi(BASE as u32 + offset * 1024)),
+                    true,
+                    Some(LAST),
+                    [(TargetId::Guest(BASE), LAYOUT, height)]
+                ),
+                Some(ScanoutSource {
+                    target: TargetId::Guest(BASE),
+                    rows: Some(offset..height)
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn vi_selects_exact_and_interior_origins() {
+        for (siz, stride) in [(2, 1024), (3, 2048)] {
+            for offset in [0, 1, 3] {
+                let vi = ViRegisters {
+                    status: siz.into(),
+                    ..vi(0x8000_0000 | (BASE as u32 + offset * stride))
+                };
+                assert_eq!(
+                    select_scanout_source(
+                        Some(vi),
+                        true,
+                        Some(LAST),
+                        [(TargetId::Guest(BASE), ImageLayout { siz, ..LAYOUT }, 240)]
+                    ),
+                    Some(ScanoutSource {
+                        target: TargetId::Guest(BASE),
+                        rows: Some(offset..offset + 237)
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_vi_images_keep_the_last_target_and_extent() {
+        for (registers, layout, height) in [
+            (vi(BASE as u32 - 1024), LAYOUT, 240),
+            (vi(BASE as u32 + 1), LAYOUT, 240),
+            (vi(BASE as u32 + 240 * 1024), LAYOUT, 240),
+            (vi(0x0090_0000), LAYOUT, 240),
+            (
+                vi(BASE as u32 + 1024),
+                ImageLayout { fmt: 3, ..LAYOUT },
+                240,
+            ),
+            (
+                vi(BASE as u32 + 1024),
+                ImageLayout { siz: 3, ..LAYOUT },
+                240,
+            ),
+            (
+                vi(BASE as u32 + 1024),
+                ImageLayout {
+                    width: 256,
+                    ..LAYOUT
                 },
+                240,
+            ),
+            (
+                vi(BASE as u32 + 1024),
+                ImageLayout { width: 0, ..LAYOUT },
+                240,
+            ),
+            (
+                ViRegisters {
+                    status: 0,
+                    ..vi(BASE as u32 + 1024)
+                },
+                LAYOUT,
+                240,
+            ),
+            (
+                ViRegisters {
+                    y_scale: 0,
+                    ..vi(BASE as u32 + 1024)
+                },
+                LAYOUT,
+                240,
             ),
         ] {
             assert_eq!(
-                select_scanout_source(Some(vi), image, Some(last), |_| present),
-                Some(expected)
+                select_scanout_source(
+                    Some(registers),
+                    true,
+                    Some(LAST),
+                    [(TargetId::Guest(BASE), layout, height)]
+                ),
+                Some(ScanoutSource {
+                    target: LAST,
+                    rows: None
+                }),
+                "{registers:?}, {layout:?}, {height}"
             );
         }
+    }
+
+    #[test]
+    fn vi_exact_base_wins_over_a_containing_image() {
+        let images = [
+            (TargetId::Guest(BASE - 1024), LAYOUT, 240),
+            (TargetId::Guest(BASE), LAYOUT, 240),
+        ];
+        for images in [images, [images[1], images[0]]] {
+            let source =
+                select_scanout_source(Some(vi(BASE as u32)), true, Some(LAST), images).unwrap();
+            assert_eq!(source.target, TargetId::Guest(BASE));
+            assert_eq!(source.rows, Some(0..237));
+        }
+    }
+
+    #[test]
+    fn host_ram_and_missing_vi_keep_the_last_target() {
+        for (registers, image) in [(Some(vi(BASE as u32)), false), (None, true)] {
+            assert_eq!(
+                select_scanout_source(
+                    registers,
+                    image,
+                    Some(LAST),
+                    [(TargetId::Guest(BASE), LAYOUT, 240)]
+                ),
+                Some(ScanoutSource {
+                    target: LAST,
+                    rows: None
+                })
+            );
+        }
+        assert_eq!(select_scanout_source(None, true, None, []), None);
+    }
+
+    #[test]
+    fn legacy_scanout_is_distinct_from_vi_zero() {
         assert_eq!(
-            select_scanout_source(None, true, Some(TargetId::Legacy), |_| true),
+            select_scanout_source(Some(vi(0)), true, Some(TargetId::Legacy), []),
             Some(ScanoutSource {
                 target: TargetId::Legacy,
-                height: None
+                rows: None
+            })
+        );
+        assert_eq!(
+            select_scanout_source(
+                Some(vi(0)),
+                true,
+                Some(TargetId::Legacy),
+                [(TargetId::Guest(0), LAYOUT, 240)]
+            ),
+            Some(ScanoutSource {
+                target: TargetId::Guest(0),
+                rows: Some(0..237)
+            })
+        );
+    }
+
+    #[test]
+    fn exact_base_without_vi_height_uses_the_retained_extent() {
+        assert_eq!(
+            select_scanout_source(
+                Some(ViRegisters {
+                    y_scale: 0,
+                    ..vi(BASE as u32)
+                }),
+                true,
+                Some(LAST),
+                [(TargetId::Guest(BASE), LAYOUT, 240)]
+            ),
+            Some(ScanoutSource {
+                target: TargetId::Guest(BASE),
+                rows: None
             })
         );
     }
