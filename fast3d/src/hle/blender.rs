@@ -30,9 +30,12 @@ pub enum AlphaCompare {
     Dither,
 }
 
-/// Decoded `other_mode_l` (+ G_FOG geometry bit) for one run.
+/// Decoded RDP render state for one run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderMode {
+    pub cycle_type: u32,
+    pub cvg_dst: u8,
+    pub image_read: bool,
     pub blender_mux: u16,
     pub force_blend: bool,
     pub blend_class: BlendClass,
@@ -75,6 +78,9 @@ pub fn decode_render_mode(other_mode_l: u32, other_mode_h: u32, geom: u32) -> Re
     let (blend_class, fallback_class, non_canonical_blend) =
         classify_blend(blender_mux, force_blend, cycle_type);
     RenderMode {
+        cycle_type,
+        cvg_dst: ((other_mode_l >> 8) & 3) as u8,
+        image_read: other_mode_l & IM_RD != 0,
         blender_mux,
         force_blend,
         blend_class,

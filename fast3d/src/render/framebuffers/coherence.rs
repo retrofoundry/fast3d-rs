@@ -45,6 +45,7 @@ impl Writer {
     pub fn encode(
         self,
         rgba: [u8; 4],
+        coverage: u8,
         pixel: usize,
         literal: Option<u32>,
         encoding: FramebufferEncoding,
@@ -72,16 +73,310 @@ impl Writer {
             let x = pixel % self.layout.width as usize;
             let y = pixel / self.layout.width as usize;
             encoding
-                .encode_u16(pack_color(rgba, MAGIC[(y & 3) * 4 + (x & 3)]))
+                .encode_u16(pack_color(rgba, coverage, MAGIC[(y & 3) * 4 + (x & 3)]))
                 .to_vec()
         }
     }
 }
 
-fn pack_color(rgba: [u8; 4], dither: u8) -> u16 {
-    // rt64's write-back takes the alpha bit from coverage's three low bits.
+fn pack_color(rgba: [u8; 4], coverage: u8, dither: u8) -> u16 {
+    debug_assert!(coverage <= 7);
     let channel = |i: usize| u16::from(rgba[i].saturating_add(dither) >> 3);
-    (channel(0) << 11) | (channel(1) << 6) | (channel(2) << 1) | u16::from((rgba[3] & 4) != 0)
+    (channel(0) << 11) | (channel(1) << 6) | (channel(2) << 1) | u16::from(coverage >> 2)
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(in crate::render) struct CoverageDraw {
+    pub(in crate::render) literal: Option<u32>,
+    pub(in crate::render) mode: Option<crate::hle::RenderMode>,
+    pub(in crate::render) geometry: CoverageGeometry,
+    pub(in crate::render) scissor: (u32, u32, u32, u32),
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(in crate::render) enum CoverageGeometry {
+    #[default]
+    Unknown,
+    Triangles(Vec<[u32; 3]>),
+    Rectangle([f32; 4]),
+}
+
+impl CoverageDraw {
+    fn possible_bounds(&self, vertices: &[Option<[f32; 2]>]) -> Option<(u32, u32, u32, u32)> {
+        let bounds = match &self.geometry {
+            CoverageGeometry::Unknown => return None,
+            CoverageGeometry::Rectangle(bounds) => *bounds,
+            CoverageGeometry::Triangles(triangles) => {
+                let mut bounds = [
+                    f32::INFINITY,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    f32::NEG_INFINITY,
+                ];
+                for &index in triangles.iter().flatten() {
+                    let Some(Some([x, y])) = vertices.get(index as usize).copied() else {
+                        return Some(self.scissor);
+                    };
+                    bounds = [
+                        bounds[0].min(x),
+                        bounds[1].min(y),
+                        bounds[2].max(x),
+                        bounds[3].max(y),
+                    ];
+                }
+                [
+                    bounds[0] - 0.125,
+                    bounds[1] - 0.125,
+                    bounds[2] + 0.125,
+                    bounds[3] + 0.125,
+                ]
+            }
+        };
+        let (x, y, w, h) = self.scissor;
+        let left = (bounds[0].floor().max(0.0) as u32).max(x);
+        let top = (bounds[1].floor().max(0.0) as u32).max(y);
+        let right = (bounds[2].ceil().max(0.0) as u32).min(x + w);
+        let bottom = (bounds[3].ceil().max(0.0) as u32).min(y + h);
+        Some((
+            left,
+            top,
+            right.saturating_sub(left),
+            bottom.saturating_sub(top),
+        ))
+    }
+
+    fn coverage_mode(&self) -> CoverageMode {
+        let Some(mode) = self.mode else {
+            return CoverageMode::Unknown;
+        };
+        if mode.cycle_type >= 2 {
+            return CoverageMode::Unknown;
+        }
+        if mode.cvg_dst == 2 || (mode.cvg_dst == 3 && !mode.image_read) {
+            return CoverageMode::Full;
+        }
+        if mode.cvg_x_alpha
+            || (mode.z_test && mode.z_mode == crate::hle::ZMode::Inter)
+            || mode.cvg_dst == 3
+            || (mode.cvg_dst == 1 && mode.image_read)
+        {
+            return CoverageMode::Unknown;
+        }
+        CoverageMode::Interior
+    }
+
+    fn stored_coverage(
+        &self,
+        extent: (usize, usize),
+        vertices: &[Option<[f32; 2]>],
+    ) -> StoredCoverage {
+        match self.coverage_mode() {
+            CoverageMode::Unknown => return StoredCoverage::Unknown,
+            CoverageMode::Full => return StoredCoverage::Full,
+            CoverageMode::Interior => {}
+        }
+        let CoverageGeometry::Triangles(triangles) = &self.geometry else {
+            return match self.geometry {
+                CoverageGeometry::Rectangle(bounds) => StoredCoverage::Rectangle(bounds),
+                _ => StoredCoverage::Unknown,
+            };
+        };
+        let (width, height) = extent;
+        let mut pixels = vec![0u8; width * height];
+        for triangle in triangles {
+            let [a, b, c] = triangle.map(|i| vertices[i as usize]);
+            let (Some(a), Some(b), Some(c)) = (a, b, c) else {
+                return StoredCoverage::Unknown;
+            };
+            let edge = |a: [f32; 2], b: [f32; 2], p: [f32; 2]| {
+                (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+            };
+            let area = edge(a, b, c);
+            if area == 0.0 {
+                continue;
+            }
+            let edges = [(a, b), (b, c), (c, a)];
+            // Offset edge half-planes also retain partial overlaps beyond acute triangle tips.
+            let lines = edges.map(|(a, b)| {
+                let dx = f64::from(b[0]) - f64::from(a[0]);
+                let dy = f64::from(b[1]) - f64::from(a[1]);
+                let sign = f64::from(area.signum());
+                let x = -dy * sign;
+                let y = dx * sign;
+                let offset = |v: f64| v * if v >= 0.0 { 1.125 } else { -0.125 };
+                [
+                    x,
+                    y,
+                    (dy * f64::from(a[0]) - dx * f64::from(a[1])) * sign + offset(x) + offset(y),
+                ]
+            });
+            let outer = [(0, 1), (1, 2), (2, 0)].map(|(i, j)| {
+                let [a, b, c] = lines[i];
+                let [d, e, f] = lines[j];
+                let det = a * e - d * b;
+                [(b * f - e * c) / det, (c * d - f * a) / det]
+            });
+            let bounds = if outer.iter().flatten().all(|v| v.is_finite()) {
+                [
+                    outer
+                        .iter()
+                        .map(|p| p[0])
+                        .fold(f64::INFINITY, f64::min)
+                        .floor()
+                        - 1.0,
+                    outer
+                        .iter()
+                        .map(|p| p[1])
+                        .fold(f64::INFINITY, f64::min)
+                        .floor()
+                        - 1.0,
+                    outer
+                        .iter()
+                        .map(|p| p[0])
+                        .fold(f64::NEG_INFINITY, f64::max)
+                        .ceil()
+                        + 1.0,
+                    outer
+                        .iter()
+                        .map(|p| p[1])
+                        .fold(f64::NEG_INFINITY, f64::max)
+                        .ceil()
+                        + 1.0,
+                ]
+            } else {
+                [0.0, 0.0, width as f64, height as f64]
+            };
+            let (sx, sy, sw, sh) = self.scissor;
+            let left = (bounds[0].max(0.0) as usize).max(sx as usize);
+            let top = (bounds[1].max(0.0) as usize).max(sy as usize);
+            let right = (bounds[2].max(0.0) as usize)
+                .min(width)
+                .min((sx + sw) as usize);
+            let bottom = (bounds[3].max(0.0) as usize)
+                .min(height)
+                .min((sy + sh) as usize);
+            for y in top..bottom {
+                for x in left..right {
+                    let x = x as f32;
+                    let y = y as f32;
+                    let corners = [
+                        [x - 0.125, y - 0.125],
+                        [x + 1.125, y - 0.125],
+                        [x - 0.125, y + 1.125],
+                        [x + 1.125, y + 1.125],
+                    ];
+                    let distances =
+                        edges.map(|(a, b)| corners.map(|p| edge(a, b, p) * area.signum()));
+                    if distances.iter().any(|edge| edge.iter().all(|&d| d < 0.0)) {
+                        continue;
+                    }
+                    let pixel = y as usize * width + x as usize;
+                    // Keep a margin around HLE edges; partial samples need the native span walk.
+                    if distances.iter().all(|edge| edge.iter().all(|&d| d > 0.0)) {
+                        pixels[pixel] |= 1;
+                    } else {
+                        pixels[pixel] |= 2;
+                    }
+                }
+            }
+        }
+        StoredCoverage::Pixels(pixels)
+    }
+
+    #[cfg(test)]
+    fn reference_coverage(
+        &self,
+        pixel: usize,
+        width: usize,
+        vertices: &[Option<[f32; 2]>],
+    ) -> Option<u8> {
+        let mode = self.mode?;
+        if mode.cycle_type >= 2 {
+            return None;
+        }
+        if mode.cvg_dst == 2 || (mode.cvg_dst == 3 && !mode.image_read) {
+            return Some(7);
+        }
+        if mode.cvg_x_alpha
+            || (mode.z_test && mode.z_mode == crate::hle::ZMode::Inter)
+            || mode.cvg_dst == 3
+            || (mode.cvg_dst == 1 && mode.image_read)
+        {
+            return None;
+        }
+        let x = (pixel % width) as f32;
+        let y = (pixel / width) as f32;
+        let full = match &self.geometry {
+            CoverageGeometry::Rectangle([left, top, right, bottom]) => {
+                x >= *left && y >= *top && x + 1.0 <= *right && y + 1.0 <= *bottom
+            }
+            CoverageGeometry::Triangles(triangles) => {
+                let mut full = false;
+                for triangle in triangles {
+                    let [a, b, c] = triangle.map(|i| vertices[i as usize]);
+                    let (Some(a), Some(b), Some(c)) = (a, b, c) else {
+                        return None;
+                    };
+                    let edge = |a: [f32; 2], b: [f32; 2], p: [f32; 2]| {
+                        (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+                    };
+                    let area = edge(a, b, c);
+                    if area == 0.0 {
+                        continue;
+                    }
+                    let corners = [
+                        [x - 0.125, y - 0.125],
+                        [x + 1.125, y - 0.125],
+                        [x - 0.125, y + 1.125],
+                        [x + 1.125, y + 1.125],
+                    ];
+                    let distances = [(a, b), (b, c), (c, a)]
+                        .map(|(a, b)| corners.map(|p| edge(a, b, p) * area.signum()));
+                    if distances.iter().any(|edge| edge.iter().all(|&d| d < 0.0)) {
+                        continue;
+                    }
+                    // Keep a margin around HLE edges; partial samples need the native span walk.
+                    if !distances.iter().all(|edge| edge.iter().all(|&d| d > 0.0)) {
+                        return None;
+                    }
+                    full = true;
+                }
+                full
+            }
+            CoverageGeometry::Unknown => false,
+        };
+        full.then_some(7)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CoverageMode {
+    Unknown,
+    Full,
+    Interior,
+}
+
+enum StoredCoverage {
+    Unknown,
+    Full,
+    Rectangle([f32; 4]),
+    Pixels(Vec<u8>),
+}
+
+impl StoredCoverage {
+    fn get(&self, pixel: usize, width: usize) -> Option<u8> {
+        let full = match self {
+            Self::Unknown => false,
+            Self::Full => true,
+            Self::Rectangle([left, top, right, bottom]) => {
+                let x = (pixel % width) as f32;
+                let y = (pixel / width) as f32;
+                x >= *left && y >= *top && x + 1.0 <= *right && y + 1.0 <= *bottom
+            }
+            Self::Pixels(pixels) => pixels[pixel] == 1,
+        };
+        full.then_some(7)
+    }
 }
 
 pub(crate) struct OwnedRange {
@@ -236,6 +531,329 @@ impl Ownership {
 mod tests {
     use super::*;
 
+    #[test]
+    fn writeback_coverage_is_independent_of_gpu_alpha() {
+        for alpha in [0, 4, 128, 255] {
+            for (coverage, expected) in [(0, 0x4430), (3, 0x4430), (4, 0x4431), (7, 0x4431)] {
+                assert_eq!(
+                    pack_color([64, 128, 192, alpha], coverage, 0),
+                    expected,
+                    "alpha={alpha}, coverage={coverage}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn writeback_coverage_limits_known_destinations() {
+        use crate::hle::decode_render_mode;
+        use n64_gbi::consts::*;
+        let rectangle = CoverageGeometry::Rectangle([2.25, 2.25, 8.0, 8.0]);
+        for (low, pixel, expected) in [
+            (0, 3 * 16 + 3, Some(7)),
+            (0, 2 * 16 + 2, None),
+            (CVG_DST_FULL, 2 * 16 + 2, Some(7)),
+            (CVG_DST_WRAP, 3 * 16 + 3, Some(7)),
+            (CVG_DST_WRAP | IM_RD, 3 * 16 + 3, None),
+            (CVG_DST_SAVE, 2 * 16 + 2, Some(7)),
+            (CVG_DST_SAVE | IM_RD, 3 * 16 + 3, None),
+            (CVG_X_ALPHA, 3 * 16 + 3, None),
+            (Z_CMP | ZMODE_INTER, 3 * 16 + 3, None),
+        ] {
+            let draw = CoverageDraw {
+                mode: Some(decode_render_mode(low, 0, 0)),
+                geometry: rectangle.clone(),
+                scissor: (0, 0, 16, 16),
+                ..Default::default()
+            };
+            assert_eq!(
+                draw.stored_coverage((16, 16), &[]).get(pixel, 16),
+                expected,
+                "mode={low:08x}"
+            );
+        }
+        for cycle in [2, 3] {
+            let draw = CoverageDraw {
+                mode: Some(decode_render_mode(CVG_DST_FULL, cycle << 20, 0)),
+                geometry: rectangle.clone(),
+                scissor: (0, 0, 16, 16),
+                ..Default::default()
+            };
+            assert_eq!(
+                draw.stored_coverage((16, 16), &[]).get(3 * 16 + 3, 16),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn writeback_cached_interiors_match_pixel_proofs() {
+        let mut seed = 1u32;
+        for case in 0..256 {
+            let mut vertices: Vec<_> = (0..9)
+                .map(|_| {
+                    Some(std::array::from_fn(|_| {
+                        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                        (seed % 384) as f32 / 8.0 - 8.0
+                    }))
+                })
+                .collect();
+            if case % 16 == 0 {
+                vertices[8] = None;
+            }
+            let draw = CoverageDraw {
+                mode: Some(crate::hle::RenderMode::default()),
+                geometry: CoverageGeometry::Triangles(vec![[0, 1, 2], [3, 4, 5], [6, 7, 8]]),
+                scissor: (0, 0, 32, 32),
+                ..Default::default()
+            };
+            let stored = draw.stored_coverage((32, 32), &vertices);
+            for pixel in 0..32 * 32 {
+                assert_eq!(
+                    stored.get(pixel, 32),
+                    draw.reference_coverage(pixel, 32, &vertices),
+                    "case={case}, pixel={pixel}, vertices={vertices:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn writeback_partial_triangle_overlap_stays_unknown() {
+        let vertices = [
+            Some([0.0, 0.0]),
+            Some([16.0, 0.0]),
+            Some([0.0, 16.0]),
+            Some([3.0, 0.0]),
+        ];
+        let mut draw = CoverageDraw {
+            mode: Some(crate::hle::RenderMode::default()),
+            geometry: CoverageGeometry::Triangles(vec![[0, 1, 2]]),
+            scissor: (0, 0, 16, 16),
+            ..Default::default()
+        };
+        assert_eq!(
+            draw.stored_coverage((16, 16), &vertices)
+                .get(2 * 16 + 2, 16),
+            Some(7)
+        );
+        assert_eq!(
+            draw.stored_coverage((16, 16), &vertices)
+                .get(8 * 16 + 8, 16),
+            None
+        );
+        draw.geometry = CoverageGeometry::Triangles(vec![[0, 1, 2], [0, 3, 2]]);
+        assert_eq!(
+            draw.stored_coverage((16, 16), &vertices)
+                .get(2 * 16 + 2, 16),
+            None
+        );
+        let vertices = [
+            Some([0.0, 0.0]),
+            Some([16.0, 0.0]),
+            Some([0.0, 16.0]),
+            Some([2.25, 0.0]),
+            Some([2.25, 16.0]),
+        ];
+        draw.geometry = CoverageGeometry::Triangles(vec![[0, 1, 2], [3, 1, 4]]);
+        assert_eq!(
+            draw.stored_coverage((16, 16), &vertices)
+                .get(2 * 16 + 2, 16),
+            None
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn writeback_coverage_follows_prefixes_and_unstamped_edges() {
+        let (device, queue, _) = crate::render::headless_device();
+        let texture = |format| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        };
+        let color = texture(wgpu::TextureFormat::Rgba8Unorm);
+        let stamps = texture(wgpu::TextureFormat::Rg32Uint);
+        let upload = |texture: &wgpu::Texture, bytes: &[u8]| {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes.len() as u32),
+                    rows_per_image: Some(1),
+                },
+                texture.size(),
+            )
+        };
+        let vertices = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 3 * 48,
+            usage: wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        for (color_writer, geometry, projected) in [
+            (None, CoverageGeometry::Triangles(vec![[0, 1, 2]]), false),
+            (
+                Some(image(0x100, 1, 1, false)),
+                CoverageGeometry::Triangles(vec![[0, 1, 2]]),
+                false,
+            ),
+            (
+                Some(image(0x100, 1, 2, false)),
+                CoverageGeometry::Rectangle([0.0; 4]),
+                false,
+            ),
+            (
+                Some(image(0x100, 1, 2, false)),
+                CoverageGeometry::Triangles(Vec::new()),
+                false,
+            ),
+            (
+                Some(image(0x100, 1, 2, false)),
+                CoverageGeometry::Triangles(vec![[0, 1, 2]]),
+                true,
+            ),
+        ] {
+            let mut coherence = Coherence::default();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            coherence.snapshot(
+                &device,
+                &mut encoder,
+                &stamps,
+                color_writer.map(|writer| (writer, &color)),
+                Some((image(0x200, 1, 2, true), &color)),
+                vec![CoverageDraw {
+                    geometry,
+                    mode: Some(crate::hle::RenderMode::default()),
+                    ..Default::default()
+                }],
+                Some(&vertices),
+                1,
+            );
+            assert_eq!(coherence.snapshots[0].vertices.is_some(), projected);
+        }
+        upload(&color, &[64, 128, 192, 0]);
+        let draw = |bounds| CoverageDraw {
+            mode: Some(crate::hle::RenderMode::default()),
+            geometry: CoverageGeometry::Rectangle(bounds),
+            scissor: (0, 0, 4, 1),
+            ..Default::default()
+        };
+        let full = draw([0.0, 0.0, 1.0, 1.0]);
+        let partial = draw([0.25, 0.0, 0.75, 1.0]);
+        let disjoint = draw([2.25, 0.0, 3.0, 1.0]);
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        let snapshot = |coherence: &mut Coherence, draws, slot: u32| {
+            upload(&stamps, bytemuck::cast_slice(&[slot, 0]));
+            coherence.begin_task();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            coherence.snapshot(
+                &device,
+                &mut encoder,
+                &stamps,
+                Some((image(0x100, 1, 2, false), &color)),
+                None,
+                draws,
+                None,
+                1,
+            );
+            queue.submit([encoder.finish()]);
+            coherence.finish(&device)
+        };
+        assert_eq!(
+            snapshot(&mut coherence, vec![full.clone()], 1)[0].bytes,
+            [0x44, 0x31]
+        );
+        assert_eq!(
+            snapshot(&mut coherence, vec![full.clone(), partial.clone()], 1)[0].bytes,
+            [0x44, 0x30]
+        );
+        assert_eq!(
+            snapshot(&mut coherence, vec![full.clone(), disjoint], 1)[0].bytes,
+            [0x44, 0x31]
+        );
+        assert!(snapshot(&mut coherence, vec![partial], 0).is_empty());
+        assert_eq!(coherence.owners.0[&0x100].bytes, [0x44, 0x31]);
+        use crate::render::inputs::{DrawInputs, OperationInputs, TargetInputs};
+        let mut target = TargetInputs {
+            color_image_epoch: 0,
+            valid: true,
+            id: crate::render::workload::TargetId::Guest(0x100),
+            color_image: Default::default(),
+            depth_image: None,
+            pc: 0,
+            logical_extent: (1, 1),
+            output_extent: (1, 1),
+            any_depth: false,
+            depth_clear: false,
+            operations: vec![
+                OperationInputs {
+                    literal_fill: None,
+                    coverage_mode: full.mode,
+                    coverage_rect: Some([0.0, 0.0, 1.0, 1.0]),
+                    pc: 0,
+                    scissor: (0, 0, 1, 1),
+                    draw: DrawInputs::Rectangle {
+                        material_index: None,
+                        fb_source: None,
+                        mode: Default::default(),
+                    },
+                },
+                OperationInputs {
+                    literal_fill: None,
+                    coverage_mode: full.mode,
+                    coverage_rect: Some([0.25, 0.0, 0.75, 1.0]),
+                    pc: 0,
+                    scissor: (0, 0, 1, 1),
+                    draw: DrawInputs::Rejected,
+                },
+            ],
+            uniforms: Vec::new(),
+            rectangles: Vec::new().into(),
+            rect_indices: Vec::new(),
+        };
+        assert_eq!(
+            snapshot(
+                &mut coherence,
+                target.coverage_draws(&[true, true], 2, &[]),
+                1
+            )[0]
+            .bytes,
+            [0x44, 0x31]
+        );
+        target.operations[1].draw = DrawInputs::Rectangle {
+            material_index: None,
+            fb_source: None,
+            mode: Default::default(),
+        };
+        assert_eq!(
+            snapshot(
+                &mut coherence,
+                target.coverage_draws(&[true, false], 2, &[]),
+                1
+            )[0]
+            .bytes,
+            [0x44, 0x31]
+        );
+    }
+
     fn image(address: u64, width: u32, siz: u8, depth: bool) -> Writer {
         Writer {
             address,
@@ -337,6 +955,7 @@ mod tests {
         assert_eq!(
             writer.encode(
                 0.75f32.to_ne_bytes(),
+                0,
                 0,
                 None,
                 FramebufferEncoding::BigEndian
@@ -454,7 +1073,7 @@ mod tests {
             ([7, 8, 15, 4], 1, 0x0845),
             ([128, 64, 32, 3], 0, 0x8208),
         ] {
-            assert_eq!(pack_color(rgba, dither), expected);
+            assert_eq!(pack_color(rgba, rgba[3] & 7, dither), expected);
         }
     }
 
@@ -466,6 +1085,7 @@ mod tests {
                 .filter(|&threshold| {
                     let word = writer.encode(
                         [8 - threshold, 0, 0, 255],
+                        7,
                         y * 5 + x,
                         None,
                         FramebufferEncoding::Native,
@@ -496,11 +1116,11 @@ mod tests {
                 depth: false,
             };
             assert_eq!(
-                writer.encode([11, 27, 91, 255], 0, None, FramebufferEncoding::Native),
+                writer.encode([11, 27, 91, 255], 7, 0, None, FramebufferEncoding::Native),
                 vec![11]
             );
             assert_eq!(
-                writer.encode([11, 27, 91, 255], 1, None, FramebufferEncoding::Native),
+                writer.encode([11, 27, 91, 255], 7, 1, None, FramebufferEncoding::Native),
                 vec![27]
             );
         }
@@ -510,11 +1130,11 @@ mod tests {
     fn literal_fill_preserves_words_and_parity() {
         let writer = image(0, 3, 2, false);
         assert_eq!(
-            writer.encode([0; 4], 0, Some(0x1234_abcd), FramebufferEncoding::Native),
+            writer.encode([0; 4], 0, 0, Some(0x1234_abcd), FramebufferEncoding::Native),
             0x1234u16.to_ne_bytes()
         );
         assert_eq!(
-            writer.encode([0; 4], 3, Some(0x1234_abcd), FramebufferEncoding::Native),
+            writer.encode([0; 4], 0, 3, Some(0x1234_abcd), FramebufferEncoding::Native),
             0xabcdu16.to_ne_bytes()
         );
     }
@@ -924,6 +1544,27 @@ struct Readback {
 }
 
 impl Readback {
+    fn vertices(
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::Buffer,
+    ) -> Self {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("guest-writeback-vertices"),
+            size: source.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(source, 0, &buffer, 0, source.size());
+        Self {
+            buffer,
+            stride: source.size() as usize,
+            pixel_bytes: 48,
+            width: source.size() as usize / 48,
+            height: 1,
+        }
+    }
+
     fn new(
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -995,8 +1636,17 @@ struct Snapshot {
     coverage: Readback,
     color: Option<(Writer, Readback)>,
     depth: Option<(Writer, Readback)>,
-    literals: Vec<Option<u32>>,
+    draws: Vec<CoverageDraw>,
+    vertices: Option<Readback>,
+    render_height: u32,
     generation: u64,
+}
+
+struct PendingWrite {
+    generation: u64,
+    writer: Writer,
+    address: u64,
+    bytes: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -1006,7 +1656,7 @@ pub(crate) struct Coherence {
     generation: u64,
     first_generation: u64,
     snapshots: Vec<Snapshot>,
-    pending: Vec<(u64, Writer, u64, Vec<u8>)>,
+    pending: Vec<PendingWrite>,
     /// Edits reported once by `release_changed`, uploaded when the next task begins.
     pub imports: Vec<crate::GuestWrite>,
     pub imported: bool,
@@ -1033,36 +1683,49 @@ impl Coherence {
         for row in y..y + height {
             let pixel = (row * writer.layout.width + x) as usize;
             let bytes = (pixel..pixel + width as usize)
-                .flat_map(|p| writer.encode([0; 4], p, Some(word), self.encoding))
+                .flat_map(|p| writer.encode([0; 4], 0, p, Some(word), self.encoding))
                 .collect();
-            self.pending.push((
-                self.generation,
+            self.pending.push(PendingWrite {
+                generation: self.generation,
                 writer,
-                writer.address + (pixel * writer.pixel_bytes()) as u64,
+                address: writer.address + (pixel * writer.pixel_bytes()) as u64,
                 bytes,
-            ));
+            });
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn snapshot(
+    pub(in crate::render) fn snapshot(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         coverage: &wgpu::Texture,
         color: Option<(Writer, &wgpu::Texture)>,
         depth: Option<(Writer, &wgpu::Texture)>,
-        literals: Vec<Option<u32>>,
+        draws: Vec<CoverageDraw>,
+        vertices: Option<&wgpu::Buffer>,
+        render_height: u32,
     ) {
         let generation = self.generation;
-        self.generation += literals.len() as u64 * 2;
+        self.generation += draws.len() as u64 * 2;
+        let vertices = vertices
+            .filter(|_| {
+                color.is_some_and(|(writer, _)| !writer.depth && (writer.layout.fmt, writer.layout.siz) == (0, 2))
+                    && draws.iter().any(|draw| draw.coverage_mode() != CoverageMode::Unknown)
+                    && draws.iter().any(|draw| {
+                        matches!(&draw.geometry, CoverageGeometry::Triangles(triangles) if !triangles.is_empty())
+                    })
+            })
+            .map(|buffer| Readback::vertices(device, encoder, buffer));
         self.snapshots.push(Snapshot {
             coverage: Readback::new(device, encoder, coverage, 8),
             color: color
                 .map(|(writer, texture)| (writer, Readback::new(device, encoder, texture, 4))),
             depth: depth
                 .map(|(writer, texture)| (writer, Readback::new(device, encoder, texture, 4))),
-            literals,
+            draws,
+            vertices,
+            render_height,
             generation,
         });
     }
@@ -1074,7 +1737,7 @@ impl Coherence {
         let overlaps = |address, length| address < end && start < address + length;
         self.pending
             .iter()
-            .any(|(_, _, address, bytes)| overlaps(*address, bytes.len() as u64))
+            .any(|write| overlaps(write.address, write.bytes.len() as u64))
             || self.snapshots.iter().any(|snapshot| {
                 [&snapshot.color, &snapshot.depth]
                     .into_iter()
@@ -1098,12 +1761,95 @@ impl Coherence {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resolve(&mut self, device: &wgpu::Device) {
         for snapshot in self.snapshots.drain(..) {
+            let width = snapshot.coverage.width;
+            let height = snapshot.render_height;
+            let target_height = snapshot.coverage.height;
+            let mut projected_vertices = snapshot.vertices;
             let stamps = snapshot.coverage.read(device);
+            let rgba16 = snapshot.color.as_ref().is_some_and(|(writer, _)| {
+                !writer.depth && (writer.layout.fmt, writer.layout.siz) == (0, 2)
+            });
             for (channel, target) in [(0, snapshot.color), (1, snapshot.depth)] {
                 let Some((writer, readback)) = target else {
                     continue;
                 };
                 let data = readback.read(device);
+                let coverage_enabled = rgba16
+                    && channel == 0
+                    && stamps
+                        .as_chunks::<8>()
+                        .0
+                        .iter()
+                        .enumerate()
+                        .any(|(pixel, stamp)| {
+                            let slot = u32::from_ne_bytes(stamp[..4].try_into().unwrap());
+                            slot != 0
+                                && data[pixel * 4 + 3] & 4 == 0
+                                && snapshot.draws[slot as usize - 1].coverage_mode()
+                                    != CoverageMode::Unknown
+                        });
+                let mut coverage = Vec::new();
+                let mut last_draw = Vec::new();
+                if coverage_enabled {
+                    coverage = (0..snapshot.draws.len())
+                        .map(|_| StoredCoverage::Unknown)
+                        .collect();
+                    last_draw = vec![0; stamps.len() / 8];
+                    let vertices: Vec<_> = projected_vertices
+                        .take()
+                        .map(|readback| {
+                            readback
+                                .read(device)
+                                .as_chunks::<48>()
+                                .0
+                                .iter()
+                                .map(|vertex| {
+                                    let p: [f32; 4] = std::array::from_fn(|i| {
+                                        f32::from_ne_bytes(
+                                            vertex[i * 4..i * 4 + 4].try_into().unwrap(),
+                                        )
+                                    });
+                                    (p.iter().all(|v| v.is_finite())
+                                        && p[3] > 0.0
+                                        && p[2] >= 0.0
+                                        && p[2] <= p[3])
+                                        .then(|| {
+                                            [
+                                                (p[0] / p[3] + 1.0) * 0.5 * width as f32,
+                                                (1.0 - p[1] / p[3]) * 0.5 * height as f32,
+                                            ]
+                                        })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    for (index, draw) in snapshot.draws.iter().enumerate() {
+                        if let Some((x, y, w, h)) = draw.possible_bounds(&vertices) {
+                            for row in y as usize..((y + h) as usize).min(target_height) {
+                                last_draw[row * width + (x as usize).min(width)
+                                    ..row * width + ((x + w) as usize).min(width)]
+                                    .fill(index as u32 + 1);
+                            }
+                        }
+                    }
+                    let mut needed = vec![false; snapshot.draws.len()];
+                    for (pixel, stamp) in stamps.as_chunks::<8>().0.iter().enumerate() {
+                        let slot = u32::from_ne_bytes(stamp[..4].try_into().unwrap());
+                        if slot != 0 && last_draw[pixel] <= slot && data[pixel * 4 + 3] & 4 == 0 {
+                            let draw = &snapshot.draws[slot as usize - 1];
+                            if draw.coverage_mode() != CoverageMode::Unknown {
+                                needed[slot as usize - 1] = true;
+                            }
+                        }
+                    }
+                    for (index, draw) in snapshot.draws.iter().enumerate() {
+                        if needed[index] {
+                            coverage[index] =
+                                draw.stored_coverage((width, target_height), &vertices);
+                        }
+                    }
+                }
+
                 let mut start = 0;
                 while start < stamps.len() / 8 {
                     let stamp = |pixel: usize| {
@@ -1124,14 +1870,20 @@ impl Coherence {
                     }
                     let bytes = (start..end)
                         .flat_map(|pixel| {
+                            let rgba: [u8; 4] = data[pixel * 4..pixel * 4 + 4].try_into().unwrap();
+                            let draw = &snapshot.draws[slot as usize - 1];
+                            let coverage = if coverage_enabled && last_draw[pixel] <= slot {
+                                coverage[slot as usize - 1].get(pixel, width)
+                            } else {
+                                None
+                            };
+                            // Writer IDs carry no edge counts or prior coverage.
+                            let coverage = coverage.unwrap_or(rgba[3] & 7);
                             writer.encode(
-                                data[pixel * 4..pixel * 4 + 4].try_into().unwrap(),
+                                rgba,
+                                coverage,
                                 pixel,
-                                if writer.depth {
-                                    None
-                                } else {
-                                    snapshot.literals[slot as usize - 1]
-                                },
+                                if writer.depth { None } else { draw.literal },
                                 self.encoding,
                             )
                         })
@@ -1146,20 +1898,20 @@ impl Coherence {
                                 - writer.byte_offset(start)) as usize
                         ]
                     };
-                    self.pending.push((
+                    self.pending.push(PendingWrite {
                         generation,
                         writer,
-                        writer.address + writer.byte_offset(start),
+                        address: writer.address + writer.byte_offset(start),
                         bytes,
-                    ));
+                    });
                     start = end;
                 }
             }
         }
-        self.pending
-            .sort_by_key(|(generation, _, _, _)| *generation);
-        for (generation, writer, address, bytes) in self.pending.drain(..) {
-            self.owners.write(writer, generation, address, bytes);
+        self.pending.sort_by_key(|write| write.generation);
+        for write in self.pending.drain(..) {
+            self.owners
+                .write(write.writer, write.generation, write.address, write.bytes);
         }
         self.owners.coalesce(self.first_generation);
     }
