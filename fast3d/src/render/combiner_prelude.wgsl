@@ -730,49 +730,91 @@ fn alpha_discard(result: CycleResult, position: vec2<f32>) {
     }
 }
 
-fn blend_fog(rgb: vec3<f32>, combiner_alpha: f32, shade_alpha: f32) -> vec3<f32> {
-    let mux = combiner.blender_mux;
+fn blend_color(sel: u32, rgb: vec3<f32>) -> vec3<f32> {
+    if sel == 2u { return combiner.blend_color.rgb; }
+    if sel == 3u { return combiner.fog_color.rgb; }
+    return rgb;
+}
+
+fn blend_a(sel: u32, comb_a: f32, shade_a: f32) -> f32 {
+    if sel == 0u { return comb_a; }
+    if sel == 1u { return combiner.fog_color.a; }
+    if sel == 2u { return shade_a; }
+    return 0.0;
+}
+
+fn framebuffer_mux() -> u32 {
+    return select(combiner.blender_mux, combiner.blender_mux << 2u, combiner.cycle_type == 1u);
+}
+
+fn memory_in_p(mux: u32) -> bool {
+    return combiner.cycle_type <= 1u && combiner.force_blend != 0u && ((mux >> 14u) & 3u) == 1u &&
+        ((mux >> 6u) & 3u) != 1u && ((mux >> 2u) & 3u) == 0u;
+}
+
+fn blend_local(rgb: vec3<f32>, combiner_alpha: f32, shade_alpha: f32, mux: u32, blend_enabled: bool) -> vec3<f32> {
     let p = (mux >> 14u) & 3u;
     let a = (mux >> 10u) & 3u;
     let m = (mux >> 6u) & 3u;
     let b = (mux >> 2u) & 3u;
-    let blend_enabled = combiner.cycle_type == 1u ||
-        (combiner.cycle_type == 0u && combiner.force_blend != 0u);
-    let local_fog = (p == 0u && m == 3u) || (p == 3u && m == 0u);
-    if (!local_fog || b == 1u) {
+    let fog_lerp = (p == 0u && m == 3u) || (p == 3u && m == 0u);
+    let local = fog_lerp || (combiner.cycle_type <= 1u && p != 1u && m != 1u && (p >= 2u || m >= 2u));
+    if (!local || b == 1u) {
         if (p == 3u) {
             return mix(rgb, combiner.fog_color.rgb, shade_alpha);
         }
         return rgb;
     }
+    let p_color = blend_color(p, rgb);
+    let m_color = blend_color(m, rgb);
     // Without FORCE_BL a one-cycle draw blends only coverage edges, which fast3d does not model.
     if (!blend_enabled) {
-        return select(rgb, combiner.fog_color.rgb, p == 3u);
+        return p_color;
     }
     // Shade-alpha captures depend on the continuous float lerp.
-    if (a == 2u && b == 0u) {
-        if (p == 0u) {
-            return mix(combiner.fog_color.rgb, rgb, shade_alpha);
-        }
-        return mix(rgb, combiner.fog_color.rgb, shade_alpha);
+    if (a == 2u && b == 0u && fog_lerp) {
+        return mix(m_color, p_color, shade_alpha);
     }
-    var alpha = 0.0;
-    switch a {
-        case 0u: { alpha = combiner_alpha; }
-        case 1u: { alpha = combiner.fog_color.a; }
-        case 2u: { alpha = shade_alpha; }
-        default: {}
-    }
+    let alpha = blend_a(a, combiner_alpha, shade_alpha);
     let alpha_byte = u32(round(clamp(alpha, 0.0, 1.0) * 255.0));
     let weight_a = alpha_byte >> 3u;
     var weight_b = 0u;
     if (b == 0u) { weight_b = (255u - alpha_byte) >> 3u; }
     if (b == 2u) { weight_b = 31u; }
-    let input_color = vec3<u32>(round(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0));
-    let fog_color = vec3<u32>(round(combiner.fog_color.rgb * 255.0));
-    let p_color = select(input_color, fog_color, p == 3u);
-    let m_color = select(input_color, fog_color, m == 3u);
-    let numerator = p_color * weight_a + m_color * (weight_b + 1u);
+    let p_byte = vec3<u32>(round(clamp(p_color, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0));
+    let m_byte = vec3<u32>(round(clamp(m_color, vec3<f32>(0.0), vec3<f32>(1.0)) * 255.0));
+    let numerator = p_byte * weight_a + m_byte * (weight_b + 1u);
     // Two-cycle cycle 0 shifts even without FORCE_BL (blender_equation_cycle0_2).
     return vec3<f32>((numerator >> vec3<u32>(5u)) & vec3<u32>(255u)) / 255.0;
+}
+
+fn blend_fog(rgb: vec3<f32>, combiner_alpha: f32, shade_alpha: f32) -> vec3<f32> {
+    let two_cycle = combiner.cycle_type == 1u;
+    let first = blend_local(rgb, combiner_alpha, shade_alpha, combiner.blender_mux,
+        two_cycle || (combiner.cycle_type == 0u && combiner.force_blend != 0u));
+    let mux = framebuffer_mux();
+    if two_cycle && ((mux >> 14u) & 3u) != 1u && ((mux >> 6u) & 3u) != 1u && ((mux >> 2u) & 3u) != 1u {
+        return blend_local(first, combiner_alpha, shade_alpha, mux, combiner.force_blend != 0u);
+    }
+    return first;
+}
+
+struct FramebufferBlend {
+    rgb: vec3<f32>,
+    weights: vec2<f32>,
+};
+
+fn blend_framebuffer(rgb: vec3<f32>, combiner_alpha: f32, shade_alpha: f32) -> FramebufferBlend {
+    let mux = framebuffer_mux();
+    let p = (mux >> 14u) & 3u;
+    let a = blend_a((mux >> 10u) & 3u, combiner_alpha, shade_alpha);
+    let b_sel = (mux >> 2u) & 3u;
+    var b = 0.0;
+    if b_sel == 0u { b = 1.0 - a; }
+    if b_sel == 1u || b_sel == 2u { b = 1.0; }
+    if memory_in_p(mux) {
+        return FramebufferBlend(blend_color((mux >> 6u) & 3u, rgb), vec2<f32>(b, a));
+    }
+    let denom = max(a + b, 1.0 / 255.0);
+    return FramebufferBlend(blend_color(p, rgb), vec2<f32>(a, b) / denom);
 }

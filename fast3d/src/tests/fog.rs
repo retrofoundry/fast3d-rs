@@ -746,3 +746,148 @@ fn fog_blender_matches_the_hardware_worked_example() {
         );
     }
 }
+
+fn assert_hardware_blender(mode: u32, cycles: u32, expected: [u8; 3], fallback: bool) {
+    let (device, queue, dual) = if fallback {
+        let (device, queue) = headless_device_forced_fallback();
+        (device, queue, false)
+    } else {
+        headless_device()
+    };
+    eprintln!("blender mode={mode:#010x} cycles={cycles} fallback={fallback} dual={dual}");
+    let mut renderer = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 64, dual);
+    for decal in [false, true] {
+        let commands = [
+            (0xBA00_1402, 0),
+            (0xB900_031D, G_RM_OPA_SURF | G_ZS_PRIM | Z_CMP | Z_UPD),
+            (0xB700_0000, 1),
+            (0xFA00_0000, 0x1848_78E0),
+            (0x0430_0040, 0x40),
+            (0xBF00_0000, 0x0000_0A14),
+            (0xBF00_0000, 0x0000_141E),
+            (0xBA00_1402, cycles.min(1) << 20),
+            (
+                0xB900_031D,
+                mode | if decal { ZMODE_DEC | Z_CMP } else { 0 },
+            ),
+            (0xFC3C_FFFF, 0xFFFE_773B),
+            (0xF800_0000, 0xD838_1860),
+            (0xF900_0000, 0x5090_D080),
+            (0xFA00_0000, 0x5B81_D5FF),
+            (0xFB00_0000, 0xDB21_4D40),
+            (0xBC00_0008, 128),
+            (0x0430_0040, 0x40),
+            (0xBF00_0000, 0x0000_0A14),
+            (0xBF00_0000, 0x0000_141E),
+        ];
+        let (mut bytes, entry) = scene_memory(&commands);
+        for i in 0..4 {
+            bytes[0x40 + i * 16 + 12..0x40 + i * 16 + 16].copy_from_slice(&[40, 104, 200, 128]);
+        }
+        let mut result = interpret(
+            RdramImage::new(&bytes),
+            entry.into(),
+            GbiUcode::F3d,
+            GbiDataFormat::Fixed,
+            None,
+        );
+        assert!(
+            result
+                .diags
+                .iter()
+                .all(|d| d.kind == crate::DiagKind::NonCanonicalBlend),
+            "{:?}",
+            result.diags
+        );
+        if cycles == 2 {
+            // Exercise the COPY shader gate without the interpreter's mandatory texture setup.
+            result.scene.materials.last_mut().unwrap().cycle_type = 2;
+        }
+        let pixels = render_to_pixels(&device, &queue, &mut renderer, &result.scene, 64, 64);
+        assert_eq!(
+            pixel(&pixels, 64, 32, 32)[..3],
+            expected,
+            "mode={mode:#010x} cycles={cycles} decal={decal} fallback={fallback}"
+        );
+    }
+}
+
+#[test]
+fn fog_blender_hardware_second_cycle_dual() {
+    assert_hardware_blender(0x3E08_4004, 1, [128, 80, 112], false);
+}
+
+#[test]
+fn fog_blender_hardware_second_cycle_fallback() {
+    assert_hardware_blender(0x3E08_4004, 1, [128, 80, 112], true);
+}
+
+#[test]
+fn fog_blender_hardware_blend_rgb_dual() {
+    assert_hardware_blender(0x8411_4004, 0, [55, 119, 203], false);
+}
+
+#[test]
+fn fog_blender_hardware_blend_rgb_fallback() {
+    assert_hardware_blender(0x8411_4004, 0, [55, 119, 203], true);
+}
+
+#[test]
+fn fog_blender_hardware_memory_rgb_dual() {
+    assert_hardware_blender(0x44D1_4044, 0, [144, 62, 60], false);
+}
+
+#[test]
+fn fog_blender_hardware_memory_rgb_fallback() {
+    assert_hardware_blender(0x44D1_4044, 0, [144, 62, 60], true);
+}
+
+#[test]
+fn fog_blender_second_cycle_consumes_first_result() {
+    for fallback in [false, true] {
+        assert_hardware_blender(
+            gbl_c1(CLR_BL, A_FOG, CLR_IN, B_1MA)
+                | gbl_c2(CLR_FOG, A_SHADE, CLR_IN, B_1MA)
+                | FORCE_BL
+                | G_ZS_PRIM,
+            1,
+            [136, 87, 113],
+            fallback,
+        );
+    }
+}
+
+#[test]
+fn fog_blender_blend_rgb_in_m() {
+    for fallback in [false, true] {
+        assert_hardware_blender(
+            gbl_c1(CLR_IN, A_FOG, CLR_BL, B_1MA) | FORCE_BL | G_ZS_PRIM,
+            0,
+            [65, 129, 205],
+            fallback,
+        );
+    }
+}
+
+#[test]
+fn fog_blender_second_cycle_memory_does_not_apply_local_fog() {
+    assert_hardware_blender(
+        gbl_c1(CLR_IN, A_0, CLR_IN, B_1)
+            | gbl_c2(CLR_FOG, A_FOG, CLR_MEM, B_1MA)
+            | FORCE_BL
+            | G_ZS_PRIM,
+        1,
+        [40, 104, 200],
+        true,
+    );
+}
+
+#[test]
+fn fog_blender_copy_ignores_blend_rgb_input() {
+    assert_hardware_blender(0x8411_4004, 2, [255, 255, 255], true);
+}
+
+#[test]
+fn fog_blender_copy_ignores_memory_rgb_input() {
+    assert_hardware_blender(0x44D1_4044, 2, [255, 255, 255], true);
+}

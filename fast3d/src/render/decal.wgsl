@@ -1,12 +1,7 @@
 @group(2) @binding(0) var depth_tex: texture_depth_2d;
 
 fn shade_decal(in: VsOut) -> vec4<f32> {
-    let r = eval_combiner(in);
-    var rgb = r.rgb;
-    if (combiner.primitive_depth.w == 0u) {
-        rgb = blend_fog(rgb, r.alpha, in.color.a);
-    }
-    alpha_discard(r, in.clip_position.xy);
+    let color = shade_fragment(in);
 
     // ── ZMODE_DEC in-shader test against the scene depth written by earlier draws. ──
     // `in.clip_position` is the rasterizer @builtin(position): .xy are framebuffer pixel coords,
@@ -25,7 +20,7 @@ fn shade_decal(in: VsOut) -> vec4<f32> {
     if (abs(pixel_z - sampled) > max(dz, eps)) {
         discard;
     }
-    return vec4<f32>(rgb, r.alpha);
+    return color;
 }
 
 @fragment
