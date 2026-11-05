@@ -191,7 +191,10 @@ fn poisoned_equal_bank_cannot_reach_a_previously_cached_image() {
     );
     let rejection = crate::Diagnostic {
         at: 0x40,
-        kind: crate::DiagKind::TextureBytesUnavailable { tmem_addr: 0 },
+        kind: crate::DiagKind::UnsupportedFramebufferAccess {
+            address: 0x1000,
+            reason: crate::FramebufferAccess::Reinterpretation,
+        },
     };
     rdp.tmem_bank.reject_load(rejection, |bank| {
         bank.write_tile(&[61; 8], 0, 1, 1, 1, 8, 1)

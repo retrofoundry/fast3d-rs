@@ -6,7 +6,6 @@ use std::sync::{Arc, OnceLock};
 #[cfg(any(test, feature = "profiling"))]
 use super::tmem::BankDecoder;
 use super::{
-    combiner::{tile_takes_faithful_path, validate_tile_texture},
     rdp::{Rdp, TileDescriptor},
     texdec::FormatInfo,
     tile_sampling::TileSampling,
@@ -30,7 +29,6 @@ pub struct TextureKey {
 pub enum Representation {
     Tile,
     Lookup4096x4,
-    LinearCompat,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,7 +56,7 @@ impl DecodeRecipe {
         Self {
             representation,
             output: if representation == Representation::Tile {
-                [u32::from(tile.width), u32::from(tile.height)]
+                logical
             } else {
                 sampling.allocation_extent()
             },
@@ -104,10 +102,6 @@ impl DecodeRecipe {
 #[derive(Clone, Debug)]
 pub enum EncodedInput {
     Tmem(Arc<[u8; TMEM_BYTES]>),
-    LinearCompat {
-        bytes: Arc<[u8]>,
-        palette_bank: Arc<[u8; TMEM_BYTES]>,
-    },
 }
 
 #[derive(Debug)]
@@ -153,14 +147,8 @@ impl EncodedTextureRequest {
             return identity;
         }
         self.identity.get_or_init(|| {
-            let (bank, linear) = match self.input() {
-                EncodedInput::Tmem(bank) => (bank, &[][..]),
-                EncodedInput::LinearCompat {
-                    bytes,
-                    palette_bank,
-                } => (palette_bank, &bytes[..]),
-            };
-            let witness = serialization::serialize_profiled(&self.recipe, bank, linear, profiling);
+            let EncodedInput::Tmem(bank) = self.input();
+            let witness = serialization::serialize_profiled(&self.recipe, bank, profiling);
             profiling.count("tmem.hashes_computed", 1);
             profiling.count("tmem.bytes_hashed", witness.len() as u64);
             TextureIdentity {
@@ -175,45 +163,21 @@ impl EncodedTextureRequest {
 }
 
 impl EncodedTextureRequest {
-    #[cfg(any(test, all(feature = "profiling", feature = "capture")))]
-    pub(crate) fn from_diagnostic(request: &crate::profiling::Request) -> Result<Self, DiagKind> {
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) fn from_diagnostic(
+        request: &crate::profiling::Request,
+    ) -> Result<Self, &'static str> {
         let tile = &request.tile;
-        let fi = FormatInfo {
-            fmt: tile.fmt,
-            siz: tile.siz,
-        };
-        fi.validate()?;
-        let unavailable = DiagKind::TextureBytesUnavailable {
-            tmem_addr: tile.tmem_addr,
-        };
-        if request.rejection.is_some()
-            || request
-                .extent
-                .iter()
-                .any(|&extent| extent == 0 || extent > 4096)
-            || tile.width == 0
-            || tile.width > 4096
-            || tile.height == 0
-            || tile.height > 4096
-            || tile.tmem_addr > 511
-            || tile.line > 511
-            || tile.palette > 15
-            || request.tlut > 3
-            || tile.masks > 15
-            || tile.maskt > 15
-        {
-            return Err(unavailable);
-        }
+        request.validate()?;
         let bank: &[u8; TMEM_BYTES] = request
             .bank
             .bytes
             .as_slice()
             .try_into()
-            .map_err(|_| unavailable)?;
+            .expect("validated bank");
         let representation = match request.representation {
             crate::profiling::Representation::Tile => Representation::Tile,
             crate::profiling::Representation::Lookup => Representation::Lookup4096x4,
-            crate::profiling::Representation::Linear => Representation::LinearCompat,
         };
         let mut recipe = DecodeRecipe::new(
             tile,
@@ -222,24 +186,7 @@ impl EncodedTextureRequest {
             TileSampling::from_tile(tile, request.tlut),
         );
         recipe.output = request.extent;
-        let input = if representation == Representation::LinearCompat {
-            if request.extent != recipe.logical || (tile.fmt == 0 && tile.siz == 3) {
-                return Err(unavailable);
-            }
-            let bytes = request.prepare()?;
-            if bytes.len() != fi.tmem_bytes(recipe.logical[0], recipe.logical[1]) {
-                return Err(unavailable);
-            }
-            EncodedInput::LinearCompat {
-                bytes: bytes.into(),
-                palette_bank: Arc::new(*bank),
-            }
-        } else {
-            if representation == Representation::Lookup4096x4 && request.extent != [4096, 4] {
-                return Err(unavailable);
-            }
-            EncodedInput::Tmem(Arc::new(*bank))
-        };
+        let input = EncodedInput::Tmem(Arc::new(*bank));
         Ok(Self {
             input,
             recipe,
@@ -258,28 +205,8 @@ impl EncodedTextureRequest {
             return false;
         }
         profiling.count("tmem.encoded_comparisons", 1);
-        let equal = |a: &[u8], b: &[u8]| {
-            if a.len() != b.len() {
-                return false;
-            }
-            profiling.count("tmem.bytes_compared", a.len() as u64);
-            a == b
-        };
-        // Capture admission conservatively compares complete owned inputs without content keys.
-        match (&self.input, &other.input) {
-            (EncodedInput::Tmem(a), EncodedInput::Tmem(b)) => equal(&a[..], &b[..]),
-            (
-                EncodedInput::LinearCompat {
-                    bytes: a,
-                    palette_bank: pa,
-                },
-                EncodedInput::LinearCompat {
-                    bytes: b,
-                    palette_bank: pb,
-                },
-            ) => equal(a, b) && (self.recipe.fmt != 2 || equal(&pa[2048..], &pb[2048..])),
-            _ => false,
-        }
+        let (EncodedInput::Tmem(a), EncodedInput::Tmem(b)) = (&self.input, &other.input);
+        serialization::matches(&self.recipe, a, b, profiling)
     }
 
     #[cfg(test)]
@@ -300,23 +227,7 @@ impl EncodedTextureRequest {
                 Representation::Lookup4096x4 => {
                     BankDecoder::new(bank).sampling_lookup(&tile, self.recipe.tlut)
                 }
-                Representation::LinearCompat => unreachable!(),
             },
-            EncodedInput::LinearCompat {
-                bytes,
-                palette_bank,
-            } => FormatInfo {
-                fmt: self.recipe.fmt,
-                siz: self.recipe.siz,
-            }
-            .decode(
-                bytes,
-                self.recipe.logical[0],
-                self.recipe.logical[1],
-                &palette_bank[2048..],
-                self.recipe.palette,
-                self.recipe.tlut,
-            ),
         };
         result.expect("owned texture requests are validated before construction")
     }
@@ -375,39 +286,6 @@ impl TextureBindingInput {
     }
 }
 
-#[cfg(any(test, feature = "profiling"))]
-pub(crate) fn physical_for_census(
-    rdp: &Rdp,
-    tile: &TileDescriptor,
-    tlut: u8,
-) -> Result<EncodedTextureRequest, DiagKind> {
-    if let Some(diagnostic) = rdp.tmem_bank.rejection(tile) {
-        return Err(diagnostic.kind);
-    }
-    FormatInfo {
-        fmt: tile.fmt,
-        siz: tile.siz,
-    }
-    .validate()?;
-    if rdp.tmem_bank.has_framebuffer(tile) {
-        return Err(DiagKind::UnsupportedFramebufferAccess {
-            address: rdp.tex_image.3,
-            reason: crate::FramebufferAccess::Reinterpretation,
-        });
-    }
-    let sampling = TileSampling::from_tile(tile, tlut);
-    let representation = if sampling.image[2] == 1 {
-        Representation::Lookup4096x4
-    } else {
-        Representation::Tile
-    };
-    Ok(EncodedTextureRequest {
-        input: EncodedInput::Tmem(rdp.tmem_bank.share_bank()),
-        recipe: DecodeRecipe::new(tile, tlut, representation, sampling),
-        identity: OnceLock::new(),
-    })
-}
-
 pub(crate) fn prepare(
     rdp: &Rdp,
     tile: &TileDescriptor,
@@ -419,7 +297,6 @@ pub(crate) fn prepare(
         return Err(diagnostic.kind);
     }
     let sampling = TileSampling::from_tile(tile, tlut);
-    let logical = [u32::from(tile.width.max(1)), u32::from(tile.height.max(1))];
     let framebuffer = rdp.tmem_bank.has_framebuffer(tile);
     if framebuffer && !matches!((tile.fmt, tile.siz, tlut), (0 | 3, 2, _) | (2, 1, 2 | 3)) {
         return Err(DiagKind::UnsupportedFramebufferAccess {
@@ -427,36 +304,18 @@ pub(crate) fn prepare(
             reason: crate::FramebufferAccess::Reinterpretation,
         });
     }
-    validate_tile_texture(rdp, tile)?;
-    let representation = if sampling.image[2] == 1 {
-        Representation::Lookup4096x4
-    } else if framebuffer || tile_takes_faithful_path(rdp, tile, logical[0]) {
-        Representation::Tile
-    } else {
-        Representation::LinearCompat
-    };
-    let recipe = DecodeRecipe::new(tile, tlut, representation, sampling);
-    let needed = FormatInfo {
+    FormatInfo {
         fmt: tile.fmt,
         siz: tile.siz,
     }
-    .tmem_bytes(logical[0], logical[1]);
-    let linear = if representation == Representation::LinearCompat {
-        let bytes = rdp.tmem_bank.linear_bytes(tile, needed)?;
-        profiling.count("tmem.linear_reconstruction_bytes", bytes.len() as u64);
-        bytes
+    .validate()?;
+    let representation = if sampling.image[2] == 1 {
+        Representation::Lookup4096x4
     } else {
-        Vec::new()
+        Representation::Tile
     };
-    let bank = rdp.tmem_bank.share_bank();
-    let input = if representation == Representation::LinearCompat {
-        EncodedInput::LinearCompat {
-            bytes: linear.into(),
-            palette_bank: bank,
-        }
-    } else {
-        EncodedInput::Tmem(bank)
-    };
+    let recipe = DecodeRecipe::new(tile, tlut, representation, sampling);
+    let input = EncodedInput::Tmem(rdp.tmem_bank.share_bank());
     let request = EncodedTextureRequest {
         input,
         recipe,
@@ -474,7 +333,7 @@ pub(crate) fn prepare(
 }
 
 mod serialization;
-#[cfg(any(test, feature = "profiling"))]
+#[cfg(test)]
 pub(crate) use serialization::serialize;
 
 #[derive(Default)]
@@ -522,16 +381,7 @@ impl TextureMemory {
                         arc_header,
                     );
                 }
-                let bank = match request.input() {
-                    EncodedInput::Tmem(bank) => bank,
-                    EncodedInput::LinearCompat {
-                        bytes,
-                        palette_bank,
-                    } => {
-                        self.allocation(bytes.as_ptr() as usize, bytes.len(), arc_header);
-                        palette_bank
-                    }
-                };
+                let EncodedInput::Tmem(bank) = request.input();
                 self.allocation(bank.as_ptr() as usize, TMEM_BYTES, arc_header);
             }
         }
@@ -541,3 +391,7 @@ impl TextureMemory {
 #[cfg(test)]
 #[path = "texture_request_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "texture_request_framebuffer_tests.rs"]
+mod framebuffer_tests;

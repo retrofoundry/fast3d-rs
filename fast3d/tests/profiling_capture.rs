@@ -140,19 +140,13 @@ async fn shared_texture_roles_decode_once_and_warm_hits_upload_nothing() {
 fn cache_preflight_matches_uncached_decode() {
     use fast3d::profiling::{authored_requests, Representation};
     let requests = authored_requests();
-    for representation in [
-        Representation::Tile,
-        Representation::Linear,
-        Representation::Lookup,
-    ] {
+    for representation in [Representation::Tile, Representation::Lookup] {
         assert!(requests.iter().any(|r| r.representation == representation));
     }
     for request in requests {
-        let executor = request.executor();
-        let linear = executor.prepare().unwrap();
-        assert_eq!(executor.decode(&linear).unwrap(), request.output);
-        let key = request.canonical(&linear);
-        let equal = request.clone().canonical(&linear);
+        assert_eq!(request.decode().unwrap(), request.output);
+        let key = request.canonical();
+        let equal = request.clone().canonical();
         assert_eq!(key, equal);
         assert_ne!(key.as_ptr(), equal.as_ptr());
         if request.representation == Representation::Tile

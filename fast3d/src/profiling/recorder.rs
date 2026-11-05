@@ -131,10 +131,10 @@ impl Recorder {
                 .last_mut()
                 .filter(|attempt| attempt.pc == pc)
             {
-                attempt.old_outcome = format!("FramebufferShortcut {{ address: {address} }}");
+                attempt.outcome = format!("FramebufferShortcut {{ address: {address} }}");
                 attempt.class = "intentional_exception".into();
                 attempt.physical.clear();
-                attempt.old_witness = None;
+                attempt.witness = None;
             }
         }
     }

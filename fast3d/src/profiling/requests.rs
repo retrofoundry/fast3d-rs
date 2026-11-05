@@ -1,13 +1,10 @@
 use crate::hle::{
-    combiner,
     rdp::{Rdp, TileDescriptor},
-    texdec::FormatInfo,
     texture_request::{
-        self, DecodeRecipe, EncodedInput, EncodedTextureRequest,
-        Representation as EncodedRepresentation,
+        EncodedInput, EncodedTextureRequest, Representation as EncodedRepresentation,
     },
     tile_sampling::TileSampling,
-    tmem::Tmem,
+    tmem::{BankDecoder, Tmem},
 };
 
 #[derive(Clone, Debug, Default)]
@@ -23,36 +20,33 @@ pub struct DecodeCounts {
 #[cfg_attr(feature = "profiling", derive(serde::Serialize, serde::Deserialize))]
 pub struct Bank {
     pub bytes: Vec<u8>,
-    pub sources: Vec<[u16; 2]>,
-    pub blocks: Vec<(u16, u16, bool)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "profiling", derive(serde::Serialize, serde::Deserialize))]
 pub enum Representation {
     Tile,
-    Linear,
     Lookup,
 }
 
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "profiling", derive(serde::Serialize, serde::Deserialize))]
 pub struct Request {
+    pub version: u32,
     pub representation: Representation,
     pub role: String,
     pub tile: TileDescriptor,
     pub tlut: u8,
     pub extent: [u32; 2],
     pub bank: Bank,
-    /// Resolved encoded compatibility input, captured before later TMEM loads.
-    #[cfg_attr(feature = "profiling", serde(default))]
-    pub linear: Option<Vec<u8>>,
     pub reachable_bytes: usize,
     pub read_operations: u64,
     pub palette_bytes: usize,
     pub output: Vec<u8>,
     pub rejection: Option<String>,
 }
+
+pub const TRACE_VERSION: u32 = 2;
 
 impl Request {
     pub(crate) fn capture(
@@ -63,41 +57,36 @@ impl Request {
         encoded: Result<&EncodedTextureRequest, crate::DiagKind>,
     ) -> Self {
         let representation = encoded.as_ref().map_or_else(
-            |_| representation(rdp, tile, tlut),
+            |_| representation(tile, tlut),
             |request| match request.recipe().representation {
                 EncodedRepresentation::Tile => Representation::Tile,
                 EncodedRepresentation::Lookup4096x4 => Representation::Lookup,
-                EncodedRepresentation::LinearCompat => Representation::Linear,
             },
         );
-        let mut bank = rdp
-            .tmem_bank
-            .profile_bank(representation == Representation::Linear);
-        let mut linear = None;
-        if let Ok(request) = encoded {
-            let owned_bank = match request.input() {
-                EncodedInput::Tmem(bytes) => bytes,
-                EncodedInput::LinearCompat {
-                    bytes,
-                    palette_bank,
-                } => {
-                    linear = Some(bytes.to_vec());
-                    palette_bank
+        let bank = match encoded {
+            Ok(request) => {
+                let EncodedInput::Tmem(bytes) = request.input();
+                Bank {
+                    bytes: bytes.to_vec(),
                 }
-            };
-            bank.bytes.copy_from_slice(owned_bank.as_ref());
-        }
+            }
+            Err(_) => rdp.tmem_bank.profile_bank(),
+        };
         Self {
+            version: TRACE_VERSION,
             representation,
             role: role.into(),
-            tile: tile.clone(),
+            tile: TileDescriptor {
+                width: tile.width.max(1),
+                height: tile.height.max(1),
+                ..tile.clone()
+            },
             tlut,
             extent: encoded.as_ref().map_or_else(
                 |_| TileSampling::from_tile(tile, tlut).allocation_extent(),
                 |request| request.recipe().output,
             ),
             bank,
-            linear,
             reachable_bytes: 0,
             read_operations: 0,
             palette_bytes: 0,
@@ -107,70 +96,31 @@ impl Request {
     }
 
     /// Offline CPU analysis for developer tools. Live trace capture leaves these fields empty.
-    pub fn analyze(&mut self) -> Result<(), crate::DiagKind> {
-        let fi = FormatInfo {
-            fmt: self.tile.fmt,
-            siz: self.tile.siz,
-        };
-        fi.validate()?;
-        if self.rejection.is_some() {
-            return Err(crate::DiagKind::TextureBytesUnavailable {
-                tmem_addr: self.tile.tmem_addr,
-            });
-        }
-        let tmem = Tmem::from_profile(&self.bank);
+    pub fn analyze(&mut self) -> Result<(), &'static str> {
+        self.validate()?;
+        let tmem = BankDecoder::new(
+            self.bank
+                .bytes
+                .as_slice()
+                .try_into()
+                .expect("validated bank"),
+        );
         let mut reads = [false; 4096];
         let mut read_operations = 0;
         let mut read = |addr| {
             reads[addr] = true;
             read_operations += 1;
         };
-        let mut linear_bytes = 0;
         let output = match self.representation {
-            Representation::Tile => tmem.sample_tile_observed(&self.tile, self.tlut, &mut read)?,
+            Representation::Tile => tmem.sample_tile_observed(&self.tile, self.tlut, &mut read),
             Representation::Lookup => {
-                tmem.sampling_lookup_observed(&self.tile, self.tlut, &mut read)?
+                tmem.sampling_lookup_observed(&self.tile, self.tlut, &mut read)
             }
-            Representation::Linear => {
-                let bytes = self.linear.clone().map_or_else(|| self.prepare(), Ok)?;
-                linear_bytes = bytes.len();
-                read_operations += bytes.len() as u64;
-                let mut palette_read = |offset| {
-                    reads[2048 + offset] = true;
-                    read_operations += 1;
-                };
-                match (self.tile.fmt, self.tile.siz) {
-                    (2, 0) => crate::hle::texdec::decode_ci4_observed(
-                        &bytes,
-                        self.tile.width.into(),
-                        self.tile.height.into(),
-                        tmem.palette(),
-                        self.tile.palette,
-                        self.tlut,
-                        &mut palette_read,
-                    ),
-                    (2, 1) => crate::hle::texdec::decode_ci8_observed(
-                        &bytes,
-                        self.tile.width.into(),
-                        self.tile.height.into(),
-                        tmem.palette(),
-                        self.tlut,
-                        &mut palette_read,
-                    ),
-                    _ => fi.decode(
-                        &bytes,
-                        self.tile.width.into(),
-                        self.tile.height.into(),
-                        tmem.palette(),
-                        self.tile.palette,
-                        self.tlut,
-                    )?,
-                }
-            }
-        };
+        }
+        .map_err(|_| "unsupported texture format")?;
         self.output = output;
         self.read_operations = read_operations;
-        self.reachable_bytes = linear_bytes + reads.iter().filter(|&&read| read).count();
+        self.reachable_bytes = reads.iter().filter(|&&read| read).count();
         self.palette_bytes = if self.tile.fmt == 2 {
             reads[2048..].iter().filter(|&&read| read).count()
         } else {
@@ -192,59 +142,68 @@ impl Request {
         )
     }
 
-    /// Return owned compatibility bytes; older traces reconstruct them from saved provenance.
-    pub fn prepare(&self) -> Result<Vec<u8>, crate::DiagKind> {
-        let fi = FormatInfo {
-            fmt: self.tile.fmt,
-            siz: self.tile.siz,
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let request = self;
+        let tile = &self.tile;
+        let fi = crate::hle::texdec::FormatInfo {
+            fmt: tile.fmt,
+            siz: tile.siz,
         };
-        fi.validate()?;
-        if self.rejection.is_some() {
-            return Err(crate::DiagKind::TextureBytesUnavailable {
-                tmem_addr: self.tile.tmem_addr,
-            });
+        fi.validate().map_err(|_| "unsupported texture format")?;
+        let unavailable = "invalid diagnostic texture request";
+        if request.version != crate::profiling::TRACE_VERSION
+            || request.rejection.is_some()
+            || request
+                .extent
+                .iter()
+                .any(|&extent| extent == 0 || extent > 4096)
+            || tile.width == 0
+            || tile.width > 4096
+            || tile.height == 0
+            || tile.height > 4096
+            || tile.tmem_addr > 511
+            || tile.line > 511
+            || tile.palette > 15
+            || request.tlut > 3
+            || tile.masks > 15
+            || tile.maskt > 15
+        {
+            return Err(unavailable);
         }
-        match self.representation {
-            Representation::Linear => self.linear.clone().map_or_else(
-                || {
-                    Tmem::from_profile(&self.bank).linear_bytes(
-                        &self.tile,
-                        fi.tmem_bytes(self.tile.width.into(), self.tile.height.into()),
-                    )
-                },
-                Ok,
-            ),
-            _ => Ok(Vec::new()),
+        let _: &[u8; 4096] = request
+            .bank
+            .bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| unavailable)?;
+        if (self.representation == Representation::Lookup && self.extent != [4096, 4])
+            || (self.representation == Representation::Tile
+                && self.extent != [u32::from(tile.width), u32::from(tile.height)])
+        {
+            return Err(unavailable);
         }
+        Ok(())
     }
 
-    pub fn decode_prepared(&self, linear: &[u8]) -> Result<Vec<u8>, crate::DiagKind> {
-        self.prepare()?;
+    pub fn decode(&self) -> Result<Vec<u8>, &'static str> {
+        self.validate()?;
+        let bank = BankDecoder::new(
+            self.bank
+                .bytes
+                .as_slice()
+                .try_into()
+                .expect("validated bank"),
+        );
         match self.representation {
-            Representation::Tile => {
-                Tmem::from_profile(&self.bank).sample_tile(&self.tile, self.tlut)
-            }
-            Representation::Lookup => {
-                Tmem::from_profile(&self.bank).sampling_lookup(&self.tile, self.tlut)
-            }
-            Representation::Linear => FormatInfo {
-                fmt: self.tile.fmt,
-                siz: self.tile.siz,
-            }
-            .decode(
-                linear,
-                self.tile.width.into(),
-                self.tile.height.into(),
-                &self.bank.bytes[2048..],
-                self.tile.palette,
-                self.tlut,
-            ),
+            Representation::Tile => bank.sample_tile(&self.tile, self.tlut),
+            Representation::Lookup => bank.sampling_lookup(&self.tile, self.tlut),
         }
+        .map_err(|_| "unsupported texture format")
     }
 
-    /// Conservative diagnostic identity, with explicit little-endian metadata and normalized linear input.
-    pub fn canonical(&self, linear: &[u8]) -> Vec<u8> {
-        let mut bytes = b"fast3d-b1-bank-v1\0".to_vec();
+    /// Conservative diagnostic identity, with explicit little-endian metadata and bank bytes.
+    pub fn canonical(&self) -> Vec<u8> {
+        let mut bytes = b"fast3d-b1-bank-v2\0".to_vec();
         bytes.push(self.representation as u8);
         let t = &self.tile;
         for value in [
@@ -263,46 +222,20 @@ impl Request {
             t.fmt, t.siz, t.palette, t.cms, t.cmt, t.masks, t.maskt, t.shifts, t.shiftt, self.tlut,
         ]);
         bytes.extend_from_slice(&self.bank.bytes);
-        bytes.extend_from_slice(linear);
         bytes
     }
 }
 
-pub struct DecodeExecutor {
-    rdp: Rdp,
-    tile: TileDescriptor,
-    tlut: u8,
-    representation: Representation,
-    rejected: bool,
-}
-
 impl Request {
-    #[cfg(any(test, all(feature = "profiling", feature = "capture")))]
-    pub(crate) fn encoded_request(&self) -> Result<EncodedTextureRequest, crate::DiagKind> {
+    pub(crate) fn encoded_request(&self) -> Result<EncodedTextureRequest, &'static str> {
         EncodedTextureRequest::from_diagnostic(self)
     }
 
     /// Compute the production identity from an owned diagnostic snapshot without expanding pixels.
-    pub fn encoded_identity(&self) -> Result<(u64, Vec<u8>), crate::DiagKind> {
-        let linear = self.prepare()?;
-        let representation = match self.representation {
-            Representation::Tile => EncodedRepresentation::Tile,
-            Representation::Lookup => EncodedRepresentation::Lookup4096x4,
-            Representation::Linear => EncodedRepresentation::LinearCompat,
-        };
-        let recipe = DecodeRecipe::new(
-            &self.tile,
-            self.tlut,
-            representation,
-            TileSampling::from_tile(&self.tile, self.tlut),
-        );
-        let bank = self.bank.bytes.as_slice().try_into().map_err(|_| {
-            crate::DiagKind::TextureBytesUnavailable {
-                tmem_addr: self.tile.tmem_addr,
-            }
-        })?;
-        let witness = texture_request::serialize(&recipe, bank, &linear);
-        Ok((twox_hash::XxHash3_64::oneshot(&witness), witness))
+    pub fn encoded_identity(&self) -> Result<(u64, Vec<u8>), &'static str> {
+        let request = self.encoded_request()?;
+        let (key, witness) = request.identity_profiled(&Default::default());
+        Ok((key.xxh3_64, witness.to_vec()))
     }
 
     pub fn diagnostic_variant(&self, xor: u8) -> Self {
@@ -335,102 +268,13 @@ impl Request {
         }
         request
     }
-
-    pub fn executor(&self) -> DecodeExecutor {
-        DecodeExecutor {
-            rdp: Rdp {
-                tmem_bank: Tmem::from_profile(&self.bank),
-                ..Default::default()
-            },
-            tile: self.tile.clone(),
-            tlut: self.tlut,
-            representation: self.representation,
-            rejected: self.rejection.is_some(),
-        }
-    }
 }
 
-impl DecodeExecutor {
-    pub fn baseline_decode(&self) -> Result<Vec<u8>, crate::DiagKind> {
-        let linear = self.prepare()?;
-        self.decode_validated(&linear)
-    }
-    pub fn prepare(&self) -> Result<Vec<u8>, crate::DiagKind> {
-        self.validate()?;
-        self.reconstruct()
-    }
-    pub fn validate(&self) -> Result<(), crate::DiagKind> {
-        combiner::validate_tile_texture(&self.rdp, &self.tile)?;
-        if self.representation != Representation::Lookup {
-            combiner::validate_tile_texture(&self.rdp, &self.tile)?;
-            let faithful = combiner::tile_takes_faithful_path(
-                &self.rdp,
-                &self.tile,
-                self.tile.width.max(1).into(),
-            );
-            if faithful != (self.representation == Representation::Tile) {
-                return Err(crate::DiagKind::TextureBytesUnavailable {
-                    tmem_addr: self.tile.tmem_addr,
-                });
-            }
-        }
-        if self.rejected {
-            return Err(crate::DiagKind::TextureBytesUnavailable {
-                tmem_addr: self.tile.tmem_addr,
-            });
-        }
-        if let Some(diag) = self.rdp.tmem_bank.rejection(&self.tile) {
-            return Err(diag.kind);
-        }
-        Ok(())
-    }
-    pub fn reconstruct(&self) -> Result<Vec<u8>, crate::DiagKind> {
-        if self.representation == Representation::Linear {
-            self.rdp.tmem_bank.linear_bytes(
-                &self.tile,
-                FormatInfo {
-                    fmt: self.tile.fmt,
-                    siz: self.tile.siz,
-                }
-                .tmem_bytes(self.tile.width.into(), self.tile.height.into()),
-            )
-        } else {
-            Ok(Vec::new())
-        }
-    }
-
-    pub fn decode(&self, linear: &[u8]) -> Result<Vec<u8>, crate::DiagKind> {
-        self.validate()?;
-        self.decode_validated(linear)
-    }
-
-    fn decode_validated(&self, linear: &[u8]) -> Result<Vec<u8>, crate::DiagKind> {
-        match self.representation {
-            Representation::Tile => self.rdp.tmem_bank.sample_tile(&self.tile, self.tlut),
-            Representation::Lookup => self.rdp.tmem_bank.sampling_lookup(&self.tile, self.tlut),
-            Representation::Linear => FormatInfo {
-                fmt: self.tile.fmt,
-                siz: self.tile.siz,
-            }
-            .decode(
-                linear,
-                self.tile.width.into(),
-                self.tile.height.into(),
-                self.rdp.tmem_bank.palette(),
-                self.tile.palette,
-                self.tlut,
-            ),
-        }
-    }
-}
-
-pub(crate) fn representation(rdp: &Rdp, tile: &TileDescriptor, tlut: u8) -> Representation {
+pub(crate) fn representation(tile: &TileDescriptor, tlut: u8) -> Representation {
     if TileSampling::from_tile(tile, tlut).image[2] == 1 {
         Representation::Lookup
-    } else if combiner::tile_takes_faithful_path(rdp, tile, tile.width.max(1).into()) {
-        Representation::Tile
     } else {
-        Representation::Linear
+        Representation::Tile
     }
 }
 
@@ -449,19 +293,8 @@ pub fn authored_requests() -> Vec<Request> {
         (4, 1),
     ] {
         for side in [1u16, 2, 4, 8, 16, 32, 64] {
-            for representation in [
-                Representation::Tile,
-                Representation::Linear,
-                Representation::Lookup,
-            ] {
-                if representation == Representation::Linear && siz == 3 {
-                    continue;
-                }
-                let width = if representation == Representation::Linear {
-                    side + 1
-                } else {
-                    side
-                };
+            for representation in [Representation::Tile, Representation::Lookup] {
+                let width = side;
                 let row = (usize::from(width) << siz).div_ceil(2);
                 if row * usize::from(side) > if fmt == 2 { 2048 } else { 4096 } {
                     continue;
@@ -481,29 +314,15 @@ pub fn authored_requests() -> Vec<Request> {
                     ..Default::default()
                 };
                 let data: Vec<u8> = (0..4096).map(|i| (i * 37 + 11) as u8).collect();
-                if representation == Representation::Linear {
-                    if (usize::from(width) << (siz + 2)).is_multiple_of(64) || side == 1 {
-                        continue;
-                    }
-                    rdp.tmem_bank.write_block(
-                        &data,
-                        0,
-                        0,
-                        0x800,
-                        (row * usize::from(side)).div_ceil(8),
-                        siz,
-                    );
-                } else {
-                    rdp.tmem_bank.write_tile(
-                        &data,
-                        0,
-                        usize::from(tile.line),
-                        side.into(),
-                        row.div_ceil(8),
-                        row.div_ceil(8) * 8,
-                        siz,
-                    );
-                }
+                rdp.tmem_bank.write_tile(
+                    &data,
+                    0,
+                    usize::from(tile.line),
+                    side.into(),
+                    row.div_ceil(8),
+                    row.div_ceil(8) * 8,
+                    siz,
+                );
                 if fmt == 2 {
                     rdp.tmem_bank.write_tlut(&data[..512], 256, 256);
                 }

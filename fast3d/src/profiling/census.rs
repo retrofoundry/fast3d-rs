@@ -2,7 +2,7 @@ use crate::hle::{
     combiner::{decode_combine, physical_texture_uses},
     rdp::{Rdp, TileDescriptor},
     rsp::Rsp,
-    texture_request::{self, EncodedInput, TextureSource},
+    texture_request::{self, TextureSource},
     tile_sampling::TileSampling,
 };
 
@@ -33,8 +33,8 @@ pub struct CensusAttempt {
     pub role: String,
     pub tile: TileDescriptor,
     pub tlut: u8,
-    pub old_outcome: String,
-    pub old_witness: Option<Vec<u8>>,
+    pub outcome: String,
+    pub witness: Option<Vec<u8>>,
     pub draw_rejection: Option<String>,
     pub framebuffer: bool,
     pub sampled_framebuffer: bool,
@@ -46,8 +46,6 @@ pub struct CensusAttempt {
     pub physical_representation: String,
     pub extent: [u32; 2],
     pub physical: Vec<u8>,
-    pub linear: Option<Vec<u8>>,
-    pub linear_bytes: Option<Vec<u8>>,
     pub class: String,
     pub decode_error: Option<String>,
 }
@@ -103,16 +101,16 @@ pub(crate) fn census_material(
         let mut attempt = CensusAttempt::capture(rdp, &rdp.tiles[index], pc, role);
         attempt.draw_rejection = blocked.clone();
         if !rdp.texture_loaded && cycle < 2 && global_rejection.is_none() {
-            attempt.old_outcome = "NoTextureLoaded".into();
+            attempt.outcome = "NoTextureLoaded".into();
             attempt.class = "unaffected".into();
         }
         if blocked.is_none()
             && !matches!(
-                attempt.old_outcome.as_str(),
-                "Tile" | "Lookup4096x4" | "LinearCompat" | "Framebuffer"
+                attempt.outcome.as_str(),
+                "Tile" | "Lookup4096x4" | "Framebuffer"
             )
         {
-            blocked = Some(format!("{}: {}", attempt.role, attempt.old_outcome));
+            blocked = Some(format!("{}: {}", attempt.role, attempt.outcome));
             attempt.draw_rejection = blocked.clone();
         }
         rsp.profiling.census_attempt(attempt);
@@ -125,7 +123,7 @@ impl CensusAttempt {
         let sampling = TileSampling::from_tile(tile, tlut);
         let lookup = sampling.image[2] == 1;
         let old = texture_request::prepare(rdp, tile, tlut, &Default::default());
-        let old_outcome = match &old {
+        let outcome = match &old {
             Ok(binding) => match &binding.source {
                 TextureSource::Encoded(request) => format!("{:?}", request.recipe().representation),
                 TextureSource::Framebuffer(_) => "Framebuffer".into(),
@@ -133,16 +131,12 @@ impl CensusAttempt {
             },
             Err(kind) => format!("{kind:?}"),
         };
-        let old_witness = old.as_ref().ok().and_then(|binding| match &binding.source {
+        let witness = old.as_ref().ok().and_then(|binding| match &binding.source {
             TextureSource::Encoded(request) => {
                 Some(request.identity_profiled(&Default::default()).1.to_vec())
             }
             _ => None,
         });
-        let affected = old_outcome == "LinearCompat"
-            || matches!(old, Err(crate::DiagKind::TextureBytesUnavailable { .. }))
-            || matches!(old, Err(crate::DiagKind::UnsupportedCommandParameters { opcode })
-                if opcode == crate::hle::consts::G_LOADBLOCK && tile.fmt == 0 && tile.siz == 3);
         let framebuffer = rdp.tmem_bank.has_framebuffer(tile);
         let bank = rdp.tmem_bank.share_bank();
         let framebuffer_tags =
@@ -169,7 +163,12 @@ impl CensusAttempt {
             rdp.tmem_bank
                 .sampling_lookup_observed(tile, tlut, &mut read)
         } else {
-            rdp.tmem_bank.sample_tile_observed(tile, tlut, &mut read)
+            let sized = TileDescriptor {
+                width: tile.width.max(1),
+                height: tile.height.max(1),
+                ..tile.clone()
+            };
+            rdp.tmem_bank.sample_tile_observed(&sized, tlut, &mut read)
         };
         let sampled: Vec<u16> = reads
             .iter()
@@ -196,49 +195,28 @@ impl CensusAttempt {
                 )
             })
             .collect();
-        let (linear_bytes, linear) = match &old {
+        let physical = match &old {
             Ok(binding) => match &binding.source {
-                TextureSource::Encoded(request) => match request.input() {
-                    EncodedInput::LinearCompat { bytes, .. } => {
-                        (Some(bytes.to_vec()), Some(request.decode()))
-                    }
-                    _ => (None, None),
-                },
-                _ => (None, None),
+                TextureSource::Encoded(request) => Ok(request.decode()),
+                _ => Err(crate::DiagKind::UnsupportedFramebufferAccess {
+                    address: rdp.tex_image.3,
+                    reason: crate::FramebufferAccess::Reinterpretation,
+                }),
             },
-            Err(_) => (None, None),
+            Err(kind) => Err(*kind),
         };
-        let physical =
-            texture_request::physical_for_census(rdp, tile, tlut).map(|request| request.decode());
         if let (Ok(footprint), Ok(physical)) = (&footprint, &physical) {
             assert_eq!(footprint, physical);
         }
-        let decode_error = physical
-            .as_ref()
-            .err()
-            .map(|kind| format!("{kind:?}"))
-            .or_else(|| {
-                physical
-                    .as_ref()
-                    .is_ok_and(Vec::is_empty)
-                    .then(|| "empty physical output extent".into())
-            });
+        let decode_error = physical.as_ref().err().map(|kind| format!("{kind:?}"));
         let mut physical = physical.unwrap_or_default();
         let class = if framebuffer {
             physical.clear();
             "intentional_exception"
         } else if decode_error.is_some() {
             "unverified"
-        } else if !affected {
-            "unaffected"
-        } else if old.is_err() {
-            "newly_admitted"
-        } else if linear.as_ref() == Some(&physical) {
-            "equal"
-        } else if linear.is_some() {
-            "changed"
         } else {
-            "unverified"
+            "unaffected"
         }
         .into();
         Self {
@@ -246,8 +224,8 @@ impl CensusAttempt {
             role,
             tile: tile.clone(),
             tlut,
-            old_outcome,
-            old_witness,
+            outcome,
+            witness,
             draw_rejection: None,
             framebuffer,
             sampled_framebuffer,
@@ -257,14 +235,8 @@ impl CensusAttempt {
             sampled_hash: twox_hash::XxHash3_64::oneshot(&sample_bytes),
             writers,
             physical_representation: if lookup { "Lookup4096x4" } else { "Tile" }.into(),
-            extent: if lookup {
-                [4096, 4]
-            } else {
-                [u32::from(tile.width), u32::from(tile.height)]
-            },
+            extent: sampling.allocation_extent(),
             physical,
-            linear,
-            linear_bytes,
             class,
             decode_error,
         }
@@ -276,7 +248,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn narrow_block_can_be_equal_or_changed() {
+    fn narrow_blocks_decode_physical_rows() {
         let mut rdp = Rdp::default();
         rdp.tmem_bank
             .write_block(&[1, 2, 3, 4, 0, 0, 0, 0], 0, 0, 0, 1, 1);
@@ -289,7 +261,7 @@ mod tests {
             ..Default::default()
         };
         let equal = CensusAttempt::capture(&rdp, &tile, 0x20, "tex0".into());
-        assert_eq!(equal.class, "equal");
+        assert_eq!(equal.class, "unaffected");
         assert_eq!(equal.physical, [[1; 4], [2; 4], [3; 4], [4; 4]].concat());
         rdp.tmem_bank.write_block(
             &[
@@ -305,19 +277,15 @@ mod tests {
         tile.width = 3;
         tile.height = 2;
         let changed = CensusAttempt::capture(&rdp, &tile, 0x28, "tex0".into());
-        assert_eq!(changed.class, "changed");
+        assert_eq!(changed.class, "unaffected");
         assert_eq!(
             changed.physical,
             [[17; 4], [34; 4], [51; 4], [85; 4], [102; 4], [119; 4]].concat()
         );
-        assert_eq!(
-            changed.linear.unwrap(),
-            [[17; 4], [34; 4], [51; 4], [0; 4], [68; 4], [85; 4]].concat()
-        );
     }
 
     #[test]
-    fn narrow_rgba32_refusal_has_a_physical_candidate() {
+    fn narrow_rgba32_request_has_a_physical_footprint() {
         let mut rdp = Rdp::default();
         rdp.tmem_bank.write_block(
             &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 0, 0, 0],
@@ -336,13 +304,9 @@ mod tests {
             ..Default::default()
         };
         let attempt = CensusAttempt::capture(&rdp, &tile, 0x30, "tex1".into());
-        assert_eq!(attempt.class, "newly_admitted");
-        assert_eq!(
-            attempt.old_outcome,
-            "UnsupportedCommandParameters { opcode: 243 }"
-        );
+        assert_eq!(attempt.class, "unaffected");
+        assert_eq!(attempt.outcome, "Tile");
         assert_eq!(attempt.physical, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-        assert!(attempt.linear.is_none());
         assert_eq!(
             attempt.sampled,
             [0, 1, 2, 3, 4, 5, 2048, 2049, 2050, 2051, 2052, 2053]
@@ -350,7 +314,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "S2: admit narrow RGBA32 LOADBLOCK requests through physical TMEM"]
     fn narrow_rgba32_routing_keeps_literal_texels() {
         let mut rdp = Rdp::default();
         rdp.tmem_bank.write_block(
@@ -397,7 +360,7 @@ mod tests {
             ..Default::default()
         };
         let attempt = CensusAttempt::capture(&rdp, &tile, 0x20, "tex0".into());
-        assert_eq!(attempt.decode_error.as_ref(), Some(&attempt.old_outcome));
+        assert_eq!(attempt.decode_error.as_ref(), Some(&attempt.outcome));
         rdp.tiles[0] = tile;
         rdp.combine_l = 0x00ff_ffff;
         rdp.combine_h = 0xfffc_f279;
@@ -405,13 +368,13 @@ mod tests {
         rsp.profiling = crate::profiling::Recorder::new(crate::profiling::Mode::Census);
         census_material(&rdp, &rsp, 0x20, Some(0), None);
         assert_eq!(
-            rsp.profiling.drain().census_attempts[0].old_outcome,
-            attempt.old_outcome
+            rsp.profiling.drain().census_attempts[0].outcome,
+            attempt.outcome
         );
     }
 
     #[test]
-    fn unset_extents_remain_unverified() {
+    fn unset_extents_decode_one_texel() {
         let mut rdp = Rdp::default();
         rdp.tmem_bank.write_block(&[0x12; 8], 0, 0, 0, 1, 1);
         let tile = TileDescriptor {
@@ -421,13 +384,10 @@ mod tests {
             ..Default::default()
         };
         let attempt = CensusAttempt::capture(&rdp, &tile, 0x20, "tex0".into());
-        assert_eq!(attempt.class, "unverified");
-        assert_eq!(attempt.linear, Some(vec![0x12; 4]));
-        assert!(attempt.physical.is_empty());
-        assert_eq!(
-            attempt.decode_error.as_deref(),
-            Some("empty physical output extent")
-        );
+        assert_eq!(attempt.class, "unaffected");
+        assert_eq!(attempt.extent, [1, 1]);
+        assert_eq!(attempt.physical, [0x12; 4]);
+        assert_eq!(attempt.decode_error, None);
     }
 
     #[test]

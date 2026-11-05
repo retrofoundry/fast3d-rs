@@ -151,7 +151,7 @@ class SupplementalReadbacks(CaptureCase):
     def test_warp_inventory_is_fixed_and_preserves_all_comparison_rows(self):
         inventory = readbacks.gpu_decode_inventory("warp")
         rows = readbacks.gpu_decode_rows(inventory, ci.COMMANDS)
-        self.assertEqual(len(rows), 297)
+        self.assertEqual(len(rows), 219)
         self.assertEqual(len(readbacks.expected_rows(ci.INVENTORY)), 171)
         full = readbacks.gpu_decode_rows(readbacks.gpu_decode_inventory(), ci.COMMANDS)
         self.assertTrue(rows.items() <= full.items())
@@ -184,11 +184,11 @@ class SupplementalReadbacks(CaptureCase):
         self.assertFalse(report["passed"])
         self.assertIn("tile.expected.bin", report["gpu_decode"]["candidate"]["errors"][0])
 
-    def test_frozen_inventory_requires_1909_rows_in_each_configuration(self):
+    def test_frozen_inventory_requires_1263_rows_in_each_configuration(self):
         expected = readbacks.gpu_decode_rows(readbacks.gpu_decode_inventory(), ci.COMMANDS)
-        self.assertEqual(len(expected), 5727)
+        self.assertEqual(len(expected), 3789)
         for config in ci.COMMANDS:
-            self.assertEqual(sum(key[0] == config for key in expected), 1909)
+            self.assertEqual(sum(key[0] == config for key in expected), 1263)
 
     def test_base_without_gpu_test_declares_zero_rows_with_current_harness(self):
         manifest = self.manifest(self.base)

@@ -50,7 +50,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let representation = params.recipe.x;
     let format = params.recipe.y;
     let size = params.recipe.z;
-    let linear = representation == 2u;
     var parity = id.x & 1u;
     var odd_swap = (id.y & 1u) * 4u;
     var relative = id.y * params.addressing.x + ((id.x << min(size, 2u)) >> 1u);
@@ -59,19 +58,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         parity = id.y & 1u;
         odd_swap = (id.y >> 1u) * 4u;
     }
-    if linear {
-        let pixel = id.y * params.extent.z + id.x;
-        relative = (pixel << size) >> 1u;
-        parity = pixel & 1u;
-        odd_swap = 0u;
-    }
     let mask = select(4095u, 2047u, format == 2u || size == 3u);
-    var address0 = (params.recipe.w + (relative ^ odd_swap)) & mask;
-    var address1 = (params.recipe.w + ((relative + 1u) ^ odd_swap)) & mask;
-    if linear {
-        address0 = relative;
-        address1 = relative + 1u;
-    }
+    let address0 = (params.recipe.w + (relative ^ odd_swap)) & mask;
+    let address1 = (params.recipe.w + ((relative + 1u) ^ odd_swap)) & mask;
     let pointer = framebuffer_pointer(address0);
     if size == 2u && pointer != 0u && ((pointer - 1u) & 1u) == 0u && framebuffer_pointer(address1) == pointer + 1u {
         let color = framebuffer_color(pointer);
@@ -84,12 +73,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             return;
         }
     }
-    var first = 0u;
+    let first = byte_at(address0);
     var second = 0u;
-    if !linear || address0 < params.addressing.w {
-        first = byte_at(address0);
-    }
-    if size >= 2u && (!linear || address1 < params.addressing.w) {
+    if size >= 2u {
         second = byte_at(address1);
     }
     let nibble = (first >> ((1u - parity) * 4u)) & 15u;
@@ -99,15 +85,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             color = rgba16((first << 8u) | second);
         }
         case 3u: {
-            var blue = 0u;
-            var alpha = 0u;
-            if linear {
-                if relative + 2u < params.addressing.w { blue = byte_at(relative + 2u); }
-                if relative + 3u < params.addressing.w { alpha = byte_at(relative + 3u); }
-            } else {
-                blue = byte_at(address0 | 2048u);
-                alpha = byte_at(address1 | 2048u);
-            }
+            let blue = byte_at(address0 | 2048u);
+            let alpha = byte_at(address1 | 2048u);
             color = vec4<u32>(first, second, blue, alpha);
         }
         case 8u, 9u: {
@@ -115,7 +94,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             if size == 0u {
                 index = params.addressing.y * 16u + nibble;
             }
-            let palette = params.input.x + ((2048u + index * 8u) & 4095u);
+            let palette = (2048u + index * 8u) & 4095u;
             let hi = byte_at(palette);
             let lo = byte_at(palette + 1u);
             if params.addressing.z == 2u {

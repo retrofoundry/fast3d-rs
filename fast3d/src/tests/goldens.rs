@@ -228,17 +228,18 @@ fn golden_rgba16_quad() {
     compare_or_write("rgba16-quad", &px, 64, 64);
 }
 
+/// A 4x4 I8 texture has 4-byte rows, narrower than LOADBLOCK's 8-byte TMEM line, so the block
+/// fills TMEM lines 0-1 only and the tile's rows 2-3 read bytes no load wrote (zero after reset).
+/// The quad samples those rows, as on hardware.
 #[test]
 fn golden_i8_ramp() {
     let px = render_scene_to_rgba8("i8-ramp--4x4", 64, 64);
     compare_or_write("i8-ramp", &px, 64, 64);
 }
 
-/// Golden test for I4 intensity format — same vertical ramp through 4-bit encode/decode.
-///
-/// I4 quantises to 4 bits (>> 4) then replicates ((v4 << 4) | v4). The seed values 0, 85,
-/// 170, 255 are all exact I4 round-trips, so the I4 golden should be byte-identical to I8.
-/// Row-scramble or banding differences indicate a nibble-order or TMEM layout bug.
+/// I4 has 2-byte rows here, so the 8-byte block fills TMEM line 0 only: tile row 0 holds the
+/// ramp's zero row and rows 1-3 read bytes no load wrote. The golden matches IA4's, not I8's,
+/// whose tile row 1 is loaded.
 #[test]
 fn golden_i4_ramp() {
     let px = render_scene_to_rgba8("i4-ramp--4x4", 64, 64);
@@ -250,8 +251,8 @@ fn golden_i4_ramp() {
 /// Alpha validation: the combiner uses SHADE alpha (vertex alpha=255), so texel alpha does NOT
 /// reach the framebuffer. The golden validates the INTENSITY/color channel only.
 /// Alpha decode correctness is validated by unit tests (`ia16_splits_intensity_and_alpha`, etc.).
-/// The swizzle bet: IA16 is a 2-byte format (siz=2); the linear-TMEM decoder iterates two bytes
-/// per texel, so nibble-order is irrelevant — no swizzle risk.
+/// The swizzle bet: IA16 is a 2-byte format (siz=2); the decoder iterates two bytes per texel,
+/// so nibble-order is irrelevant — no swizzle risk. Its 8-byte rows fill whole TMEM lines.
 #[test]
 fn golden_ia16_ramp() {
     let px = render_scene_to_rgba8("ia16-ramp--4x4", 64, 64);
@@ -261,7 +262,8 @@ fn golden_ia16_ramp() {
 /// Golden test for IA8 intensity+alpha format.
 ///
 /// Alpha validation: same as IA16 — combiner outputs SHADE alpha, not texel alpha.
-/// Unit tests cover alpha decode. Swizzle: IA8 is 1-byte/texel, no nibble order.
+/// Unit tests cover alpha decode. Its 4-byte rows leave the sampled rows unloaded, as in
+/// `golden_i8_ramp`.
 #[test]
 fn golden_ia8_ramp() {
     let px = render_scene_to_rgba8("ia8-ramp--4x4", 64, 64);
@@ -271,9 +273,9 @@ fn golden_ia8_ramp() {
 /// Golden test for IA4 intensity+alpha format — 4-bit format, 2 texels/byte.
 ///
 /// Alpha validation: combiner outputs SHADE alpha; texel alpha validated by unit tests.
-/// Swizzle: IA4 uses the same nibble order as I4 (even col = high nibble). The 2×2 multi-row
-/// unit test (`ia4_multirow_swizzle_canary`) is the primary swizzle check; the golden confirms
-/// the intensity bands are visible and row-distinct.
+/// Swizzle: IA4 uses the same nibble order as I4 (even col = high nibble); the 2×2 multi-row
+/// unit test (`ia4_multirow_swizzle_canary`) is the swizzle check. Its 2-byte rows leave the
+/// sampled rows unloaded, as in `golden_i4_ramp`.
 #[test]
 fn golden_ia4_ramp() {
     let px = render_scene_to_rgba8("ia4-ramp--4x4", 64, 64);

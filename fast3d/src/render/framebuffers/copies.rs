@@ -67,9 +67,7 @@ impl Copies {
         if let Some(view) = self.requests.get(&id) {
             return view.clone();
         }
-        let EncodedInput::Tmem(bank) = request.encoded.input() else {
-            unreachable!()
-        };
+        let EncodedInput::Tmem(bank) = request.encoded.input();
         let mut bytes = bank.to_vec();
         bytes.resize(4096 + 4096 * 4, 0);
         let mut offsets = HashMap::new();

@@ -35,40 +35,6 @@ pub(crate) struct DecodeJob {
 pub(crate) fn required_input_bytes(request: &EncodedTextureRequest) -> u64 {
     match request.input() {
         EncodedInput::Tmem(_) => 4096,
-        EncodedInput::LinearCompat { bytes, .. } => bytes.len().div_ceil(4) as u64 * 4 + 4096,
-    }
-}
-
-struct PackedInput<'a> {
-    bytes: Cow<'a, [u8]>,
-    palette_offset: u32,
-    linear_len: u32,
-}
-
-impl<'a> PackedInput<'a> {
-    fn new(request: &'a EncodedTextureRequest) -> Self {
-        match request.input() {
-            EncodedInput::Tmem(bank) => Self {
-                bytes: Cow::Borrowed(&bank[..]),
-                palette_offset: 0,
-                linear_len: 0,
-            },
-            EncodedInput::LinearCompat {
-                bytes,
-                palette_bank,
-            } => {
-                let palette_offset = bytes.len().div_ceil(4) * 4;
-                let mut packed = Vec::with_capacity(palette_offset + palette_bank.len());
-                packed.extend_from_slice(bytes);
-                packed.resize(palette_offset, 0);
-                packed.extend_from_slice(&palette_bank[..]);
-                Self {
-                    bytes: Cow::Owned(packed),
-                    palette_offset: palette_offset as u32,
-                    linear_len: bytes.len() as u32,
-                }
-            }
-        }
     }
 }
 
@@ -77,7 +43,7 @@ struct DecodeParams {
 }
 
 impl DecodeParams {
-    fn new(request: &EncodedTextureRequest, input: &PackedInput<'_>) -> Self {
+    fn new(request: &EncodedTextureRequest) -> Self {
         let recipe = request.recipe();
         Self {
             words: [
@@ -97,9 +63,9 @@ impl DecodeParams {
                     u32::from(recipe.line) * 8,
                     recipe.palette.into(),
                     recipe.tlut.into(),
-                    input.linear_len,
+                    0,
                 ],
-                [input.palette_offset, 0, 0, 0],
+                [0; 4],
             ],
         }
     }
@@ -196,18 +162,19 @@ impl DecodePipeline {
         staging: Option<DecodeStaging>,
         framebuffer: Option<Vec<u8>>,
     ) -> DecodeJob {
-        let mut input = PackedInput::new(request);
-        let mut params = DecodeParams::new(request, &input);
+        let EncodedInput::Tmem(bank) = request.input();
+        let mut input = Cow::Borrowed(&bank[..]);
+        let mut params = DecodeParams::new(request);
         if let Some(bytes) = framebuffer {
-            input.bytes = Cow::Owned(bytes);
+            input = Cow::Owned(bytes);
             params.words[3][1] = 1024;
         }
         let staging = staging
-            .filter(|v| v.capacity() >= input.bytes.len() as u64)
+            .filter(|v| v.capacity() >= input.len() as u64)
             .unwrap_or_else(|| {
                 let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("texture-decode-input"),
-                    size: input.bytes.len() as u64,
+                    size: input.len() as u64,
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
@@ -224,26 +191,17 @@ impl DecodePipeline {
                     params,
                 }
             });
-        queue.write_buffer(&staging.input, 0, &input.bytes);
+        queue.write_buffer(&staging.input, 0, &input);
         queue.write_buffer(&staging.params, 0, &params.bytes());
         profiling.count(
             "buffer.texture_decode_input.upload_bytes",
-            input.bytes.len() as u64,
+            input.len() as u64,
         );
         profiling.count("buffer.texture_decode_uniform.upload_bytes", PARAM_BYTES);
         profiling.count("tmem.decode_input_upload_calls", 1);
         profiling.count("tmem.decode_uniform_upload_calls", 1);
-        profiling.count("tmem.decode_input_upload_bytes", input.bytes.len() as u64);
+        profiling.count("tmem.decode_input_upload_bytes", input.len() as u64);
         profiling.count("tmem.decode_uniform_upload_bytes", PARAM_BYTES);
-        profiling.count(
-            "tmem.decode_upload_padding_bytes",
-            match request.input() {
-                EncodedInput::Tmem(_) => 0,
-                EncodedInput::LinearCompat { bytes, .. } => {
-                    u64::from(input.palette_offset) - bytes.len() as u64
-                }
-            },
-        );
         let extent = request.recipe().output;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("texture-decode-output"),

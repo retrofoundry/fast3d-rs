@@ -150,24 +150,17 @@ fn change_source(fixture: &Fixture, source: usize) -> Fixture {
 #[derive(Clone, Copy, Debug)]
 enum RecipeCase {
     LookupI8,
-    LinearI8,
-    LinearCi8,
+    NarrowI8,
+    NarrowCi8,
 }
 
 impl RecipeCase {
-    const ALL: [Self; 3] = [Self::LookupI8, Self::LinearI8, Self::LinearCi8];
+    const ALL: [Self; 3] = [Self::LookupI8, Self::NarrowI8, Self::NarrowCi8];
 
     fn representation(self) -> Representation {
         match self {
             Self::LookupI8 => Representation::Lookup,
-            Self::LinearI8 | Self::LinearCi8 => Representation::Linear,
-        }
-    }
-
-    fn input_bytes(self) -> u64 {
-        match self {
-            Self::LookupI8 => 4096,
-            Self::LinearI8 | Self::LinearCi8 => 4108,
+            Self::NarrowI8 | Self::NarrowCi8 => Representation::Tile,
         }
     }
 }
@@ -187,7 +180,7 @@ fn recipe_fixture(recipe: RecipeCase, changed: bool) -> Fixture {
     const PALETTE: u32 = 0x0030_0100;
     let mut fixture = fixture("tmem-layouts");
     let mut commands = commands(&fixture)[..16].to_vec();
-    let fmt = if matches!(recipe, RecipeCase::LinearCi8) {
+    let fmt = if matches!(recipe, RecipeCase::NarrowCi8) {
         2
     } else {
         4
@@ -220,7 +213,7 @@ fn recipe_fixture(recipe: RecipeCase, changed: bool) -> Fixture {
             ]);
             (lookup_texels(changed).to_vec(), 8)
         }
-        RecipeCase::LinearI8 | RecipeCase::LinearCi8 => {
+        RecipeCase::NarrowI8 | RecipeCase::NarrowCi8 => {
             commands.extend([
                 gdp_set_texture_image(fmt, 1, 3, SOURCE),
                 gdp_set_tile(fmt, 1, 0, 0, 7, 0, 2, 0, 0, 2, 0, 0),
@@ -280,15 +273,26 @@ fn recipe_fixture(recipe: RecipeCase, changed: bool) -> Fixture {
 fn recipe_color(recipe: RecipeCase, changed: bool) -> [u8; 4] {
     match recipe {
         RecipeCase::LookupI8 => unreachable!(),
-        RecipeCase::LinearI8 => [if changed { 173 } else { 61 }; 4],
-        RecipeCase::LinearCi8 if changed => [0, 0, 255, 255],
-        RecipeCase::LinearCi8 => [255, 0, 0, 255],
+        RecipeCase::NarrowI8 => [if changed { 173 } else { 61 }; 4],
+        RecipeCase::NarrowCi8 if changed => [0, 0, 255, 255],
+        RecipeCase::NarrowCi8 => [255, 0, 0, 255],
     }
 }
 
 fn expected_recipe_decode(recipe: RecipeCase, changed: bool) -> Vec<u8> {
     if !matches!(recipe, RecipeCase::LookupI8) {
-        return recipe_color(recipe, changed).repeat(9);
+        let first = recipe_color(recipe, changed);
+        let middle = if matches!(recipe, RecipeCase::NarrowI8) {
+            [211; 4]
+        } else {
+            [0; 4]
+        };
+        let last = if matches!(recipe, RecipeCase::NarrowI8) {
+            [0; 4]
+        } else {
+            first
+        };
+        return [first.repeat(3), middle.repeat(3), last.repeat(3)].concat();
     }
     let last = if changed { 239 } else { 211 };
     let even = [
@@ -314,7 +318,10 @@ fn expected_recipe_pixels(recipe: RecipeCase, changed: bool) -> Vec<u8> {
     let colors: Vec<_> = if matches!(recipe, RecipeCase::LookupI8) {
         lookup_texels(changed).map(|value| [value; 4]).to_vec()
     } else {
-        vec![recipe_color(recipe, changed); 9]
+        expected_recipe_decode(recipe, changed)
+            .as_chunks::<4>()
+            .0
+            .to_vec()
     };
     let width = colors.len() / 3;
     for (index, [r, g, b, _]) in colors.into_iter().enumerate() {
@@ -326,7 +333,7 @@ fn expected_recipe_pixels(recipe: RecipeCase, changed: bool) -> Vec<u8> {
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-fn hle_lookup_and_linear_recipe_census_matches_literals() {
+fn hle_lookup_and_narrow_recipe_census_matches_literals() {
     for recipe in RecipeCase::ALL {
         let mut identities = Vec::new();
         for changed in [false, true] {
@@ -344,20 +351,18 @@ fn hle_lookup_and_linear_recipe_census_matches_literals() {
             if matches!(recipe, RecipeCase::LookupI8) {
                 assert_eq!(request.extent, [4096, 4]);
                 assert_eq!([request.tile.cms, request.tile.masks], [0, 3]);
-                assert!(request.linear.is_none());
             } else {
                 assert_eq!(request.extent, [3, 3]);
                 let value = match recipe {
-                    RecipeCase::LinearI8 if changed => 173,
-                    RecipeCase::LinearI8 => 61,
-                    RecipeCase::LinearCi8 => 0,
+                    RecipeCase::NarrowI8 if changed => 173,
+                    RecipeCase::NarrowI8 => 61,
+                    RecipeCase::NarrowCi8 => 0,
                     RecipeCase::LookupI8 => unreachable!(),
                 };
-                assert_eq!(request.linear.as_deref(), Some([value; 9].as_slice()));
                 assert_eq!(&request.bank.bytes[..9], &[value; 9]);
                 assert_eq!(&request.bank.bytes[9..16], &[211; 7]);
             }
-            if matches!(recipe, RecipeCase::LinearCi8) {
+            if matches!(recipe, RecipeCase::NarrowCi8) {
                 assert_eq!(request.tile.fmt, 2);
                 assert_eq!(request.tlut, 2);
                 let palette = if changed { [0, 0x3f] } else { [0xf8, 1] };
@@ -367,9 +372,7 @@ fn hle_lookup_and_linear_recipe_census_matches_literals() {
                 assert_eq!(request.tlut, 0);
             }
             assert_eq!(
-                request
-                    .decode_prepared(&request.prepare().unwrap())
-                    .unwrap(),
+                request.decode().unwrap(),
                 expected_recipe_decode(recipe, changed),
                 "{recipe:?}, changed {changed}"
             );
@@ -649,25 +652,13 @@ fn public_interpreter_counts_reload_copies_before_renderer_lookup() {
 }
 
 fn assert_work(snapshot: &Snapshot, misses: u64, hits: u64, tasks: u64) {
-    assert_work_with_input(snapshot, misses, hits, tasks, misses * 4096, 0);
-}
-
-fn assert_work_with_input(
-    snapshot: &Snapshot,
-    misses: u64,
-    hits: u64,
-    tasks: u64,
-    input_bytes: u64,
-    padding_bytes: u64,
-) {
     for (name, expected) in [
         ("tmem.misses", misses),
         ("tmem.hits", hits),
         ("tmem.decode_dispatches", misses),
         ("tmem.decode_compute_passes", u64::from(misses != 0)),
         ("tmem.decode_input_upload_calls", misses),
-        ("tmem.decode_input_upload_bytes", input_bytes),
-        ("tmem.decode_upload_padding_bytes", padding_bytes),
+        ("tmem.decode_input_upload_bytes", misses * 4096),
         ("tmem.decode_uniform_upload_calls", misses),
         ("tmem.decode_uniform_upload_bytes", misses * 64),
         ("tmem.evictions", 0),
@@ -885,13 +876,9 @@ async fn realistic_reloads() {
             ("tmem.bytes_hashed", 4704),
             ("tmem.witness_comparisons", if frame == 0 { 9 } else { 18 }),
             ("tmem.encoded_comparisons", 9),
-            (
-                "tmem.bytes_compared",
-                if frame == 0 { 39216 } else { 41568 },
-            ),
+            ("tmem.bytes_compared", if frame == 0 { 2968 } else { 5320 }),
             ("tmem.bank_cow_allocations", 9),
             ("tmem.bank_cow_bytes", 36864),
-            ("tmem.linear_reconstruction_bytes", 0),
         ] {
             assert_eq!(count(&profile, name), expected, "{name}, frame {frame}");
         }
@@ -940,10 +927,10 @@ async fn realistic_reloads() {
             "resident_gpu_bytes" | "resident_cpu_bytes" => {
                 aggregate.gauges[&format!("tmem.{name}")]
             }
-            "encoded_bytes_compared" => count(&aggregate, "tmem.encoded_comparisons") * 4096,
+            "encoded_bytes_compared" => count(&aggregate, "tmem.encoded_bytes_compared"),
             "witness_bytes_compared" => {
                 count(&aggregate, "tmem.bytes_compared")
-                    - count(&aggregate, "tmem.encoded_comparisons") * 4096
+                    - count(&aggregate, "tmem.encoded_bytes_compared")
             }
             _ => count(&aggregate, &format!("tmem.{name}")),
         };
@@ -963,10 +950,11 @@ async fn palette_reloads() {
     for frame in 0..2 {
         harness.renderer.begin_frame();
         harness.process(&fixture, None);
+        // Two of the five draws keep their bound material, so only three requests reach residency.
         assert_work(
             &harness.recorder.drain(),
             if frame == 0 { 3 } else { 0 },
-            if frame == 0 { 2 } else { 5 },
+            if frame == 0 { 0 } else { 3 },
             1,
         );
         semantics::assert_pixels("tmem-tlut-mutation", &harness.pixels().await);
@@ -974,7 +962,7 @@ async fn palette_reloads() {
     }
 }
 
-async fn lookup_and_linear_residency() {
+async fn lookup_and_narrow_residency() {
     for recipe in RecipeCase::ALL {
         let mut harness = Harness::new(&recipe_fixture(recipe, false)).await;
         let scope = harness
@@ -986,19 +974,7 @@ async fn lookup_and_linear_residency() {
             harness.process(&recipe_fixture(recipe, changed), None);
             let profile = harness.recorder.drain();
             let misses = u64::from(frame == 0 || changed);
-            let padding = if matches!(recipe, RecipeCase::LookupI8) {
-                0
-            } else {
-                3
-            };
-            assert_work_with_input(
-                &profile,
-                misses,
-                1 - misses,
-                1,
-                misses * recipe.input_bytes(),
-                misses * padding,
-            );
+            assert_work(&profile, misses, 1 - misses, 1);
             assert_eq!(
                 count(&profile, "tmem.staging_reuses"),
                 u64::from(changed),
@@ -1073,6 +1049,6 @@ gpu_test!(
 gpu_test!(three_frame_display_list_reload_counts, realistic_reloads);
 gpu_test!(only_relevant_palette_reloads_decode, palette_reloads);
 gpu_test!(
-    lookup_and_linear_cold_warm_changed_input_counts_and_pixels,
-    lookup_and_linear_residency
+    lookup_and_narrow_cold_warm_changed_input_counts_and_pixels,
+    lookup_and_narrow_residency
 );

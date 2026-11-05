@@ -1,8 +1,7 @@
 use super::*;
 
-fn reference_serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], linear: &[u8]) -> Vec<u8> {
+fn reference_serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES]) -> Vec<u8> {
     let mut selected = [false; TMEM_BYTES];
-    let mut palette = [false; TMEM_BYTES];
     let mut mark = |rel: usize, odd: bool, parity: usize| {
         let mask = if recipe.fmt == 2 || recipe.siz == 3 {
             2047
@@ -53,26 +52,8 @@ fn reference_serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], linear: &
                 }
             }
         }
-        Representation::LinearCompat => {
-            if recipe.fmt == 2 {
-                for x in 0..(recipe.logical[0] as usize * recipe.logical[1] as usize) {
-                    let index = if recipe.siz == 0 {
-                        (linear[x / 2] >> if x & 1 == 0 { 4 } else { 0 }) & 15
-                    } else {
-                        linear[x]
-                    };
-                    let p = 2048 + usize::from(recipe.palette) * 128 + usize::from(index) * 8;
-                    palette[p & 4095] = true;
-                    palette[(p + 1) & 4095] = true;
-                }
-            }
-        }
     }
-    let mut out = Vec::with_capacity(
-        56 + selected.iter().filter(|&&v| v).count() * 3
-            + linear.len()
-            + palette.iter().filter(|&&v| v).count() * 3,
-    );
+    let mut out = Vec::new();
     out.extend_from_slice(b"fast3d-tmem-key\0");
     out.extend_from_slice(&1u16.to_le_bytes());
     out.extend_from_slice(&[recipe.representation as u8, 0]);
@@ -93,9 +74,7 @@ fn reference_serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], linear: &
         }
     };
     pairs(&mut out, &selected);
-    out.extend_from_slice(&(linear.len() as u32).to_le_bytes());
-    out.extend_from_slice(linear);
-    pairs(&mut out, &palette);
+    out.extend_from_slice(&[0; 8]);
     out
 }
 
@@ -116,14 +95,7 @@ fn spans_preserve_preimages_through_wrap_swap_overlap_and_palette_tails() {
         for base in [0, 1, 255, 256, 511] {
             for line in [0, 1, 3, 255, 511] {
                 for width in (0..=17).chain([65, 2049]) {
-                    for representation in [
-                        Representation::Tile,
-                        Representation::Lookup4096x4,
-                        Representation::LinearCompat,
-                    ] {
-                        if representation == Representation::LinearCompat && siz == 3 {
-                            continue;
-                        }
+                    for representation in [Representation::Tile, Representation::Lookup4096x4] {
                         let recipe = DecodeRecipe {
                             representation,
                             output: if representation == Representation::Lookup4096x4 {
@@ -139,16 +111,9 @@ fn spans_preserve_preimages_through_wrap_swap_overlap_and_palette_tails() {
                             palette: if fmt == 2 && siz == 0 { 15 } else { 0 },
                             tlut: if fmt == 2 { 3 } else { 0 },
                         };
-                        let linear = if representation == Representation::LinearCompat {
-                            (0..((width as usize * 3) << siz).div_ceil(2))
-                                .map(|i| bank[i & 4095])
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
                         assert_eq!(
-                            serialize(&recipe, &bank, &linear),
-                            reference_serialize(&recipe, &bank, &linear),
+                            serialize(&recipe, &bank),
+                            reference_serialize(&recipe, &bank),
                             "{recipe:?}"
                         );
                     }
@@ -173,9 +138,9 @@ fn zero_height_selects_no_physical_bytes_or_palette_entries() {
             tlut: 0,
         };
         let bank = [255; TMEM_BYTES];
-        let preimage = serialize(&recipe, &bank, &[]);
+        let preimage = serialize(&recipe, &bank);
         assert_eq!(preimage.len(), 56);
         assert_eq!(&preimage[44..], &[0; 12]);
-        assert_eq!(preimage, reference_serialize(&recipe, &bank, &[]));
+        assert_eq!(preimage, reference_serialize(&recipe, &bank));
     }
 }

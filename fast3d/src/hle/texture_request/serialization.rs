@@ -74,12 +74,7 @@ impl Selection {
     }
 }
 
-pub(super) fn serialize_profiled(
-    recipe: &DecodeRecipe,
-    bank: &[u8; TMEM_BYTES],
-    linear: &[u8],
-    profiling: &Recorder,
-) -> Vec<u8> {
+fn select(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], profiling: &Recorder) -> Selection {
     let mut selected = Selection::default();
     let mut palette = Selection::default();
     let size = if recipe.fmt == 2 || recipe.siz == 3 {
@@ -111,7 +106,6 @@ pub(super) fn serialize_profiled(
             selected.range(0, size);
             span_bytes = size;
         }
-        Representation::LinearCompat => {}
     }
     if recipe.siz == 3 {
         for i in 0..32 {
@@ -151,25 +145,47 @@ pub(super) fn serialize_profiled(
                     indices(byte, true);
                 }
             }
-            Representation::LinearCompat => {
-                let pixels = recipe.logical[0] as usize * recipe.logical[1] as usize;
-                let bytes = (pixels << recipe.siz).div_ceil(2);
-                for (i, &byte) in linear[..bytes].iter().enumerate() {
-                    indices(byte, i + 1 < bytes || pixels & 1 == 0);
-                }
-            }
         }
-        if recipe.representation != Representation::LinearCompat {
-            for (selected, palette) in selected.0.iter_mut().zip(&mut palette.0) {
-                *selected |= *palette;
-                *palette = 0;
-            }
+        for (selected, palette) in selected.0.iter_mut().zip(palette.0) {
+            *selected |= palette;
         }
     }
+    profiling.count("tmem.footprint_span_bytes", span_bytes as u64);
+    profiling.count("tmem.palette_index_reads", palette_reads);
+    selected
+}
 
+pub(super) fn matches(
+    recipe: &DecodeRecipe,
+    a: &[u8; TMEM_BYTES],
+    b: &[u8; TMEM_BYTES],
+    profiling: &Recorder,
+) -> bool {
+    let selected = select(recipe, a, profiling);
+    let bytes = selected.count() as u64;
+    profiling.count("tmem.encoded_bytes_compared", bytes);
+    profiling.count("tmem.bytes_compared", bytes);
+    selected.0.iter().enumerate().all(|(word, &bits)| {
+        let mut bits = bits;
+        while bits != 0 {
+            let address = word * 64 + bits.trailing_zeros() as usize;
+            if a[address] != b[address] {
+                return false;
+            }
+            bits &= bits - 1;
+        }
+        true
+    })
+}
+
+pub(super) fn serialize_profiled(
+    recipe: &DecodeRecipe,
+    bank: &[u8; TMEM_BYTES],
+    profiling: &Recorder,
+) -> Vec<u8> {
+    let selected = select(recipe, bank, profiling);
     let physical_count = selected.count();
-    let palette_count = palette.count();
-    let mut out = Vec::with_capacity(56 + physical_count * 3 + linear.len() + palette_count * 3);
+    let mut out = Vec::with_capacity(56 + physical_count * 3);
     out.extend_from_slice(b"fast3d-tmem-key\0");
     out.extend_from_slice(&1u16.to_le_bytes());
     out.extend_from_slice(&[recipe.representation as u8, 0]);
@@ -181,18 +197,14 @@ pub(super) fn serialize_profiled(
     out.extend_from_slice(&recipe.line.to_le_bytes());
     out.extend_from_slice(&[recipe.palette, recipe.tlut]);
     selected.pairs(&mut out, bank, physical_count);
-    out.extend_from_slice(&(linear.len() as u32).to_le_bytes());
-    out.extend_from_slice(linear);
-    palette.pairs(&mut out, bank, palette_count);
+    out.extend_from_slice(&[0; 8]);
     profiling.count("tmem.preimage_bytes_constructed", out.len() as u64);
-    profiling.count("tmem.footprint_span_bytes", span_bytes as u64);
-    profiling.count("tmem.palette_index_reads", palette_reads);
     out
 }
 
-#[cfg(any(test, feature = "profiling"))]
-pub(crate) fn serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES], linear: &[u8]) -> Vec<u8> {
-    serialize_profiled(recipe, bank, linear, &Recorder::default())
+#[cfg(test)]
+pub(crate) fn serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES]) -> Vec<u8> {
+    serialize_profiled(recipe, bank, &Recorder::default())
 }
 
 #[cfg(test)]

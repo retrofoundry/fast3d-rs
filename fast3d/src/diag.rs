@@ -154,9 +154,6 @@ pub enum DiagKind {
     NonCanonicalBlend,
     StrayRdphalf,
     NoTextureLoaded,
-    TextureBytesUnavailable {
-        tmem_addr: u16,
-    },
     /// A two-texture material's second texture cannot be decoded.
     SecondTextureUndecodable,
     /// CA/CB/CC/CD/AA/AB/AC/AD slots: low eight bits cycle 1, high eight bits cycle 0.
@@ -207,7 +204,6 @@ impl DiagKind {
             | DiagKind::InvalidVertexTransform { .. }
             | DiagKind::MissingBranchTarget
             | DiagKind::NoTextureLoaded
-            | DiagKind::TextureBytesUnavailable { .. }
             | DiagKind::SecondTextureUndecodable
             | DiagKind::UnhandledMovemem(_)
             | DiagKind::UnhandledMoveword(_)
@@ -331,9 +327,6 @@ impl std::fmt::Display for DiagKind {
             DiagKind::StrayRdphalf => write!(f, "stray RDPHALF — rect decode desync"),
             DiagKind::NoTextureLoaded => {
                 write!(f, "no texture loaded")
-            }
-            DiagKind::TextureBytesUnavailable { tmem_addr } => {
-                write!(f, "linear texture bytes unavailable at TMEM word 0x{tmem_addr:03X}; refusing to draw")
             }
             DiagKind::SecondTextureUndecodable => {
                 write!(

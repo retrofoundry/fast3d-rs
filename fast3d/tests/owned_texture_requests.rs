@@ -20,6 +20,9 @@ fn production_requests_reproduce_frozen_preimages_on_this_target() {
     for row in document["vectors"].as_array().unwrap() {
         let recipe = &row["recipe"];
         let n = |name: &str| recipe[name].as_u64().unwrap();
+        if n("representation") == 2 {
+            continue;
+        }
         let mut trace = prototype.clone();
         trace.tile.fmt = n("fmt") as u8;
         trace.tile.siz = n("siz") as u8;
@@ -33,29 +36,18 @@ fn production_requests_reproduce_frozen_preimages_on_this_target() {
         trace.representation = match n("representation") {
             0 => fast3d::profiling::Representation::Tile,
             1 => fast3d::profiling::Representation::Lookup,
-            _ => fast3d::profiling::Representation::Linear,
+            _ => unreachable!(),
         };
         trace.bank.bytes = vec![0; 4096];
-        trace.bank.sources = vec![[0; 2]; 4096];
-        trace.bank.blocks.clear();
         for field in ["physical_pairs_hex", "palette_pairs_hex"] {
             for pair in unhex(row[field].as_str().unwrap()).as_chunks::<3>().0 {
                 trace.bank.bytes[usize::from(u16::from_le_bytes([pair[0], pair[1]]))] = pair[2];
             }
         }
-        let linear = unhex(row["linear_hex"].as_str().unwrap());
-        if !linear.is_empty() {
-            let base = usize::from(trace.tile.tmem_addr) * 8;
-            for (offset, &byte) in linear.iter().enumerate() {
-                let address = (base + offset) & 4095;
-                trace.bank.bytes[address] = byte;
-                trace.bank.sources[address] = [1, offset as u16];
-            }
-            trace
-                .bank
-                .blocks
-                .push((base as u16, linear.len() as u16, true));
-        }
+        trace.extent = [
+            recipe["output"][0].as_u64().unwrap() as u32,
+            recipe["output"][1].as_u64().unwrap() as u32,
+        ];
         trace.rejection = None;
         let (key, witness) = trace.encoded_identity().unwrap();
         assert_eq!(

@@ -26,7 +26,7 @@ fn tile(fmt: u8, siz: u8, width: u16, height: u16, line: u16, base: u16) -> Tile
 }
 
 fn bank(bytes: &[u8]) -> Tmem {
-    let mut profile = Tmem::default().profile_bank(false);
+    let mut profile = Tmem::default().profile_bank();
     profile.bytes[..bytes.len()].copy_from_slice(bytes);
     Tmem::from_profile(&profile)
 }
@@ -56,7 +56,7 @@ fn export(id: &str, actual: &[u8], expected: &[u8], width: u32, height: u32, inp
 
 fn check(id: &str, tmem: &Tmem, tile: &TileDescriptor, mode: u8, expected: &[u8]) {
     let actual = tmem.sample_tile(tile, mode).unwrap();
-    let mut input = tmem.profile_bank(false).bytes;
+    let mut input = tmem.profile_bank().bytes;
     input.extend([tile.fmt, tile.siz, tile.palette, mode]);
     for v in [tile.width, tile.height, tile.line, tile.tmem_addr] {
         input.extend(v.to_le_bytes());
@@ -334,31 +334,6 @@ fn tmem_lookup_all_planes_wrap_independent_literals() {
 }
 
 #[test]
-fn tmem_provenance_equal_banks_distinct_linear_streams() {
-    let descriptor = tile(4, 1, 3, 3, 1, 0);
-    let mut streams = Vec::new();
-    for dxt in [0, 2048] {
-        let mut tmem = Tmem::default();
-        tmem.write_block(&[0; 24], 0, 0, dxt, 3, 1);
-        let mut profile = tmem.profile_bank(true);
-        for (i, b) in profile.bytes.iter_mut().enumerate() {
-            *b = i as u8;
-        }
-        tmem = Tmem::from_profile(&profile);
-        streams.push(tmem.linear_bytes(&descriptor, 16).unwrap());
-    }
-    assert_eq!(
-        streams[0],
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-    );
-    assert_eq!(
-        streams[1],
-        [0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15, 8, 9, 10, 11]
-    );
-    assert_ne!(streams[0], streams[1]);
-}
-
-#[test]
 fn tmem_poison_then_reload_checks_rejection_before_reuse() {
     let mut state = crate::hle::rdp::Rdp {
         other_mode_h: 2 << 20,
@@ -380,13 +355,16 @@ fn tmem_poison_then_reload_checks_rejection_before_reuse() {
     assert_eq!(get(&state).0.unwrap().texture.decode().as_ref(), [61; 4]);
     let diagnostic = crate::Diagnostic {
         at: 0x40,
-        kind: crate::DiagKind::TextureBytesUnavailable { tmem_addr: 0 },
+        kind: crate::DiagKind::UnsupportedFramebufferAccess {
+            address: 0x1000,
+            reason: crate::FramebufferAccess::Reinterpretation,
+        },
     };
-    let before = state.tmem_bank.profile_bank(false).bytes;
+    let before = state.tmem_bank.profile_bank().bytes;
     state.tmem_bank.reject_load(diagnostic, |tmem| {
         tmem.write_tile(&[61; 8], 0, 1, 1, 1, 8, 1)
     });
-    assert_eq!(before, state.tmem_bank.profile_bank(false).bytes);
+    assert_eq!(before, state.tmem_bank.profile_bank().bytes);
     assert!(get(&state).0.is_none());
     assert_eq!(get(&state).1, [diagnostic]);
     state.tmem_bank.write_tile(&[61; 8], 0, 1, 1, 1, 8, 1);
@@ -415,7 +393,7 @@ fn tmem_tlut_order_reach_and_rgba32_overlap() {
     assert_eq!(first, [255, 0, 0, 255]);
     assert_eq!(second, [0, 255, 0, 255]);
     tmem.write_tlut(&[0x12, 0x34, 0x56, 0x78], 2, 511);
-    let bytes = tmem.profile_bank(false).bytes;
+    let bytes = tmem.profile_bank().bytes;
     assert_eq!(&bytes[4088..], [0x12, 0x34].repeat(4));
     assert_eq!(&bytes[..8], [0x56, 0x78].repeat(4));
     for palette in 0..16 {

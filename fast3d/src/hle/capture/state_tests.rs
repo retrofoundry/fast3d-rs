@@ -722,3 +722,51 @@ fn capture_rejects_unsupported_active_use_even_when_both_walks_do_no_work() {
         .to_string()
         .contains("prior RDP state"));
 }
+
+#[test]
+fn capture_admission_compares_sampled_tmem_including_initial_zeros() {
+    let mut fixture = fixture();
+    let mut draw = task(
+        &[
+            gdp_set_color_image(0, 2, 64, 0x20000),
+            gdp_set_scissor(0, 0, 0, 256, 192),
+            gdp_set_cycle_type(2),
+            gdp_set_texture_image(4, 1, 8, 0x10000),
+            gdp_set_tile(4, 1, 0, 0, 7, 0, 2, 0, 0, 2, 0, 0),
+            gdp_load_block(7, 0, 0, 7, 0),
+            gdp_set_tile(4, 1, 1, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+            gdp_set_tile_size(0, 0, 0, 12, 4),
+        ],
+        0,
+    );
+    draw.spans[0].bytes.extend(
+        gsp_texture_rectangle(0, 0, 16, 8, 0, 0, 0, 4096, 1024, false)
+            .into_iter()
+            .chain([gsp_enddl()])
+            .flat_map(|(a, b)| [a.to_be_bytes(), b.to_be_bytes()].concat()),
+    );
+    draw.spans.push(MemorySpan {
+        address: 0x10000,
+        bytes: vec![61; 8],
+    });
+    fixture.tasks = vec![draw];
+    for (word, accepted) in [(0, true), (1, false), (511, true)] {
+        let mut initial_rdp = crate::hle::rdp::Rdp::default();
+        initial_rdp
+            .tmem_bank
+            .write_block(&[91; 8], word, 0, 0, 1, 1);
+        let capture = CaptureFrame {
+            fixture: fixture.clone(),
+            error: None,
+            initial_rdp,
+            initial_framebuffers: Default::default(),
+            expected_generation: std::rc::Rc::new(()),
+            sequence: false,
+        };
+        let result = capture.finish(None);
+        assert_eq!(result.is_ok(), accepted, "word {word}: {result:?}");
+        if let Err(error) = result {
+            assert!(error.to_string().contains("prior RDP state"), "{error}");
+        }
+    }
+}

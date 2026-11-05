@@ -101,7 +101,7 @@ fn load_provenance_disjoint_loads_preserve_both_layouts() {
             let expected = if first {
                 vec![16, 17, 18, 32, 33, 34, 48, 49, 50]
             } else {
-                (16..25).collect()
+                vec![16, 17, 18, 24, 25, 26, 32, 33, 34]
             };
             assert_eq!(
                 intensities(&rect_texture(&result, 1)),
@@ -132,17 +132,15 @@ fn load_provenance_overwriting_loads_replace_both_layouts() {
 }
 
 #[test]
-fn load_provenance_missing_block_bytes_drops_draw() {
+fn load_provenance_partial_word_overwrite_samples_both_loads() {
     for second in [false, true] {
         let result = two_loads(false, second, 1, true);
-        assert_eq!(result.dropped_runs, 1, "{second}: {:?}", result.diags);
-        assert_eq!(result.diags.len(), 1);
+        assert_eq!(result.dropped_runs, 0, "{second}: {:?}", result.diags);
+        assert!(result.diags.is_empty());
         assert_eq!(
-            result.diags[0].kind,
-            crate::DiagKind::TextureBytesUnavailable { tmem_addr: 0 }
+            intensities(&rect_texture(&result, 1)),
+            [16, 17, 18, 0xee, 0xee, 0xee, 32, 33, 34]
         );
-        assert_eq!(result.summary(false).errors, 1);
-        assert_eq!(result.scene.materials.len(), 1);
     }
 }
 
@@ -151,22 +149,18 @@ fn load_provenance_partial_base_overwrite_cannot_repoint_surviving_rows() {
     let mut state = two_loads(true, false, 0, true).rdp;
     state.tiles[0].height = 2;
     let mut diags = Vec::new();
-    assert!(crate::hle::combiner::build_rect_material(
-        &state,
-        &Default::default(),
-        0,
-        &mut diags,
-        0
-    )
-    .is_none());
+    let material =
+        crate::hle::combiner::build_rect_material(&state, &Default::default(), 0, &mut diags, 0)
+            .unwrap();
+    assert!(diags.is_empty());
     assert_eq!(
-        diags[0].kind,
-        crate::DiagKind::TextureBytesUnavailable { tmem_addr: 0 }
+        intensities(&material.texture.decode()),
+        [0xee, 0xee, 0xee, 32, 33, 34]
     );
 }
 
 #[test]
-fn load_provenance_recovers_gapped_block_at_its_base() {
+fn load_provenance_gapped_block_samples_initial_zeros() {
     let mut state = two_loads(false, true, 32, true).rdp;
     state.tmem_bank = Default::default();
     state
@@ -182,12 +176,12 @@ fn load_provenance_recovers_gapped_block_at_its_base() {
     .unwrap();
     assert_eq!(
         intensities(&material.texture.decode()),
-        (16..25).collect::<Vec<_>>()
+        [16, 17, 18, 0, 0, 0, 28, 29, 30]
     );
 }
 
 #[test]
-fn load_provenance_second_texture_and_lod_use_retained_linear_bytes() {
+fn load_provenance_second_texture_and_lod_use_retained_physical_bytes() {
     for lod in [false, true] {
         let mut state = two_loads(false, true, 32, true).rdp;
         state.tiles[1] = state.tiles[0].clone();
@@ -204,13 +198,13 @@ fn load_provenance_second_texture_and_lod_use_retained_linear_bytes() {
             .unwrap_or_else(|| panic!("{lod}: {diags:?}"));
         assert_eq!(
             intensities(&material.tex1.unwrap().texture.decode()),
-            (16..25).collect::<Vec<_>>()
+            [16, 17, 18, 24, 25, 26, 32, 33, 34]
         );
         if lod {
             assert!(material.lod);
             assert_eq!(
                 intensities(&material.mip_levels[1].texture.decode()),
-                (16..25).collect::<Vec<_>>()
+                [16, 17, 18, 24, 25, 26, 32, 33, 34]
             );
         }
     }
@@ -258,11 +252,12 @@ fn load_provenance_nonzero_wrapped_and_interior_bases() {
             for _ in 0..1024 {
                 state.tmem_bank.write_block(&[0xee; 8], 64, 0, 0, 1, 1);
             }
-            let first = 16 + offset as u8 * 8;
-            assert_eq!(
-                intensities(&decode(&state).unwrap()),
-                (first..first + 9).collect::<Vec<_>>()
-            );
+            let expected = if offset == 0 {
+                [16, 17, 18, 24, 25, 26, 32, 33, 34]
+            } else {
+                [28, 29, 30, 36, 37, 38, 44, 45, 46]
+            };
+            assert_eq!(intensities(&decode(&state).unwrap()), expected);
         }
     }
 }
@@ -276,7 +271,7 @@ fn load_provenance_overwrite_elsewhere_in_same_block_preserves_subregion() {
     state.tmem_bank.write_tile(&[0xee; 8], 0, 1, 1, 1, 8, 1);
     assert_eq!(
         intensities(&decode(&state).unwrap()),
-        (32..41).collect::<Vec<_>>()
+        [32, 33, 34, 40, 41, 42, 48, 49, 50]
     );
 }
 
@@ -287,18 +282,18 @@ fn load_provenance_self_overwrite_only_loses_overwritten_source_bytes() {
     source[..24].copy_from_slice(&(16..40).collect::<Vec<_>>());
     state.tmem_bank.write_block(&source, 0, 0, 2048, 513, 1);
     assert_eq!(
-        decode(&state),
-        Err(crate::DiagKind::TextureBytesUnavailable { tmem_addr: 0 })
+        intensities(&decode(&state).unwrap()),
+        [0xee, 0xee, 0xee, 24, 25, 26, 32, 33, 34]
     );
     state.tiles[0].tmem_addr = 1;
     assert_eq!(
         intensities(&decode(&state).unwrap()),
-        (24..33).collect::<Vec<_>>()
+        [28, 29, 30, 36, 37, 38, 0xee, 0xee, 0xee]
     );
 }
 
 #[test]
-fn load_provenance_palette_and_rgba32_writes_invalidate_overlapping_bytes() {
+fn load_provenance_palette_and_rgba32_writes_replace_overlapping_bytes() {
     for base in [0, 256] {
         for palette in [false, true] {
             let mut state = narrow_state(base);
@@ -316,13 +311,13 @@ fn load_provenance_palette_and_rgba32_writes_invalidate_overlapping_bytes() {
                 state.tmem_bank.write_block(&[0xee; 8], 1, 0, 0, 1, 3);
                 assert_eq!(
                     intensities(&decode(&state).unwrap()),
-                    (16..25).collect::<Vec<_>>()
+                    [16, 17, 18, 24, 25, 26, 32, 33, 34]
                 );
                 state.tmem_bank.write_block(&[0xee; 16], 1, 0, 0, 2, 3);
             }
             assert_eq!(
-                decode(&state),
-                Err(crate::DiagKind::TextureBytesUnavailable { tmem_addr: base })
+                intensities(&decode(&state).unwrap()),
+                [16, 17, 18, 0xee, 0xee, 0xee, 32, 33, 34]
             );
         }
     }
@@ -356,7 +351,7 @@ fn load_provenance_retained_ci_uses_live_palette_and_low_bank_mask() {
 }
 
 #[test]
-fn load_provenance_missing_bytes_in_every_used_input_reject_draw() {
+fn load_provenance_mixed_load_bytes_reach_every_used_input() {
     for input in [0, 1, 2, 3] {
         let mut state = two_loads(false, true, 1, true).rdp;
         state.tmem_bank.write_tile(&[0x70; 8], 32, 1, 1, 1, 8, 1);
@@ -385,16 +380,18 @@ fn load_provenance_missing_bytes_in_every_used_input_reject_draw() {
             rsp.texture_state.level = 1;
         }
         let mut diags = Vec::new();
-        assert!(
-            crate::hle::combiner::build_material(&state, &rsp, &mut diags, 0x80).is_none(),
-            "input {input}"
-        );
+        let material =
+            crate::hle::combiner::build_material(&state, &rsp, &mut diags, 0x80).unwrap();
+        assert!(diags.is_empty(), "input {input}: {diags:?}");
+        let texture = match input {
+            0 => &material.texture,
+            1 => &material.tex1.as_ref().unwrap().texture,
+            2 => &material.mip_levels[1].texture,
+            _ => &material.detail_tex.as_ref().unwrap().texture,
+        };
         assert_eq!(
-            diags,
-            [crate::Diagnostic {
-                at: 0x80,
-                kind: crate::DiagKind::TextureBytesUnavailable { tmem_addr: 0 }
-            }]
+            intensities(&texture.decode()),
+            [16, 17, 18, 0xee, 0xee, 0xee, 32, 33, 34]
         );
     }
 }
@@ -411,7 +408,7 @@ fn load_provenance_four_bit_rows_must_align_in_bits() {
     state.tmem_bank.write_tile(&[0xee; 8], 64, 1, 1, 1, 8, 1);
     assert_eq!(
         intensities(&decode(&state).unwrap()),
-        [17, 34, 51, 68, 85, 102, 119, 136, 153]
+        [17, 0, 0, 0, 0, 0, 0, 0, 0]
     );
 }
 
@@ -441,7 +438,7 @@ fn load_provenance_survives_task_boundaries_without_original_rdram() {
             let expected = if first {
                 vec![16, 17, 18, 32, 33, 34, 48, 49, 50]
             } else {
-                (16..25).collect()
+                vec![16, 17, 18, 24, 25, 26, 32, 33, 34]
             };
             assert_eq!(intensities(&rect_texture(&result, 0)), expected);
         }

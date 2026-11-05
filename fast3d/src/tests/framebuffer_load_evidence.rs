@@ -434,7 +434,7 @@ fn f0_loadtile_byte_mapping_and_snapshot() {
     assert_eq!((0x88 + 64 + 8, 0x88 + 2 * 64 + 8), (0xd0, 0x110));
     let mut tmem = Tmem::default();
     tmem.write_tile(&source[0xd0..0x118], 0x20, 2, 2, 1, 64, 2);
-    let bank = tmem.profile_bank(false);
+    let bank = tmem.profile_bank();
     assert_eq!(
         &bank.bytes[0x100..0x108],
         &[0x12, 0xa3, 0x44, 0x33, 0xf0, 0xd9, 0x6d, 0x8b]

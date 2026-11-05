@@ -10,6 +10,10 @@ fn count(snapshot: &Snapshot, name: &str) -> u64 {
 }
 
 fn assert_work(case: &str, snapshot: &Snapshot) {
+    println!(
+        "T2_WORK {}",
+        serde_json::json!({"case": case, "counters": snapshot.counters, "gauges": snapshot.gauges})
+    );
     let contract: serde_json::Value = serde_json::from_str(include_str!(
         "../../../tools/tmem/dispatch-expectations.json"
     ))
@@ -21,10 +25,6 @@ fn assert_work(case: &str, snapshot: &Snapshot) {
             "{case}: {name}"
         );
     }
-    println!(
-        "T2_WORK {}",
-        serde_json::json!({"case": case, "counters": snapshot.counters, "gauges": snapshot.gauges})
-    );
 }
 
 fn state() -> (Rdp, TileDescriptor, Recorder) {
@@ -77,12 +77,12 @@ fn production_preimages_match_every_frozen_vector() {
         };
         let fmt = n("fmt") as u8;
         let siz = n("siz") as u8;
+        if n("representation") == 2 {
+            continue;
+        }
         let recipe = DecodeRecipe {
-            representation: [
-                Representation::Tile,
-                Representation::Lookup4096x4,
-                Representation::LinearCompat,
-            ][n("representation") as usize],
+            representation: [Representation::Tile, Representation::Lookup4096x4]
+                [n("representation") as usize],
             output: extent("output"),
             logical: extent("logical"),
             fmt,
@@ -102,8 +102,7 @@ fn production_preimages_match_every_frozen_vector() {
                 bank[usize::from(u16::from_le_bytes([pair[0], pair[1]]))] = pair[2];
             }
         }
-        let linear = unhex(row["linear_hex"].as_str().unwrap());
-        let bytes = serialize(&recipe, &bank, &linear);
+        let bytes = serialize(&recipe, &bank);
         assert_eq!(
             bytes,
             unhex(row["canonical_preimage_hex"].as_str().unwrap()),
@@ -114,23 +113,19 @@ fn production_preimages_match_every_frozen_vector() {
             format!("{:016x}", twox_hash::XxHash3_64::oneshot(&bytes)),
             row["xxh3_64"].as_str().unwrap()
         );
-        if recipe.representation != Representation::LinearCompat {
-            let rdp = Rdp {
-                tmem_bank: super::super::tmem::Tmem::from_profile(&crate::profiling::Bank {
-                    bytes: bank.to_vec(),
-                    sources: Vec::new(),
-                    blocks: Vec::new(),
-                }),
-                ..Default::default()
-            };
-            let mut tile = recipe.tile();
-            tile.palette = n("palette") as u8;
-            if recipe.representation == Representation::Lookup4096x4 {
-                tile.masks = 10;
-            }
-            let binding = prepare(&rdp, &tile, n("tlut") as u8, &Recorder::default()).unwrap();
-            assert_eq!(request(&binding).witness(), bytes);
+        let rdp = Rdp {
+            tmem_bank: super::super::tmem::Tmem::from_profile(&crate::profiling::Bank {
+                bytes: bank.to_vec(),
+            }),
+            ..Default::default()
+        };
+        let mut tile = recipe.tile();
+        tile.palette = n("palette") as u8;
+        if recipe.representation == Representation::Lookup4096x4 {
+            tile.masks = 10;
         }
+        let binding = prepare(&rdp, &tile, n("tlut") as u8, &Recorder::default()).unwrap();
+        assert_eq!(request(&binding).witness(), bytes);
     }
 }
 
@@ -204,7 +199,10 @@ fn rejected_equal_bytes_and_bad_formats_never_construct_requests() {
     profiler.drain();
     let diagnostic = crate::Diagnostic {
         at: 0x40,
-        kind: DiagKind::TextureBytesUnavailable { tmem_addr: 0 },
+        kind: DiagKind::UnsupportedFramebufferAccess {
+            address: 0x1000,
+            reason: crate::FramebufferAccess::Reinterpretation,
+        },
     };
     rdp.tmem_bank.reject_load(diagnostic, |bank| {
         bank.write_tile(&[61; 8], 0, 1, 1, 1, 8, 1)
@@ -230,7 +228,7 @@ fn rejected_equal_bytes_and_bad_formats_never_construct_requests() {
 }
 
 #[test]
-fn linear_provenance_is_validated_and_retained_requests_own_the_stream() {
+fn partial_overwrites_keep_retained_physical_requests() {
     let (mut rdp, mut tile, profiler) = state();
     tile.width = 3;
     tile.height = 3;
@@ -238,20 +236,27 @@ fn linear_provenance_is_validated_and_retained_requests_own_the_stream() {
     let first = prepare(&rdp, &tile, 0, &profiler).unwrap();
     assert_eq!(
         request(&first).recipe().representation,
-        Representation::LinearCompat
+        Representation::Tile
     );
-    assert_eq!(first.source.decode().as_ref(), [61; 36]);
-    assert_work("linear-first-3x3", &profiler.drain());
+    assert_eq!(
+        first.source.decode().as_ref(),
+        [[61; 24].as_slice(), &[0; 12]].concat()
+    );
+    assert_work("narrow-first-3x3", &profiler.drain());
     prepare(&rdp, &tile, 0, &profiler).unwrap();
-    assert_work("linear-warm", &profiler.drain());
+    assert_work("narrow-warm", &profiler.drain());
     let before = rdp.tmem_bank.encoded_bank().to_vec();
     rdp.tmem_bank.write_tile(&[61; 8], 0, 1, 1, 1, 8, 1);
     assert_eq!(before, rdp.tmem_bank.encoded_bank().as_slice());
-    assert!(prepare(&rdp, &tile, 0, &profiler).is_err());
-    assert_work("provenance-only-rejection", &profiler.drain());
+    let overwritten = prepare(&rdp, &tile, 0, &profiler).unwrap();
+    assert_eq!(first, overwritten);
+    assert_work("equal-byte-partial-overwrite", &profiler.drain());
     assert!(request(&first).identity.get().is_none());
     drop(rdp);
-    assert_eq!(first.source.decode().as_ref(), [61; 36]);
+    assert_eq!(
+        first.source.decode().as_ref(),
+        [[61; 24].as_slice(), &[0; 12]].concat()
+    );
 }
 
 #[test]
@@ -276,9 +281,7 @@ fn memory_accounting_does_not_force_identity_and_counts_shared_bank_once() {
     let first = prepare(&rdp, &tile, 0, &profiler).unwrap();
     tile.width = 2;
     let second = prepare(&rdp, &tile, 0, &profiler).unwrap();
-    let EncodedInput::Tmem(bank) = request(&first).input() else {
-        panic!("physical bank")
-    };
+    let EncodedInput::Tmem(bank) = request(&first).input();
     assert!(Arc::ptr_eq(bank, &rdp.tmem_bank.share_bank()));
     let mut memory = TextureMemory::default();
     for source in [&first.source, &first.source, &second.source] {
@@ -369,15 +372,17 @@ fn unretained_bank_writes_do_not_copy_storage() {
 }
 
 #[test]
-fn unset_physical_extents_preserve_the_empty_cpu_payload() {
+fn unset_physical_extents_decode_one_texel() {
     let (rdp, mut tile, profiler) = state();
     tile.width = 0;
+    tile.height = 0;
     let binding = prepare(&rdp, &tile, 0, &profiler).unwrap();
-    assert!(binding.source.decode().is_empty());
-    assert_eq!(
-        binding.source.decode(),
-        rdp.tmem_bank.sample_tile(&tile, 0).unwrap()
-    );
+    assert_eq!(request(&binding).recipe().output, [1, 1]);
+    assert_eq!(binding.source.decode().as_ref(), [61; 4]);
+    let mut trace =
+        crate::profiling::Request::capture(&rdp, &tile, 0, "texture0", Ok(request(&binding)));
+    trace.analyze().unwrap();
+    assert_eq!(trace.output, [61; 4]);
 }
 
 #[cfg(feature = "capture")]
@@ -427,7 +432,7 @@ fn image_roles_share_one_bank_with_level_zero_aliases_and_no_identity() {
 }
 
 #[test]
-fn equal_banks_with_different_linear_provenance_keep_distinct_lazy_identity() {
+fn equal_banks_with_different_load_history_keep_equal_lazy_identity() {
     let (mut rdp, mut tile, profiler) = state();
     tile.width = 3;
     tile.height = 3;
@@ -448,11 +453,11 @@ fn equal_banks_with_different_linear_provenance_keep_distinct_lazy_identity() {
     drop(rdp);
     assert!(request(&first).identity.get().is_none());
     assert!(request(&second).identity.get().is_none());
-    assert!(!first.matches(&second, &profiler));
-    assert_eq!(first.source.decode().as_ref()[32..], [8; 4]);
-    assert_eq!(second.source.decode().as_ref()[32..], [12; 4]);
-    assert_ne!(request(&first).key(), request(&second).key());
-    assert_ne!(request(&first).witness(), request(&second).witness());
+    assert!(first.matches(&second, &profiler));
+    assert_eq!(first.source.decode().as_ref()[32..], [0; 4]);
+    assert_eq!(second.source.decode().as_ref()[32..], [0; 4]);
+    assert_eq!(request(&first).key(), request(&second).key());
+    assert_eq!(request(&first).witness(), request(&second).witness());
 }
 
 #[test]
@@ -515,7 +520,8 @@ fn display_list_reloads_banks_between_draws_and_frames_without_identity_work() {
         rdp = result.rdp.clone();
         frames.push(result.scene);
     }
-    assert_work("display-list-reloads-three-frames", &profiling.drain());
+    let construction = profiling.drain();
+    assert_work("display-list-reloads-three-frames", &construction);
     drop(rdp);
     for pair in frames.windows(2) {
         for (a, b) in pair[0].materials.iter().zip(&pair[1].materials) {
@@ -545,7 +551,7 @@ fn display_list_reloads_banks_between_draws_and_frames_without_identity_work() {
         "palette_index_reads",
     ] {
         assert_eq!(
-            count(&profile, name),
+            count(&profile, name) + count(&construction, name),
             contract["t4"]["display_list_reloads_three_frames"][name]
                 .as_u64()
                 .unwrap(),
@@ -573,4 +579,59 @@ fn construction_and_identity_memo_work_are_counted_separately() {
     assert_eq!(count(&repeat, "preimage_bytes_constructed"), 0);
     assert_eq!(count(&repeat, "bytes_hashed"), 0);
     assert_eq!(count(&repeat, "identity_memo_hits"), 1);
+}
+
+#[test]
+fn physical_footprints_keep_retained_bytes_and_ignore_unrelated_mutations_even_on_collision() {
+    for (fmt, siz, address, changes) in [
+        (4, 1, 16, true),
+        (4, 1, 32, true),
+        (4, 1, 40, false),
+        (2, 1, 2048, true),
+        (2, 1, 2056, false),
+        (2, 0, 2048, true),
+        (2, 0, 2056, false),
+    ] {
+        let mut rdp = Rdp::default();
+        rdp.tmem_bank.write_block(&[0; 32], 0, 0, 0, 4, 1);
+        rdp.tmem_bank.write_block(&[0; 8], 0, 0, 0, 1, 1);
+        let tile = TileDescriptor {
+            fmt,
+            siz,
+            width: 4,
+            height: 5,
+            line: 1,
+            ..Default::default()
+        };
+        let first = prepare(&rdp, &tile, 3, &Recorder::default()).unwrap();
+        let pixels = first.source.decode().into_owned();
+        let witness = request(&first).witness().to_vec();
+        let mut bank = rdp.tmem_bank.profile_bank();
+        bank.bytes[address] = 0x91;
+        rdp.tmem_bank = super::super::tmem::Tmem::from_profile(&bank);
+        let mut second = prepare(&rdp, &tile, 3, &Recorder::default()).unwrap();
+        drop(rdp);
+        assert_eq!(first.source.decode().as_ref(), pixels);
+        assert_eq!(request(&first).witness(), witness);
+        assert_eq!(
+            request(&first).key() != request(&second).key(),
+            changes,
+            "{fmt}/{siz}/{address}"
+        );
+        assert_eq!(first.source.decode() != second.source.decode(), changes);
+        let TextureSource::Encoded(second) = &mut second.source else {
+            unreachable!()
+        };
+        Arc::get_mut(second)
+            .unwrap()
+            .identity
+            .get_mut()
+            .unwrap()
+            .key = request(&first).key();
+        assert_eq!(request(&first).witness() != second.witness(), changes);
+        assert_eq!(
+            request(&first).matches(second, &Recorder::default()),
+            !changes
+        );
+    }
 }

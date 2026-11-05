@@ -64,8 +64,8 @@ impl TraceCollector {
                 continue;
             }
             let cases = self.cases.entry(request.class()).or_default();
-            let prepared = request.executor().prepare().expect("admitted trace input");
-            if self.seen.insert(request.canonical(&prepared)) {
+            request.validate().expect("admitted trace input");
+            if self.seen.insert(request.canonical()) {
                 cases.push(request.clone());
             }
         }

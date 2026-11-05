@@ -17,50 +17,34 @@ fn texture_decode_shader_has_a_valid_bounded_compute_entry() {
 }
 
 #[test]
-fn texture_decode_packs_raw_bytes_and_explicit_palette_offset() {
+fn texture_decode_packs_raw_bank_bytes() {
     use crate::hle::texture_request::{
         DecodeRecipe, EncodedInput, EncodedTextureRequest, Representation,
     };
     let bank = std::sync::Arc::new(std::array::from_fn(|i| i as u8));
-    let recipe = DecodeRecipe {
-        representation: Representation::LinearCompat,
-        output: [3, 1],
-        logical: [3, 1],
-        fmt: 2,
-        siz: 1,
-        base: 511,
-        line: 3,
-        palette: 7,
-        tlut: 3,
-    };
-    let request = EncodedTextureRequest::from_test_parts(
-        EncodedInput::LinearCompat {
-            bytes: [0x12, 0x34, 0x56].into(),
-            palette_bank: bank.clone(),
-        },
-        recipe.clone(),
-    );
-    let input = PackedInput::new(&request);
-    assert_eq!(input.bytes.len(), 4100);
-    assert_eq!(&input.bytes[..8], &[0x12, 0x34, 0x56, 0, 0, 1, 2, 3]);
-    assert_eq!(&input.bytes[4..], &bank[..]);
-    let params = DecodeParams::new(&request, &input);
-    assert_eq!(
-        params.words,
-        [[3, 1, 3, 1], [2, 2, 1, 4088], [24, 7, 3, 3], [4, 0, 0, 0]]
-    );
-    assert_eq!(&params.bytes()[28..32], &[0xf8, 0x0f, 0, 0]);
-    assert_eq!(required_input_bytes(&request), 4100);
     let request = EncodedTextureRequest::from_test_parts(
         EncodedInput::Tmem(bank.clone()),
         DecodeRecipe {
             representation: Representation::Tile,
-            ..recipe
+            output: [3, 1],
+            logical: [3, 1],
+            fmt: 2,
+            siz: 1,
+            base: 511,
+            line: 3,
+            palette: 7,
+            tlut: 3,
         },
     );
-    let input = PackedInput::new(&request);
-    assert_eq!(input.bytes.as_ptr(), bank.as_ptr());
-    assert_eq!(input.bytes.as_ref(), &bank[..]);
+    let EncodedInput::Tmem(input) = request.input();
+    assert_eq!(input.as_ptr(), bank.as_ptr());
+    assert_eq!(&input[..], &bank[..]);
+    let params = DecodeParams::new(&request);
+    assert_eq!(
+        params.words,
+        [[3, 1, 3, 1], [0, 2, 1, 4088], [24, 7, 3, 0], [0, 0, 0, 0]]
+    );
+    assert_eq!(&params.bytes()[28..32], &[0xf8, 0x0f, 0, 0]);
     assert_eq!(required_input_bytes(&request), 4096);
 }
 
@@ -120,11 +104,11 @@ fn texture_decode_vectors_match_the_frozen_artifact_inventory() {
     .unwrap();
     assert_eq!(inventory["version"], 1);
     let rows = inventory["rows"].as_array().unwrap();
-    assert_eq!(rows.len(), 1909);
+    assert_eq!(rows.len(), 1263);
     let mut vectors = super::vectors::component_vectors();
     vectors.extend(super::vectors::layout_vectors());
     vectors.extend(super::vectors::literal_layout_vectors());
-    assert_eq!(vectors.len(), 1909);
+    assert_eq!(vectors.len(), 1263);
     vectors.sort_unstable_by(|a, b| a.name.cmp(&b.name));
     let actual: Vec<_> = vectors
         .iter()
@@ -186,10 +170,10 @@ fn warp_readbacks_cover_formats_modes_and_addressing_edges() {
                     let r = &v.request;
                     r.tile.fmt == fmt
                         && r.tile.siz == siz
-                        && r.representation == Representation::Linear
+                        && r.representation == Representation::Tile
                         && r.extent == [3, 3]
                 }),
-                "missing odd-width linear format {fmt}/{siz}"
+                "missing odd-width physical format {fmt}/{siz}"
             );
         }
     }
@@ -205,5 +189,5 @@ fn warp_readbacks_cover_formats_modes_and_addressing_edges() {
             vector.name
         );
     }
-    assert_eq!(super::vectors::readback_vectors(false).len(), 1909);
+    assert_eq!(super::vectors::readback_vectors(false).len(), 1263);
 }

@@ -13,8 +13,16 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+TMEM_CONTENTS_GOLDENS = {
+    'i4-ramp.bin': 'f4f2c0ba9cbf4eba8c748bf35886a8689d49a3c67d7ae3f1b56826082a8fbdcf',
+    'i8-ramp.bin': 'af4e0045dfac3f4bc5d933731efb1537a3e3db91a4b7d944dfcb5020ffe5438d',
+    'ia4-ramp.bin': 'f4f2c0ba9cbf4eba8c748bf35886a8689d49a3c67d7ae3f1b56826082a8fbdcf',
+    'ia8-ramp.bin': 'af4e0045dfac3f4bc5d933731efb1537a3e3db91a4b7d944dfcb5020ffe5438d',
+}
+
+
 class FrozenBaselines(unittest.TestCase):
-    def test_all_27_goldens_match_frozen_c2_readbacks(self):
+    def test_all_27_goldens_match_c2_or_tmem_contents_baselines(self):
         ledger = json.loads((HERE / 'goldens-bb0fea3.json').read_text())
         rows = ledger['goldens']
         self.assertEqual(len(rows), 27)
@@ -24,7 +32,8 @@ class FrozenBaselines(unittest.TestCase):
             with self.subTest(file=row['file']):
                 data = (ROOT / row['file']).read_bytes()
                 self.assertEqual(len(data), row['width'] * row['height'] * 4)
-                self.assertEqual(sha(data), row['sha256'])
+                expected = TMEM_CONTENTS_GOLDENS.get(Path(row['file']).name, row['sha256'])
+                self.assertEqual(sha(data), expected)
                 self.assertEqual(set(row['c2_readbacks']), {'default', 'debug-ui', 'all-features'})
                 self.assertEqual(set(row['c2_readbacks'].values()), {row['sha256']})
 
