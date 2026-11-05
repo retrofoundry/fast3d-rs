@@ -661,6 +661,9 @@ impl<R: Rdram> Rdram for RecordingRdram<'_, R> {
     fn in_bounds(&self, address: u64, length: u64) -> bool {
         self.inner.in_bounds(address, length)
     }
+    fn check_write(&self, address: u64, length: u64) -> std::result::Result<(), MemoryError> {
+        self.source(self.inner.check_write(address, length))
+    }
     fn read_u8(&self, address: u64) -> std::result::Result<u8, MemoryError> {
         let value = self.source(self.inner.read_u8(address))?;
         self.bytes(address, 1)?;

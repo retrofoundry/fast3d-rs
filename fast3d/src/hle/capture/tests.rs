@@ -1297,3 +1297,33 @@ fn capture_snapshots_walk_bindings() {
 
 #[path = "s2dex_tests.rs"]
 mod s2dex;
+
+#[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+#[test]
+fn recording_preserves_host_writeback_ranges() {
+    let bytes = [0u8; 16];
+    let start = bytes.as_ptr() as u64;
+    let range = start..start + 16;
+    let ranges = [range];
+    let inner = unsafe {
+        crate::hle::host_mem::HostMemory::new(crate::HostRam::with_ranges(&bytes, &ranges))
+    };
+    let log = RefCell::new(ReadLog::default());
+    let memory = RecordingRdram {
+        inner,
+        layout: MemoryLayout::host_native(),
+        log: &log,
+    };
+    assert!(memory.check_write(start, 16).is_ok());
+    assert_eq!(
+        memory.check_write(start + 1, 16).unwrap_err().kind,
+        MemoryErrorKind::Unavailable
+    );
+    assert_eq!(
+        log.into_inner().error,
+        Some(CaptureError::MissingSpan {
+            address: start + 1,
+            length: 16
+        })
+    );
+}

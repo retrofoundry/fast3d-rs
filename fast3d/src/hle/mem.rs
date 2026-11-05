@@ -162,6 +162,10 @@ pub trait Rdram {
     fn command_stride(&self) -> u64;
     /// An advisory range query that returns false if `address + length` overflows.
     fn in_bounds(&self, address: u64, length: u64) -> bool;
+    /// Validates a write-back span without reading it; backends are permissive by default.
+    fn check_write(&self, _address: u64, _length: u64) -> Result<(), MemoryError> {
+        Ok(())
+    }
     fn read_u8(&self, address: u64) -> Result<u8, MemoryError>;
     fn read_i8(&self, address: u64) -> Result<i8, MemoryError>;
     fn read_i16(&self, address: u64) -> Result<i16, MemoryError>;

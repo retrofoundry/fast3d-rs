@@ -138,10 +138,12 @@ impl CaptureFrame {
     /// Records a native display-list walk while every reachable source span is still valid.
     ///
     /// # Safety
-    /// Every command and reachable input span must be allocated, readable, initialized, in
+    /// Every command and reachable input span within the registered ranges (or every reachable
+    /// span when no ranges are supplied) must be allocated, readable, initialized, in
     /// [`crate::HostRam`]'s native layout, and stable until return. Borrowed texture bytes must not
     /// be mutated concurrently. Numeric CIMG/ZIMG identities need not be readable unless used as
-    /// inputs. The dispatch cap only bounds liveness; it cannot validate a native pointer.
+    /// inputs. The dispatch cap only bounds liveness; without registered ranges it cannot validate
+    /// a native pointer.
     #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
     pub unsafe fn process_dl_host(
         &mut self,

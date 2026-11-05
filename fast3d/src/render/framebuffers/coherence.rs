@@ -837,7 +837,7 @@ pub(crate) struct Coherence {
     first_generation: u64,
     snapshots: Vec<Snapshot>,
     pending: Vec<(u64, Writer, u64, Vec<u8>)>,
-    /// Edits reported once by `release_changed`, queued until an accepted task uploads them.
+    /// Edits reported once by `release_changed`, uploaded when the next task begins.
     pub imports: Vec<crate::GuestWrite>,
     pub imported: bool,
 }

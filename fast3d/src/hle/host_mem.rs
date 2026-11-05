@@ -8,6 +8,7 @@ use crate::hle::mem::{
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::{marker::PhantomData, ptr};
 use std::borrow::Cow;
+use std::ops::Range;
 
 fn memory_error(address: u64, length: u64, kind: MemoryErrorKind) -> MemoryError {
     MemoryError {
@@ -39,8 +40,8 @@ fn probe_log_nonident(args: core::fmt::Arguments<'_>) {
 
 /// A safe descriptor for one native display-list walk.
 ///
-/// The descriptor stores only a lifetime witness and initial raw segment bases. It performs no
-/// reads and does not implement [`Rdram`]. Native memory is interpreted only by the crate's unsafe
+/// The descriptor stores a lifetime witness, initial raw segment bases, and optional guest ranges.
+/// It performs no reads and does not implement [`Rdram`]. Native memory is interpreted only by the crate's unsafe
 /// host entry point. Its fixed layout uses native-endian 16-byte commands with full-width address
 /// words, unaligned scalar reads, native packed Fixed matrices, 16-byte Fixed vertices, and
 /// 24-byte Float vertices. Address words below `0x1000_0000` are segmented, and reads that resolve
@@ -55,6 +56,7 @@ fn probe_log_nonident(args: core::fmt::Arguments<'_>) {
 /// ```
 pub struct HostRam<'a> {
     pub segments: [u64; 16],
+    ranges: Option<&'a [Range<u64>]>,
     _frame: PhantomData<&'a [u8]>,
 }
 
@@ -67,7 +69,16 @@ impl<'a> HostRam<'a> {
     pub fn new(_frame: &'a [u8]) -> Self {
         Self {
             segments: [0; 16],
+            ranges: None,
             _frame: PhantomData,
+        }
+    }
+
+    /// Restricts reads and write-back to spans wholly inside one range; those ranges must remain live and readable during the walk.
+    pub fn with_ranges(frame: &'a [u8], ranges: &'a [Range<u64>]) -> Self {
+        Self {
+            ranges: Some(ranges),
+            ..Self::new(frame)
         }
     }
 
@@ -89,7 +100,7 @@ impl<'a> HostMemory<'a> {
     ///
     /// # Safety
     ///
-    /// Every command and reachable input span read during the walk must remain allocated,
+    /// Every span read within the registered ranges (or every reachable span without ranges) must remain allocated,
     /// readable, initialized, correctly laid out, and stable until this reader and its borrowed slices are dropped. Borrowed texture bytes must
     /// not be mutated concurrently. CIMG and ZIMG numeric identities need not be readable unless a
     /// command uses them as input.
@@ -97,13 +108,20 @@ impl<'a> HostMemory<'a> {
         Self { ram }
     }
 
-    fn checked_span(address: u64, length: u64) -> Result<(), MemoryError> {
+    fn checked_span(&self, address: u64, length: u64) -> Result<(), MemoryError> {
         if address < SEGMENT_SPACE_END {
             return Err(memory_error(address, length, MemoryErrorKind::Unavailable));
         }
-        address
+        let end = address
             .checked_add(length)
             .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
+        if self.ram.ranges.is_some_and(|ranges| {
+            !ranges
+                .iter()
+                .any(|range| range.start <= address && end <= range.end)
+        }) {
+            return Err(memory_error(address, length, MemoryErrorKind::Unavailable));
+        }
         Ok(())
     }
 
@@ -162,7 +180,7 @@ impl Rdram for HostMemory<'_> {
     }
 
     fn read_command(&self, address: u64) -> Result<Command, MemoryError> {
-        Self::checked_span(address, 16)?;
+        self.checked_span(address, 16)?;
         let second = address + 8;
         let w0_word = unsafe { Self::read_unaligned::<u64>(address) };
         let w1_word = unsafe { Self::read_unaligned::<u64>(second) };
@@ -178,32 +196,39 @@ impl Rdram for HostMemory<'_> {
     }
 
     fn in_bounds(&self, address: u64, length: u64) -> bool {
-        address >= SEGMENT_SPACE_END && address.checked_add(length).is_some()
+        self.checked_span(address, length).is_ok()
+    }
+
+    fn check_write(&self, address: u64, length: u64) -> Result<(), MemoryError> {
+        if self.ram.ranges.is_some() {
+            self.checked_span(address, length)?;
+        }
+        Ok(())
     }
 
     fn read_u8(&self, address: u64) -> Result<u8, MemoryError> {
-        Self::checked_span(address, 1)?;
+        self.checked_span(address, 1)?;
         Ok(unsafe { Self::read_unaligned(address) })
     }
 
     fn read_i8(&self, address: u64) -> Result<i8, MemoryError> {
-        Self::checked_span(address, 1)?;
+        self.checked_span(address, 1)?;
         Ok(unsafe { Self::read_unaligned(address) })
     }
 
     fn read_i16(&self, address: u64) -> Result<i16, MemoryError> {
-        Self::checked_span(address, 2)?;
+        self.checked_span(address, 2)?;
         Ok(unsafe { Self::read_unaligned(address) })
     }
 
     fn read_u16(&self, address: u64) -> Result<u16, MemoryError> {
-        Self::checked_span(address, 2)?;
+        self.checked_span(address, 2)?;
         Ok(unsafe { Self::read_unaligned(address) })
     }
 
     fn read_bytes(&self, address: u64, length: usize) -> Result<Cow<'_, [u8]>, MemoryError> {
         let length_u64 = length as u64;
-        Self::checked_span(address, length_u64)?;
+        self.checked_span(address, length_u64)?;
         if length == 0 {
             return Ok(Cow::Borrowed(&[]));
         }
@@ -219,7 +244,7 @@ impl Rdram for HostMemory<'_> {
     }
 
     fn read_matrix(&self, address: u64, format: GbiDataFormat) -> Result<Matrix, MemoryError> {
-        Self::checked_span(address, 64)?;
+        self.checked_span(address, 64)?;
         let mut matrix = [[0.0; 4]; 4];
         match format {
             GbiDataFormat::Float => {
@@ -256,7 +281,7 @@ impl Rdram for HostMemory<'_> {
 
     fn read_vertex(&self, address: u64, format: GbiDataFormat) -> Result<RawVertex, MemoryError> {
         let length = self.vertex_stride(format)?;
-        Self::checked_span(address, length)?;
+        self.checked_span(address, length)?;
         match format {
             GbiDataFormat::Float => Ok(RawVertex {
                 pos: unsafe {
