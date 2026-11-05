@@ -247,23 +247,25 @@ fn replay_vertex_missing_fields_report_the_full_typed_span() {
 }
 
 #[test]
-fn capture_vertex_requires_the_complete_source_stride() {
+fn capture_vertex_zero_fills_and_replays_the_source_bytes() {
     let hw = Image(vec![0; 15]);
     let recorder = RecordingHardware::new(&hw);
+    let expected = RawVertex {
+        pos: [0.0; 3],
+        st: [0; 2],
+        rgba: [0; 4],
+    };
+    let memory = recorder.rdram();
+    assert_eq!(memory.read_vertex(0, DataFormat::Fixed).unwrap(), expected);
+    assert_eq!(memory.take_zero_filled_read(), Some((0, 16)));
+    drop(memory);
+    let task = recorder
+        .finish(0, Microcode::F3dex2, DataFormat::Fixed, 0)
+        .unwrap();
+    let replay = ReplayHardware::new(&task, None).unwrap();
     assert_eq!(
-        recorder.rdram().read_vertex(0, DataFormat::Fixed),
-        Err(MemoryError {
-            address: 0,
-            length: 16,
-            kind: MemoryErrorKind::OutOfBounds,
-        })
-    );
-    assert_eq!(
-        recorder.finish(0, Microcode::F3dex2, DataFormat::Fixed, 0),
-        Err(CaptureError::MissingSpan {
-            address: 0,
-            length: 16,
-        })
+        replay.rdram().read_vertex(0, DataFormat::Fixed).unwrap(),
+        expected
     );
 }
 
@@ -293,6 +295,14 @@ fn image_float_typed_reads_are_unsupported() {
 
 #[test]
 fn recording_and_replay_reject_every_missing_input_kind() {
+    use crate::tests::memory_failures::StrictMemory;
+    struct Image(Vec<u8>);
+    impl Hardware for Image {
+        fn rdram(&self) -> impl Rdram + '_ {
+            StrictMemory::new(&self.0)
+        }
+    }
+
     use crate::{DiagKind, MemoryAccess};
 
     type FailureCase = (Vec<(u32, u32)>, MemoryAccess, u64, u64, u64);
@@ -363,7 +373,7 @@ fn recording_and_replay_reject_every_missing_input_kind() {
             .flat_map(|&(w0, w1)| w0.to_be_bytes().into_iter().chain(w1.to_be_bytes()))
             .collect();
         let direct = crate::hle::interpret(
-            RdramImage::new(&bytes),
+            StrictMemory::new(&bytes),
             0,
             crate::hle::gbi::GbiUcode::F3dex2,
             DataFormat::Fixed,

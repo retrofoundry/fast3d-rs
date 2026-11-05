@@ -80,7 +80,7 @@ pub(crate) mod fixtures;
 mod scene_builders;
 
 mod load_provenance;
-mod memory_failures;
+pub(crate) mod memory_failures;
 #[cfg(feature = "capture")]
 mod tmem_fixtures;
 mod tmem_witnesses;

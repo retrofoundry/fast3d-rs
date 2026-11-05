@@ -141,31 +141,50 @@ fn image_decodes_complete_public_values() {
 }
 
 #[test]
-fn image_read_exact_or_error() {
-    let bytes = [0u8; 16];
+fn image_data_reads_zero_fill_but_commands_remain_strict() {
+    let bytes = [0xab; 16];
     let memory = RdramImage::new(&bytes);
-
     assert_eq!(
         memory.read_command(12),
         Err(error(12, 8, MemoryErrorKind::OutOfBounds))
     );
-    assert_eq!(
-        memory.read_u16(15),
-        Err(error(15, 2, MemoryErrorKind::OutOfBounds))
-    );
-    assert_eq!(
-        memory.read_bytes(14, 3),
-        Err(error(14, 3, MemoryErrorKind::OutOfBounds))
-    );
-    assert_eq!(
-        memory.read_matrix(8, DataFormat::Fixed),
-        Err(error(8, 64, MemoryErrorKind::OutOfBounds))
-    );
-    assert_eq!(
-        memory.read_vertex(8, DataFormat::Fixed),
-        Err(error(8, 16, MemoryErrorKind::OutOfBounds))
-    );
+    assert_eq!(memory.read_u16(15), Ok(0xab00));
+    assert_eq!(&*memory.read_bytes(14, 3).unwrap(), &[0xab, 0xab, 0]);
+    assert_eq!(&*memory.read_bytes(100, 3).unwrap(), &[0; 3]);
+    assert_eq!(memory.take_zero_filled_read(), Some((15, 2)));
+    assert_eq!(memory.take_zero_filled_read(), None);
+    let vertex = memory.read_vertex(8, DataFormat::Fixed).unwrap();
+    assert_eq!(vertex.pos, [-21589.0; 3]);
+    assert_eq!(vertex.st, [0; 2]);
+    assert_eq!(vertex.rgba, [0; 4]);
+    assert_eq!(memory.read_matrix(16, DataFormat::Fixed), Ok([[0.0; 4]; 4]));
     assert!(!memory.in_bounds(u64::MAX, 1));
+}
+
+#[test]
+fn image_data_reads_mask_each_physical_byte_before_zero_filling() {
+    let bytes = [0x12, 0x34, 0x56, 0x78];
+    let memory = RdramImage::new(&bytes);
+    assert_eq!(memory.read_u16(0x8000_0001), Ok(0x3456));
+    assert_eq!(memory.take_zero_filled_read(), None);
+    assert_eq!(
+        &*memory.read_bytes(0x8000_0002, 4).unwrap(),
+        &[0x56, 0x78, 0, 0]
+    );
+    assert_eq!(memory.take_zero_filled_read(), Some((2, 4)));
+    assert_eq!(
+        &*memory.read_bytes(0x80ff_fffe, 6).unwrap(),
+        &[0, 0, 0x12, 0x34, 0x56, 0x78]
+    );
+    assert_eq!(memory.take_zero_filled_read(), Some((0x00ff_fffe, 6)));
+    assert_eq!(
+        memory.read_slice(0x8000_0000, 4),
+        Err(error(0x8000_0000, 4, MemoryErrorKind::OutOfBounds))
+    );
+    assert_eq!(
+        memory.read_command(0x8000_0000),
+        Err(error(0x8000_0000, 8, MemoryErrorKind::OutOfBounds))
+    );
 }
 
 #[test]
@@ -175,6 +194,14 @@ fn image_rejects_overflow_and_unsupported_float_layouts() {
     assert_eq!(
         memory.read_bytes(u64::MAX, 2),
         Err(error(u64::MAX, 2, MemoryErrorKind::AddressOverflow))
+    );
+    assert_eq!(
+        memory.read_u8(u32::MAX as u64 + 1),
+        Err(error(
+            u32::MAX as u64 + 1,
+            1,
+            MemoryErrorKind::AddressOverflow
+        ))
     );
     assert_eq!(
         memory.resolve(u32::MAX as u64 + 1),
@@ -285,15 +312,17 @@ fn obj_bg_does_not_read_padding() {
 }
 
 #[test]
-fn obj_bg_missing_field_reports_exact_span() {
+fn obj_bg_missing_fields_read_as_zero() {
     for (end, kind, address, length) in [
         (19, fast3d::ObjBgKind::Scaled, 16, 4),
         (35, fast3d::ObjBgKind::Scaled, 32, 4),
         (39, fast3d::ObjBgKind::Copy, 38, 2),
     ] {
+        let memory = RdramImage::new(&[0; 40][..end]);
         assert_eq!(
-            RdramImage::new(&[0; 40][..end]).read_obj_bg(0, kind),
-            Err(error(address, length, MemoryErrorKind::OutOfBounds))
+            memory.read_obj_bg(0, kind).unwrap(),
+            fast3d::ObjBg::default()
         );
+        assert_eq!(memory.take_zero_filled_read(), Some((address, length)));
     }
 }
