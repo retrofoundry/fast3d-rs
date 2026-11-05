@@ -770,7 +770,13 @@ impl Rsp {
         } else {
             ((1u32 << length) - 1) << shift
         };
-        rdp.other_mode_l = (rdp.other_mode_l & !mask) | data;
+        let blend_color = |low| {
+            crate::hle::blender::decode_render_mode(low, rdp.other_mode_h, 0).blend_class
+                == crate::hle::BlendClass::BlendColor
+        };
+        let next = (rdp.other_mode_l & !mask) | data;
+        self.material_dirty |= blend_color(next) != blend_color(rdp.other_mode_l);
+        rdp.other_mode_l = next;
     }
 
     /// SetOtherMode_H bit-field update: length = p0_len_field+1; off = 32 - p0_shift_field - length.
@@ -922,6 +928,9 @@ pub(crate) fn snapshot_run(
         .tmem_bank
         .tile_has_load(&rdp.tiles[usize::from(rsp.texture_state.tile & 7)])
         && (uses_texture || uses_second)
+        && crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, 0)
+            .blend_class
+            != crate::hle::BlendClass::BlendColor
         && rec
             .framebuffers
             .targets
@@ -941,7 +950,6 @@ pub(crate) fn snapshot_run(
     }
 
     validate_depth_alias(rdp, false, diags, pc)?;
-    validate_depth_source(rdp, diags, pc)?;
     // --- Material ---
     let material_index = if rsp.material_dirty {
         // Rebuild: build_material borrows rdp + rsp immutably; ? early-exits (None) on failure.
@@ -1030,7 +1038,11 @@ pub(crate) fn ensure_pair_open(
         fmt: rdp.color_image.fmt,
         siz: rdp.color_image.siz,
     };
-    if rdp.depth_image != Some(rdp.color_image.addr) {
+    let is_depth_clear = rdp.depth_image == Some(rdp.color_image.addr)
+        && (rdp.other_mode_h >> 20) & 3 == crate::hle::consts::G_CYC_FILL
+        && rdp.color_image.fmt == 0
+        && rdp.color_image.siz == 2;
+    if !is_depth_clear {
         let _ = rec
             .framebuffers
             .targets
@@ -1048,9 +1060,12 @@ pub(crate) fn ensure_pair_open(
             true,
         );
     }
-    if !rec.paired || rdp.color_changed || rdp.depth_changed {
+    if !rec.paired
+        || rdp.color_changed
+        || rdp.depth_changed
+        || scene.framebuffer_pairs[rec.cur_pair].is_depth_clear != is_depth_clear
+    {
         let depth_image = rdp.depth_image;
-        let is_depth_clear = depth_image == Some(rdp.color_image.addr);
         scene.framebuffer_pairs.push(FramebufferPair {
             color_image_epoch: rec.framebuffers.color_image_epoch,
             color_image: rdp.color_image,
@@ -1093,7 +1108,6 @@ pub(crate) fn snapshot_rect_run(
     pc: u64,
 ) -> Option<(u32, u32)> {
     validate_depth_alias(rdp, false, diags, pc)?;
-    validate_depth_source(rdp, diags, pc)?;
     let m = crate::hle::combiner::build_rect_material(rdp, rsp, tile, diags, pc)?;
     let material_index = match scene.materials.last() {
         Some(last) if last.matches(&m, &rsp.profiling) => (scene.materials.len() - 1) as u32,
@@ -1119,33 +1133,45 @@ pub(crate) fn validate_depth_alias(
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
 ) -> Option<()> {
-    if rdp.color_image_set
-        && rdp.depth_image == Some(rdp.color_image.addr)
-        && !(fill
-            && (rdp.other_mode_h >> 20) & 3 == 3
-            && rdp.color_image.fmt == 0
-            && rdp.color_image.siz == 2)
+    let mode = crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, 0);
+    let Some(depth) = rdp.depth_image else {
+        return Some(());
+    };
+    if !rdp.color_image_set {
+        return Some(());
+    }
+    if fill
+        && (rdp.other_mode_h >> 20) & 3 == 3
+        && rdp.color_image.addr == depth
+        && rdp.color_image.fmt == 0
+        && rdp.color_image.siz == 2
+    {
+        return Some(());
+    }
+    let unsupported_fill = fill && rdp.color_image.addr == depth;
+    let cycle = (rdp.other_mode_h >> 20) & 3;
+    let z_access = (mode.z_test || mode.z_write)
+        && cycle != crate::hle::consts::G_CYC_FILL
+        && cycle != crate::hle::consts::G_CYC_COPY;
+    if !unsupported_fill && !z_access {
+        return Some(());
+    }
+    let height = if rdp.scissor.lry > 0 {
+        rdp.scissor.lry as u64
+    } else {
+        240
+    };
+    let color_length =
+        (u64::from(rdp.color_image.width) * (4u64 << rdp.color_image.siz)).div_ceil(8) * height;
+    let depth_length = u64::from(rdp.color_image.width) * 2 * height;
+    if rdp.color_image.addr < depth.saturating_add(depth_length)
+        && depth < rdp.color_image.addr.saturating_add(color_length)
     {
         diags.push(crate::diag::Diagnostic {
             at: pc,
             kind: crate::diag::DiagKind::UnsupportedDepthAlias {
                 address: rdp.color_image.addr,
             },
-        });
-        return None;
-    }
-    Some(())
-}
-
-fn validate_depth_source(
-    rdp: &crate::hle::rdp::Rdp,
-    diags: &mut Vec<crate::diag::Diagnostic>,
-    pc: u64,
-) -> Option<()> {
-    if rdp.other_mode_l & crate::hle::consts::G_ZS_PRIM != 0 {
-        diags.push(crate::diag::Diagnostic {
-            at: pc,
-            kind: crate::diag::DiagKind::UnsupportedPrimitiveDepthSource,
         });
         return None;
     }

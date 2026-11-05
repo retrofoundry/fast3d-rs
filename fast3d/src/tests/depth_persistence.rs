@@ -248,7 +248,7 @@ fn depth_persist_vs_perframe() {
     }
 }
 
-fn depth_pixels(
+pub(super) fn depth_pixels(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     renderer: &SceneRenderer,
@@ -2117,11 +2117,7 @@ mod writeback {
                 &mut diagnostics,
             );
         }
-        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-        assert!(matches!(
-            diagnostics[0].kind,
-            crate::DiagKind::UnsupportedImageReinterpretation { depth: false, .. }
-        ));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
         apply(r.take_guest_writes());
         let bytes: Vec<_> = memory.into_iter().flat_map(u16::to_ne_bytes).collect();
         assert_eq!(&bytes[..8], &[255; 8]);

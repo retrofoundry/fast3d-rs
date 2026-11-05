@@ -482,6 +482,9 @@ impl Renderer {
             self.inner.profiling.clone(),
         );
         self.inner.coherence = self.guest_writeback.then(Default::default);
+        if self.guest_writeback {
+            self.inner.warm_coverage(&self.device);
+        }
         self.inner.framebuffer_copies = framebuffer_copies;
         self.inner.frame_serial = frame_serial;
         self.inner.dither_seed = dither_seed;
@@ -511,6 +514,9 @@ impl Renderer {
         if enabled != self.guest_writeback {
             self.mark_mutation();
             self.inner.coherence = enabled.then(Default::default);
+            if enabled {
+                self.inner.warm_coverage(&self.device);
+            }
         }
         self.guest_writeback = enabled;
     }

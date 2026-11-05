@@ -35,6 +35,7 @@ mod filter_fixtures;
 mod fog;
 mod framebuffer;
 mod framebuffer_aliases;
+mod framebuffer_coherence;
 #[cfg(feature = "capture")]
 mod framebuffer_load_evidence;
 mod gbi_roundtrip;

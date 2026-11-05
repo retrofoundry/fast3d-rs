@@ -43,8 +43,7 @@ fn blend_b(sel: u32, a: f32) -> f32 {
     return 0.0;                      // 0
 }
 
-@fragment
-fn fs_main(in: VsOut) -> FragOut {
+fn shade_dual(in: VsOut) -> FragOut {
     let r = eval_combiner(in);
     // C3: fog mix — when cyc1 blender P == CLR_FOG (3), mix combiner output toward fog color
     // before it is used as CLR_IN in the fb-cycle blender below.
@@ -73,4 +72,21 @@ fn fs_main(in: VsOut) -> FragOut {
     o.color0 = vec4<f32>(pcol * (a / denom), 1.0); // alpha-out = 1.0 (AA/coverage unemulated)
     o.color1 = vec4<f32>(vec3<f32>(b / denom), 1.0);
     return o;
+}
+
+struct DualDepthOutput {
+    @location(0) @blend_src(0) color0: vec4<f32>,
+    @location(0) @blend_src(1) color1: vec4<f32>,
+    @builtin(frag_depth) depth: f32,
+}
+
+@fragment
+fn fs_main(in: VsOut) -> FragOut {
+    return shade_dual(in);
+}
+
+@fragment
+fn fs_depth(in: VsOut) -> DualDepthOutput {
+    let color = shade_dual(in);
+    return DualDepthOutput(color.color0, color.color1, fragment_depth(in.clip_position.z));
 }

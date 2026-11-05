@@ -189,9 +189,10 @@ In coherent mode, copy execution consults byte ownership; pending overlapping GP
 are resolved before selecting color sources. This can submit and wait during rendering,
 after the interpreter has accepted the whole task. The copy itself reads no guest bytes.
 Older color layouts remain available while they own bytes, including CPU imports into
-those views. Coherent target-layout changes import the latest owned bytes and still report
-`UnsupportedImageReinterpretation`. Color draws over depth storage report
-`UnsupportedDepthAlias`.
+those views. Coherent target-layout changes import the latest owned bytes. Color draws
+over depth storage are allowed when depth comparison and update are both off, or when
+the draw runs in FILL or COPY cycle, which ignore them; later depth use imports the
+resulting words.
 
 The capture container is unchanged: commands reproduce copies, and generated pixels
 add no memory spans. Framebuffer requests are counted separately in profiling and omit

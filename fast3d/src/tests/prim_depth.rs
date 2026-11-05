@@ -1,5 +1,4 @@
 use super::dl_builder::DlBuilder;
-use crate::diag::{DiagKind, Diagnostic};
 use crate::hle::interpret_rdram;
 use crate::scene::{PrimitiveDepth, SceneOp};
 use n64_gbi::encode::*;
@@ -11,19 +10,22 @@ enum Draw {
     Quad,
     TexRect,
     TexRectFlip,
+    FillRect,
 }
 
-const DRAWS: [Draw; 5] = [
+const DRAWS: [Draw; 6] = [
     Draw::Triangle,
     Draw::Tri2,
     Draw::Quad,
     Draw::TexRect,
     Draw::TexRectFlip,
+    Draw::FillRect,
 ];
 
 impl Draw {
     fn commands(self) -> Vec<(u32, u32)> {
         match self {
+            Self::FillRect => vec![gdp_fill_rectangle(128, 128, 384, 384)],
             Self::Triangle => vec![gsp_1triangle(0, 1, 2)],
             Self::Tri2 => vec![gsp_2triangles(0, 1, 2, 0, 2, 3)],
             Self::Quad => vec![gsp_quad(0, 1, 2, 3)],
@@ -183,76 +185,40 @@ fn primdepth_snapshot_per_draw() {
 }
 
 #[test]
-fn primdepth_source_draw_is_rejected() {
+fn primdepth_source_draw_is_recorded() {
     for cycle in [0, 1] {
         for draw in DRAWS {
-            let (mut dl, mut commands) = setup(cycle, true);
-            commands.extend([(0xee00_0000, 0x8000_ffff), gdp_set_other_mode_l(2, 1, 4)]);
-            let draw_offset = commands.len() as u64 * 8;
+            let (dl, mut commands) = setup(cycle, true);
+            commands.extend([
+                gdp_set_prim_depth(0x8000, 0xffff),
+                gdp_set_other_mode_l(2, 1, 4),
+            ]);
             commands.extend(draw.commands());
-            commands.push(gsp_enddl());
-            let entry = dl.list("main", &commands);
-            let built = dl.finish("main");
-            let result = interpret_rdram(&built.rdram, built.entry);
-            assert!(result.scene.indices.is_empty(), "{draw:?}, cycle {cycle}");
-            assert!(result.scene.draw_runs.is_empty());
-            assert!(result.scene.framebuffer_pairs.is_empty());
-            assert!(result.scene.materials.is_empty());
-            assert_eq!(result.summary(false).errors, 1);
-            assert_eq!(result.summary(false).warns, 0);
-            assert_eq!(result.summary(false).dropped_runs, 1);
-            assert_eq!(
-                result.diags,
-                [Diagnostic {
-                    at: u64::from(entry) + draw_offset,
-                    kind: DiagKind::UnsupportedPrimitiveDepthSource,
-                }]
+            let result = walk(dl, commands);
+            assert!(
+                result.diags.is_empty(),
+                "{draw:?}, cycle {cycle}: {:?}",
+                result.diags
             );
+            assert_eq!(result.dropped_runs, 0);
+            assert_eq!(result.scene.framebuffer_pairs[0].ops.len(), 1);
         }
     }
 }
 
 #[test]
-fn primdepth_source_rejects_repeated_draws_and_recovers() {
+fn primdepth_source_switches_preserve_all_draws() {
     for cycle in [0, 1] {
         for draw in DRAWS {
-            for paired in [false, true] {
-                if !paired && matches!(draw, Draw::TexRect | Draw::TexRectFlip) {
-                    continue;
-                }
-                let (mut dl, mut commands) = setup(cycle, paired);
+            let (dl, mut commands) = setup(cycle, true);
+            for source in [0, 4, 4, 0] {
+                commands.push(gdp_set_other_mode_l(2, 1, source));
                 commands.extend(draw.commands());
-                commands.push(gdp_set_other_mode_l(2, 1, 4));
-                let first_offset = commands.len() as u64 * 8;
-                commands.extend(draw.commands());
-                let second_offset = commands.len() as u64 * 8;
-                commands.extend(draw.commands());
-                commands.push(gdp_set_other_mode_l(2, 1, 0));
-                commands.extend(draw.commands());
-                commands.push(gsp_enddl());
-                let entry = dl.list("main", &commands);
-                let built = dl.finish("main");
-                let result = interpret_rdram(&built.rdram, built.entry);
-                assert_eq!(
-                    result.diags,
-                    [first_offset, second_offset].map(|offset| Diagnostic {
-                        at: u64::from(entry) + offset,
-                        kind: DiagKind::UnsupportedPrimitiveDepthSource,
-                    })
-                );
-                assert_eq!(result.summary(true).errors, 2);
-                assert_eq!(result.summary(true).dropped_runs, 2);
-                assert_eq!(result.summary(true).warns, 0);
-                let triangles = match draw {
-                    Draw::Triangle => 2,
-                    Draw::Tri2 | Draw::Quad => 4,
-                    _ => 0,
-                };
-                assert_eq!(result.summary(true).tris, triangles);
-                if matches!(draw, Draw::TexRect | Draw::TexRectFlip) {
-                    assert_eq!(result.scene.framebuffer_pairs[0].ops.len(), 2);
-                }
             }
+            let result = walk(dl, commands);
+            assert!(result.diags.is_empty(), "{:?}", result.diags);
+            assert_eq!(result.dropped_runs, 0);
+            assert_eq!(result.scene.draw_origins.len(), 4);
         }
     }
 }
@@ -342,32 +308,6 @@ fn pixel_z_draws_unchanged() {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn primdepth_source_draw_is_rejected_pixels() {
-    use super::common::render_to_pixels;
-    use crate::render::{headless_device_forced_fallback, SceneRenderer};
-
-    let (device, queue) = headless_device_forced_fallback();
-    let mut renderer =
-        SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 320, 240, false);
-    for cycle in [0, 1] {
-        for draw in DRAWS {
-            let (dl, mut commands) = setup(cycle, true);
-            commands.push(gdp_set_other_mode_l(2, 1, 4));
-            commands.extend(draw.commands());
-            let rejected = walk(dl, commands);
-            assert_eq!(rejected.summary(false).dropped_runs, 1);
-            let (dl, commands) = setup(cycle, true);
-            let empty = walk(dl, commands);
-            let before = render_to_pixels(&device, &queue, &mut renderer, &empty.scene, 320, 240);
-            let after = render_to_pixels(&device, &queue, &mut renderer, &rejected.scene, 320, 240);
-            assert_eq!(after, before, "{draw:?}, cycle {cycle}");
-            assert!(!after.as_chunks::<4>().0.contains(&[255, 0, 0, 255]));
-        }
-    }
-}
-
 #[test]
 fn primdepth_words_and_roundtrip() {
     for (z, dz, expected) in [
@@ -406,4 +346,47 @@ fn primdepth_setter_alone_is_silent() {
     assert!(result.diags.is_empty(), "{:?}", result.diags);
     assert_eq!(result.summary(false), baseline.summary(false));
     assert_eq!(result.scene, baseline.scene);
+}
+
+#[test]
+fn primdepth_inputs_keep_independent_depth_flags() {
+    use n64_gbi::consts::{Z_CMP, Z_UPD};
+    for cycle in [0, 1] {
+        for draw in DRAWS {
+            for flags in [0, Z_CMP, Z_UPD, Z_CMP | Z_UPD] {
+                let (dl, mut commands) = setup(cycle, true);
+                commands.extend([
+                    gdp_set_depth_image(0x40000),
+                    gdp_set_render_mode(flags, 0),
+                    gdp_set_other_mode_l(2, 1, 4),
+                    gdp_set_prim_depth(0xa000, 0xabcd),
+                ]);
+                commands.extend(draw.commands());
+                let result = walk(dl, commands);
+                assert!(result.diags.is_empty(), "{:?}", result.diags);
+                let (index, depth) = match &result.scene.framebuffer_pairs[0].ops[0] {
+                    SceneOp::Tris(run) => (run.render_mode_index, run.prim_depth),
+                    SceneOp::TexRect {
+                        render_mode_index,
+                        prim_depth,
+                        ..
+                    } => (*render_mode_index, *prim_depth),
+                    other => panic!("{other:?}"),
+                };
+                let mode = &result.scene.render_modes[index as usize];
+                assert_eq!(
+                    (mode.z_test, mode.z_write),
+                    (flags & Z_CMP != 0, flags & Z_UPD != 0)
+                );
+                assert!(mode.z_source_prim);
+                assert_eq!(
+                    depth,
+                    PrimitiveDepth {
+                        z: 0xa000,
+                        dz: 0xabcd
+                    }
+                );
+            }
+        }
+    }
 }

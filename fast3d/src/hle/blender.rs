@@ -7,6 +7,8 @@ use crate::hle::consts::rdp::*;
 pub enum BlendClass {
     #[default]
     Replace,
+    /// The blender emits blend color with full framebuffer coverage.
+    BlendColor,
     AlphaOver,
     DualSrc,
 }
@@ -38,6 +40,8 @@ pub struct RenderMode {
     /// True when the mode blends but is NOT the canonical M=CLR_MEM,B=1MA,A=A_IN lerp.
     /// The §4.4/§9 [IMP12] diagnostic is emitted by `snapshot_run` in A6 (pure decode here).
     pub non_canonical_blend: bool,
+    /// Select SETPRIMDEPTH instead of interpolated pixel depth.
+    pub z_source_prim: bool,
     pub z_test: bool,
     pub z_write: bool,
     pub z_mode: ZMode,
@@ -76,6 +80,7 @@ pub fn decode_render_mode(other_mode_l: u32, other_mode_h: u32, geom: u32) -> Re
         blend_class,
         fallback_class,
         non_canonical_blend,
+        z_source_prim: other_mode_l & G_ZS_PRIM != 0,
         z_test: other_mode_l & Z_CMP != 0,
         z_write: other_mode_l & Z_UPD != 0,
         z_mode,
@@ -136,7 +141,9 @@ fn classify_blend(mux: u16, force_blend: bool, cycle_type: u32) -> (BlendClass, 
     } else {
         (cc >= 2) || force_blend
     };
-    if uses_alpha_blend(p, a, m, b, all_inputs) {
+    if cc > 0 && force_blend && a == A_0 && m == CLR_BL && b == B_A_MEM {
+        (BlendClass::BlendColor, BlendClass::BlendColor, false)
+    } else if uses_alpha_blend(p, a, m, b, all_inputs) {
         // DualSrc primary; fallback AlphaOver (lossless for canonical M=CLR_MEM,B=1MA,A=A_IN;
         // additive and other non-canonical modes are clamped — still translucent, not opaque).
         let canonical = p == CLR_IN && a == A_IN && m == CLR_MEM && b == B_1MA;

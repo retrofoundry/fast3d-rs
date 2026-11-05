@@ -96,7 +96,7 @@ impl Workload {
                 color_image: pair.color_image,
                 depth_image: pair.depth_image,
                 logical_extent: super::pair_render_extent(pair),
-                depth_clear: pair.depth_image == Some(pair.color_image.addr),
+                depth_clear: pair.is_depth_clear,
                 operations: Vec::new(),
             };
             for operation in operations {
@@ -203,21 +203,26 @@ fn push_triangles(
 }
 
 use super::framebuffers::{ImageLayout, ImageRequest};
-use super::inputs::{DrawInputs, RenderInputs, TargetInputs, TextureInputs};
+use super::inputs::{DrawInputs, OperationInputs, RenderInputs, TargetInputs, TextureInputs};
 use super::{CombinerUniform, SceneRenderer, CLEAR_COLOR};
 use crate::ClearPolicy;
 
 impl TargetWorkload {
     pub(super) fn uses_depth(&self, scene: &Scene) -> bool {
-        self.depth_image.is_some()
-            || self.id == TargetId::Legacy
-                && self.operations.iter().any(|op| match &op.draw {
-                    SceneOp::Tris(run) => {
-                        let mode = &scene.render_modes[run.render_mode_index as usize];
-                        mode.z_test || mode.z_write || mode.z_mode == crate::hle::ZMode::Decal
-                    }
-                    _ => false,
-                })
+        self.depth_clear
+            || self.operations.iter().any(|op| {
+                let index = match &op.draw {
+                    SceneOp::Tris(run) => run.render_mode_index,
+                    SceneOp::TexRect {
+                        render_mode_index,
+                        copy_mode: false,
+                        ..
+                    } => *render_mode_index,
+                    _ => return false,
+                };
+                let mode = &scene.render_modes[index as usize];
+                mode.z_test || mode.z_write
+            })
     }
 }
 
@@ -410,6 +415,7 @@ impl SceneRenderer {
             let any_depth = target.any_depth;
             let depth_id = target
                 .depth_image
+                .filter(|_| any_depth)
                 .map(TargetId::Guest)
                 .or_else(|| any_depth.then_some(TargetId::Legacy));
             let color_layout = ImageLayout {
@@ -807,7 +813,8 @@ impl SceneRenderer {
                     continue;
                 }
                 let read_depth = target.operations[start].reads_depth();
-                let end = if self.coherence.is_some() {
+                let decal_write = |op: &OperationInputs| op.reads_depth() && op.writes_depth();
+                let end = if self.coherence.is_some() || decal_write(&target.operations[start]) {
                     start + 1
                 } else {
                     start
@@ -816,6 +823,7 @@ impl SceneRenderer {
                             .take_while(|op| {
                                 !matches!(op.draw, DrawInputs::FramebufferCopy(_))
                                     && op.reads_depth() == read_depth
+                                    && !decal_write(op)
                             })
                             .count()
                 };
@@ -838,7 +846,28 @@ impl SceneRenderer {
                         source_valid[slot] = false;
                     }
                 }
-                let attachment = depth.filter(|_| !read_depth).map(|depth| {
+                let writes_depth = target.operations[start..end]
+                    .iter()
+                    .any(OperationInputs::writes_depth);
+                let decal_snapshot = (read_depth && writes_depth).then(|| {
+                    let snapshot =
+                        super::framebuffers::DepthImage::new(device, depth_layout, height);
+                    self.depth_pipeline
+                        .copy(device, &mut encoder, depth.unwrap(), &snapshot);
+                    snapshot
+                });
+                let snapshot_bg = decal_snapshot.as_ref().map(|snapshot| {
+                    device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("decal-depth-snapshot"),
+                        layout: self.textured_fb.depth_bind_group_layout(),
+                        entries: &[wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&snapshot.attach),
+                        }],
+                    })
+                });
+                let depth_bg = snapshot_bg.as_ref().or(depth_bg.as_ref());
+                let attachment = depth.filter(|_| !read_depth || writes_depth).map(|depth| {
                     wgpu::RenderPassDepthStencilAttachment {
                         view: &depth.attach,
                         depth_ops: Some(wgpu::Operations {
@@ -881,7 +910,7 @@ impl SceneRenderer {
                         pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
                         pass.set_scissor_rect(x, y, width, height);
                         if read_depth {
-                            pass.set_bind_group(2, depth_bg.as_ref().unwrap(), &[]);
+                            pass.set_bind_group(2, depth_bg.unwrap(), &[]);
                         }
                         match &operation.draw {
                             DrawInputs::Tris {
@@ -942,12 +971,13 @@ impl SceneRenderer {
                     multiview_mask: None,
                 });
                 color_load = wgpu::LoadOp::Load;
+                self.profiling.count("workload.segments", 1);
                 pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
                 if let Some(index) = &buffers.indices {
                     pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
                 }
                 if read_depth {
-                    pass.set_bind_group(2, depth_bg.as_ref().unwrap(), &[]);
+                    pass.set_bind_group(2, depth_bg.unwrap(), &[]);
                 }
                 for (slot, operation) in target.operations.iter().enumerate().take(end).skip(start)
                 {
@@ -976,6 +1006,7 @@ impl SceneRenderer {
                                     *cull,
                                     mode.fallback_class,
                                     mode.blend_class,
+                                    mode.z_write,
                                 )
                             } else {
                                 let test = any_depth && mode.z_test;
@@ -1031,7 +1062,7 @@ impl SceneRenderer {
                     self.target_descriptors.written(address, false);
                 }
             }
-            let writes_depth = target.operations.iter().any(|op| matches!(&op.draw, DrawInputs::Tris { mode, .. } if mode.z_test && mode.z_write && !mode.read_depth));
+            let writes_depth = target.operations.iter().any(OperationInputs::writes_depth);
             if let Some(TargetId::Guest(address)) = depth_id.filter(|_| writes_depth) {
                 self.target_descriptors.written(address, true);
             }
@@ -1087,6 +1118,19 @@ impl SceneRenderer {
                     depth,
                     target.operations.iter().map(|op| op.literal_fill).collect(),
                 );
+            }
+            if self.coherence.is_some() {
+                if let TargetId::Guest(address) = target.id {
+                    let end = address + color_layout.row_bytes().unwrap() * u64::from(h);
+                    self.depthbuffers.retain(|id, depth| {
+                        let TargetId::Guest(start) = *id else {
+                            return true;
+                        };
+                        let depth_end = start
+                            + depth.layout.row_bytes().unwrap() * u64::from(depth.texture.height());
+                        start >= end || address >= depth_end
+                    });
+                }
             }
         }
         self.profile_resident_resources();

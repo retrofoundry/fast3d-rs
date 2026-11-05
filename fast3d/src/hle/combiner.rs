@@ -756,13 +756,20 @@ fn build_material_inner(
     let rect = rect_tile.is_some();
     let selectors = decode_combine(rdp.combine_l, rdp.combine_h);
     let cycle_type = (rdp.other_mode_h >> 20) & 3;
-    if !validate_combiner(&selectors, cycle_type, diags, pc) {
+    let blend_color =
+        crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, 0).blend_class
+            == crate::hle::BlendClass::BlendColor;
+    if !blend_color && !validate_combiner(&selectors, cycle_type, diags, pc) {
         return None;
     }
-    if !validate_conversion_modes(rdp, diags, pc) {
+    if !blend_color && !validate_conversion_modes(rdp, diags, pc) {
         return None;
     }
-    let (uses_physical0, uses_physical1) = physical_texture_uses(&selectors, cycle_type);
+    let (uses_physical0, uses_physical1) = if blend_color {
+        (false, false)
+    } else {
+        physical_texture_uses(&selectors, cycle_type)
+    };
     let base = usize::from(rect_tile.unwrap_or(rsp.texture_state.tile) & 7);
     let mut used_tiles = Vec::new();
     if uses_physical0 {
@@ -793,7 +800,7 @@ fn build_material_inner(
         }
     }
     if !rdp.texture_loaded && cycle_type < 2 {
-        if !rect && rdp.combine_l == 0 && rdp.combine_h == 0 {
+        if !blend_color && !rect && rdp.combine_l == 0 && rdp.combine_h == 0 {
             return None;
         }
         if uses_physical0 || uses_physical1 {
