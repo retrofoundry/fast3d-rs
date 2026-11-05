@@ -51,6 +51,10 @@ pub struct Tmem {
     pub(crate) framebuffer_tags: Option<super::framebuffer_load::Tags>,
     copying: Option<u16>,
     pub(crate) copy_serial: u64,
+    #[cfg(any(test, feature = "profiling"))]
+    pub(crate) census_writers: Option<Box<[u64; TMEM_BYTES]>>,
+    #[cfg(any(test, feature = "profiling"))]
+    census_load: u64,
     pub(super) profiling: crate::profiling::Recorder,
 }
 
@@ -92,6 +96,10 @@ impl Default for Tmem {
             framebuffer_tags: None,
             copying: None,
             copy_serial: 0,
+            #[cfg(any(test, feature = "profiling"))]
+            census_writers: None,
+            #[cfg(any(test, feature = "profiling"))]
+            census_load: 0,
             profiling: Default::default(),
         }
     }
@@ -140,12 +148,25 @@ impl Tmem {
         tmem
     }
 
+    #[cfg(any(test, feature = "profiling"))]
+    fn census_load(&mut self, kind: &str, parameters: &[u64], source: &[u8]) {
+        if self.profiling.censusing() {
+            self.census_load = self.profiling.census_load(kind, parameters, source);
+            self.census_writers
+                .get_or_insert_with(|| Box::new([0; TMEM_BYTES]));
+        }
+    }
+
     fn writer(&mut self) -> impl FnMut(usize, u8, ByteSource, u32) + '_ {
         if Arc::strong_count(&self.bytes) > 1 {
             self.profiling.count("tmem.bank_cow_allocations", 1);
             self.profiling
                 .count("tmem.bank_cow_bytes", TMEM_BYTES as u64);
         }
+        #[cfg(any(test, feature = "profiling"))]
+        let writers = &mut self.census_writers;
+        #[cfg(any(test, feature = "profiling"))]
+        let load = self.census_load;
         let bytes = Arc::make_mut(&mut self.bytes);
         let Self {
             sources,
@@ -157,6 +178,10 @@ impl Tmem {
             ..
         } = self;
         move |addr, value, source, offset| {
+            #[cfg(any(test, feature = "profiling"))]
+            if let Some(writers) = writers {
+                writers[addr] = load;
+            }
             if let Some(tags) = framebuffer_tags {
                 tags.bytes[addr] =
                     copying.map_or(Default::default(), |copy| super::framebuffer_load::Tag {
@@ -450,6 +475,18 @@ impl Tmem {
         word_count: usize,
         siz: u8,
     ) {
+        #[cfg(any(test, feature = "profiling"))]
+        self.census_load(
+            "block",
+            &[
+                dst_tmem_addr_words as u64,
+                line_words as u64,
+                u64::from(dxt),
+                word_count as u64,
+                u64::from(siz),
+            ],
+            src,
+        );
         let rgba32 = siz == 3;
         let mask = if rgba32 { MASK16 } else { MASK8 };
         let advance = if rgba32 { 4 } else { 8 };
@@ -554,6 +591,19 @@ impl Tmem {
         src_stride_bytes: usize,
         siz: u8,
     ) {
+        #[cfg(any(test, feature = "profiling"))]
+        self.census_load(
+            "tile",
+            &[
+                dst_tmem_word as u64,
+                line_words as u64,
+                row_count as u64,
+                words_per_row as u64,
+                src_stride_bytes as u64,
+                u64::from(siz),
+            ],
+            src,
+        );
         let rgba32 = siz == 3;
         let mask = if rgba32 { MASK16 } else { MASK8 };
         let advance = if rgba32 { 4 } else { 8 };
@@ -621,6 +671,18 @@ impl Tmem {
         source_stride: usize,
         line: usize,
     ) {
+        #[cfg(any(test, feature = "profiling"))]
+        self.census_load(
+            "tlut",
+            &[
+                count as u64,
+                dst_word as u64,
+                rows as u64,
+                source_stride as u64,
+                line as u64,
+            ],
+            entries_be,
+        );
         let base = (dst_word << 3) & MASK8;
         let mut store_byte = self.writer();
         for row in 0..rows {

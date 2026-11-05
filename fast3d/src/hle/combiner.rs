@@ -484,7 +484,7 @@ fn cycle_uses_texel0(c: &CycleSel) -> bool {
         || c.ad == AlphaIn::Texel0
 }
 
-fn validate_combiner(
+pub(crate) fn validate_combiner(
     selectors: &CombinerSelectors,
     cycle_type: u32,
     diags: &mut Vec<crate::diag::Diagnostic>,
@@ -545,7 +545,7 @@ fn validate_register_selectors(
     true
 }
 
-fn validate_conversion_modes(
+pub(crate) fn validate_conversion_modes(
     rdp: &crate::hle::rdp::Rdp,
     diags: &mut Vec<crate::diag::Diagnostic>,
     pc: u64,
@@ -752,6 +752,8 @@ fn build_material_inner(
     pc: u64,
     rect_tile: Option<u8>,
 ) -> Option<Material> {
+    #[cfg(any(test, feature = "profiling"))]
+    crate::profiling::census_material(rdp, rsp, pc, rect_tile, None);
     rsp.profiling.count("material.builds", 1);
     let rect = rect_tile.is_some();
     let selectors = decode_combine(rdp.combine_l, rdp.combine_h);

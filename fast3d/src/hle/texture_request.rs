@@ -3,7 +3,7 @@ use std::borrow::Cow;
 
 use std::sync::{Arc, OnceLock};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "profiling"))]
 use super::tmem::BankDecoder;
 use super::{
     combiner::{tile_takes_faithful_path, validate_tile_texture},
@@ -77,7 +77,7 @@ impl DecodeRecipe {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "profiling"))]
 impl DecodeRecipe {
     fn tile(&self) -> TileDescriptor {
         TileDescriptor {
@@ -291,7 +291,7 @@ impl EncodedTextureRequest {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "profiling"))]
     pub fn decode(&self) -> Vec<u8> {
         let tile = self.recipe().tile();
         let result = match self.input() {
@@ -373,6 +373,39 @@ impl TextureBindingInput {
     pub(crate) fn matches(&self, other: &Self, profiling: &Recorder) -> bool {
         self.sampling == other.sampling && self.source.matches(&other.source, profiling)
     }
+}
+
+#[cfg(any(test, feature = "profiling"))]
+pub(crate) fn physical_for_census(
+    rdp: &Rdp,
+    tile: &TileDescriptor,
+    tlut: u8,
+) -> Result<EncodedTextureRequest, DiagKind> {
+    if let Some(diagnostic) = rdp.tmem_bank.rejection(tile) {
+        return Err(diagnostic.kind);
+    }
+    FormatInfo {
+        fmt: tile.fmt,
+        siz: tile.siz,
+    }
+    .validate()?;
+    if rdp.tmem_bank.has_framebuffer(tile) {
+        return Err(DiagKind::UnsupportedFramebufferAccess {
+            address: rdp.tex_image.3,
+            reason: crate::FramebufferAccess::Reinterpretation,
+        });
+    }
+    let sampling = TileSampling::from_tile(tile, tlut);
+    let representation = if sampling.image[2] == 1 {
+        Representation::Lookup4096x4
+    } else {
+        Representation::Tile
+    };
+    Ok(EncodedTextureRequest {
+        input: EncodedInput::Tmem(rdp.tmem_bank.share_bank()),
+        recipe: DecodeRecipe::new(tile, tlut, representation, sampling),
+        identity: OnceLock::new(),
+    })
 }
 
 pub(crate) fn prepare(

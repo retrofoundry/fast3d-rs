@@ -223,6 +223,8 @@ pub(crate) fn emit_texrect<M: Rdram>(rect: TexRect, cx: &mut Ctx<M>) -> Option<E
     let copy_mode = ((rdp.other_mode_h >> 20) & 3) == crate::hle::consts::G_CYC_COPY;
     if !rdp.color_image_set {
         // A 2D op needs a framebuffer target; one before the first CIMG is malformed → drop.
+        #[cfg(any(test, feature = "profiling"))]
+        crate::profiling::census_material(rdp, rsp, pc, Some(tile), Some(DiagKind::DrawBeforeCimg));
         *dropped_runs += 1;
         diags.push(Diagnostic {
             at: pc,
@@ -264,6 +266,14 @@ pub(crate) fn emit_texrect<M: Rdram>(rect: TexRect, cx: &mut Ctx<M>) -> Option<E
                     reason: crate::FramebufferAccess::TextureMode,
                 },
             });
+            #[cfg(any(test, feature = "profiling"))]
+            crate::profiling::census_material(
+                rdp,
+                rsp,
+                pc,
+                Some(tile),
+                diags.last().map(|diag| diag.kind),
+            );
             *dropped_runs += 1;
             return None;
         }
@@ -278,12 +288,28 @@ pub(crate) fn emit_texrect<M: Rdram>(rect: TexRect, cx: &mut Ctx<M>) -> Option<E
                     reason: crate::diag::FramebufferAccess::Reinterpretation,
                 },
             });
+            #[cfg(any(test, feature = "profiling"))]
+            crate::profiling::census_material(
+                rdp,
+                rsp,
+                pc,
+                Some(tile),
+                diags.last().map(|diag| diag.kind),
+            );
             *dropped_runs += 1;
             return None;
         }
         Ok(source) => source.map(|source| source.address),
         Err(kind) => {
             diags.push(Diagnostic { at: pc, kind });
+            #[cfg(any(test, feature = "profiling"))]
+            crate::profiling::census_material(
+                rdp,
+                rsp,
+                pc,
+                Some(tile),
+                diags.last().map(|diag| diag.kind),
+            );
             *dropped_runs += 1;
             return None;
         }
@@ -294,6 +320,10 @@ pub(crate) fn emit_texrect<M: Rdram>(rect: TexRect, cx: &mut Ctx<M>) -> Option<E
         *dropped_runs += 1;
         return None;
     };
+    #[cfg(any(test, feature = "profiling"))]
+    if let Some(address) = fb_source {
+        rsp.profiling.census_framebuffer_shortcut(pc, address);
+    }
     crate::hle::rsp::ensure_pair_open(scene, rdp, rec);
     crate::hle::rsp::record_scissor_if_changed(scene, rdp, rec);
 
@@ -574,6 +604,9 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
             w1_addr: cmd.w1_addr,
         };
         let op = c.opcode();
+        #[cfg(any(test, feature = "profiling"))]
+        rsp.profiling
+            .census_command(pc, [cmd.w0, cmd.w1], rdp.tex_image);
         let dispatch_microcode = ucode;
 
         let mut observed = observer.as_ref().map(|_| {
@@ -863,6 +896,16 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
                 }
 
                 if !rdp.color_image_set {
+                    #[cfg(any(test, feature = "profiling"))]
+                    if (rdp.other_mode_h >> 20) & 3 < 2 {
+                        crate::profiling::census_material(
+                            &rdp,
+                            &rsp,
+                            pc,
+                            Some(0),
+                            Some(DiagKind::DrawBeforeCimg),
+                        );
+                    }
                     dropped_runs += 1;
                     diags.push(Diagnostic {
                         at: pc,
