@@ -37,6 +37,7 @@ pub struct CensusAttempt {
     pub witness: Option<Vec<u8>>,
     pub draw_rejection: Option<String>,
     pub framebuffer: bool,
+    pub framebuffer_decode: Option<String>,
     pub sampled_framebuffer: bool,
     pub framebuffer_tags: Vec<(u16, u64, u32)>,
     pub bank: Vec<u8>,
@@ -131,6 +132,14 @@ impl CensusAttempt {
             },
             Err(kind) => format!("{kind:?}"),
         };
+        let framebuffer_decode = old.as_ref().ok().and_then(|binding| match &binding.source {
+            TextureSource::Framebuffer(request) => Some(if request.materialize {
+                "materialized".into()
+            } else {
+                "exact".into()
+            }),
+            _ => None,
+        });
         let witness = old.as_ref().ok().and_then(|binding| match &binding.source {
             TextureSource::Encoded(request) => {
                 Some(request.identity_profiled(&Default::default()).1.to_vec())
@@ -205,21 +214,18 @@ impl CensusAttempt {
         let physical = match &old {
             Ok(binding) => match &binding.source {
                 TextureSource::Encoded(request) => Ok(request.decode()),
-                _ => Err(crate::DiagKind::UnsupportedFramebufferAccess {
-                    address: rdp.tex_image.3,
-                    reason: crate::FramebufferAccess::Reinterpretation,
-                }),
+                _ => Err("GPU framebuffer copies unavailable on CPU".into()),
             },
-            Err(kind) => Err(*kind),
+            Err(kind) => Err(format!("{kind:?}")),
         };
         if let (Ok(footprint), Ok(physical)) = (&footprint, &physical) {
             assert_eq!(footprint, physical);
         }
-        let decode_error = physical.as_ref().err().map(|kind| format!("{kind:?}"));
+        let decode_error = physical.as_ref().err().cloned();
         let mut physical = physical.unwrap_or_default();
         let class = if framebuffer {
             physical.clear();
-            "intentional_exception"
+            "unverified"
         } else if decode_error.is_some() {
             "unverified"
         } else {
@@ -235,6 +241,7 @@ impl CensusAttempt {
             witness,
             draw_rejection: None,
             framebuffer,
+            framebuffer_decode,
             sampled_framebuffer,
             framebuffer_tags,
             bank: bank.to_vec(),
@@ -262,6 +269,70 @@ impl CensusAttempt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn framebuffer_census_and_trace_do_not_decode_placeholder_bytes() {
+        use crate::hle::framebuffer_load::FramebufferCopy;
+        use crate::render::framebuffers::{targets::ImageDescriptor, ImageLayout};
+        use std::sync::Arc;
+        for (fmt, siz, mode) in [
+            (0, 2, "exact"),
+            (3, 1, "materialized"),
+            (4, 0, "materialized"),
+        ] {
+            let mut rdp = Rdp {
+                texture_loaded: true,
+                combine_l: 0x00ff_ffff,
+                combine_h: 0xfffc_f279,
+                ..Default::default()
+            };
+            let source = ImageDescriptor {
+                address: 0x10000,
+                layout: ImageLayout {
+                    width: 4,
+                    fmt: 0,
+                    siz: 2,
+                },
+                height: 1,
+                generation: 1,
+                depth: false,
+            };
+            let copy = Arc::new(FramebufferCopy::new(1, source, source.address, 8, 8, 1));
+            rdp.tmem_bank
+                .copy_load(copy, |bank| bank.write_tile(&[], 0, 1, 1, 1, 8, 1));
+            rdp.tiles[0] = TileDescriptor {
+                fmt,
+                siz,
+                width: 4,
+                height: 1,
+                line: 1,
+                ..Default::default()
+            };
+            let attempt = CensusAttempt::capture(&rdp, &rdp.tiles[0], 0x20, "tex0".into());
+            assert_eq!(attempt.outcome, "Framebuffer");
+            assert_eq!(attempt.framebuffer_decode.as_deref(), Some(mode));
+            assert_eq!(attempt.class, "unverified");
+            assert_eq!(
+                attempt.decode_error.as_deref(),
+                Some("GPU framebuffer copies unavailable on CPU")
+            );
+            assert!(attempt.physical.is_empty());
+            assert!(attempt.witness.is_none());
+            assert!(attempt.framebuffer && attempt.sampled_framebuffer);
+            let mut rsp = Rsp::default();
+            rsp.profiling = crate::profiling::Recorder::new(crate::profiling::Mode::Trace);
+            let material =
+                crate::hle::combiner::build_material(&rdp, &rsp, &mut Vec::new(), 0x20).unwrap();
+            assert!(matches!(material.texture, TextureSource::Framebuffer(_)));
+            let snapshot = rsp.profiling.drain();
+            assert!(snapshot.requests.is_empty());
+            assert_eq!(snapshot.counters["framebuffer.texture_requests"], 1);
+            assert_eq!(
+                snapshot.counters[&format!("framebuffer.{mode}_requests")],
+                1
+            );
+        }
+    }
 
     #[test]
     fn census_palette_planes_have_exportable_extents_and_lane_footprints() {

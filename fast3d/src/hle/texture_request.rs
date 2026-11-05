@@ -334,17 +334,6 @@ pub(crate) fn prepare(
     }
     let mut sampling = TileSampling::from_tile(tile, tlut);
     let framebuffer = rdp.tmem_bank.has_framebuffer(tile, tlut);
-    if framebuffer
-        && !matches!(
-            (tile.fmt, tile.siz, tlut),
-            (0 | 3, 2, 0 | 1) | (2, 1, 2 | 3)
-        )
-    {
-        return Err(DiagKind::UnsupportedFramebufferAccess {
-            address: rdp.tex_image.3,
-            reason: crate::FramebufferAccess::Reinterpretation,
-        });
-    }
     FormatInfo {
         fmt: tile.fmt,
         siz: tile.siz,
@@ -377,10 +366,10 @@ pub(crate) fn prepare(
         identity: OnceLock::new(),
     };
     let source = if framebuffer {
-        TextureSource::Framebuffer(Arc::new(super::framebuffer_load::FramebufferTexture {
-            encoded: request,
-            tags: rdp.tmem_bank.framebuffer_tags_for(tile, tlut),
-        }))
+        TextureSource::Framebuffer(Arc::new(super::framebuffer_load::FramebufferTexture::new(
+            request,
+            rdp.tmem_bank.framebuffer_tags_for(tile, tlut),
+        )))
     } else {
         TextureSource::Encoded(Arc::new(request))
     };

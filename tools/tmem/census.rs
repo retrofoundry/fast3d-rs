@@ -38,6 +38,7 @@ fn identity_bytes(attempt: &CensusAttempt, witness: Option<&str>) -> Result<Vec<
         }).collect::<Vec<_>>(),
         "witness_file": witness.map(|path| format!("../{path}")),
         "framebuffer": attempt.framebuffer,
+        "framebuffer_decode": attempt.framebuffer_decode,
         "sampled_framebuffer": attempt.sampled_framebuffer,
     }))?)
 }
@@ -326,6 +327,7 @@ fn run(capture: &Path, out: &Path) -> Result<Value> {
                     "outcome": attempt.outcome,
                     "draw_rejection": attempt.draw_rejection,
                     "framebuffer": attempt.framebuffer,
+                    "framebuffer_decode": attempt.framebuffer_decode,
                     "sampled_framebuffer": attempt.sampled_framebuffer,
                     "physical_representation": attempt.physical_representation,
                     "extent": attempt.extent,
@@ -485,6 +487,7 @@ mod tests {
             outcome: "Tile".into(),
             draw_rejection: None,
             framebuffer: false,
+            framebuffer_decode: None,
             sampled_framebuffer: false,
             framebuffer_tags: vec![],
             bank: vec![0; 4096],

@@ -40,7 +40,7 @@ Each workload directory contains:
   equality with the same collision handling.
 - `textures/`: one descriptor per distinct witness, linked to its first attempt
   and load IDs. Ordinary textures have physical decode PNGs. Framebuffer
-  candidates and failed decodes retain descriptors without PNGs. Paths are relative to the JSON file containing them.
+  requests and failed decodes retain descriptors without PNGs. Paths are relative to the JSON file containing them.
 - `summary.json`: attempt and distinct counts by class, roles, current outcomes,
   frames, tasks, errors, caps and terminations.
 
@@ -62,6 +62,12 @@ retired linear streams. Classes are `unaffected`, `intentional_exception` or
 `unverified`. Compare saved runs by workload, frame/task, draw PC, role,
 descriptor, sampled bytes and exact witnesses to detect routing or content
 regressions. A formerly refused request becoming Tile/Lookup is newly admitted.
+`framebuffer_decode` is `exact` or `materialized` for accepted framebuffer requests.
+Both remain `unverified`, with `GPU framebuffer copies unavailable on CPU` as the
+decode error, an empty physical image and no Fast3dV1 witness. This is an unavailable
+CPU observation, not a renderer refusal. Profiling counts `framebuffer.exact_requests`
+and `framebuffer.materialized_requests`; neither enters the ordinary CPU trace.
+
 All four oracle axes stay `unverified`: this tool has no independent load/decode
 oracle, GPU readback or final sampling observation. These results do not close
 hardware or GPU evidence gates.
