@@ -14,7 +14,7 @@ pub(crate) struct DecodePipeline {
 }
 
 pub(crate) struct DecodeStaging {
-    input: wgpu::Buffer,
+    pub(crate) input: wgpu::Buffer,
     params: wgpu::Buffer,
 }
 
@@ -183,8 +183,25 @@ impl DecodePipeline {
         profiling: &Recorder,
         staging: Option<DecodeStaging>,
     ) -> DecodeJob {
-        let input = PackedInput::new(request);
-        let params = DecodeParams::new(request, &input);
+        self.create_job_input(device, queue, request, profiling, staging, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_job_input(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        request: &EncodedTextureRequest,
+        profiling: &Recorder,
+        staging: Option<DecodeStaging>,
+        framebuffer: Option<Vec<u8>>,
+    ) -> DecodeJob {
+        let mut input = PackedInput::new(request);
+        let mut params = DecodeParams::new(request, &input);
+        if let Some(bytes) = framebuffer {
+            input.bytes = Cow::Owned(bytes);
+            params.words[3][1] = 1024;
+        }
         let staging = staging
             .filter(|v| v.capacity() >= input.bytes.len() as u64)
             .unwrap_or_else(|| {

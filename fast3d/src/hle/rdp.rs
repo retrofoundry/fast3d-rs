@@ -284,37 +284,70 @@ pub(crate) fn set_tile_size_typed<M: Rdram>(tile: usize, bounds: [u16; 4], cx: &
     cx.rsp.material_dirty = true;
 }
 
-fn framebuffer_load<M: Rdram>(cx: &mut Ctx<M>, address: u64, length: usize) -> Option<Diagnostic> {
-    let kind = match cx.rec.framebuffers.targets.overlap(address, length as u64) {
+fn framebuffer_load<M: Rdram>(
+    cx: &mut Ctx<M>,
+    address: u64,
+    row_bytes: u32,
+    stride: u32,
+    rows: u32,
+    write: impl FnOnce(&mut crate::hle::tmem::Tmem),
+) -> Option<bool> {
+    let length = u64::from(rows - 1) * u64::from(stride) + u64::from(row_bytes);
+    let result = cx.rec.framebuffers.targets.load_source(address, length);
+    let source = match result {
         Ok(None) => return None,
-        Ok(Some(_)) => DiagKind::UnsupportedFramebufferAccess {
-            address,
-            reason: crate::diag::FramebufferAccess::TextureLoad,
-        },
-        Err(kind) => kind,
+        Ok(Some(source)) => source,
+        Err(kind) => {
+            let diagnostic = Diagnostic { at: cx.pc, kind };
+            cx.diags.push(diagnostic);
+            cx.rdp.tmem_bank.reject_load(diagnostic, write);
+            cx.rsp.material_dirty = true;
+            return Some(false);
+        }
     };
-    let diagnostic = Diagnostic { at: cx.pc, kind };
-    cx.diags.push(diagnostic);
+    let copy = std::sync::Arc::new(super::framebuffer_load::FramebufferCopy::new(
+        cx.rdp.tmem_bank.next_copy_id(),
+        source,
+        address,
+        row_bytes,
+        stride,
+        rows,
+    ));
+    if !cx.rec.paired {
+        super::rsp::ensure_pair_open(cx.scene, cx.rdp, cx.rec);
+        cx.rdp.color_changed = true;
+    }
+    cx.scene.framebuffer_pairs[cx.rec.cur_pair]
+        .ops
+        .push(crate::scene::SceneOp::FramebufferCopy(copy.clone()));
+    cx.rdp.tmem_bank.copy_load(copy, write);
+    cx.rdp.texture_loaded = true;
     cx.rsp.material_dirty = true;
-    Some(diagnostic)
+    Some(true)
 }
 
 fn load_block<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     // contiguous, linear: N64 RDP hardware word count.
-    let (_fmt, siz, _w, addr) = cx.rdp.tex_image;
+    let (_fmt, siz, width, base) = cx.rdp.tex_image;
     let tile_idx = c.p1(24, 3) as usize; // load tile (7 for a well-formed LoadTextureBlock)
     let uls = c.p0(12, 12);
+    let ult = c.p0(0, 12);
+    let offset =
+        ((u64::from(uls) << siz) >> 1) + (((u64::from(width) + 1) << siz) >> 1) * u64::from(ult);
+    let addr = memory_try!(cx, Texture, checked_span(base, offset));
     let lrs = c.p1(12, 12);
     let dxt = c.p1(0, 12); // CALC_DXT accumulator increment
                            // saturating_sub guards malformed input (uls > lrs) against u32 underflow/panic.
     let words = (lrs.saturating_sub(uls) >> (4 - siz as u32)) + 1; // RGBA16 siz=2
     let bytes = (words as usize) << 3; // 8 bytes/word (siz<=2)
-    if let Some(diagnostic) = framebuffer_load(cx, addr, bytes) {
-        let tile = &cx.rdp.tiles[tile_idx];
-        let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
-        cx.rdp.tmem_bank.reject_load(diagnostic, |tmem| {
-            tmem.write_block(&[], dst, line, dxt, words as usize, siz)
-        });
+    let tile = &cx.rdp.tiles[tile_idx];
+    let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
+    if framebuffer_load(cx, addr, bytes as u32, bytes as u32, 1, |tmem| {
+        tmem.write_block(&[], dst, line, dxt, words as usize, siz)
+    })
+    .is_some()
+    {
+        cx.rdp.load_via_tile = false;
         return;
     }
     let src = memory_try!(cx, Texture, read_bytes_exact(cx.mem, addr, bytes)).into_owned();
@@ -366,10 +399,15 @@ pub(crate) fn load_tile_typed<M: Rdram>(
     let offset = u64::from(bytes_offset) + u64::from(bytes_per_row) * u64::from(ult);
     let texture_start = checked_span(addr, offset).map_err(|error| texture_error(cx, error))?;
     let src_len = (row_count as usize - 1) * bytes_per_row as usize + words_per_row as usize * 8;
-    if let Some(diagnostic) = framebuffer_load(cx, texture_start, src_len) {
-        let tile = &cx.rdp.tiles[tile_idx];
-        let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
-        cx.rdp.tmem_bank.reject_load(diagnostic, |tmem| {
+    let tile = &cx.rdp.tiles[tile_idx];
+    let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
+    if let Some(loaded) = framebuffer_load(
+        cx,
+        texture_start,
+        words_per_row * 8,
+        bytes_per_row,
+        row_count,
+        |tmem| {
             tmem.write_tile(
                 &[],
                 dst,
@@ -379,8 +417,10 @@ pub(crate) fn load_tile_typed<M: Rdram>(
                 bytes_per_row as usize,
                 siz,
             )
-        });
-        return Err(());
+        },
+    ) {
+        cx.rdp.load_via_tile = true;
+        return if loaded { Ok(()) } else { Err(()) };
     }
     let src = read_bytes_exact(cx.mem, texture_start, src_len)
         .map(std::borrow::Cow::into_owned)
@@ -415,27 +455,34 @@ fn texture_error<M: Rdram>(cx: &mut Ctx<M>, error: crate::MemoryError) {
 }
 
 fn load_tlut<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
-    if c.w0 & 0x00ff_ffff != 0 || c.w1 & 0x3fff != 0 {
-        cx.diags.push(Diagnostic {
-            at: cx.pc,
-            kind: DiagKind::UnsupportedCommandParameters { opcode: G_LOADTLUT },
-        });
+    let (_, siz, width, base) = cx.rdp.tex_image;
+    let uls = c.p0(14, 10);
+    let ult = c.p0(2, 10);
+    let count = c.p1(14, 10).saturating_sub(uls) + 1;
+    let rows = c.p1(2, 10).saturating_sub(ult) + 1;
+    let stride = ((u32::from(width) + 1) << siz) >> 1;
+    let offset = u64::from((uls << siz) >> 1) + u64::from(ult * stride);
+    let addr = memory_try!(cx, Tlut, checked_span(base, offset));
+    let tile = &cx.rdp.tiles[c.p1(24, 3) as usize];
+    let (dst, line) = (usize::from(tile.tmem_addr), usize::from(tile.line));
+    let write = |tmem: &mut crate::hle::tmem::Tmem, bytes: &[u8]| {
+        tmem.write_tlut_rows(
+            bytes,
+            count as usize,
+            dst,
+            rows as usize,
+            stride as usize,
+            line,
+        );
+    };
+    let texture_loaded = cx.rdp.texture_loaded;
+    if framebuffer_load(cx, addr, count * 2, stride, rows, |tmem| write(tmem, &[])).is_some() {
+        cx.rdp.texture_loaded = texture_loaded;
         return;
     }
-    let addr = cx.rdp.tex_image.3;
-    let count = c.p1(14, 10) as usize + 1;
-    let packed_bytes = count * 2;
-    if let Some(diagnostic) = framebuffer_load(cx, addr, packed_bytes) {
-        let dst = usize::from(cx.rdp.tiles[c.p1(24, 3) as usize].tmem_addr);
-        cx.rdp
-            .tmem_bank
-            .reject_load(diagnostic, |tmem| tmem.write_tlut(&[0; 2048], count, dst));
-        return;
-    }
-    let packed = memory_try!(cx, Tlut, read_bytes_exact(cx.mem, addr, packed_bytes));
-    let tile = c.p1(24, 3) as usize;
-    let dst_word = usize::from(cx.rdp.tiles[tile].tmem_addr);
-    cx.rdp.tmem_bank.write_tlut(&packed, count, dst_word);
+    let length = (rows - 1) * stride + count * 2;
+    let packed = memory_try!(cx, Tlut, read_bytes_exact(cx.mem, addr, length as usize));
+    write(&mut cx.rdp.tmem_bank, &packed);
     cx.rsp.material_dirty = true;
 }
 
@@ -840,8 +887,9 @@ mod tests {
     }
 
     #[test]
-    fn tlut_legacy_row_fields_diagnosed() {
+    fn tlut_fractional_bounds_and_zero_line_follow_rows() {
         for (w0, w1) in [
+            (0xf000_0000, 0x0700_0000),
             (0xf000_0001, 0x0700_0000),
             (0xf000_1000, 0x0700_0000),
             (0xf000_0000, 0x0700_0001),
@@ -849,27 +897,17 @@ mod tests {
             (0xf000_0000, 0x0700_1000),
             (0xf000_0000, 0x0700_2000),
         ] {
-            let before = palette_state(7, 0x100);
-            let (after, diags) = run_cmd(&[], before.clone(), w0, w1);
-            assert_eq!(after, before);
-            assert_eq!(
-                diags,
-                [Diagnostic {
-                    at: 0,
-                    kind: DiagKind::UnsupportedCommandParameters { opcode: 0xf0 }
-                }]
-            );
-            assert_eq!(diags[0].kind.severity(), crate::diag::Severity::Error);
+            let source: Vec<_> = (0..8).flat_map(|i| [0x12 + i, 0x34 + i]).collect();
+            let (rdp, diags) = run_cmd(&source, palette_state(7, 0x100), w0, w1);
+            assert!(diags.is_empty(), "{diags:?}");
+            let last = if w1 == 0x0700_000c {
+                [0x18, 0x3a]
+            } else {
+                [0x12, 0x34]
+            };
+            assert_eq!(&rdp.tmem_bank.palette()[..8], last.repeat(4));
+            assert!(rdp.tmem_bank.palette()[8..].iter().all(|&b| b == 0x55));
         }
-        let (rdp, diags) = run_cmd(
-            &[0x12, 0x34],
-            palette_state(7, 0x100),
-            0xf000_0000,
-            0x0700_0000,
-        );
-        assert!(diags.is_empty(), "{diags:?}");
-        assert_eq!(&rdp.tmem_bank.palette()[..8], [0x12, 0x34].repeat(4));
-        assert!(rdp.tmem_bank.palette()[8..].iter().all(|&b| b == 0x55));
     }
 
     #[test]

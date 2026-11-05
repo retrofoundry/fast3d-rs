@@ -72,8 +72,8 @@ fn fb_texture_load_overlap_never_reads_stale_ram() {
             "GPU-only address must never reach Rdram: {:?}",
             result.diags
         );
-        assert!(result.diags.iter().any(|d| d.at == 80));
-        assert_eq!(result.dropped_runs, 1);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
+        assert_eq!(result.dropped_runs, 0);
         assert_eq!(result.termination, crate::inspect::WalkTermination::End);
     }
 }
@@ -212,13 +212,7 @@ fn framebuffer_history_does_not_change_guest_register_equality() {
         previous.framebuffers,
         None,
     );
-    assert!(matches!(
-        retained.diags[0].kind,
-        DiagKind::UnsupportedFramebufferAccess {
-            reason: crate::FramebufferAccess::TextureLoad,
-            ..
-        }
-    ));
+    assert!(retained.diags.is_empty(), "{:?}", retained.diags);
     let fresh = run(&loads);
     assert!(matches!(fresh.diags[0].kind, DiagKind::MemoryRead { .. }));
 }
@@ -353,7 +347,7 @@ fn exact_base_fb_alias_keeps_compatibility_pixels() {
 }
 
 #[test]
-fn framebuffer_load_rejection_preserves_unrelated_draws_and_real_faults() {
+fn framebuffer_load_preserves_unrelated_draws_and_real_faults() {
     let mut dl = commands(0x10000, 0x20000, 0x10000);
     dl.insert(10, gdp_load_block(0, 0, 0, 15, 0));
     let result = run(&dl);
@@ -417,7 +411,7 @@ fn legacy_named_depth_is_a_known_gpu_texture_range() {
         && matches!(
             d.kind,
             DiagKind::UnsupportedFramebufferAccess {
-                reason: crate::FramebufferAccess::TextureLoad,
+                reason: crate::FramebufferAccess::DepthTexture,
                 ..
             }
         )));

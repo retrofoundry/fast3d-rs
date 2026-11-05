@@ -107,6 +107,18 @@ impl CaptureFrame {
         let summary =
             renderer.process_dl_with_bindings(&recording, entry, microcode, diagnostics, bindings);
         self.expected_generation = renderer.capture_generation.clone();
+        if renderer
+            .inner
+            .coherence
+            .as_ref()
+            .is_some_and(|coherence| coherence.imported)
+        {
+            let error = invalid(
+                "task imports framebuffer bytes; capture requires versioned attachment imports",
+            );
+            self.error = Some(error.clone());
+            return Err(error);
+        }
         let task = u32::try_from(self.fixture.tasks.len())
             .map_err(|_| invalid("too many tasks in one frame"))
             .and_then(|order| {
@@ -197,6 +209,18 @@ impl CaptureFrame {
             bindings,
         );
         self.expected_generation = renderer.capture_generation.clone();
+        if renderer
+            .inner
+            .coherence
+            .as_ref()
+            .is_some_and(|coherence| coherence.imported)
+        {
+            let error = invalid(
+                "task imports framebuffer bytes; capture requires versioned attachment imports",
+            );
+            self.error = Some(error.clone());
+            return Err(error);
+        }
         let task = u32::try_from(self.fixture.tasks.len())
             .map_err(|_| invalid("too many tasks in one frame"))
             .and_then(|order| {
@@ -256,6 +280,19 @@ impl CaptureFrame {
         Ok(fixture)
     }
 
+    /// Present HOST scanout while capturing last-rendered output; VI swap selection is not recorded.
+    pub fn present_host(
+        mut self,
+        renderer: &mut Renderer,
+        address: Option<u64>,
+    ) -> Result<Fixture> {
+        self.check_renderer(renderer);
+        let presented = renderer.present_host(address);
+        let fixture = self.finish(None)?;
+        presented.map_err(|error| CaptureError::Gpu(format!("presentation failed: {error:?}")))?;
+        Ok(fixture)
+    }
+
     /// Presents the last rendered framebuffer into `target` without consulting guest memory.
     pub fn present_last_to(
         mut self,
@@ -298,6 +335,8 @@ impl CaptureFrame {
         let mut live_framebuffers = self.initial_framebuffers;
         let mut replay_framebuffers = crate::hle::interp::FramebufferState::default();
         let mut replay = crate::hle::rdp::Rdp::default();
+        // Copy serials only name GPU snapshots; they are not guest state.
+        replay.tmem_bank.copy_serial = live.tmem_bank.copy_serial;
         for task in &self.fixture.tasks {
             let mut actual =
                 task.interpret_with_framebuffers(live.clone(), live_framebuffers.clone())?;

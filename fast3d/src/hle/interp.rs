@@ -468,7 +468,32 @@ pub(crate) fn interpret_profiled<M: Rdram>(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn interpret_with_bindings<M: Rdram>(
-    mem: M,
+    mut mem: M,
+    entry: u64,
+    ucode: crate::hle::gbi::GbiUcode,
+    data_format: crate::DataFormat,
+    rdp: crate::hle::rdp::Rdp,
+    framebuffers: FramebufferState,
+    observer: Option<&mut dyn crate::inspect::WalkObserver>,
+    profiling: crate::profiling::Recorder,
+    bindings: &[(u64, crate::Microcode)],
+) -> InterpResult {
+    interpret_borrowed(
+        &mut mem,
+        entry,
+        ucode,
+        data_format,
+        rdp,
+        framebuffers,
+        observer,
+        profiling,
+        bindings,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn interpret_borrowed<M: Rdram>(
+    mem: &mut M,
     entry: u64,
     mut ucode: crate::hle::gbi::GbiUcode,
     data_format: crate::DataFormat,
@@ -479,7 +504,6 @@ pub(crate) fn interpret_with_bindings<M: Rdram>(
     bindings: &[(u64, crate::Microcode)],
 ) -> InterpResult {
     rdp.tmem_bank.profiling = profiling.clone();
-    let mut mem = mem;
     let mut gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
     let mut rsp = crate::hle::rsp::Rsp::new(gbi.consts, gbi.data_format);
     rsp.set_initial_microcode(ucode);
@@ -537,6 +561,7 @@ pub(crate) fn interpret_with_bindings<M: Rdram>(
             termination = WalkTermination::Runaway;
             break;
         }
+        let origin_start = scene.draw_origins.len();
         let stride = mem.command_stride();
         dispatched += 1;
         let cmd = walk_try!(Command, mem.read_command(pc));
@@ -771,7 +796,7 @@ pub(crate) fn interpret_with_bindings<M: Rdram>(
                     &mut Ctx {
                         rsp: &mut rsp,
                         rdp: &mut rdp,
-                        mem: &mut mem,
+                        mem,
                         scene: &mut scene,
                         diags: &mut diags,
                         pc,
@@ -947,7 +972,7 @@ pub(crate) fn interpret_with_bindings<M: Rdram>(
             let mut cx = Ctx {
                 rsp: &mut rsp,
                 rdp: &mut rdp,
-                mem: &mut mem,
+                mem,
                 scene: &mut scene,
                 diags: &mut diags,
                 pc,
@@ -1014,6 +1039,24 @@ pub(crate) fn interpret_with_bindings<M: Rdram>(
                 break 'dispatch;
             }
             pc = walk_try!(Command, checked_span(pc, stride));
+        }
+        if scene.draw_origins.len() > origin_start {
+            let depth_clear = rdp.depth_image == Some(rdp.color_image.addr);
+            if rdp.color_image_set && !depth_clear {
+                rec.framebuffers
+                    .targets
+                    .written(rdp.color_image.addr, false);
+            }
+            if let Some(address) = rdp.depth_image {
+                if depth_clear
+                    || (rdp.other_mode_l & 0x30 == 0x30
+                        && scene.draw_origins[origin_start..]
+                            .iter()
+                            .any(|origin| origin.rectangle.is_none()))
+                {
+                    rec.framebuffers.targets.written(address, true);
+                }
+            }
         }
         if rejected {
             flow = WalkFlow::Fault;
@@ -2384,5 +2427,99 @@ mod structured_diag_tests {
         );
         assert!(r.diags.iter().any(|d| d.kind == DiagKind::DrawBeforeCimg));
         assert_eq!(r.dropped_runs, 1);
+    }
+}
+
+#[cfg(test)]
+mod coherence_tests {
+    use super::*;
+    use n64_gbi::encode::*;
+
+    #[test]
+    fn source_use_retains_layout_before_a_later_rebind() {
+        let layout = crate::render::framebuffers::ImageLayout {
+            width: 4,
+            fmt: 0,
+            siz: 2,
+        };
+        let mut framebuffers = FramebufferState::default();
+        framebuffers
+            .targets
+            .record(0x10000, layout, 2, false)
+            .unwrap();
+        framebuffers
+            .targets
+            .record(0x20000, layout, 2, false)
+            .unwrap();
+        let rdp = crate::hle::rdp::Rdp {
+            color_image: crate::scene::ColorImage {
+                addr: 0x20000,
+                width: 4,
+                fmt: 0,
+                siz: 2,
+            },
+            color_image_set: true,
+            scissor_set: true,
+            scissor: crate::scene::Scissor {
+                lrx: 4,
+                lry: 2,
+                ..Default::default()
+            },
+            other_mode_h: 2 << 20,
+            ..Default::default()
+        };
+        let mut commands = vec![
+            gdp_set_texture_image(0, 2, 4, 0x10000),
+            gdp_set_tile(0, 2, 1, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+            gdp_set_tile_size(0, 0, 0, 12, 4),
+        ];
+        commands.extend(gsp_texture_rectangle(
+            0, 0, 12, 4, 0, 0, 0, 4096, 1024, false,
+        ));
+        commands.extend([
+            gdp_set_color_image(4, 1, 4, 0x10000),
+            gdp_set_cycle_type(3),
+            gdp_set_fill_color(0xffff_ffff),
+            gdp_fill_rectangle(0, 0, 12, 4),
+            gsp_enddl(),
+        ]);
+        let bytes: Vec<_> = commands
+            .into_iter()
+            .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes()))
+            .collect();
+        let result = interpret_borrowed(
+            &mut RdramImage::new(&bytes),
+            0,
+            crate::hle::gbi::GbiUcode::F3dex2,
+            crate::DataFormat::Fixed,
+            rdp,
+            framebuffers,
+            None,
+            Default::default(),
+            &[],
+        );
+        assert_eq!(result.termination, WalkTermination::End);
+        assert!(result
+            .scene
+            .framebuffer_pairs
+            .iter()
+            .flat_map(|pair| &pair.ops)
+            .any(|op| matches!(
+                op,
+                crate::scene::SceneOp::TexRect {
+                    fb_source: Some(0x10000),
+                    ..
+                }
+            )));
+        assert_eq!(
+            result
+                .framebuffers
+                .targets
+                .get(0x10000, false)
+                .unwrap()
+                .layout
+                .siz,
+            1
+        );
     }
 }

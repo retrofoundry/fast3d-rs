@@ -65,6 +65,8 @@ pub struct Scissor {
 /// An op in the 2D/3D scene op-list inside a `FramebufferPair`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneOp {
+    /// Snapshot a framebuffer region at this point in the command stream.
+    FramebufferCopy(std::sync::Arc<crate::hle::framebuffer_load::FramebufferCopy>),
     Tris(DrawRun),
     FillRect {
         rect: Rect,

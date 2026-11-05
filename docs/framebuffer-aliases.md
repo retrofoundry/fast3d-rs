@@ -34,9 +34,10 @@ compares interpretation and prepared inputs using the live initial history and a
 empty replay history, advancing each between tasks. Switch epochs are ignored in
 that comparison because capture recording excludes diagnostic depth-reset policies.
 
-General range ownership, offset copies, triangle framebuffer textures, same-target
-snapshots, bit reinterpretation, CPU/GPU coherence and color write-back remain
-unsupported. The existing offscreen-then-sample golden is a compatibility test for
-the convenience only. [The authored real-load fixtures](framebuffer-load-evidence.md)
-pin this rejection and provide independent offset, packing and snapshot probes
-for rt64. They add no support; hardware agreement remains a separate gate.
+Real LoadTile, LoadBlock and LoadTLUT commands use ordered GPU snapshots separately
+from this convenience. They support interior offsets, source strides, rectangle and
+triangle consumers, and RGBA16/IA16/CI8 reinterpretation. The existing
+offscreen-then-sample golden remains a compatibility test for the load-free path.
+[The authored real-load fixtures](framebuffer-load-evidence.md) check snapshot order
+and the unquantised render-target convention. GPU write-back and guest imports remain
+opt-in; framebuffer loads do not require that switch.

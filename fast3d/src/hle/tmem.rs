@@ -48,6 +48,9 @@ pub struct Tmem {
     blocks: Vec<BlockLoad>,
     rejected: Box<[Option<crate::Diagnostic>; TMEM_BYTES]>,
     rejecting: Option<crate::Diagnostic>,
+    pub(crate) framebuffer_tags: Option<super::framebuffer_load::Tags>,
+    copying: Option<u16>,
+    pub(crate) copy_serial: u64,
     pub(super) profiling: crate::profiling::Recorder,
 }
 
@@ -86,6 +89,9 @@ impl Default for Tmem {
             blocks: Vec::new(),
             rejected: Box::new([None; TMEM_BYTES]),
             rejecting: None,
+            framebuffer_tags: None,
+            copying: None,
+            copy_serial: 0,
             profiling: Default::default(),
         }
     }
@@ -134,7 +140,7 @@ impl Tmem {
         tmem
     }
 
-    fn writer(&mut self) -> impl FnMut(usize, u8, ByteSource) + '_ {
+    fn writer(&mut self) -> impl FnMut(usize, u8, ByteSource, u32) + '_ {
         if Arc::strong_count(&self.bytes) > 1 {
             self.profiling.count("tmem.bank_cow_allocations", 1);
             self.profiling
@@ -146,9 +152,18 @@ impl Tmem {
             blocks,
             rejected,
             rejecting,
+            framebuffer_tags,
+            copying,
             ..
         } = self;
-        move |addr, value, source| {
+        move |addr, value, source, offset| {
+            if let Some(tags) = framebuffer_tags {
+                tags.bytes[addr] =
+                    copying.map_or(Default::default(), |copy| super::framebuffer_load::Tag {
+                        copy: copy + 1,
+                        pointer: tags.copies[usize::from(copy)].pointer(offset),
+                    });
+            }
             if let Some(previous) = sources[addr].block() {
                 blocks[previous].live_bytes -= 1;
             }
@@ -159,6 +174,87 @@ impl Tmem {
             sources[addr] = source;
             bytes[addr] = value;
         }
+    }
+
+    pub(crate) fn next_copy_id(&mut self) -> u64 {
+        self.copy_serial += 1;
+        self.copy_serial
+    }
+
+    pub(crate) fn copy_load(
+        &mut self,
+        copy: Arc<super::framebuffer_load::FramebufferCopy>,
+        write: impl FnOnce(&mut Self),
+    ) {
+        let tags = self.framebuffer_tags.get_or_insert_with(Default::default);
+        let mut used = vec![false; tags.copies.len()];
+        for tag in tags.bytes.iter().filter(|tag| tag.copy != 0) {
+            used[usize::from(tag.copy) - 1] = true;
+        }
+        let slot = used
+            .iter()
+            .position(|used| !used)
+            .unwrap_or(tags.copies.len());
+        if slot == tags.copies.len() {
+            tags.copies.push(copy);
+        } else {
+            tags.copies[slot] = copy;
+        }
+        self.copying = Some(slot as u16);
+        write(self);
+        self.copying = None;
+    }
+
+    pub(crate) fn framebuffer_tags_for(
+        &self,
+        tile: &TileDescriptor,
+    ) -> super::framebuffer_load::Tags {
+        let mut tags = self.framebuffer_tags.as_ref().unwrap().clone();
+        let mut visible = [false; TMEM_BYTES];
+        self.reachable_byte(tile, |address| {
+            visible[address] = true;
+            None::<()>
+        });
+        if tile.fmt == 2 {
+            let range = if tile.siz == 0 {
+                PALETTE_BASE + usize::from(tile.palette) * 128
+                    ..PALETTE_BASE + (usize::from(tile.palette) + 1) * 128
+            } else {
+                PALETTE_BASE..TMEM_BYTES
+            };
+            visible[range].fill(true);
+        }
+        // Copy slots depend on stale tags from earlier loads; requests number only visible copies.
+        let mut slots = vec![0; tags.copies.len()];
+        let mut copies = Vec::new();
+        for (tag, visible) in tags.bytes.iter_mut().zip(visible) {
+            if !visible {
+                *tag = Default::default();
+            } else if tag.copy != 0 {
+                let slot = &mut slots[usize::from(tag.copy) - 1];
+                if *slot == 0 {
+                    copies.push(tags.copies[usize::from(tag.copy) - 1].clone());
+                    *slot = copies.len() as u16;
+                }
+                tag.copy = *slot;
+            }
+        }
+        tags.copies = copies;
+        tags
+    }
+
+    pub(crate) fn has_framebuffer(&self, tile: &TileDescriptor) -> bool {
+        self.framebuffer_tags.as_ref().is_some_and(|tags| {
+            let palette = if tile.siz == 0 {
+                let start = PALETTE_BASE + usize::from(tile.palette) * 128;
+                start..start + 128
+            } else {
+                PALETTE_BASE..TMEM_BYTES
+            };
+            self.reachable_byte(tile, |addr| (tags.bytes[addr].copy != 0).then_some(()))
+                .is_some()
+                || tile.fmt == 2 && tags.bytes[palette].iter().any(|tag| tag.copy != 0)
+        })
     }
 
     pub(crate) fn reject_load(
@@ -192,7 +288,7 @@ impl Tmem {
     fn reachable_byte<T>(
         &self,
         tile: &TileDescriptor,
-        find: impl Fn(usize) -> Option<T>,
+        mut find: impl FnMut(usize) -> Option<T>,
     ) -> Option<T> {
         let base = usize::from(tile.tmem_addr) << 3;
         let stride = usize::from(tile.line) << 3;
@@ -394,6 +490,7 @@ impl Tmem {
                             load,
                             offset: (tex + LOW_SRC[i]) as u16,
                         },
+                        (tex + LOW_SRC[i]) as u32,
                     );
                     store_byte(
                         dst | PALETTE_BASE,
@@ -402,6 +499,7 @@ impl Tmem {
                             load,
                             offset: (tex + HIGH_SRC[i]) as u16,
                         },
+                        (tex + HIGH_SRC[i]) as u32,
                     );
                 }
             } else {
@@ -415,6 +513,7 @@ impl Tmem {
                             load,
                             offset: (tex + i) as u16,
                         },
+                        (tex + i) as u32,
                     );
                 }
             }
@@ -479,11 +578,13 @@ impl Tmem {
                             dst,
                             src.get(tex + LOW_SRC[i]).copied().unwrap_or(0),
                             ByteSource::BANK,
+                            (tex + LOW_SRC[i]) as u32,
                         );
                         store_byte(
                             dst | PALETTE_BASE,
                             src.get(tex + HIGH_SRC[i]).copied().unwrap_or(0),
                             ByteSource::BANK,
+                            (tex + HIGH_SRC[i]) as u32,
                         );
                     }
                 } else {
@@ -494,6 +595,7 @@ impl Tmem {
                             dst,
                             src.get(tex + i).copied().unwrap_or(0),
                             ByteSource::BANK,
+                            (tex + i) as u32,
                         );
                     }
                 }
@@ -504,14 +606,36 @@ impl Tmem {
 
     /// Load packed BE halfwords, repeating each across its destination word.
     /// `dst_word` is a 64-bit TMEM word address; writes wrap at 4 KiB.
+    #[cfg(any(test, feature = "profiling"))]
     pub fn write_tlut(&mut self, entries_be: &[u8], count: usize, dst_word: usize) {
+        self.write_tlut_rows(entries_be, count, dst_word, 1, count * 2, 0);
+    }
+
+    /// Load strided palette rows, replicating each halfword across its TMEM word.
+    pub fn write_tlut_rows(
+        &mut self,
+        entries_be: &[u8],
+        count: usize,
+        dst_word: usize,
+        rows: usize,
+        source_stride: usize,
+        line: usize,
+    ) {
         let base = (dst_word << 3) & MASK8;
         let mut store_byte = self.writer();
-        for i in 0..count {
-            let entry = &entries_be[i * 2..i * 2 + 2];
-            let addr = (base + i * 8) & MASK8;
-            for byte in 0..8 {
-                store_byte(addr + byte, entry[byte & 1], ByteSource::BANK);
+        for row in 0..rows {
+            for i in 0..count {
+                let source = row * source_stride + i * 2;
+                let addr = (base + row * line * 32 + i * 8) & MASK8;
+                for byte in 0..8 {
+                    let offset = source + (byte & 1);
+                    store_byte(
+                        addr + byte,
+                        entries_be.get(offset).copied().unwrap_or(0),
+                        ByteSource::BANK,
+                        offset as u32,
+                    );
+                }
             }
         }
     }
@@ -588,6 +712,8 @@ impl PartialEq for Tmem {
             && self.sources == other.sources
             && self.blocks == other.blocks
             && self.rejected == other.rejected
+            && self.framebuffer_tags == other.framebuffer_tags
+            && self.copy_serial == other.copy_serial
             && self.rejecting == other.rejecting
     }
 }

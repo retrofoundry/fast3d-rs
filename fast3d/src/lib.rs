@@ -187,7 +187,7 @@ fn pick_surface_format(
     (wgpu::TextureFormat::Bgra8Unorm, None) // degenerate empty caps
 }
 
-/// Owned guest bytes at a native address, with depth pixels encoded as native-endian u16 words.
+/// Owned guest bytes at a native address, with 16-bit pixels encoded as native-endian u16 words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuestWrite {
     pub address: u64,
@@ -205,7 +205,7 @@ pub struct Renderer {
     inner: SceneRenderer,
     rdp: crate::hle::rdp::Rdp,
     color_image_epoch: u64,
-    depth_writeback: bool,
+    guest_writeback: bool,
     guest_writes: Vec<GuestWrite>,
     #[cfg(feature = "capture")]
     capture_generation: std::rc::Rc<()>,
@@ -308,7 +308,7 @@ impl Renderer {
             inner,
             rdp: Default::default(),
             color_image_epoch: 0,
-            depth_writeback: false,
+            guest_writeback: false,
             guest_writes: Vec::new(),
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
@@ -391,7 +391,7 @@ impl Renderer {
             inner,
             rdp: Default::default(),
             color_image_epoch: 0,
-            depth_writeback: false,
+            guest_writeback: false,
             guest_writes: Vec::new(),
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
@@ -472,6 +472,7 @@ impl Renderer {
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
         let (frame_serial, dither_seed) = (self.inner.frame_serial, self.inner.dither_seed);
+        let framebuffer_copies = std::mem::take(&mut self.inner.framebuffer_copies);
         self.inner = SceneRenderer::new_profiled(
             &self.device,
             render_fmt,
@@ -480,6 +481,8 @@ impl Renderer {
             dual_source,
             self.inner.profiling.clone(),
         );
+        self.inner.coherence = self.guest_writeback.then(Default::default);
+        self.inner.framebuffer_copies = framebuffer_copies;
         self.inner.frame_serial = frame_serial;
         self.inner.dither_seed = dither_seed;
         self.surface_format = render_fmt;
@@ -499,12 +502,20 @@ impl Renderer {
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
     }
 
-    /// Enable blocking native depth write-back after accepted tasks; disabled by default and on wasm.
-    pub fn set_depth_writeback(&mut self, enabled: bool) {
-        self.depth_writeback = enabled && !cfg!(target_arch = "wasm32");
+    /// Enable blocking native color/depth write-back; targets must be readable/writable guest memory.
+    ///
+    /// Disabled by default and on wasm. Apply returned patches before the next task; 16-bit pixels
+    /// use native-endian words and 8-bit pixels use bytes. Guest reads occur only during processing.
+    pub fn set_guest_writeback(&mut self, enabled: bool) {
+        let enabled = enabled && !cfg!(target_arch = "wasm32");
+        if enabled != self.guest_writeback {
+            self.mark_mutation();
+            self.inner.coherence = enabled.then(Default::default);
+        }
+        self.guest_writeback = enabled;
     }
 
-    /// Drain native-endian depth patches accumulated by accepted tasks since the previous drain.
+    /// Drain native image patches accumulated by accepted tasks since the previous drain.
     pub fn take_guest_writes(&mut self) -> Vec<GuestWrite> {
         std::mem::take(&mut self.guest_writes)
     }
@@ -736,8 +747,12 @@ impl Renderer {
     }
 
     fn interpreter_framebuffers(&self) -> crate::hle::interp::FramebufferState {
+        let mut targets = self.inner.target_descriptors.clone();
+        if let Some(coherence) = &self.inner.coherence {
+            targets.seed_owners(&coherence.owners);
+        }
         crate::hle::interp::FramebufferState {
-            targets: self.inner.target_descriptors.clone(),
+            targets,
             color_image_epoch: self.color_image_epoch,
         }
     }
@@ -745,7 +760,7 @@ impl Renderer {
     #[allow(clippy::too_many_arguments)]
     fn process_dl_memory_observed(
         &mut self,
-        mem: impl Rdram,
+        mut mem: impl Rdram,
         entry: u64,
         ucode: Microcode,
         diags: &mut dyn DiagSink,
@@ -754,6 +769,13 @@ impl Renderer {
         bindings: &[(u64, Microcode)],
     ) -> DlSummary {
         let _process = self.inner.profiling.span("process_dl");
+        let mut released = Ok(());
+        if let Some(coherence) = &mut self.inner.coherence {
+            coherence.begin_task();
+            if submission != Submission::RasterizePrefix {
+                released = coherence.release_changed(&mem);
+            }
+        }
         self.mark_mutation();
         #[cfg(feature = "capture")]
         if self.inner.depth_reset_policy == DepthResetPolicy::TaskBoundary {
@@ -771,8 +793,8 @@ impl Renderer {
             self.interpreter_framebuffers()
         };
         let interpretation = self.inner.profiling.span("interpretation");
-        let mut result = crate::hle::interp::interpret_with_bindings(
-            mem,
+        let mut result = crate::hle::interp::interpret_borrowed(
+            &mut mem,
             entry,
             ucode.into(),
             self.data_format,
@@ -809,6 +831,24 @@ impl Renderer {
             return result.summary(false);
         }
 
+        if result.commits_rdp() {
+            if let Err(error) = released {
+                let diagnostic = Diagnostic {
+                    at: entry,
+                    kind: DiagKind::MemoryRead {
+                        access: crate::diag::MemoryAccess::Framebuffer,
+                        error,
+                    },
+                };
+                diags.emit(diagnostic);
+                result.diags.push(diagnostic);
+                result.termination = inspect::WalkTermination::Rejected;
+                return result.summary(false);
+            }
+        }
+        if self.guest_writeback && result.commits_rdp() {
+            self.inner.import_existing(&self.device, &self.queue);
+        }
         if submission == Submission::DiscardOnStop && result.commits_rdp() {
             self.rdp = result.rdp.clone();
             self.color_image_epoch = result.framebuffers.color_image_epoch;
@@ -823,9 +863,22 @@ impl Renderer {
             self.config.clear_policy,
         );
         #[cfg(not(target_arch = "wasm32"))]
-        if self.depth_writeback && result.commits_rdp() {
+        if self.guest_writeback && result.commits_rdp() {
             self.guest_writes
-                .extend(self.inner.read_depth_writes(&self.device, &self.queue));
+                .extend(self.inner.coherence.as_mut().unwrap().finish(&self.device));
+            let writers: std::collections::HashSet<_> = self
+                .inner
+                .coherence
+                .as_ref()
+                .unwrap()
+                .owners
+                .0
+                .values()
+                .map(|range| range.writer)
+                .collect();
+            self.inner
+                .color_versions
+                .retain(|writer, _| writers.contains(writer));
         }
         for &diagnostic in &self.inner.diagnostics {
             diags.emit(diagnostic);
@@ -1057,22 +1110,36 @@ impl Renderer {
     /// golden capture). The caller owns acquisition + present. No-op if nothing has been rendered
     /// yet (leaves `target` as-is).
     pub fn present_to(&mut self, hw: &impl Hardware, target: &wgpu::TextureView) {
-        self.present_to_vi(hw.vi(), target);
+        self.present_to_source(self.scanout_source(hw.vi()), target);
     }
 
     /// Scan out the last rendered framebuffer without consulting guest memory or VI registers.
     /// Uses that target's retained logical height.
     pub fn present_last_to(&mut self, target: &wgpu::TextureView) {
-        self.present_to_vi(None, target);
+        self.present_to_source(self.scanout_source(None), target);
     }
 
-    fn present_to_vi(&mut self, vi: Option<ViRegisters>, target: &wgpu::TextureView) {
+    /// Present a full-width HOST color address into `target`, falling back to the last rendered target.
+    pub fn present_host_to(&mut self, address: Option<u64>, target: &wgpu::TextureView) {
+        self.present_to_source(self.host_scanout_source(address), target);
+    }
+
+    fn host_scanout_source(&self, address: Option<u64>) -> Option<ScanoutSource> {
+        address
+            .filter(|address| self.inner.has_fb(*address))
+            .map(|address| ScanoutSource {
+                target: TargetId::Guest(address),
+                height: None,
+            })
+            .or_else(|| self.scanout_source(None))
+    }
+
+    fn present_to_source(&mut self, src: Option<ScanoutSource>, target: &wgpu::TextureView) {
         let _span = self.inner.profiling.span("presentation");
         self.mark_mutation();
         // Always create an encoder + run the render hook, even when nothing has been scanned out yet
         // (a UI overlay should still draw — RN). Scanout is recorded only when a source FB exists;
         // with no hook and no scanout the submit is an empty no-op, so `target` is left as-is.
-        let src = self.scanout_source(vi);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1089,19 +1156,23 @@ impl Renderer {
     /// VI snapshot via `hw.vi()` itself (N64 fidelity). Auto-reconfigures the surface from the
     /// stored config on Outdated/Lost and returns `SurfaceLost` so the caller retries next frame.
     pub fn present(&mut self, hw: &impl Hardware) -> Result<(), PresentError> {
-        self.present_vi(hw.vi())
+        self.present_source(self.scanout_source(hw.vi()))
     }
 
     /// Present the last rendered framebuffer without consulting guest memory or VI registers.
     /// Uses that target's retained logical height.
     pub fn present_last(&mut self) -> Result<(), PresentError> {
-        self.present_vi(None)
+        self.present_source(self.scanout_source(None))
     }
 
-    fn present_vi(&mut self, vi: Option<ViRegisters>) -> Result<(), PresentError> {
+    /// Present a full-width HOST color address, falling back to the last rendered target.
+    pub fn present_host(&mut self, address: Option<u64>) -> Result<(), PresentError> {
+        self.present_source(self.host_scanout_source(address))
+    }
+
+    fn present_source(&mut self, src: Option<ScanoutSource>) -> Result<(), PresentError> {
         let _span = self.inner.profiling.span("presentation");
         self.mark_mutation();
-        let src = self.scanout_source(vi);
 
         // RO: acquire in a scope so the `&self.target` borrow (surface/config) ENDS before
         // `record_and_submit` needs `&mut self` (it borrows `self.hook`). `frame` is owned.

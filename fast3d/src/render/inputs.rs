@@ -98,6 +98,33 @@ pub(super) struct TargetInputs {
 }
 
 impl TargetInputs {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn write_bounds(&self, slot: usize) -> (u32, u32, u32, u32) {
+        let op = &self.operations[slot];
+        let (x, y, width, height) = op.scissor;
+        if !matches!(op.draw, DrawInputs::Rectangle { .. }) {
+            return op.scissor;
+        }
+        let start = self.rect_indices[slot] as usize * 6;
+        let vertices = &self.rectangles[start..start + 6];
+        let xs = vertices
+            .iter()
+            .map(|v| (v.position[0] + 1.0) * 0.5 * self.output_extent.0 as f32);
+        let ys = vertices
+            .iter()
+            .map(|v| (1.0 - v.position[1]) * 0.5 * self.output_extent.1 as f32);
+        let left = (xs.clone().fold(f32::INFINITY, f32::min).floor().max(0.0) as u32).max(x);
+        let top = (ys.clone().fold(f32::INFINITY, f32::min).floor().max(0.0) as u32).max(y);
+        let right = (xs.fold(0.0, f32::max).ceil() as u32).min(x + width);
+        let bottom = (ys.fold(0.0, f32::max).ceil() as u32).min(y + height);
+        (
+            left,
+            top,
+            right.saturating_sub(left),
+            bottom.saturating_sub(top),
+        )
+    }
+
     pub(super) fn record_descriptors(
         &self,
         descriptors: &mut super::framebuffers::targets::TargetDescriptors,
@@ -150,6 +177,7 @@ impl TargetInputs {
 
 #[derive(Debug, PartialEq)]
 pub(super) struct OperationInputs {
+    pub literal_fill: Option<u32>,
     pub pc: u64,
     pub scissor: (u32, u32, u32, u32),
     pub draw: DrawInputs,
@@ -157,6 +185,7 @@ pub(super) struct OperationInputs {
 
 #[derive(Debug, PartialEq)]
 pub(super) enum DrawInputs {
+    FramebufferCopy(std::sync::Arc<crate::hle::framebuffer_load::FramebufferCopy>),
     Rejected,
     DepthFill {
         word: u32,
@@ -294,6 +323,15 @@ impl<'a> RenderInputs<'a> {
                                 .rect_indices
                                 .push((inputs.rectangles.len() / 6) as u32);
                             let (draw, mut uniform) = match &operation.draw {
+                                SceneOp::FramebufferCopy(copy) => {
+                                    inputs.operations.push(OperationInputs {
+                                        literal_fill: None,
+                                        pc: 0,
+                                        scissor: (0, 0, 0, 0),
+                                        draw: DrawInputs::FramebufferCopy(copy.clone()),
+                                    });
+                                    continue;
+                                }
                                 SceneOp::Tris(run) => {
                                     let mat = &scene.materials[run.material_index as usize];
                                     let mode = &scene.render_modes[run.render_mode_index as usize];
@@ -399,6 +437,7 @@ impl<'a> RenderInputs<'a> {
                                             mode: operation.scissor.mode,
                                         };
                                         inputs.operations.push(OperationInputs {
+                                            literal_fill: Some(*color_raw),
                                             pc: operation.pc.unwrap_or(0),
                                             scissor: super::clamp_scissor(&scissor, w, h),
                                             draw: DrawInputs::DepthFill { word: *color_raw },
@@ -475,6 +514,7 @@ impl<'a> RenderInputs<'a> {
                             );
                             debug_assert!(w > 0 && h > 0);
                             uniform.frame = [frame[0], frame[1], w, h];
+                            uniform.coverage_slot = slot as u32 + 1;
                             let bytes = bytemuck::bytes_of(&uniform);
                             inputs.uniforms[slot * 256..slot * 256 + bytes.len()]
                                 .copy_from_slice(bytes);
@@ -484,6 +524,10 @@ impl<'a> RenderInputs<'a> {
                                 (w, h),
                             );
                             inputs.operations.push(OperationInputs {
+                                literal_fill: match operation.draw {
+                                    SceneOp::FillRect { color_raw, .. } => Some(color_raw),
+                                    _ => None,
+                                },
                                 pc: operation.pc.unwrap_or(0),
                                 scissor: super::clamp_scissor(&scissor, w, h),
                                 draw,
@@ -582,6 +626,7 @@ mod tests {
                                 ..
                             } => 2,
                             DrawInputs::DepthFill { .. } => continue,
+                            DrawInputs::FramebufferCopy(_) => continue,
                             DrawInputs::Rejected => panic!("{name}: rejected draw"),
                         };
                         seen[kind] = true;

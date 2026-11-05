@@ -195,7 +195,9 @@ pub struct CombinerUniform {
     /// Low 32 bits of frame serial, dither seed, raster viewport width and height.
     pub frame: [u32; 4],
     pub is_rect: u32,
-    pub _pad: [u32; 3],
+    pub coverage_slot: u32, // draw slot + 1, written to the guest write-back coverage target
+    pub fill_word: u32,     // FillRect's raw fill-color register
+    pub fill_siz: u32,      // FillRect color-image siz + 1; 0 for other draws
 }
 const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 192);
 
@@ -293,7 +295,9 @@ impl CombinerUniform {
             },
             frame: [0; 4],
             is_rect: 0,
-            _pad: [0; 3],
+            coverage_slot: 0,
+            fill_word: 0,
+            fill_siz: 0,
         }
     }
 
@@ -311,11 +315,12 @@ impl CombinerUniform {
 
     /// Synthesize a `CombinerUniform` for a `SceneOp::FillRect` (the 2D solid-rect path).
     ///
-    /// The RDP fill-color register (`color_raw`) is resolved to normalized RGBA8 via the color
-    /// image's pixel size (`siz`) and placed in the `prim` register (`tex_enable = 0`). The combine
-    /// words encode a flat-PRIM passthrough so the fragment shader emits the fill color verbatim:
-    /// 1-cycle color = (0 − 0)·0 + PRIMITIVE; alpha = (0 − 0)·0 + PRIM_ALPHA. `blend_color` is NOT
-    /// a combiner input (it drives the blender), so it stays zeroed.
+    /// 8-bit and 16-bit fills pass the RDP fill-color register (`color_raw`) through `fill_word`;
+    /// the fragment shader takes each pixel's byte or halfword from it before the combiner runs.
+    /// Other sizes resolve `color_raw` to normalized RGBA8 in the `prim` register
+    /// (`tex_enable = 0`), and the combine words encode a flat-PRIM passthrough: 1-cycle color =
+    /// (0 − 0)·0 + PRIMITIVE; alpha = (0 − 0)·0 + PRIM_ALPHA. `blend_color` is NOT a combiner
+    /// input (it drives the blender), so it stays zeroed.
     pub fn fill_rect(color_raw: u32, siz: u8) -> Self {
         // Resolve the fill color to normalized RGBA8 by the color image's pixel size.
         let prim = if siz == 3 {
@@ -327,9 +332,8 @@ impl CombinerUniform {
                 (color_raw & 0xFF) as f32 / 255.0,
             ]
         } else {
-            // G_IM_SIZ_16b (and the degenerate 4b/8b cases): the high 16 bits are an RGBA5551
-            // pixel (the fill word replicates the pixel across both halves). Bit-replicate each
-            // 5-bit channel to 8 bits — identical to `decode_rgba16`.
+            // The high 16 bits as an RGBA5551 pixel, bit-replicated like `decode_rgba16`. Only the
+            // degenerate 4b case reaches the combiner with it; 8b and 16b fills read `fill_word`.
             let p = ((color_raw >> 16) & 0xFFFF) as u16;
             let r5 = ((p >> 11) & 0x1F) as u8;
             let g5 = ((p >> 6) & 0x1F) as u8;
@@ -380,7 +384,9 @@ impl CombinerUniform {
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
             frame: [0; 4],
             is_rect: 1,
-            _pad: [0; 3],
+            coverage_slot: 0,
+            fill_word: color_raw,
+            fill_siz: u32::from(siz) + 1,
         }
     }
 
@@ -416,7 +422,9 @@ impl CombinerUniform {
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
             frame: [0; 4],
             is_rect: 1,
-            _pad: [0; 3],
+            coverage_slot: 0,
+            fill_word: 0,
+            fill_siz: 0,
         }
     }
 }
@@ -1800,6 +1808,9 @@ pub struct SceneRenderer {
     rsp: RspProcessPipeline,
     samplers: [[wgpu::Sampler; 3]; 3],
     texture_resources: texture_resources::TextureResources,
+    pub(crate) framebuffer_copies: framebuffers::copies::Copies,
+    pub(crate) color_versions:
+        std::collections::HashMap<framebuffers::coherence::Writer, wgpu::Texture>,
     material_bindings: Vec<texture_bindings::MaterialBinding>,
     /// A 1×1 white `@group(0)` (tex + sampler) bind group used as the texture binding for
     /// `FillRect` draws (which carry no material, but the pipeline layout still requires group 0).
@@ -1820,7 +1831,8 @@ pub struct SceneRenderer {
     first_touch: std::collections::HashSet<workload::TargetId>,
     pub(crate) depthbuffers: std::collections::HashMap<workload::TargetId, DepthImage>,
     depth_first_touch: std::collections::HashSet<workload::TargetId>,
-    depth_writes: std::collections::BTreeMap<u64, std::ops::Range<u32>>,
+    pub(crate) coherence: Option<framebuffers::coherence::Coherence>,
+    coverage: Option<framebuffers::coherence::Coverage>,
     depth_pipeline: DepthPipeline,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     pub(crate) dropped_runs: u32,
@@ -2030,6 +2042,8 @@ impl SceneRenderer {
             rsp,
             samplers,
             texture_resources: texture_resources::TextureResources::new(device),
+            framebuffer_copies: Default::default(),
+            color_versions: Default::default(),
             material_bindings: Vec::new(),
             fill_bind_group,
             dummy_view,
@@ -2040,7 +2054,8 @@ impl SceneRenderer {
             first_touch: std::collections::HashSet::new(),
             depthbuffers: std::collections::HashMap::new(),
             depth_first_touch: std::collections::HashSet::new(),
-            depth_writes: Default::default(),
+            coherence: None,
+            coverage: None,
             depth_pipeline: DepthPipeline::new(device),
             diagnostics: Vec::new(),
             dropped_runs: 0,
@@ -2104,6 +2119,7 @@ impl SceneRenderer {
         slot: u32,
         rect_idx: u32,
         any_depth: bool,
+        coverage_pipeline: Option<&wgpu::RenderPipeline>,
     ) {
         let opt_fb_bg: Option<wgpu::BindGroup> = if let inputs::DrawInputs::Rectangle {
             fb_source: Some(descriptor),
@@ -2180,7 +2196,7 @@ impl SceneRenderer {
             any_depth,
             *blend_class,
         );
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(coverage_pipeline.unwrap_or(pipeline));
         if let Some(rv) = rect_vbuf {
             pass.set_vertex_buffer(0, rv.slice(..));
         }
@@ -2351,9 +2367,13 @@ impl SceneRenderer {
         }
         self.target_descriptors = Default::default();
         self.framebuffers.clear();
+        self.color_versions.clear();
+        self.framebuffer_copies = Default::default();
         self.depthbuffers.clear();
         self.depth_first_touch.clear();
-        self.depth_writes.clear();
+        if let Some(coherence) = &mut self.coherence {
+            *coherence = Default::default();
+        }
         self.diagnostics.clear();
         self.first_touch.clear();
         self.frame_serial = 0;
@@ -2378,7 +2398,9 @@ impl SceneRenderer {
     pub(crate) fn discard_depth(&mut self) {
         self.depthbuffers.clear();
         self.depth_first_touch.clear();
-        self.depth_writes.clear();
+        if let Some(coherence) = &mut self.coherence {
+            *coherence = Default::default();
+        }
     }
 }
 

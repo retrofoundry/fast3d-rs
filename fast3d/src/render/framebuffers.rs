@@ -1,9 +1,10 @@
+pub(crate) mod coherence;
 pub(crate) mod targets;
 
 use super::{workload::TargetId, SceneRenderer, CLEAR_COLOR, DEPTH_FORMAT};
 use crate::{ClearPolicy, DiagKind, Diagnostic};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ImageLayout {
     pub width: u32,
     pub fmt: u8,
@@ -67,6 +68,8 @@ pub(super) struct DepthPipeline {
     copy: wgpu::RenderPipeline,
     fill_layout: wgpu::BindGroupLayout,
     copy_layout: wgpu::BindGroupLayout,
+    import: wgpu::RenderPipeline,
+    import_layout: wgpu::BindGroupLayout,
 }
 
 impl DepthPipeline {
@@ -95,6 +98,19 @@ impl DepthPipeline {
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let import_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("depth-import"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
@@ -138,8 +154,35 @@ impl DepthPipeline {
         Self {
             fill: make("fill_depth", &fill_layout),
             copy: make("copy_depth", &copy_layout),
+            import: make("import_depth", &import_layout),
+            import_layout,
             fill_layout,
             copy_layout,
+        }
+    }
+
+    fn import(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        target: &DepthImage,
+        spans: &[(u32, u32, u32)],
+    ) {
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("depth-import"),
+            layout: &self.import_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(source),
+            }],
+        });
+        let mut pass = depth_pass(encoder, &target.attach, wgpu::LoadOp::Load);
+        pass.set_pipeline(&self.import);
+        pass.set_bind_group(0, &group, &[]);
+        for &(x, y, width) in spans {
+            pass.set_scissor_rect(x, y, width, 1);
+            pass.draw(0..3, 0..1);
         }
     }
 
@@ -358,7 +401,19 @@ impl SceneRenderer {
             }
             return;
         }
-        if old.is_some() && !compatible {
+        if let Some(old) = old.filter(|_| !compatible) {
+            if self.coherence.is_some() {
+                if let TargetId::Guest(address) = id {
+                    self.color_versions.insert(
+                        coherence::Writer {
+                            address,
+                            layout: old.layout,
+                            depth: false,
+                        },
+                        old.color.clone(),
+                    );
+                }
+            }
             self.reinterpretation(id, false, pc);
         }
         let new = self.make_fb(device, layout, attachment_height, height);
@@ -433,7 +488,6 @@ impl SceneRenderer {
     }
 }
 
-#[cfg(any(test, not(target_arch = "wasm32")))]
 fn pack_depth(depth: f32) -> u16 {
     let z = ((depth * 262144.0) as u32).min(0x3ffff);
     let exponent = (0..8u32)
@@ -444,107 +498,6 @@ fn pack_depth(depth: f32) -> u16 {
     let mantissa = (z - base) >> (6 - exponent.min(6));
     // Exact slope dz is not retained by Depth32Float; guest write-back uses dz = 0.
     ((exponent << 13) | (mantissa << 2)) as u16
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl SceneRenderer {
-    pub(crate) fn read_depth_writes(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> Vec<crate::GuestWrite> {
-        if self.depth_writes.is_empty() {
-            return Vec::new();
-        }
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("depth-writeback"),
-        });
-        let readbacks: Vec<_> = self
-            .depth_writes
-            .iter()
-            .map(|(&address, rows)| {
-                let texture = &self.depthbuffers[&TargetId::Guest(address)].texture;
-                let width = texture.width();
-                let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("depth-writeback"),
-                    size: u64::from(stride) * u64::from(texture.height()),
-                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                    mapped_at_creation: false,
-                });
-                encoder.copy_texture_to_buffer(
-                    wgpu::TexelCopyTextureInfo {
-                        texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::DepthOnly,
-                    },
-                    wgpu::TexelCopyBufferInfo {
-                        buffer: &buffer,
-                        layout: wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(stride),
-                            rows_per_image: Some(texture.height()),
-                        },
-                    },
-                    texture.size(),
-                );
-                self.profiling.count(
-                    "readback.depth_bytes",
-                    u64::from(width) * u64::from(texture.height()) * 4,
-                );
-                (
-                    address,
-                    rows.start.min(texture.height())..rows.end.min(texture.height()),
-                    width,
-                    stride,
-                    buffer,
-                )
-            })
-            .collect();
-        queue.submit([encoder.finish()]);
-        let receivers: Vec<_> = readbacks
-            .iter()
-            .map(|(_, _, _, _, buffer)| {
-                let (tx, rx) = std::sync::mpsc::channel();
-                buffer
-                    .slice(..)
-                    .map_async(wgpu::MapMode::Read, move |result| {
-                        let _ = tx.send(result);
-                    });
-                rx
-            })
-            .collect();
-        device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("depth write-back GPU wait");
-        readbacks
-            .into_iter()
-            .zip(receivers)
-            .map(|((address, rows, width, stride, buffer), rx)| {
-                rx.recv()
-                    .expect("depth write-back callback")
-                    .expect("depth write-back mapping");
-                let data = buffer.slice(..).get_mapped_range();
-                let mut bytes =
-                    Vec::with_capacity((rows.end - rows.start) as usize * width as usize * 2);
-                for y in rows.clone() {
-                    let start = y as usize * stride as usize;
-                    for word in data[start..start + width as usize * 4].as_chunks::<4>().0 {
-                        bytes.extend_from_slice(
-                            &pack_depth(f32::from_le_bytes(*word)).to_ne_bytes(),
-                        );
-                    }
-                }
-                drop(data);
-                buffer.unmap();
-                crate::GuestWrite {
-                    address: address + u64::from(rows.start) * u64::from(width) * 2,
-                    bytes,
-                }
-            })
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -584,3 +537,5 @@ mod writeback_tests {
         assert_eq!(pack_depth(1.0), 0xfffc);
     }
 }
+
+pub(crate) mod copies;

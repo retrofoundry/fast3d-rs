@@ -22,3 +22,10 @@ fn fill_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f3
 fn copy_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
     return textureLoad(source, vec2<i32>(position.xy), 0);
 }
+
+@group(0) @binding(2) var imported: texture_2d<f32>;
+
+@fragment
+fn import_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
+    return textureLoad(imported, vec2<i32>(position.xy), 0).r;
+}

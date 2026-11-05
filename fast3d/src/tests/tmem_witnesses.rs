@@ -602,12 +602,12 @@ fn tmem_zero_line_and_nonci_tlut_do_not_alias_low_bank() {
 }
 
 #[test]
-fn tmem_gpu_source_poison_rejects_draw_then_guest_reload_restores_it() {
+fn tmem_unsupported_gpu_source_poison_rejects_draw_then_guest_reload_restores_it() {
     use n64_gbi::encode::*;
     let mut b = super::dl_builder::DlBuilder::new();
     let source = b.bytes(8, &[0xf8, 1].repeat(4));
     let mut commands = vec![
-        gdp_set_color_image(0, 2, 32, 0x10000),
+        gdp_set_color_image(0, 3, 32, 0x10000),
         gdp_set_cycle_type(3),
         gdp_set_fill_color(0x0001_0001),
         gdp_fill_rectangle(0, 0, 124, 124),
@@ -645,7 +645,7 @@ fn tmem_gpu_source_poison_rejects_draw_then_guest_reload_restores_it() {
             at: u64::from(built.entry) + poison_index as u64 * 8,
             kind: crate::DiagKind::UnsupportedFramebufferAccess {
                 address: 0x10000,
-                reason: crate::FramebufferAccess::TextureLoad
+                reason: crate::FramebufferAccess::Reinterpretation
             }
         }]
     );

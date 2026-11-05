@@ -59,9 +59,9 @@ struct Combiner {
                                 // decoded). In LOCKSTEP with the Rust CombinerUniform.
     frame:           vec4<u32>, // serial, seed, raster viewport width and height
     is_rect:         u32,
-    _pad0:           u32,
-    _pad1:           u32,
-    _pad2:           u32,
+    coverage_slot:   u32,       // draw slot + 1, written to the guest write-back coverage target
+    fill_word:       u32,       // FillRect's raw fill-color register
+    fill_siz:        u32,       // FillRect color-image siz + 1; 0 for other draws
 };
 
 @group(0) @binding(0) var tex0:  texture_2d<f32>;
@@ -429,6 +429,19 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     let ddx_uv = dpdx(in.uv);
     let ddy_uv = dpdy(in.uv);
     let uv = in.uv * combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
+
+    let pixel = u32(in.clip_position.y) * combiner.frame.z + u32(in.clip_position.x);
+    if combiner.fill_siz == 3u {
+        let word = select(combiner.fill_word >> 16u, combiner.fill_word & 0xffffu, (pixel & 1u) != 0u);
+        let rgb5 = vec3<u32>((word >> 11u) & 31u, (word >> 6u) & 31u, (word >> 1u) & 31u);
+        let rgb = vec3<f32>((rgb5 << vec3<u32>(3u)) | (rgb5 >> vec3<u32>(2u))) / 255.0;
+        let alpha = f32(word & 1u);
+        return CycleResult(alpha, rgb, alpha);
+    }
+    if combiner.fill_siz == 2u {
+        let intensity = f32((combiner.fill_word >> ((3u - (pixel & 3u)) * 8u)) & 255u) / 255.0;
+        return CycleResult(intensity, vec3<f32>(intensity), intensity);
+    }
 
     let l = combiner.combine_l;
     let h = combiner.combine_h;
