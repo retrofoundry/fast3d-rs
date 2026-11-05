@@ -49,32 +49,26 @@ impl Writer {
         pixel: usize,
         literal: Option<u32>,
         encoding: FramebufferEncoding,
-    ) -> Vec<u8> {
+    ) -> [u8; 2] {
         if !self.supported() {
-            return vec![0; self.pixel_bytes()];
+            return [0; 2];
         }
         if let Some(word) = literal {
             return if self.pixel_bytes() == 2 {
-                encoding
-                    .encode_u16((word >> (16 * (1 - pixel % 2))) as u16)
-                    .to_vec()
+                encoding.encode_u16((word >> (16 * (1 - pixel % 2))) as u16)
             } else {
-                vec![(word >> (8 * (3 - pixel % 4))) as u8]
+                [(word >> (8 * (3 - pixel % 4))) as u8, 0]
             };
         }
         if self.depth {
-            encoding
-                .encode_u16(super::pack_depth(f32::from_ne_bytes(rgba)))
-                .to_vec()
+            encoding.encode_u16(super::pack_depth(f32::from_ne_bytes(rgba)))
         } else if self.pixel_bytes() == 1 {
-            vec![rgba[(pixel % self.layout.width as usize) & 1]]
+            [rgba[(pixel % self.layout.width as usize) & 1], 0]
         } else {
             const MAGIC: [u8; 16] = [0, 6, 1, 7, 4, 2, 5, 3, 3, 5, 2, 4, 7, 1, 6, 0];
             let x = pixel % self.layout.width as usize;
             let y = pixel / self.layout.width as usize;
-            encoding
-                .encode_u16(pack_color(rgba, coverage, MAGIC[(y & 3) * 4 + (x & 3)]))
-                .to_vec()
+            encoding.encode_u16(pack_color(rgba, coverage, MAGIC[(y & 3) * 4 + (x & 3)]))
         }
     }
 }
@@ -88,6 +82,8 @@ fn pack_color(rgba: [u8; 4], coverage: u8, dither: u8) -> u16 {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::render) struct CoverageDraw {
     pub(in crate::render) literal: Option<u32>,
+    pub(in crate::render) combiner: Option<super::writeback::Combiner>,
+    pub(in crate::render) cull: bool,
     pub(in crate::render) mode: Option<crate::hle::RenderMode>,
     pub(in crate::render) geometry: CoverageGeometry,
     pub(in crate::render) scissor: (u32, u32, u32, u32),
@@ -544,6 +540,240 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn writeback_native_rejected_sample_preserves_ownership() {
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        let writer = image(0, 1, 2, false);
+        coherence.fill(writer, (0, 0, 1, 1), 0x12311231);
+        coherence.commit_pending(u64::MAX);
+        let mode = crate::hle::RenderMode::default();
+        let draw = CoverageDraw {
+            combiner: super::super::writeback::Combiner::new(
+                &crate::render::CombinerUniform::fill_rect(0xffffffff, 2),
+                mode,
+            ),
+            mode: Some(mode),
+            geometry: CoverageGeometry::Triangles(vec![[0, 1, 2]]),
+            scissor: (0, 0, 1, 1),
+            ..Default::default()
+        };
+        let vertices = [[0.25, 0.25], [0.75, 0.25], [0.5, 0.75]].map(|position| {
+            Some(super::super::writeback::Vertex {
+                position,
+                color: [1.0; 4],
+            })
+        });
+        let stamps: [u8; 8] = bytemuck::cast([1u32, 0]);
+        let geometry = ReplayGeometry::new(std::slice::from_ref(&draw), &vertices);
+        let output = coherence.replay(writer, &[draw], (0, 0), &geometry, &stamps, &[255; 4]);
+        assert!(matches!(output[0], super::super::writeback::Pixel::Keep));
+        assert_eq!(coherence.owners.0[&0].bytes, [0x12, 0x31]);
+        assert_eq!(coherence.stored_coverage_code(0), Some(7));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn writeback_native_full_recovers_unknown_history_before_wrap() {
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        let writer = image(0, 1, 2, false);
+        let mode = crate::hle::RenderMode {
+            image_read: true,
+            cvg_dst: 2,
+            ..Default::default()
+        };
+        let combiner = super::super::writeback::Combiner::new(
+            &crate::render::CombinerUniform::fill_rect(0xffffffff, 2),
+            mode,
+        );
+        let full = CoverageDraw {
+            combiner: combiner.clone(),
+            mode: Some(mode),
+            geometry: CoverageGeometry::Rectangle([0.0, 0.0, 1.0, 1.0]),
+            scissor: (0, 0, 1, 1),
+            ..Default::default()
+        };
+        let wrap = CoverageDraw {
+            combiner,
+            mode: Some(crate::hle::RenderMode {
+                antialias: true,
+                cvg_dst: 1,
+                ..mode
+            }),
+            geometry: CoverageGeometry::Rectangle([0.25, 0.0, 0.75, 1.0]),
+            scissor: (0, 0, 1, 1),
+            ..Default::default()
+        };
+        let stamps: [u8; 8] = bytemuck::cast([1u32, 0]);
+        let draws = [full, wrap];
+        let geometry = ReplayGeometry::new(&draws, &[]);
+        let output = coherence.replay(writer, &draws, (0, 0), &geometry, &stamps, &[255; 4]);
+        assert!(matches!(
+            output[0],
+            super::super::writeback::Pixel::Write([255, 255, 255, 255], 3, 2)
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn writeback_native_unknown_draw_does_not_reuse_old_rgb() {
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        let writer = image(0, 1, 2, false);
+        coherence.fill(writer, (0, 0, 1, 1), 0xf801f801);
+        coherence.commit_pending(u64::MAX);
+        let mode = crate::hle::decode_render_mode(
+            n64_gbi::consts::FORCE_BL
+                | n64_gbi::consts::gbl_c1(
+                    n64_gbi::consts::CLR_IN,
+                    n64_gbi::consts::A_IN,
+                    n64_gbi::consts::CLR_MEM,
+                    n64_gbi::consts::B_1MA,
+                ),
+            0,
+            0,
+        );
+        let uniform = crate::render::CombinerUniform::fill_rect(0x003f003f, 2);
+        let mut uniform = uniform;
+        uniform.prim[3] = 128.0 / 255.0;
+        let unsupported = CoverageDraw {
+            geometry: CoverageGeometry::Rectangle([0.0, 0.0, 1.0, 1.0]),
+            scissor: (0, 0, 1, 1),
+            ..Default::default()
+        };
+        let draw = CoverageDraw {
+            combiner: super::super::writeback::Combiner::new(&uniform, mode),
+            mode: Some(mode),
+            geometry: CoverageGeometry::Rectangle([0.0, 0.0, 1.0, 1.0]),
+            scissor: (0, 0, 1, 1),
+            ..Default::default()
+        };
+        let stamps: [u8; 8] = bytemuck::cast([2u32, 0]);
+        let draws = [unsupported, draw];
+        let geometry = ReplayGeometry::new(&draws, &[]);
+        let output = coherence.replay(
+            writer,
+            &draws,
+            (0, 0),
+            &geometry,
+            &stamps,
+            &[0, 128, 128, 128],
+        );
+        assert!(matches!(
+            output[0],
+            super::super::writeback::Pixel::Write([0, 128, 128, 128], 7, 2)
+        ));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn writeback_native_unknown_footprint_invalidates_queued_fill_bits() {
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        let writer = image(0, 1, 2, false);
+        coherence.fill(writer, (0, 0, 1, 1), 0x12311231);
+        let draw = CoverageDraw {
+            geometry: CoverageGeometry::Rectangle([0.0, 0.0, 1.0, 1.0]),
+            scissor: (0, 0, 1, 1),
+            ..Default::default()
+        };
+        let stamps: [u8; 8] = bytemuck::cast([0u32, 0]);
+        let geometry = ReplayGeometry::new(std::slice::from_ref(&draw), &[]);
+        coherence.replay(writer, &[draw], (1, 0), &geometry, &stamps, &[0; 4]);
+        coherence.commit_pending(u64::MAX);
+        assert_eq!(coherence.stored_coverage_code(0), None);
+        assert_eq!(coherence.owners.0[&0].bytes, [0x12, 0x31]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn writeback_native_fallback_proof_keeps_known_pixels_and_literal_resets() {
+        for destination in [1, 3] {
+            for height in [1, 2] {
+                for reset in [false, true] {
+                    for literal in [false, true] {
+                        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+                        let writer = image(0, 2, 2, false);
+                        coherence.fill(writer, (0, 0, 2, 2), 0x12311231);
+                        coherence.commit_pending(u64::MAX);
+                        let mode = crate::hle::RenderMode {
+                            image_read: true,
+                            cvg_dst: destination,
+                            ..Default::default()
+                        };
+                        let native = CoverageDraw {
+                            combiner: super::super::writeback::Combiner::new(
+                                &crate::render::CombinerUniform::fill_rect(0xffffffff, 2),
+                                mode,
+                            ),
+                            literal: literal.then_some(0x12311231),
+                            mode: Some(mode),
+                            geometry: CoverageGeometry::Rectangle([0.0, 0.0, 2.0, 2.0]),
+                            scissor: (0, 0, 2, 2),
+                            ..Default::default()
+                        };
+                        let mut draws = vec![CoverageDraw {
+                            geometry: CoverageGeometry::Rectangle([0.0, 0.0, 2.0, height as f32]),
+                            scissor: (0, 0, 2, 2),
+                            ..Default::default()
+                        }];
+                        if reset {
+                            draws.push(CoverageDraw {
+                                literal: Some(0x12311231),
+                                combiner: None,
+                                ..native.clone()
+                            });
+                        }
+                        draws.push(native);
+                        let geometry = ReplayGeometry::new(&draws, &[]);
+                        let fallback = geometry.fallback_only(&draws, 0, (2, 2));
+                        let stamps: Vec<_> = [draws.len() as u32, 0]
+                            .into_iter()
+                            .flat_map(u32::to_ne_bytes)
+                            .cycle()
+                            .take(32)
+                            .collect();
+                        let output = coherence.replay(
+                            writer,
+                            &draws,
+                            (1, 0),
+                            &geometry,
+                            &stamps,
+                            &[255; 16],
+                        );
+                        assert_eq!(fallback, height == 2 && !reset && !literal);
+                        if fallback {
+                            assert!(output
+                                .iter()
+                                .all(|p| matches!(p, super::super::writeback::Pixel::Fallback)));
+                        } else {
+                            assert!(output
+                                .iter()
+                                .any(|p| matches!(p, super::super::writeback::Pixel::Write(..))));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn writeback_native_hidden_bits_follow_byte_aliases_and_cpu_edits() {
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        let writer = image(0, 2, 2, false);
+        coherence.fill(writer, (0, 0, 2, 1), 0x12311231);
+        coherence.commit_pending(u64::MAX);
+        coherence
+            .release_changed(&crate::RdramImage::new(&[0x12, 0x30, 0x12, 0x31]))
+            .unwrap();
+        assert_eq!(coherence.stored_coverage_code(0), None);
+        assert_eq!(coherence.stored_coverage_code(2), Some(7));
+        coherence.fill(writer, (0, 0, 2, 1), 0x12311231);
+        coherence.commit_pending(u64::MAX);
+        coherence.fill(image(1, 1, 1, false), (0, 0, 1, 1), 0xff000000);
+        coherence.commit_pending(u64::MAX);
+        assert_eq!(coherence.stored_coverage_code(0), None);
+        assert_eq!(coherence.stored_coverage_code(2), Some(7));
+    }
+
     #[test]
     fn writeback_coverage_limits_known_destinations() {
         use crate::hle::decode_render_mode;
@@ -746,6 +976,7 @@ mod tests {
                 }],
                 Some(&vertices),
                 1,
+                0,
             );
             assert_eq!(coherence.snapshots[0].vertices.is_some(), projected);
         }
@@ -773,6 +1004,7 @@ mod tests {
                 draws,
                 None,
                 1,
+                0,
             );
             queue.submit([encoder.finish()]);
             coherence.finish(&device)
@@ -1090,7 +1322,7 @@ mod tests {
                         None,
                         FramebufferEncoding::Native,
                     );
-                    u16::from_ne_bytes(word.try_into().unwrap()) >> 11 == 1
+                    u16::from_ne_bytes(word) >> 11 == 1
                 })
                 .count()
         };
@@ -1117,11 +1349,11 @@ mod tests {
             };
             assert_eq!(
                 writer.encode([11, 27, 91, 255], 7, 0, None, FramebufferEncoding::Native),
-                vec![11]
+                [11, 0]
             );
             assert_eq!(
                 writer.encode([11, 27, 91, 255], 7, 1, None, FramebufferEncoding::Native),
-                vec![27]
+                [27, 0]
             );
         }
     }
@@ -1632,6 +1864,103 @@ impl Readback {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ReplayGeometry {
+    vertices: Vec<Option<super::writeback::Vertex>>,
+    positions: Vec<Option<[f32; 2]>>,
+    admitted: Vec<bool>,
+    bounds: Vec<Option<(u32, u32, u32, u32)>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ReplayGeometry {
+    fn prepare(&mut self, draws: &[CoverageDraw]) {
+        self.positions.clear();
+        self.positions
+            .extend(self.vertices.iter().map(|v| v.map(|v| v.position)));
+        self.admitted.clear();
+        self.admitted.extend(
+            draws
+                .iter()
+                .map(|draw| super::writeback::admitted(draw, &self.vertices)),
+        );
+        self.bounds.clear();
+        self.bounds.extend(
+            draws
+                .iter()
+                .map(|draw| draw.possible_bounds(&self.positions)),
+        );
+    }
+
+    fn fallback_only(
+        &self,
+        draws: &[CoverageDraw],
+        first_draw: usize,
+        extent: (usize, usize),
+    ) -> bool {
+        let mut admitted = self
+            .admitted
+            .iter()
+            .enumerate()
+            .skip(first_draw)
+            .filter_map(|(i, &a)| a.then_some(i));
+        let Some(index) = admitted.next() else {
+            return false;
+        };
+        if admitted.next().is_some() || index + 1 != draws.len() {
+            return false;
+        }
+        let mode = draws[index].mode.unwrap();
+        if draws[index].literal.is_some() || !mode.image_read || !matches!(mode.cvg_dst, 1 | 3) {
+            return false;
+        }
+        for i in (first_draw..index).rev() {
+            if draws[i].literal.is_some() {
+                return false;
+            }
+            if self.bounds[i].is_some_and(|(x, y, w, h)| {
+                x == 0 && y == 0 && w as usize >= extent.0 && h as usize >= extent.1
+            }) {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(test)]
+    fn new(draws: &[CoverageDraw], vertices: &[Option<super::writeback::Vertex>]) -> Self {
+        let mut geometry = Self {
+            vertices: vertices.to_vec(),
+            ..Default::default()
+        };
+        geometry.prepare(draws);
+        geometry
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ReplayScratch {
+    bytes: Vec<u8>,
+    valid: Vec<bool>,
+    color_valid: Vec<bool>,
+    colors: Vec<[f32; 4]>,
+    coverage: Vec<u8>,
+    output: Vec<super::writeback::Pixel>,
+    unknown: Vec<u32>,
+    history: Vec<u32>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ResolveScratch {
+    geometry: ReplayGeometry,
+    coverage: Vec<StoredCoverage>,
+    last_draw: Vec<u32>,
+    needed: Vec<bool>,
+}
+
 struct Snapshot {
     coverage: Readback,
     color: Option<(Writer, Readback)>,
@@ -1639,6 +1968,7 @@ struct Snapshot {
     draws: Vec<CoverageDraw>,
     vertices: Option<Readback>,
     render_height: u32,
+    first_draw: usize,
     generation: u64,
 }
 
@@ -1647,12 +1977,19 @@ struct PendingWrite {
     writer: Writer,
     address: u64,
     bytes: Vec<u8>,
+    coverage: Vec<u8>,
+    invalidate: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
 pub(crate) struct Coherence {
     pub encoding: FramebufferEncoding,
     pub owners: Ownership,
+    hidden: BTreeMap<u64, Vec<u8>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_scratch: ReplayScratch,
+    #[cfg(not(target_arch = "wasm32"))]
+    resolve_scratch: ResolveScratch,
     generation: u64,
     first_generation: u64,
     snapshots: Vec<Snapshot>,
@@ -1682,13 +2019,36 @@ impl Coherence {
         let (x, y, width, height) = bounds;
         for row in y..y + height {
             let pixel = (row * writer.layout.width + x) as usize;
-            let bytes = (pixel..pixel + width as usize)
-                .flat_map(|p| writer.encode([0; 4], 0, p, Some(word), self.encoding))
-                .collect();
+            let bytes = if writer.supported() {
+                (pixel..pixel + width as usize)
+                    .flat_map(|p| {
+                        writer
+                            .encode([0; 4], 0, p, Some(word), self.encoding)
+                            .into_iter()
+                            .take(writer.pixel_bytes())
+                    })
+                    .collect()
+            } else {
+                vec![0; width as usize * writer.pixel_bytes()]
+            };
             self.pending.push(PendingWrite {
                 generation: self.generation,
+                invalidate: None,
                 writer,
                 address: writer.address + (pixel * writer.pixel_bytes()) as u64,
+                coverage: if !writer.depth && (writer.layout.fmt, writer.layout.siz) == (0, 2) {
+                    (pixel..pixel + width as usize)
+                        .map(|p| {
+                            if (word >> (16 * (1 - p % 2))) & 1 != 0 {
+                                7
+                            } else {
+                                0
+                            }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
                 bytes,
             });
         }
@@ -1705,13 +2065,14 @@ impl Coherence {
         draws: Vec<CoverageDraw>,
         vertices: Option<&wgpu::Buffer>,
         render_height: u32,
+        first_draw: usize,
     ) {
         let generation = self.generation;
         self.generation += draws.len() as u64 * 2;
         let vertices = vertices
             .filter(|_| {
                 color.is_some_and(|(writer, _)| !writer.depth && (writer.layout.fmt, writer.layout.siz) == (0, 2))
-                    && draws.iter().any(|draw| draw.coverage_mode() != CoverageMode::Unknown)
+                    && draws.iter().any(|draw| draw.coverage_mode() != CoverageMode::Unknown || draw.combiner.is_some())
                     && draws.iter().any(|draw| {
                         matches!(&draw.geometry, CoverageGeometry::Triangles(triangles) if !triangles.is_empty())
                     })
@@ -1726,6 +2087,7 @@ impl Coherence {
             draws,
             vertices,
             render_height,
+            first_draw,
             generation,
         });
     }
@@ -1758,9 +2120,302 @@ impl Coherence {
         self.owners.patches(self.first_generation)
     }
 
+    #[cfg(test)]
+    pub(crate) fn stored_coverage_code(&self, address: u64) -> Option<u8> {
+        let byte = |address| {
+            let (&start, range) = self.owners.0.range(..=address).next_back()?;
+            range.bytes.get((address - start) as usize).copied()
+        };
+        let word = self
+            .encoding
+            .decode_u16([byte(address)?, byte(address + 1)?]);
+        let hidden = *self
+            .hidden
+            .get(&(address / 4096))?
+            .get((address % 4096) as usize / 2)?;
+        (hidden != 255).then_some(((word & 1) as u8) * 4 + (hidden & 3))
+    }
+
+    fn invalidate_hidden(&mut self, address: u64, length: usize) {
+        if length == 0 {
+            return;
+        }
+        let end = address + length as u64;
+        for (&page, bits) in self.hidden.range_mut(address / 4096..=(end - 1) / 4096) {
+            let start = address.saturating_sub(page * 4096) as usize / 2;
+            let end = (end - page * 4096).min(4096).div_ceil(2) as usize;
+            bits[start..end].fill(255);
+        }
+    }
+
+    fn commit_pending(&mut self, generation: u64) {
+        self.pending.sort_by_key(|write| write.generation);
+        let end = self
+            .pending
+            .partition_point(|write| write.generation <= generation);
+        let mut pending = std::mem::take(&mut self.pending);
+        for write in pending.drain(..end) {
+            self.invalidate_hidden(write.address, write.bytes.len());
+            if let Some((rows, length)) = write.invalidate {
+                let stride = write.writer.layout.row_bytes().unwrap();
+                for row in 0..rows {
+                    self.invalidate_hidden(write.address + row as u64 * stride, length);
+                }
+            }
+            let mut index = 0;
+            while index < write.coverage.len() {
+                let address = write.address + index as u64 * 2;
+                let offset = (address % 4096) as usize / 2;
+                let length = (2048 - offset).min(write.coverage.len() - index);
+                let coverage = &write.coverage[index..index + length];
+                if coverage.iter().any(|&c| c != 255) {
+                    let bits = self
+                        .hidden
+                        .entry(address / 4096)
+                        .or_insert_with(|| vec![255; 2048]);
+                    for (bits, &coverage) in bits[offset..offset + length].iter_mut().zip(coverage)
+                    {
+                        *bits = if coverage == 255 { 255 } else { coverage & 3 };
+                    }
+                }
+                index += length;
+            }
+            self.owners
+                .write(write.writer, write.generation, write.address, write.bytes);
+        }
+        self.pending = pending;
+    }
+
+    fn queue_invalidation(
+        &mut self,
+        writer: Writer,
+        generation: u64,
+        bounds: (u32, u32, u32, u32),
+        height: usize,
+    ) {
+        let (x, y, w, h) = bounds;
+        let width = writer.layout.width as usize;
+        let left = (x as usize).min(width);
+        let right = ((x + w) as usize).min(width);
+        let bottom = ((y + h) as usize).min(height);
+        if left < right && (y as usize) < bottom {
+            self.pending.push(PendingWrite {
+                generation,
+                writer,
+                address: writer.address + writer.byte_offset(y as usize * width + left),
+                bytes: Vec::new(),
+                coverage: Vec::new(),
+                invalidate: Some((bottom - y as usize, (right - left) * writer.pixel_bytes())),
+            });
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn replay(
+        &mut self,
+        writer: Writer,
+        draws: &[CoverageDraw],
+        order: (u64, usize),
+        geometry: &ReplayGeometry,
+        stamps: &[u8],
+        data: &[u8],
+    ) -> Vec<super::writeback::Pixel> {
+        use super::writeback::Pixel;
+        let (generation, first_draw) = order;
+        let width = writer.layout.width as usize;
+        let height = data.len() / 4 / width;
+        let extent = (width, height);
+        let length = width * height;
+        let mut scratch = std::mem::take(&mut self.replay_scratch);
+        let bytes = &mut scratch.bytes;
+        bytes.resize(length * 2, 0);
+        bytes.fill(0);
+        let valid = &mut scratch.valid;
+        valid.resize(length * 2, false);
+        valid.fill(false);
+        let end = writer.address + bytes.len() as u64;
+        for (&address, range) in self.owners.0.range(..end) {
+            let start = address.max(writer.address);
+            let end = (address + range.bytes.len() as u64).min(end);
+            if start >= end {
+                continue;
+            }
+            let a = (start - writer.address) as usize;
+            let b = (end - writer.address) as usize;
+            bytes[a..b].copy_from_slice(
+                &range.bytes[(start - address) as usize..(end - address) as usize],
+            );
+            valid[a..b].fill(true);
+        }
+        let unpack = |word: u16| {
+            let channel = |shift: u32| {
+                let v = ((word >> shift) & 31u16) as u8;
+                f32::from((v << 3) | (v >> 2)) / 255.0
+            };
+            [channel(11), channel(6), channel(1), 1.0]
+        };
+        let color_valid = &mut scratch.color_valid;
+        color_valid.clear();
+        color_valid.extend(valid.as_chunks::<2>().0.iter().map(|v| v[0] && v[1]));
+        let colors = &mut scratch.colors;
+        colors.resize(length, [0.0; 4]);
+        let coverage = &mut scratch.coverage;
+        coverage.resize(length, 255);
+        coverage.fill(255);
+        for pixel in 0..length {
+            let word = self
+                .encoding
+                .decode_u16([bytes[pixel * 2], bytes[pixel * 2 + 1]]);
+            colors[pixel] = unpack(word);
+        }
+        let mut pixel = 0;
+        while pixel < length {
+            let address = writer.address + pixel as u64 * 2;
+            let offset = (address % 4096) as usize / 2;
+            let count = (2048 - offset).min(length - pixel);
+            if let Some(bits) = self.hidden.get(&(address / 4096)) {
+                for (i, &hidden) in bits[offset..offset + count].iter().enumerate() {
+                    let p = pixel + i;
+                    if color_valid[p] && hidden != 255 {
+                        let word = self.encoding.decode_u16([bytes[p * 2], bytes[p * 2 + 1]]);
+                        coverage[p] = ((word & 1) as u8) * 4 + hidden;
+                    }
+                }
+            }
+            pixel += count;
+        }
+        let mut output = std::mem::take(&mut scratch.output);
+        output.clear();
+        output.extend(stamps.as_chunks::<8>().0.iter().map(|stamp| {
+            let slot = u32::from_ne_bytes(stamp[..4].try_into().unwrap()) as usize;
+            if slot > first_draw && geometry.admitted[slot - 1] {
+                Pixel::Keep
+            } else {
+                Pixel::Fallback
+            }
+        }));
+        let unknown = &mut scratch.unknown;
+        unknown.resize(length, 0);
+        unknown.fill(0);
+        let history = &mut scratch.history;
+        history.resize(length, 0);
+        history.fill(0);
+        for (index, draw) in draws.iter().enumerate().skip(first_draw) {
+            if let (Some(word), CoverageGeometry::Rectangle(bounds)) =
+                (draw.literal, &draw.geometry)
+            {
+                let (sx, sy, sw, sh) = draw.scissor;
+                for y in (bounds[1].max(0.0) as usize).max(sy as usize)
+                    ..(bounds[3].max(0.0) as usize)
+                        .min(height)
+                        .min((sy + sh) as usize)
+                {
+                    for x in (bounds[0].max(0.0) as usize).max(sx as usize)
+                        ..(bounds[2].max(0.0) as usize)
+                            .min(width)
+                            .min((sx + sw) as usize)
+                    {
+                        let pixel = y * width + x;
+                        history[pixel] = index as u32 + 1;
+                        let word = (word >> (16 * (1 - pixel % 2))) as u16;
+                        colors[pixel] = unpack(word);
+                        color_valid[pixel] = true;
+                        coverage[pixel] = if word & 1 == 0 { 0 } else { 7 };
+                        output[pixel] = Pixel::Write([0; 4], coverage[pixel], index as u32 + 1);
+                    }
+                }
+                continue;
+            }
+            let accepted = geometry.admitted[index];
+            if accepted {
+                super::writeback::rasterize(
+                    draw,
+                    &geometry.vertices,
+                    extent,
+                    |pixel, count, rgba, shade_alpha| {
+                        if unknown[pixel] > history[pixel] {
+                            coverage[pixel] = 255;
+                            color_valid[pixel] = false;
+                        }
+                        history[pixel] = index as u32 + 1;
+                        let mode = draw.mode.unwrap();
+                        let memory = if mode.image_read { coverage[pixel] } else { 7 };
+                        let memory = (memory != 255).then_some(memory);
+                        let c = memory
+                            .map(|m| super::writeback::destination(mode, count, m))
+                            .or_else(|| {
+                                (mode.cvg_dst == 2 || (count == 8 && mode.cvg_dst == 0))
+                                    .then_some(7)
+                            });
+                        coverage[pixel] = c.unwrap_or(255);
+                        if super::writeback::color_known(
+                            mode,
+                            rgba[3],
+                            count,
+                            memory,
+                            color_valid[pixel],
+                        ) {
+                            let color = super::writeback::blend(
+                                mode,
+                                draw.combiner.as_ref().unwrap(),
+                                rgba,
+                                colors[pixel],
+                                shade_alpha,
+                                count,
+                                memory.unwrap_or(7),
+                            );
+                            colors[pixel] = color.map(|c| f32::from(c) / 255.0);
+                            color_valid[pixel] = true;
+                            output[pixel] = c.map_or(Pixel::Fallback, |c| {
+                                Pixel::Write(color, c, index as u32 + 1)
+                            });
+                        } else {
+                            color_valid[pixel] = false;
+                            let slot = u32::from_ne_bytes(
+                                stamps[pixel * 8..pixel * 8 + 4].try_into().unwrap(),
+                            );
+                            output[pixel] = match c {
+                                Some(c) if slot == index as u32 + 1 => Pixel::Write(
+                                    data[pixel * 4..pixel * 4 + 4].try_into().unwrap(),
+                                    c,
+                                    slot,
+                                ),
+                                _ => Pixel::Fallback,
+                            };
+                        }
+                    },
+                );
+            }
+            if !accepted {
+                if let Some((x, y, w, h)) = geometry.bounds[index] {
+                    for row in y as usize..((y + h) as usize).min(height) {
+                        let start = row * width + (x as usize).min(width);
+                        let end = row * width + ((x + w) as usize).min(width);
+                        unknown[start..end].fill(index as u32 + 1);
+                    }
+                    self.queue_invalidation(
+                        writer,
+                        generation + (index as u64 + 1) * 2,
+                        (x, y, w, h),
+                        height,
+                    );
+                }
+            }
+        }
+        for pixel in 0..length {
+            if unknown[pixel] > history[pixel] {
+                output[pixel] = Pixel::Fallback;
+            }
+        }
+        self.replay_scratch = scratch;
+        output
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resolve(&mut self, device: &wgpu::Device) {
-        for snapshot in self.snapshots.drain(..) {
+        let mut scratch = std::mem::take(&mut self.resolve_scratch);
+        for snapshot in std::mem::take(&mut self.snapshots) {
+            self.commit_pending(snapshot.generation);
             let width = snapshot.coverage.width;
             let height = snapshot.render_height;
             let target_height = snapshot.coverage.height;
@@ -1774,6 +2429,13 @@ impl Coherence {
                     continue;
                 };
                 let data = readback.read(device);
+                let native_candidate = channel == 0
+                    && rgba16
+                    && snapshot
+                        .draws
+                        .iter()
+                        .skip(snapshot.first_draw)
+                        .any(|draw| draw.combiner.is_some());
                 let coverage_enabled = rgba16
                     && channel == 0
                     && stamps
@@ -1783,48 +2445,55 @@ impl Coherence {
                         .enumerate()
                         .any(|(pixel, stamp)| {
                             let slot = u32::from_ne_bytes(stamp[..4].try_into().unwrap());
-                            slot != 0
+                            slot as usize > snapshot.first_draw
                                 && data[pixel * 4 + 3] & 4 == 0
                                 && snapshot.draws[slot as usize - 1].coverage_mode()
                                     != CoverageMode::Unknown
                         });
-                let mut coverage = Vec::new();
-                let mut last_draw = Vec::new();
-                if coverage_enabled {
-                    coverage = (0..snapshot.draws.len())
-                        .map(|_| StoredCoverage::Unknown)
-                        .collect();
-                    last_draw = vec![0; stamps.len() / 8];
-                    let vertices: Vec<_> = projected_vertices
-                        .take()
-                        .map(|readback| {
-                            readback
-                                .read(device)
-                                .as_chunks::<48>()
-                                .0
-                                .iter()
-                                .map(|vertex| {
-                                    let p: [f32; 4] = std::array::from_fn(|i| {
+                let ResolveScratch {
+                    geometry,
+                    coverage,
+                    last_draw,
+                    needed,
+                } = &mut scratch;
+                geometry.vertices.clear();
+                if coverage_enabled || native_candidate {
+                    if let Some(readback) = projected_vertices.take() {
+                        for vertex in readback.read(device).as_chunks::<48>().0.iter() {
+                            let p: [f32; 4] = std::array::from_fn(|i| {
+                                f32::from_ne_bytes(vertex[i * 4..i * 4 + 4].try_into().unwrap())
+                            });
+                            let position = (p.iter().all(|v| v.is_finite())
+                                && p[3] > 0.0
+                                && p[2] >= 0.0
+                                && p[2] <= p[3])
+                                .then(|| {
+                                    [
+                                        (p[0] / p[3] + 1.0) * 0.5 * width as f32,
+                                        (1.0 - p[1] / p[3]) * 0.5 * height as f32,
+                                    ]
+                                });
+                            geometry.vertices.push(position.map(|position| {
+                                super::writeback::Vertex {
+                                    position,
+                                    color: std::array::from_fn(|i| {
                                         f32::from_ne_bytes(
-                                            vertex[i * 4..i * 4 + 4].try_into().unwrap(),
+                                            vertex[16 + i * 4..20 + i * 4].try_into().unwrap(),
                                         )
-                                    });
-                                    (p.iter().all(|v| v.is_finite())
-                                        && p[3] > 0.0
-                                        && p[2] >= 0.0
-                                        && p[2] <= p[3])
-                                        .then(|| {
-                                            [
-                                                (p[0] / p[3] + 1.0) * 0.5 * width as f32,
-                                                (1.0 - p[1] / p[3]) * 0.5 * height as f32,
-                                            ]
-                                        })
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    for (index, draw) in snapshot.draws.iter().enumerate() {
-                        if let Some((x, y, w, h)) = draw.possible_bounds(&vertices) {
+                                    }),
+                                }
+                            }));
+                        }
+                    }
+                    geometry.prepare(&snapshot.draws);
+                }
+                if coverage_enabled {
+                    coverage.clear();
+                    coverage.resize_with(snapshot.draws.len(), || StoredCoverage::Unknown);
+                    last_draw.resize(stamps.len() / 8, 0);
+                    last_draw.fill(0);
+                    for (index, _) in snapshot.draws.iter().enumerate() {
+                        if let Some((x, y, w, h)) = geometry.bounds[index] {
                             for row in y as usize..((y + h) as usize).min(target_height) {
                                 last_draw[row * width + (x as usize).min(width)
                                     ..row * width + ((x + w) as usize).min(width)]
@@ -1832,12 +2501,18 @@ impl Coherence {
                             }
                         }
                     }
-                    let mut needed = vec![false; snapshot.draws.len()];
+                    needed.resize(snapshot.draws.len(), false);
+                    needed.fill(false);
                     for (pixel, stamp) in stamps.as_chunks::<8>().0.iter().enumerate() {
                         let slot = u32::from_ne_bytes(stamp[..4].try_into().unwrap());
-                        if slot != 0 && last_draw[pixel] <= slot && data[pixel * 4 + 3] & 4 == 0 {
+                        if slot as usize > snapshot.first_draw
+                            && last_draw[pixel] <= slot
+                            && data[pixel * 4 + 3] & 4 == 0
+                        {
                             let draw = &snapshot.draws[slot as usize - 1];
-                            if draw.coverage_mode() != CoverageMode::Unknown {
+                            if draw.coverage_mode() != CoverageMode::Unknown
+                                && !geometry.admitted[slot as usize - 1]
+                            {
                                 needed[slot as usize - 1] = true;
                             }
                         }
@@ -1845,19 +2520,87 @@ impl Coherence {
                     for (index, draw) in snapshot.draws.iter().enumerate() {
                         if needed[index] {
                             coverage[index] =
-                                draw.stored_coverage((width, target_height), &vertices);
+                                draw.stored_coverage((width, target_height), &geometry.positions);
                         }
                     }
                 }
 
+                let native_admitted = native_candidate
+                    && geometry
+                        .admitted
+                        .iter()
+                        .skip(snapshot.first_draw)
+                        .any(|&a| a);
+                let native_fallback = native_admitted
+                    && geometry.fallback_only(
+                        &snapshot.draws,
+                        snapshot.first_draw,
+                        (width, target_height),
+                    );
+                let native_enabled = native_admitted && !native_fallback;
+                let native = if native_enabled {
+                    self.replay(
+                        writer,
+                        &snapshot.draws,
+                        (snapshot.generation, snapshot.first_draw),
+                        geometry,
+                        &stamps,
+                        &data,
+                    )
+                } else {
+                    if channel == 0
+                        && (native_fallback
+                            || !self.hidden.is_empty()
+                            || snapshot.draws.iter().any(|draw| draw.literal.is_some()))
+                    {
+                        if !coverage_enabled && !native_candidate {
+                            geometry.bounds.clear();
+                            geometry.bounds.extend(
+                                snapshot.draws.iter().map(|draw| draw.possible_bounds(&[])),
+                            );
+                        }
+                        for (index, draw) in
+                            snapshot.draws.iter().enumerate().skip(snapshot.first_draw)
+                        {
+                            if native_fallback
+                                && (geometry.admitted[index]
+                                    || matches!(
+                                        (&draw.literal, &draw.geometry),
+                                        (Some(_), CoverageGeometry::Rectangle(_))
+                                    ))
+                            {
+                                continue;
+                            }
+                            if let Some((x, y, w, h)) = geometry.bounds[index] {
+                                self.queue_invalidation(
+                                    writer,
+                                    snapshot.generation + (index as u64 + 1) * 2,
+                                    (x, y, w, h),
+                                    target_height,
+                                );
+                            }
+                        }
+                    }
+                    Vec::new()
+                };
                 let mut start = 0;
                 while start < stamps.len() / 8 {
                     let stamp = |pixel: usize| {
-                        u32::from_ne_bytes(
+                        match native.get(pixel) {
+                            Some(super::writeback::Pixel::Write(_, _, slot)) => return *slot,
+                            Some(super::writeback::Pixel::Keep) => return 0,
+                            _ => {}
+                        }
+                        let slot = u32::from_ne_bytes(
                             stamps[pixel * 8 + channel * 4..pixel * 8 + channel * 4 + 4]
                                 .try_into()
                                 .unwrap(),
-                        )
+                        );
+                        if slot as usize <= snapshot.first_draw {
+                            0
+                        } else {
+                            slot
+                        }
                     };
                     let slot = stamp(start);
                     if slot == 0 {
@@ -1868,24 +2611,50 @@ impl Coherence {
                     while end < stamps.len() / 8 && stamp(end) == slot {
                         end += 1;
                     }
+                    let mut stored = Vec::new();
                     let bytes = (start..end)
                         .flat_map(|pixel| {
-                            let rgba: [u8; 4] = data[pixel * 4..pixel * 4 + 4].try_into().unwrap();
+                            let mut rgba: [u8; 4] =
+                                data[pixel * 4..pixel * 4 + 4].try_into().unwrap();
                             let draw = &snapshot.draws[slot as usize - 1];
                             let coverage = if coverage_enabled && last_draw[pixel] <= slot {
                                 coverage[slot as usize - 1].get(pixel, width)
                             } else {
                                 None
                             };
-                            // Writer IDs carry no edge counts or prior coverage.
+                            let coverage =
+                                if let Some(super::writeback::Pixel::Write(color, c, _)) =
+                                    native.get(pixel)
+                                {
+                                    rgba = *color;
+                                    Some(*c)
+                                } else if rgba16 && channel == 0 {
+                                    draw.literal
+                                        .map(|word| {
+                                            if (word >> (16 * (1 - pixel % 2))) & 1 != 0 {
+                                                7
+                                            } else {
+                                                0
+                                            }
+                                        })
+                                        .or(coverage)
+                                } else {
+                                    None
+                                };
+                            if rgba16 && channel == 0 {
+                                stored.push(coverage.unwrap_or(255));
+                            }
                             let coverage = coverage.unwrap_or(rgba[3] & 7);
-                            writer.encode(
-                                rgba,
-                                coverage,
-                                pixel,
-                                if writer.depth { None } else { draw.literal },
-                                self.encoding,
-                            )
+                            writer
+                                .encode(
+                                    rgba,
+                                    coverage,
+                                    pixel,
+                                    if writer.depth { None } else { draw.literal },
+                                    self.encoding,
+                                )
+                                .into_iter()
+                                .take(writer.pixel_bytes())
                         })
                         .collect();
                     let generation = snapshot.generation + u64::from(slot) * 2 - channel as u64;
@@ -1900,20 +2669,23 @@ impl Coherence {
                     };
                     self.pending.push(PendingWrite {
                         generation,
+                        invalidate: None,
                         writer,
                         address: writer.address + writer.byte_offset(start),
+                        coverage: stored,
                         bytes,
                     });
                     start = end;
                 }
+                if native_enabled {
+                    self.replay_scratch.output = native;
+                }
             }
         }
-        self.pending.sort_by_key(|write| write.generation);
-        for write in self.pending.drain(..) {
-            self.owners
-                .write(write.writer, write.generation, write.address, write.bytes);
-        }
+        self.commit_pending(u64::MAX);
         self.owners.coalesce(self.first_generation);
+        self.hidden.retain(|_, bits| bits.iter().any(|&c| c != 255));
+        self.resolve_scratch = scratch;
     }
 }
 
@@ -1948,6 +2720,7 @@ impl Coherence {
             }
         }
         for patch in &changed {
+            self.invalidate_hidden(patch.address, patch.bytes.len());
             self.owners.mark_foreign(patch.address, patch.bytes.clone());
         }
         self.imports.extend(changed);

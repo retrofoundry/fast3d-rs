@@ -109,10 +109,27 @@ impl TargetInputs {
         self.operations[..end]
             .iter()
             .zip(source_valid)
-            .map(|(op, &valid)| {
+            .enumerate()
+            .map(|(index, (op, &valid))| {
                 if valid && !matches!(op.draw, DrawInputs::Rejected) {
                     use super::framebuffers::coherence::{CoverageDraw, CoverageGeometry};
                     CoverageDraw {
+                        cull: matches!(
+                            op.draw,
+                            DrawInputs::Tris {
+                                cull: CullKind::Cull,
+                                ..
+                            }
+                        ),
+                        combiner: op.coverage_mode.and_then(|mode| {
+                            let bytes = self.uniforms.get(
+                                index * 256..index * 256 + std::mem::size_of::<CombinerUniform>(),
+                            )?;
+                            super::framebuffers::writeback::Combiner::new(
+                                &bytemuck::pod_read_unaligned(bytes),
+                                mode,
+                            )
+                        }),
                         literal: op.literal_fill,
                         mode: op.coverage_mode,
                         scissor: op.scissor,
@@ -677,9 +694,18 @@ impl<'a> RenderInputs<'a> {
                                         ((rect.lry >> 2) + 1) as f32,
                                     ]),
                                 ),
-                                SceneOp::FillRect { color_raw, .. } => {
-                                    (Some(*color_raw), None, None)
-                                }
+                                SceneOp::FillRect {
+                                    color_raw, rect, ..
+                                } => (
+                                    Some(*color_raw),
+                                    None,
+                                    Some([
+                                        rect.ulx as f32,
+                                        rect.uly as f32,
+                                        (rect.lrx + 1) as f32,
+                                        (rect.lry + 1) as f32,
+                                    ]),
+                                ),
                                 _ => (None, None, None),
                             };
                             inputs.operations.push(OperationInputs {
