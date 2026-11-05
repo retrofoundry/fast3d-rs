@@ -101,14 +101,21 @@ Screen-change preservation across copies has a separate interpreter assertion:
 rt64's GPU modification records do not carry earlier screen overrides into a
 later copy, so that case is not an rt64 parity claim.
 
-`f3dex2-modify-rgba`, `f3dex2-modify-st`, `f3dex2-modify-xy` and `f3dex2-modify-z`
-match rt64 exactly and can be gated with `--threshold 0 --max-diff-pixels 0`.
+`f3dex2-modify-rgba`, `f3dex2-modify-st` and `f3dex2-modify-xy` match rt64
+exactly and can be gated with `--threshold 0 --max-diff-pixels 0`.
 `f3dex2-quad-winding` also matches rt64 exactly after the integer-pixel-origin
 coverage change. Its independent per-pixel and culling assertions remain in
 `fast3d/src/tests/f3dex2_fixtures.rs`. Replacing each `07000204/0006080A`
 command with TRI2 (`06000204/0006080A`) produces byte-identical rt64 output.
 The frozen [TMEM oracle ledger](../tmem/README.md) records zero RGBA residual
 for this row; the old 192-pixel residual is closed.
+
+`f3dex2-modify-z` is not an rt64 parity claim. fast3d reads a ZSCREEN word as
+raw s15.16 screen Z, the units `G_DEPTOZSrg` produces and BRANCH_Z compares,
+so `03000000` and `01000000` are Z=768 and Z=256 of the 1024 depth range. rt64
+uses the word divided by 65536 as normalized depth, which puts both modified
+strips past the far plane, so its right strip at `[176,248) × [40,112)` stays
+blue where fast3d draws red.
 
 The two BRANCH_Z fixtures are oracle-gated; neither uses equality or MODIFYVTX.
 CULLDL, threshold equality (`<=`), and modified raw Z have SDK-derived command-read

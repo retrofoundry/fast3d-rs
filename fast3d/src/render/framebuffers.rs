@@ -181,7 +181,11 @@ impl DepthPipeline {
         if bounds == (0, 0, target.texture.width(), target.texture.height())
             && word & 0xfffc_fffc == 0xfffc_fffc
         {
-            clear_depth(encoder, &target.attach);
+            let _pass = depth_pass(
+                encoder,
+                &target.attach,
+                wgpu::LoadOp::Clear(262143.0 / 262144.0),
+            );
             return;
         }
         let buffer = super::buffer_init(
@@ -426,5 +430,157 @@ impl SceneRenderer {
                 kind: DiagKind::UnsupportedImageReinterpretation { address, depth },
             });
         }
+    }
+}
+
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn pack_depth(depth: f32) -> u16 {
+    let z = ((depth * 262144.0) as u32).min(0x3ffff);
+    let exponent = (0..8u32)
+        .rev()
+        .find(|e| z >= 0x40000 - (0x40000 >> e))
+        .unwrap();
+    let base = 0x40000 - (0x40000 >> exponent);
+    let mantissa = (z - base) >> (6 - exponent.min(6));
+    // Exact slope dz is not retained by Depth32Float; guest write-back uses dz = 0.
+    ((exponent << 13) | (mantissa << 2)) as u16
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SceneRenderer {
+    pub(crate) fn read_depth_writes(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Vec<crate::GuestWrite> {
+        if self.depth_writes.is_empty() {
+            return Vec::new();
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("depth-writeback"),
+        });
+        let readbacks: Vec<_> = self
+            .depth_writes
+            .iter()
+            .map(|(&address, rows)| {
+                let texture = &self.depthbuffers[&TargetId::Guest(address)].texture;
+                let width = texture.width();
+                let stride = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+                let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("depth-writeback"),
+                    size: u64::from(stride) * u64::from(texture.height()),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+                encoder.copy_texture_to_buffer(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::DepthOnly,
+                    },
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &buffer,
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(stride),
+                            rows_per_image: Some(texture.height()),
+                        },
+                    },
+                    texture.size(),
+                );
+                self.profiling.count(
+                    "readback.depth_bytes",
+                    u64::from(width) * u64::from(texture.height()) * 4,
+                );
+                (
+                    address,
+                    rows.start.min(texture.height())..rows.end.min(texture.height()),
+                    width,
+                    stride,
+                    buffer,
+                )
+            })
+            .collect();
+        queue.submit([encoder.finish()]);
+        let receivers: Vec<_> = readbacks
+            .iter()
+            .map(|(_, _, _, _, buffer)| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |result| {
+                        let _ = tx.send(result);
+                    });
+                rx
+            })
+            .collect();
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("depth write-back GPU wait");
+        readbacks
+            .into_iter()
+            .zip(receivers)
+            .map(|((address, rows, width, stride, buffer), rx)| {
+                rx.recv()
+                    .expect("depth write-back callback")
+                    .expect("depth write-back mapping");
+                let data = buffer.slice(..).get_mapped_range();
+                let mut bytes =
+                    Vec::with_capacity((rows.end - rows.start) as usize * width as usize * 2);
+                for y in rows.clone() {
+                    let start = y as usize * stride as usize;
+                    for word in data[start..start + width as usize * 4].as_chunks::<4>().0 {
+                        bytes.extend_from_slice(
+                            &pack_depth(f32::from_le_bytes(*word)).to_ne_bytes(),
+                        );
+                    }
+                }
+                drop(data);
+                buffer.unmap();
+                crate::GuestWrite {
+                    address: address + u64::from(rows.start) * u64::from(width) * 2,
+                    bytes,
+                }
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod writeback_tests {
+    use super::pack_depth;
+
+    #[test]
+    fn packed_depth_exponent_boundaries_and_neighbors() {
+        for (base, previous, packed, next) in [
+            (0, 0, 0, 0),
+            (0x20000, 0x1ffc, 0x2000, 0x2000),
+            (0x30000, 0x3ffc, 0x4000, 0x4000),
+            (0x38000, 0x5ffc, 0x6000, 0x6000),
+            (0x3c000, 0x7ffc, 0x8000, 0x8000),
+            (0x3e000, 0x9ffc, 0xa000, 0xa000),
+            (0x3f000, 0xbffc, 0xc000, 0xc004),
+            (0x3f800, 0xdffc, 0xe000, 0xe004),
+            (0x3ffff, 0xfff8, 0xfffc, 0xfffc),
+        ] {
+            for (z, expected) in [(base - 1, previous), (base, packed), (base + 1, next)] {
+                assert_eq!(pack_depth(z as f32 / 262144.0), expected, "z18 {z:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn packed_depth_zero_dz_words_roundtrip() {
+        let bases = [
+            0, 0x20000, 0x30000, 0x38000, 0x3c000, 0x3e000, 0x3f000, 0x3f800,
+        ];
+        let shifts = [6, 5, 4, 3, 2, 1, 0, 0];
+        for word in (0u16..=0xfffc).step_by(4) {
+            let exponent = (word >> 13) as usize;
+            let z = bases[exponent] + (u32::from((word & 0x1ffc) >> 2) << shifts[exponent]);
+            assert_eq!(pack_depth(z as f32 / 262144.0), word);
+        }
+        assert_eq!(pack_depth(1.0), 0xfffc);
     }
 }

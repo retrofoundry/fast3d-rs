@@ -1820,6 +1820,7 @@ pub struct SceneRenderer {
     first_touch: std::collections::HashSet<workload::TargetId>,
     pub(crate) depthbuffers: std::collections::HashMap<workload::TargetId, DepthImage>,
     depth_first_touch: std::collections::HashSet<workload::TargetId>,
+    depth_writes: std::collections::BTreeMap<u64, std::ops::Range<u32>>,
     depth_pipeline: DepthPipeline,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     pub(crate) dropped_runs: u32,
@@ -2039,6 +2040,7 @@ impl SceneRenderer {
             first_touch: std::collections::HashSet::new(),
             depthbuffers: std::collections::HashMap::new(),
             depth_first_touch: std::collections::HashSet::new(),
+            depth_writes: Default::default(),
             depth_pipeline: DepthPipeline::new(device),
             diagnostics: Vec::new(),
             dropped_runs: 0,
@@ -2351,6 +2353,7 @@ impl SceneRenderer {
         self.framebuffers.clear();
         self.depthbuffers.clear();
         self.depth_first_touch.clear();
+        self.depth_writes.clear();
         self.diagnostics.clear();
         self.first_touch.clear();
         self.frame_serial = 0;
@@ -2375,6 +2378,7 @@ impl SceneRenderer {
     pub(crate) fn discard_depth(&mut self) {
         self.depthbuffers.clear();
         self.depth_first_touch.clear();
+        self.depth_writes.clear();
     }
 }
 

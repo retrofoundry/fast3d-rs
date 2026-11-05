@@ -204,7 +204,7 @@ fn scene(case: Case) -> Built {
                         ),
                         Case::Z => (
                             G_MWO_POINT_ZSCREEN,
-                            if strip == 1 { 0x0000_c000 } else { 0x0000_4000 },
+                            if strip == 1 { 0x0300_0000 } else { 0x0100_0000 },
                         ),
                         _ => unreachable!(),
                     };
@@ -277,7 +277,7 @@ fn fixture(case: Case) -> Fixture {
             Case::Rgba => "RGBA 02100000/00FF00FF then 02100000/0000FFFF, slots 0..3; red/green/blue strips",
             Case::St => "ST 02140000/01800040 then 02140000/03000040, slots 0..3; half texture scale at load, unit scale after modify; red/green/blue strips",
             Case::Xy => "XY 02180000/02C000A0 for slot 0; translate [40,112)x[40,112) to [176,248)x[40,112)",
-            Case::Z => "Z 021C0000/0000C000 then 021C0000/00004000, slots 0..3; red foreground moves behind blue then in front; red/blue/red strips",
+            Case::Z => "Z 021C0000/03000000 then 021C0000/01000000, slots 0..3; red foreground moves behind blue then in front; red/blue/red strips",
             Case::BranchBelow => "E1000000/07000008; 0400F006/01FF0000: slot 3 raw screen Z=383.25 < 511, segmented tail branch in child; green left square, blue caller continuation",
             Case::BranchAbove => "E1000000/07000008; 0400F006/01FF0000: slot 3 raw screen Z=638.75 > 511, child falls through; red left square, blue caller continuation",
             Case::Quad => "07000204/0006080A: independent triangles (0,1,2), (3,4,5), opposite winding; no cull, cull back, cull front",

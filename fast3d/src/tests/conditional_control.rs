@@ -769,3 +769,21 @@ fn branchz_preserves_load_matrix() {
     let r = walk(b, &expected);
     assert!(r.diags.is_empty(), "{:?}", r.diags);
 }
+
+#[test]
+fn modify_zscreen_normalizes_gpu_depth_only() {
+    let mut b = DlBuilder::new();
+    let v = vertex(&mut b, &[[0, 0, 0]]);
+    b.list(
+        "main",
+        &[
+            gsp_vertex(0, 1, v),
+            gsp_modifyvertex(0, G_MWO_POINT_ZSCREEN, 511 << 16),
+            END,
+        ],
+    );
+    let built = b.finish("main");
+    let result = crate::hle::interpret_rdram(&built.rdram, built.entry);
+    assert!(result.diags.is_empty(), "{:?}", result.diags);
+    assert_eq!(result.scene.modify_screen[0][2], 511.0 / 1024.0);
+}

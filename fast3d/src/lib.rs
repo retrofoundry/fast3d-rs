@@ -187,6 +187,13 @@ fn pick_surface_format(
     (wgpu::TextureFormat::Bgra8Unorm, None) // degenerate empty caps
 }
 
+/// Owned guest bytes at a native address, with depth pixels encoded as native-endian u16 words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuestWrite {
+    pub address: u64,
+    pub bytes: Vec<u8>,
+}
+
 /// The public N64 renderer. Non-generic — the `Hardware` handle is a per-call parameter (spec §3).
 ///
 /// `!Send` + `!Sync` on every target: no public bound may add them (spec §3.1). The `_not_send`
@@ -198,6 +205,8 @@ pub struct Renderer {
     inner: SceneRenderer,
     rdp: crate::hle::rdp::Rdp,
     color_image_epoch: u64,
+    depth_writeback: bool,
+    guest_writes: Vec<GuestWrite>,
     #[cfg(feature = "capture")]
     capture_generation: std::rc::Rc<()>,
     pub(crate) frame_scenes: Vec<Scene>,
@@ -299,6 +308,8 @@ impl Renderer {
             inner,
             rdp: Default::default(),
             color_image_epoch: 0,
+            depth_writeback: false,
+            guest_writes: Vec::new(),
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
@@ -380,6 +391,8 @@ impl Renderer {
             inner,
             rdp: Default::default(),
             color_image_epoch: 0,
+            depth_writeback: false,
+            guest_writes: Vec::new(),
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
             frame_scenes: Vec::new(),
@@ -484,6 +497,16 @@ impl Renderer {
         // so `Drop` below sees `None` and does not double-fire.
         self.take_render_hook();
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
+    /// Enable blocking native depth write-back after accepted tasks; disabled by default and on wasm.
+    pub fn set_depth_writeback(&mut self, enabled: bool) {
+        self.depth_writeback = enabled && !cfg!(target_arch = "wasm32");
+    }
+
+    /// Drain native-endian depth patches accumulated by accepted tasks since the previous drain.
+    pub fn take_guest_writes(&mut self) -> Vec<GuestWrite> {
+        std::mem::take(&mut self.guest_writes)
     }
 
     /// RCP: walk the display list at `entry` and rasterize every framebuffer it produces into the
@@ -799,6 +822,11 @@ impl Renderer {
             &result.scene,
             self.config.clear_policy,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.depth_writeback && result.commits_rdp() {
+            self.guest_writes
+                .extend(self.inner.read_depth_writes(&self.device, &self.queue));
+        }
         for &diagnostic in &self.inner.diagnostics {
             diags.emit(diagnostic);
             result.diags.push(diagnostic);
@@ -847,6 +875,7 @@ impl Renderer {
     pub fn reset(&mut self) {
         self.reset_rdp_state();
         self.color_image_epoch = 0;
+        self.guest_writes.clear();
         self.inner.reset();
         self.frame_scenes.clear();
         self.last_scanout_addr = None;

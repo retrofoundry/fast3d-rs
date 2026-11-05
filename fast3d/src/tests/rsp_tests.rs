@@ -184,7 +184,7 @@ fn phase4_modify_vertex_screen_fields_accumulate_flags_and_values() {
     rsp.modify_vertex(0, 0x1C, 0x0000_8000, &mut scene).unwrap();
 
     assert_eq!(scene.modify_flags[0], 3);
-    assert_eq!(scene.modify_screen[0], [32.0, 16.0, 0.5, 0.0]);
+    assert_eq!(scene.modify_screen[0], [32.0, 16.0, 0.5 / 1024.0, 0.0]);
 }
 
 #[test]
@@ -312,7 +312,7 @@ fn phase4_modify_vertex_screen_override_renders_requested_pixel_and_depth() {
     {
         rsp.modify_vertex(slot as u32, 0x18, packed_xy(x, y), &mut scene)
             .unwrap();
-        rsp.modify_vertex(slot as u32, 0x1C, 0x0000_C000, &mut scene)
+        rsp.modify_vertex(slot as u32, 0x1C, 768 << 16, &mut scene)
             .unwrap();
     }
     // Foreground triangle surrounds N64 screen pixel (160,120), which maps to target pixel (32,32).
@@ -320,7 +320,7 @@ fn phase4_modify_vertex_screen_override_renders_requested_pixel_and_depth() {
         let slot = (slot + 3) as u32;
         rsp.modify_vertex(slot, 0x18, packed_xy(x, y), &mut scene)
             .unwrap();
-        rsp.modify_vertex(slot, 0x1C, 0x0000_8000, &mut scene)
+        rsp.modify_vertex(slot, 0x1C, 512 << 16, &mut scene)
             .unwrap();
     }
     rsp.draw_tri(0, 1, 2, 0, 0, [0; 4], Default::default(), &mut scene, None);
@@ -497,6 +497,9 @@ fn modifyvtx_reload_resets_modifications() {
     rsp.draw_tri(7, 7, 7, 0, 0, [0; 4], Default::default(), &mut scene, None);
     assert_eq!(scene.indices, [0, 0, 0, 1, 1, 1]);
     assert_eq!(scene.modify_flags, [3, 0]);
-    assert_eq!(scene.modify_screen, [[32.0, 64.0, 0.5, 0.0], [0.0; 4]]);
+    assert_eq!(
+        scene.modify_screen,
+        [[32.0, 64.0, 0.5 / 1024.0, 0.0], [0.0; 4]]
+    );
     assert_eq!(scene.cn, [0x281e_140a, 0x4433_2211]);
 }

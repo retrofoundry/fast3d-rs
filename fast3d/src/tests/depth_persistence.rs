@@ -371,7 +371,7 @@ fn depth_addresses_are_independent() {
             &renderer,
             0x0000_0001_0020_0000,
             [7, 5],
-            |_, _| 196608.0 / 262143.0,
+            |_, _| 196608.0 / 262144.0,
         );
         assert_depth(
             &device,
@@ -379,7 +379,7 @@ fn depth_addresses_are_independent() {
             &renderer,
             0x0000_0002_0020_0000,
             [7, 5],
-            |_, _| 245760.0 / 262143.0,
+            |_, _| 245760.0 / 262144.0,
         );
     }
 }
@@ -411,7 +411,7 @@ fn depth_address_zero_is_valid() {
         ClearPolicy::Persist,
     );
     assert_depth(&device, &queue, &renderer, 0, [320, 240], |_, _| {
-        196608.0 / 262143.0
+        196608.0 / 262144.0
     });
 }
 
@@ -436,13 +436,13 @@ fn depth_clear_hits_selected_storage() {
         );
         assert_depth(&device, &queue, &renderer, Z.into(), [7, 5], |x, y| {
             if inside(x, y, [2, 1, 5, 4]) {
-                1.0
+                262143.0 / 262144.0
             } else {
-                196608.0 / 262143.0
+                196608.0 / 262144.0
             }
         });
         assert_depth(&device, &queue, &renderer, B.into(), [7, 5], |_, _| {
-            245760.0 / 262143.0
+            245760.0 / 262144.0
         });
     }
 }
@@ -475,12 +475,12 @@ fn depth_clear_scissor_and_fill_parity() {
             assert_depth(&device, &queue, &renderer, Z.into(), [width, 5], |x, y| {
                 if inside(x, y, [2, 1, 6, 3]) {
                     if (y * width + x).is_multiple_of(2) {
-                        196608.0 / 262143.0
+                        196608.0 / 262144.0
                     } else {
-                        245760.0 / 262143.0
+                        245760.0 / 262144.0
                     }
                 } else {
-                    1.0
+                    262143.0 / 262144.0
                 }
             });
         }
@@ -511,7 +511,7 @@ fn depth_fill_packed_exponent_ranges() {
             ClearPolicy::Persist,
         );
         assert_depth(&device, &queue, &renderer, Z.into(), [7, 5], |_, _| {
-            fixed_depth / 262143.0
+            fixed_depth / 262144.0
         });
     }
 }
@@ -528,7 +528,7 @@ fn depth_height_growth_preserves_rows() {
             policy,
         );
         assert_depth(&device, &queue, &renderer, Z.into(), [7, 3], |_, _| {
-            196608.0 / 262143.0
+            196608.0 / 262144.0
         });
         renderer.render_into_store(
             &device,
@@ -543,8 +543,8 @@ fn depth_height_growth_preserves_rows() {
             Z.into(),
             [7, 6],
             |_, y| match y {
-                0..3 => 196608.0 / 262143.0,
-                5 => 245760.0 / 262143.0,
+                0..3 => 196608.0 / 262144.0,
+                5 => 245760.0 / 262144.0,
                 _ => 1.0,
             },
         );
@@ -559,8 +559,8 @@ fn depth_height_growth_preserves_rows() {
                 0.0
             } else {
                 match y {
-                    0..3 => 196608.0 / 262143.0,
-                    5 => 245760.0 / 262143.0,
+                    0..3 => 196608.0 / 262144.0,
+                    5 => 245760.0 / 262144.0,
                     _ => 1.0,
                 }
             }
@@ -589,7 +589,7 @@ fn depth_stride_change_is_explicit() {
     )), "{:?}", renderer.diagnostics);
     assert_depth(&device, &queue, &renderer, Z.into(), [9, 5], |x, y| {
         if x == 0 && y == 0 {
-            245760.0 / 262143.0
+            245760.0 / 262144.0
         } else {
             1.0
         }
@@ -636,7 +636,9 @@ fn depth_clear_before_and_after_draws_is_ordered() {
             policy,
         );
         assert_depth(&device, &queue, &renderer, Z.into(), [320, 240], |x, y| {
-            if inside(x, y, [64, 64, 128, 128]) || !inside(x, y, [32, 32, 288, 208]) {
+            if inside(x, y, [64, 64, 128, 128]) {
+                262143.0 / 262144.0
+            } else if !inside(x, y, [32, 32, 288, 208]) {
                 1.0
             } else {
                 511.0 / 1024.0
@@ -749,9 +751,9 @@ fn depth_growth_within_scene_preserves_earlier_fill() {
             Z.into(),
             [7, 4],
             |_, y| match y {
-                0..2 => 196608.0 / 262143.0,
+                0..2 => 196608.0 / 262144.0,
                 2 => 1.0,
-                _ => 245760.0 / 262143.0,
+                _ => 245760.0 / 262144.0,
             },
         );
     }
@@ -858,7 +860,7 @@ fn depth_generation_diagnostics_reach_process_dl() {
             &renderer.inner,
             Z.into(),
             [width, 5],
-            |_, _| 196608.0 / 262143.0,
+            |_, _| 196608.0 / 262144.0,
         );
     }
     let mut b = DlBuilder::new();
@@ -884,7 +886,7 @@ fn depth_generation_diagnostics_reach_process_dl() {
         &renderer.inner,
         Z.into(),
         [9, 5],
-        |_, _| 196608.0 / 262143.0,
+        |_, _| 196608.0 / 262144.0,
     );
 }
 
@@ -1037,9 +1039,9 @@ fn depth_legacy_extent_mismatch_preserves_guest_storage() {
             assert!(!renderer.has_fb(TargetId::Legacy));
             assert_depth(&device, &queue, &renderer, Z.into(), [320, 240], |x, _| {
                 if x.is_multiple_of(2) {
-                    196608.0 / 262143.0
+                    196608.0 / 262144.0
                 } else {
-                    245760.0 / 262143.0
+                    245760.0 / 262144.0
                 }
             });
             renderer.render_into_store(&device, &queue, &draw_task(B, Z, 64, BLUE), policy);
@@ -1227,6 +1229,227 @@ fn color_format_change_preserves_independent_depth() {
         assert_eq!(*pixel, if i == 0 { BLUE } else { BACKGROUND });
     }
     assert_depth(&device, &queue, &renderer, Z.into(), [6, 4], |_, _| {
-        196608.0 / 262143.0
+        196608.0 / 262144.0
     });
+}
+
+#[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+mod writeback {
+    use super::*;
+    use crate::{
+        GuestWrite, Hardware, HostRam, Microcode, NopSink, PresentTarget, Rdram, RdramImage,
+        Renderer, RendererConfig,
+    };
+
+    fn renderer(width: u32, height: u32) -> Renderer {
+        let (device, queue) = headless_device_forced_fallback();
+        Renderer::with_device(
+            device,
+            queue,
+            PresentTarget::Headless {
+                format: FORMAT,
+                width,
+                height,
+            },
+            RendererConfig {
+                clear_policy: ClearPolicy::Persist,
+                resolution_multiplier: 1,
+                sample_count: 1,
+                present_mode: wgpu::PresentMode::Fifo,
+                format: Some(FORMAT),
+                power_preference: wgpu::PowerPreference::LowPower,
+            },
+        )
+    }
+
+    fn depth_fill(address: u64, word: u32) -> Vec<[u64; 2]> {
+        let mut dl = vec![
+            gdp_set_depth_image(0),
+            gdp_set_color_image(0, 2, 7, 0),
+            gdp_set_scissor(0, 0, 0, 28, 20),
+        ];
+        fill(&mut dl, word, [0, 0, 6, 4]);
+        dl.push(gsp_enddl());
+        let mut dl: Vec<_> = dl
+            .into_iter()
+            .map(|(a, b)| [u64::from(a), u64::from(b)])
+            .collect();
+        dl[0][1] = address;
+        dl[1][1] = address;
+        dl
+    }
+
+    fn process(renderer: &mut Renderer, dl: &[[u64; 2]]) -> crate::DlSummary {
+        unsafe {
+            renderer.process_dl_host(
+                HostRam::new(&[]),
+                dl.as_ptr() as u64,
+                Microcode::F3dex2,
+                &mut NopSink,
+            )
+        }
+    }
+
+    fn words(patch: &GuestWrite) -> Vec<u16> {
+        patch
+            .bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| u16::from_ne_bytes(*b))
+            .collect()
+    }
+
+    #[test]
+    fn depth_writeback_clear_roundtrips_at_native_extent() {
+        let address = 0x1_0020_0000;
+        for (width, height) in [(1280, 720), (13, 9)] {
+            let mut r = renderer(width, height);
+            r.set_depth_writeback(true);
+            assert_eq!(
+                process(&mut r, &depth_fill(address, 0xfffc_fffc)).termination,
+                crate::inspect::WalkTermination::End
+            );
+            let patches = r.take_guest_writes();
+            assert_eq!(patches.len(), 1);
+            assert_eq!(patches[0].address, address);
+            assert_eq!(words(&patches[0]), vec![0xfffc; 7 * 5]);
+            assert!(r.take_guest_writes().is_empty());
+        }
+    }
+
+    #[test]
+    fn depth_writeback_fill_preserves_words_and_row_parity() {
+        let mut r = renderer(64, 64);
+        r.set_depth_writeback(true);
+        for exponent in 0..8u32 {
+            let even = (exponent << 13) | 0x1234;
+            let odd = (exponent << 13) | 0x1ffc;
+            process(&mut r, &depth_fill(0x2_0020_0000, even << 16 | odd));
+            let patches = r.take_guest_writes();
+            assert_eq!(
+                words(&patches[0]),
+                (0..35)
+                    .map(|i| if i % 2 == 0 { even as u16 } else { odd as u16 })
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_depth_writeback_does_not_read_back() {
+        let mut r = renderer(64, 64);
+        let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+        r.inner.profiling = recorder.clone();
+        assert!(!r.depth_writeback);
+        for enabled in [false, true, false] {
+            r.set_depth_writeback(enabled);
+            recorder.drain();
+            process(&mut r, &depth_fill(0x1_0020_0000, 0xfffc_fffc));
+            assert_eq!(r.take_guest_writes().len(), usize::from(enabled));
+            assert_eq!(
+                recorder
+                    .snapshot()
+                    .counters
+                    .get("readback.depth_bytes")
+                    .copied()
+                    .unwrap_or(0),
+                if enabled { 7 * 5 * 4 } else { 0 }
+            );
+        }
+    }
+
+    struct Image(Built);
+    impl Hardware for Image {
+        fn rdram(&self) -> impl Rdram + '_ {
+            RdramImage::new(&self.0.rdram)
+        }
+    }
+
+    #[test]
+    fn depth_writeback_triangle_matches_viewport_packed_z() {
+        let mut r = renderer(1280, 720);
+        r.set_depth_writeback(true);
+        for modified in [false, true] {
+            r.reset();
+            let mut b = DlBuilder::new();
+            let mut dl = setup(&mut b, A, Z);
+            quad(
+                &mut b,
+                &mut dl,
+                [32, 32, 288, 208],
+                if modified { 64 } else { 0 },
+                RED,
+            );
+            if modified {
+                let tri = dl.pop().unwrap();
+                for slot in 0..4 {
+                    dl.push(gsp_modifyvertex(slot, G_MWO_POINT_ZSCREEN, 511 << 16));
+                }
+                dl.push(tri);
+            }
+            let hw = Image(finish(b, dl));
+            r.process_dl(&hw, u64::from(hw.0.entry), Microcode::F3dex2, &mut NopSink);
+            let patches = r.take_guest_writes();
+            assert_eq!(patches.len(), 1);
+            assert_eq!(patches[0].address, u64::from(Z));
+            let words = words(&patches[0]);
+            assert_eq!(words.len(), 320 * 240);
+            // z18 = (511 / 1024) * 262144 = 130816; exponent 0, mantissa 2044.
+            assert_eq!(words[120 * 320 + 160], 0x1ff0);
+            assert_eq!(words[0], 0xfffc);
+        }
+    }
+
+    #[test]
+    fn depth_writeback_only_accepted_tasks_produce_patches() {
+        let mut r = renderer(64, 64);
+        r.set_depth_writeback(true);
+        process(&mut r, &depth_fill(0x1_0020_0000, 0xfffc_fffc));
+        assert_eq!(r.take_guest_writes().len(), 1);
+        let mut rejected = depth_fill(0x1_0020_0000, 0);
+        rejected.insert(rejected.len() - 1, [0xd500_0000, 0]);
+        assert_eq!(
+            process(&mut r, &rejected).termination,
+            crate::inspect::WalkTermination::Rejected
+        );
+        assert!(r.take_guest_writes().is_empty());
+        let mut b = DlBuilder::new();
+        b.list(
+            "main",
+            &[
+                gdp_set_depth_image(Z),
+                gdp_set_color_image(0, 2, 7, Z),
+                gdp_set_scissor(0, 0, 0, 28, 20),
+                gdp_set_cycle_type(3),
+                gdp_set_fill_color(0),
+                gdp_fill_rectangle(0, 0, 24, 16),
+                gsp_vertex(0, 1, 0x700000),
+            ],
+        );
+        let hw = Image(b.finish("main"));
+        assert!(
+            !r.process_dl(&hw, u64::from(hw.0.entry), Microcode::F3dex2, &mut NopSink)
+                .renderable
+        );
+        assert!(r.take_guest_writes().is_empty());
+        struct Stop;
+        impl crate::inspect::WalkObserver for Stop {
+            fn command(&mut self, step: crate::inspect::WalkStep<'_>) -> std::ops::ControlFlow<()> {
+                if step.seq == 5 {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                }
+            }
+        }
+        r.process_dl_observed(
+            &hw,
+            u64::from(hw.0.entry),
+            Microcode::F3dex2,
+            &mut NopSink,
+            &mut Stop,
+        );
+        assert!(r.take_guest_writes().is_empty());
+    }
 }
