@@ -220,7 +220,7 @@ its output with explicit-device replay on the same adapter:
 cargo test -p fast3d --features capture --lib sm64_corpus_public_facade -- --nocapture
 ```
 
-CI runs Chrome on `macos-14`, using Metal WebGPU, with the runner image's own Google Chrome
+CI runs Chrome on `macos-latest`, using Metal WebGPU, with the runner image's own Google Chrome
 and the ChromeDriver at `$CHROMEWEBDRIVER`. A Chrome for Testing download does not work
 there: its child processes cannot reach the browser's Mach rendezvous port and the network
 service crash-loops before the page loads. Locally, put a matching Chrome and ChromeDriver on
