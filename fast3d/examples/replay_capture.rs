@@ -65,11 +65,14 @@ mod native {
             },
         ))?;
         let adapter_info = adapter.get_info();
-        let features = if sequence.frames[0].frame.dual_source_blending {
+        let mut features = if sequence.frames[0].frame.dual_source_blending {
             wgpu::Features::DUAL_SOURCE_BLENDING
         } else {
             wgpu::Features::empty()
         };
+        if sequence.frames[0].frame.depth_clip_control {
+            features |= adapter.features() & wgpu::Features::DEPTH_CLIP_CONTROL;
+        }
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 required_features: features,

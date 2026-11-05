@@ -10,8 +10,10 @@ snapshot and can happen after the guest resumes.
 `Fixture::from_bytes` loads one frame. `Fixture::replay` accepts a wgpu device and queue;
 `replay_headless` requests them. Both return task diagnostics, summaries, and packed RGBA8
 pixels. These async operations work on native and wasm32; wasm readback awaits the mapping
-callback. The device must match the recorded dual-source-blending feature. Missing memory
-latches an error and rejects the output, including missing TexRect continuation commands.
+callback. The device must match the recorded dual-source-blending feature. A fixture with an
+F3DEX2 NoN task or binding must also match the recorded depth-clip-control feature, which
+`replay_headless` requests when the adapter has it. Missing memory latches an error and rejects
+the output, including missing TexRect continuation commands.
 
 A single-frame fixture starts with default RDP registers, empty TMEM and no established color
 image. Replay preserves register state between its tasks. Each replay and clear-policy probe
@@ -278,7 +280,7 @@ The 84-byte frame record follows:
 | 32 | 4 | Output format: unspecified=0, RGBA8=1, BGRA8=2, RGBA8 sRGB=3, BGRA8 sRGB=4 |
 | 36 | 4 | Clear policy: PerFrame=0, Persist=1 |
 | 40 | 4 | Power preference: none=0, low=1, high=2 |
-| 44 | 4 | Dual-source blending enabled: 0 or 1 |
+| 44 | 4 | Device feature bits: dual-source blending=1, depth-clip control=2 |
 | 48 | 4 | VI present: 0 or 1 |
 | 52 | 32 | Eight VI u32s: status, origin, width, x_scale, y_scale, h_start, v_start, v_current |
 
@@ -325,7 +327,7 @@ packed u32s, while image matrices contain big-endian split halfwords. Textures r
 
 Frame writers emit version 2. Readers retain version 1 with empty microcode bindings and
 an object ABI inferred from its image or host memory layout. F3DEX2 remains microcode ID 0,
-F3D remains 1, and S2DEX2 is 2. Each task snapshots its immutable full-width text-token
+F3D remains 1, S2DEX2 is 2, and F3DEX2 NoN is 3. Each task snapshots its immutable full-width text-token
 bindings; replay, admission and sequence measurement use that task's snapshot.
 
 The frame header, frame record, provenance and first 160 bytes of each task retain the

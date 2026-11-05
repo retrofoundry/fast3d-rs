@@ -295,7 +295,7 @@ pub(crate) fn geometry_flags(
     }
     let flags: &[GeometryFlag] = match microcode {
         Microcode::S2dex2 => &[],
-        Microcode::F3dex2 => flags!(rsp_f3dex2;
+        Microcode::F3dex2 | Microcode::F3dex2NoN => flags!(rsp_f3dex2;
             G_ZBUFFER, G_SHADE, G_CULL_FRONT, G_CULL_BACK, G_FOG, G_LIGHTING,
             G_TEXTURE_GEN, G_TEXTURE_GEN_LINEAR, G_SHADING_SMOOTH, G_CLIPPING),
         Microcode::F3d => flags!(rsp_f3d;

@@ -658,7 +658,7 @@ impl Rsp {
     ///
     /// Either way the three indices are pushed onto the shared `scene.indices` buffer in draw order,
     /// and coalescing only extends the LAST run/op when it is a `Tris` with a matching
-    /// `(cull, material_index, render_mode_index, fog_color, prim_depth)` key.
+    /// `(cull, unclipped_depth, material_index, render_mode_index, fog_color, prim_depth)` key.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_tri(
         &mut self,
@@ -691,8 +691,10 @@ impl Rsp {
         } else {
             CullKind::None
         };
+        let unclipped_depth = self.microcode == crate::Microcode::F3dex2NoN;
         let coalesces = |run: &DrawRun| {
             run.cull == kind
+                && run.unclipped_depth == unclipped_depth
                 && run.material_index == material_index
                 && run.render_mode_index == render_mode_index
                 && run.fog_color == fog_color
@@ -708,6 +710,7 @@ impl Rsp {
                     fog_color,
                     prim_depth,
                     cull: kind,
+                    unclipped_depth,
                     index_count: 3,
                     index_start,
                 })),
@@ -720,6 +723,7 @@ impl Rsp {
                     fog_color,
                     prim_depth,
                     cull: kind,
+                    unclipped_depth,
                     index_count: 3,
                     index_start,
                 }),
@@ -1460,6 +1464,7 @@ mod draw_runs_tests {
                 material_index: 0,
                 render_mode_index: 0,
                 cull: CullKind::None,
+                unclipped_depth: false,
                 index_count: 3,
                 index_start: 0,
             }]
@@ -1480,6 +1485,7 @@ mod draw_runs_tests {
                 material_index: 0,
                 render_mode_index: 0,
                 cull: CullKind::Cull,
+                unclipped_depth: false,
                 index_count: 3,
                 index_start: 0,
             }]
@@ -1502,6 +1508,7 @@ mod draw_runs_tests {
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::None,
+                    unclipped_depth: false,
                     index_count: 3,
                     index_start: 0,
                 },
@@ -1511,6 +1518,7 @@ mod draw_runs_tests {
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::Cull,
+                    unclipped_depth: false,
                     index_count: 6,
                     index_start: 3,
                 },
@@ -1530,6 +1538,7 @@ mod draw_runs_tests {
                 material_index: 5,
                 render_mode_index: 7,
                 cull: CullKind::None,
+                unclipped_depth: false,
                 index_count: 3,
                 index_start: 0,
             }]

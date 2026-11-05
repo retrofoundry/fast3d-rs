@@ -47,6 +47,8 @@ pub enum GbiUcode {
     /// Authentic F3DEX2 — the web/RdramImage default.
     #[default]
     F3dex2,
+    /// F3DEX2 with depth clamping instead of near/far clipping.
+    F3dex2NoN,
     /// Original F3D microcode.
     F3d,
     S2dex2,
@@ -55,7 +57,7 @@ pub enum GbiUcode {
 impl GbiUcode {
     pub(crate) fn install<M: Rdram>(self, table: &mut [Handler<M>; 256]) {
         match self {
-            GbiUcode::F3dex2 => f3dex2::install_f3dex2(table),
+            GbiUcode::F3dex2 | GbiUcode::F3dex2NoN => f3dex2::install_f3dex2(table),
             GbiUcode::F3d => f3d::install_f3d(table),
             GbiUcode::S2dex2 => crate::hle::rsp_s2dex2::install(table),
         }
@@ -63,7 +65,7 @@ impl GbiUcode {
 
     pub fn constants(self) -> GbiConstants {
         match self {
-            GbiUcode::F3dex2 | GbiUcode::S2dex2 => f3dex2::F3DEX2_CONSTS,
+            GbiUcode::F3dex2 | GbiUcode::F3dex2NoN | GbiUcode::S2dex2 => f3dex2::F3DEX2_CONSTS,
             GbiUcode::F3d => f3d::F3D_CONSTS,
         }
     }

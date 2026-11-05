@@ -25,6 +25,119 @@ impl WalkObserver for Steps {
 }
 
 #[test]
+fn non_switches_preserve_draw_clipping_and_inspect_identity() {
+    use crate::tests::dl_builder::DlBuilder;
+    use n64_gbi::encode::*;
+
+    let mut b = DlBuilder::new();
+    let matrix = b.matrix(super::math::identity());
+    let vertices =
+        b.vertices(
+            &[[-1, -1, -2], [1, -1, -2], [0, 1, -2]].map(|[x, y, z]| VtxColored {
+                x,
+                y,
+                z,
+                flag: 0,
+                s: 0,
+                t: 0,
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            }),
+        );
+    let mut commands = vec![gdp_set_combine_lerp(
+        CcPass {
+            a: 8,
+            b: 8,
+            c: 16,
+            d: 4,
+        },
+        CcPass {
+            a: 7,
+            b: 7,
+            c: 7,
+            d: 4,
+        },
+        CcPass {
+            a: 8,
+            b: 8,
+            c: 16,
+            d: 4,
+        },
+        CcPass {
+            a: 7,
+            b: 7,
+            c: 7,
+            d: 4,
+        },
+    )];
+    commands.push(gdp_set_render_mode(
+        n64_gbi::consts::G_RM_OPA_SURF,
+        n64_gbi::consts::G_RM_OPA_SURF2,
+    ));
+    for token in [None, Some(0x2000), Some(0x3000), Some(0x2000)] {
+        if let Some(token) = token {
+            commands.extend([
+                (0xe1000000, 0x8000),
+                (0xdd0007ff, 0x1000),
+                (0xdd0007ff, token),
+            ]);
+        }
+        commands.extend([
+            gsp_matrix(matrix, false, true, false),
+            gsp_vertex(0, 3, vertices),
+            gsp_1triangle(0, 1, 2),
+        ]);
+    }
+    commands.push(gsp_enddl());
+    b.list("main", &commands);
+    let built = b.finish("main");
+    let mut seen = Vec::new();
+    let result = super::interp::interpret_with_bindings(
+        RdramImage::new(&built.rdram),
+        built.entry.into(),
+        Microcode::F3dex2NoN.into(),
+        DataFormat::Fixed,
+        Default::default(),
+        Default::default(),
+        Some(&mut |step: WalkStep<'_>| {
+            if step.words[0].w0 >> 24 == 0x05 {
+                seen.push((step.microcode, step.state.microcode));
+            }
+            ControlFlow::Continue(())
+        }),
+        Default::default(),
+        &[
+            (0x1000, Microcode::S2dex2),
+            (0x2000, Microcode::F3dex2NoN),
+            (0x3000, Microcode::F3dex2),
+        ],
+    );
+    assert_eq!(result.termination, WalkTermination::End);
+    assert!(result.diags.is_empty(), "{:?}", result.diags);
+    assert_eq!(
+        seen,
+        [
+            Microcode::F3dex2NoN,
+            Microcode::F3dex2NoN,
+            Microcode::F3dex2,
+            Microcode::F3dex2NoN
+        ]
+        .map(|m| (m, m))
+    );
+    assert_eq!(
+        result
+            .scene
+            .draw_runs
+            .iter()
+            .map(|run| (run.unclipped_depth, run.index_count))
+            .collect::<Vec<_>>(),
+        vec![(true, 6), (false, 3), (true, 3)]
+    );
+}
+
+#[test]
 fn switch_roundtrip_preserves_shared_state_and_return_stack() {
     let bytes = image(&[
         (0xde000000, 0x01000000),

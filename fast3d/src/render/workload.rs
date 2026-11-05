@@ -996,6 +996,7 @@ impl SceneRenderer {
                         }
                         DrawInputs::Tris {
                             cull,
+                            unclipped_depth,
                             index_start,
                             index_count,
                             material_index,
@@ -1026,7 +1027,7 @@ impl SceneRenderer {
                                     ),
                                 }
                             };
-                            pass.set_pipeline(pipeline);
+                            pass.set_pipeline(&pipeline[usize::from(*unclipped_depth)]);
                             if let Some(vertices) = buffers.vertices.get(&target.logical_extent) {
                                 pass.set_vertex_buffer(0, vertices.slice(..));
                             }

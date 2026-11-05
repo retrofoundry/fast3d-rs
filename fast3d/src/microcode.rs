@@ -9,6 +9,8 @@ pub enum Microcode {
     /// emit `GBI_FLOATS` data also select this microcode and pair it with `DataFormat::Float`.
     #[default]
     F3dex2,
+    /// F3DEX2 with depth clamping instead of near/far clipping.
+    F3dex2NoN,
     /// Original F3D microcode.
     F3d,
     /// S2DEX2 object and background microcode.
@@ -19,6 +21,7 @@ impl From<Microcode> for GbiUcode {
     fn from(m: Microcode) -> Self {
         match m {
             Microcode::F3dex2 => GbiUcode::F3dex2,
+            Microcode::F3dex2NoN => GbiUcode::F3dex2NoN,
             Microcode::S2dex2 => GbiUcode::S2dex2,
             Microcode::F3d => GbiUcode::F3d,
         }
@@ -29,6 +32,7 @@ impl From<GbiUcode> for Microcode {
     fn from(u: GbiUcode) -> Self {
         match u {
             GbiUcode::F3dex2 => Microcode::F3dex2,
+            GbiUcode::F3dex2NoN => Microcode::F3dex2NoN,
             GbiUcode::S2dex2 => Microcode::S2dex2,
             GbiUcode::F3d => Microcode::F3d,
         }
@@ -48,6 +52,10 @@ mod tests {
 
     #[test]
     fn from_roundtrips_both_directions() {
+        assert_eq!(
+            Microcode::from(GbiUcode::from(Microcode::F3dex2NoN)),
+            Microcode::F3dex2NoN
+        );
         assert_eq!(GbiUcode::from(Microcode::F3dex2), GbiUcode::F3dex2);
         assert_eq!(GbiUcode::from(Microcode::F3d), GbiUcode::F3d);
         assert_eq!(Microcode::from(GbiUcode::F3dex2), Microcode::F3dex2);

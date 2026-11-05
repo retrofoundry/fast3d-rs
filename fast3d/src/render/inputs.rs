@@ -192,6 +192,7 @@ pub(super) enum DrawInputs {
     },
     Tris {
         cull: CullKind,
+        unclipped_depth: bool,
         index_start: u32,
         index_count: u32,
         material_index: u32,
@@ -358,9 +359,11 @@ impl<'a> RenderInputs<'a> {
                                         u32::from(run.prim_depth.z),
                                     ]);
                                     uniform.inv_tex_size = super::triangle_inv_tex_size(mat);
+                                    uniform.inv_tex_size[3] = u32::from(run.unclipped_depth) as f32;
                                     (
                                         DrawInputs::Tris {
                                             cull: run.cull,
+                                            unclipped_depth: run.unclipped_depth,
                                             index_start: run.index_start,
                                             index_count: run.index_count,
                                             material_index: run.material_index,

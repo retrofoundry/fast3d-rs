@@ -28,6 +28,7 @@ fn host64_fill() -> Fixture {
             height: 48,
             vi: None,
             dual_source_blending: false,
+            depth_clip_control: false,
         },
         tasks: vec![Task {
             bindings: Vec::new(),

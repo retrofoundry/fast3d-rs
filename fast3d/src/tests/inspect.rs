@@ -163,7 +163,7 @@ fn bytes(words: impl IntoIterator<Item = (u32, u32)>) -> Vec<u8> {
 fn cycle_type(ucode: Microcode, cycle: u32) -> (u32, u32) {
     match ucode {
         Microcode::S2dex2 => unreachable!("3D fixture"),
-        Microcode::F3dex2 => gdp_set_cycle_type(cycle),
+        Microcode::F3dex2 | Microcode::F3dex2NoN => gdp_set_cycle_type(cycle),
         Microcode::F3d => gdp_set_cycle_type_f3d(cycle),
     }
 }
@@ -171,14 +171,14 @@ fn cycle_type(ucode: Microcode, cycle: u32) -> (u32, u32) {
 fn end(ucode: Microcode) -> (u32, u32) {
     match ucode {
         Microcode::S2dex2 => unreachable!("3D fixture"),
-        Microcode::F3dex2 => gsp_enddl(),
+        Microcode::F3dex2 | Microcode::F3dex2NoN => gsp_enddl(),
         Microcode::F3d => gsp_enddl_f3d(),
     }
 }
 fn dl(ucode: Microcode, target: u32, branch: bool) -> (u32, u32) {
     let opcode = match ucode {
         Microcode::S2dex2 => unreachable!("3D fixture"),
-        Microcode::F3dex2 => 0xde,
+        Microcode::F3dex2 | Microcode::F3dex2NoN => 0xde,
         Microcode::F3d => 0x06,
     };
     ((opcode << 24) | (u32::from(branch) << 16), target)
@@ -194,7 +194,7 @@ fn rectangle_words(ucode: Microcode, mut words: [(u32, u32); 3]) -> [(u32, u32);
 
 #[test]
 fn memory_read_discards_scene_and_observes_fault() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let fault = gdp_load_tlut(7, 3);
         let memory = bytes([
             gdp_set_color_image(0, 2, 320, 0x100000),
@@ -292,7 +292,7 @@ fn every_fixture_is_observationally_equivalent() {
 
 #[test]
 fn fixed_rectangles_have_exact_dispatches_words_and_targets() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         for (depth, scissor) in [(false, false), (true, false), (false, true)] {
             let mut commands = vec![gdp_set_color_image(0, 2, 320, 0x100000)];
             if depth {
@@ -413,7 +413,7 @@ fn fixed_rectangles_have_exact_dispatches_words_and_targets() {
 
 #[test]
 fn calls_returns_branches_and_segmented_targets() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let memory = bytes([
             dl(ucode, 24, false),
             dl(ucode, 24, false),
@@ -485,7 +485,7 @@ fn calls_returns_branches_and_segmented_targets() {
 
 #[test]
 fn faults_keep_successfully_read_words_and_terminal_diagnostics() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let mut count = 0;
         let summary = walk(
             RdramImage::new(&[]),
@@ -585,7 +585,7 @@ fn faults_keep_successfully_read_words_and_terminal_diagnostics() {
 
 #[test]
 fn cap_and_cancellation_precedence() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         for (last, expected, stop) in [
             (end(ucode), WalkTermination::End, false),
             (gdp_set_fill_color(3), WalkTermination::Cap, false),
@@ -681,7 +681,7 @@ fn cap_and_cancellation_precedence() {
 #[test]
 fn triangles_report_index_growth_even_when_runs_coalesce() {
     use crate::hle::consts::{G_RM_OPA_SURF, G_RM_OPA_SURF2};
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         for paired in [false, true] {
             for doubled in [false, true] {
                 for cull in [0, 1, 2] {
@@ -704,7 +704,7 @@ fn triangles_report_index_growth_even_when_runs_coalesce() {
                     if cull != 0 {
                         let mask = match ucode {
                             Microcode::S2dex2 => unreachable!("3D fixture"),
-                            Microcode::F3dex2 => {
+                            Microcode::F3dex2 | Microcode::F3dex2NoN => {
                                 if cull == 1 {
                                     0x200
                                 } else {
@@ -721,31 +721,37 @@ fn triangles_report_index_growth_even_when_runs_coalesce() {
                         };
                         commands.push(match ucode {
                             Microcode::S2dex2 => unreachable!("3D fixture"),
-                            Microcode::F3dex2 => gsp_set_geometrymode(mask),
+                            Microcode::F3dex2 | Microcode::F3dex2NoN => gsp_set_geometrymode(mask),
                             Microcode::F3d => gsp_set_geometrymode_f3d(mask),
                         });
                     }
                     commands.push(gdp_set_combine_lerp(cc, ca, cc, ca));
                     commands.push(match ucode {
                         Microcode::S2dex2 => unreachable!("3D fixture"),
-                        Microcode::F3dex2 => gdp_set_render_mode(G_RM_OPA_SURF, G_RM_OPA_SURF2),
+                        Microcode::F3dex2 | Microcode::F3dex2NoN => {
+                            gdp_set_render_mode(G_RM_OPA_SURF, G_RM_OPA_SURF2)
+                        }
                         Microcode::F3d => gdp_set_render_mode_f3d(G_RM_OPA_SURF, G_RM_OPA_SURF2),
                     });
                     commands.push(match ucode {
                         Microcode::S2dex2 => unreachable!("3D fixture"),
-                        Microcode::F3dex2 => gsp_vertex(0, 4, 0x100),
+                        Microcode::F3dex2 | Microcode::F3dex2NoN => gsp_vertex(0, 4, 0x100),
                         Microcode::F3d => gsp_vertex_f3d(0, 4, 0x100),
                     });
                     if doubled {
                         commands.push(match ucode {
                             Microcode::S2dex2 => unreachable!("3D fixture"),
-                            Microcode::F3dex2 => gsp_2triangles(0, 1, 2, 0, 2, 3),
+                            Microcode::F3dex2 | Microcode::F3dex2NoN => {
+                                gsp_2triangles(0, 1, 2, 0, 2, 3)
+                            }
                             Microcode::F3d => gsp_quad_f3d(0, 1, 2, 3),
                         });
                     } else {
                         commands.extend(match ucode {
                             Microcode::S2dex2 => unreachable!("3D fixture"),
-                            Microcode::F3dex2 => [gsp_1triangle(0, 1, 2), gsp_1triangle(0, 2, 3)],
+                            Microcode::F3dex2 | Microcode::F3dex2NoN => {
+                                [gsp_1triangle(0, 1, 2), gsp_1triangle(0, 2, 3)]
+                            }
                             Microcode::F3d => {
                                 [gsp_1triangle_f3d(0, 1, 2), gsp_1triangle_f3d(0, 2, 3)]
                             }
@@ -1066,15 +1072,15 @@ fn observation_does_not_add_reads_or_truncate_operands() {
 
 #[test]
 fn post_command_projection_preserves_values_and_owned_snapshots() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let geom = match ucode {
             Microcode::S2dex2 => unreachable!("3D fixture"),
-            Microcode::F3dex2 => gsp_set_geometrymode(0x200),
+            Microcode::F3dex2 | Microcode::F3dex2NoN => gsp_set_geometrymode(0x200),
             Microcode::F3d => gsp_set_geometrymode_f3d(0x200),
         };
         let texture = match ucode {
             Microcode::S2dex2 => unreachable!("3D fixture"),
-            Microcode::F3dex2 => gsp_texture(123, 456, 2, 3, true),
+            Microcode::F3dex2 | Microcode::F3dex2NoN => gsp_texture(123, 456, 2, 3, true),
             Microcode::F3d => gsp_texture_f3d(123, 456, 2, 3, true),
         };
         let commands = [
@@ -1106,7 +1112,7 @@ fn post_command_projection_preserves_values_and_owned_snapshots() {
                 if s.seq == 0 {
                     let name = match ucode {
                         Microcode::S2dex2 => unreachable!("3D fixture"),
-                        Microcode::F3dex2 => "G_CULL_FRONT",
+                        Microcode::F3dex2 | Microcode::F3dex2NoN => "G_CULL_FRONT",
                         Microcode::F3d => "G_SHADING_SMOOTH",
                     };
                     assert!(s
@@ -1268,7 +1274,7 @@ fn matrix_viewport_light_and_lookat_projection_uses_decoded_units() {
 #[test]
 fn rejected_draws_and_final_warnings_have_distinct_diagnostic_slices() {
     use crate::DiagKind;
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let cc = CcPass {
             a: ZERO_C,
             b: ZERO_C,
@@ -1289,12 +1295,12 @@ fn rejected_draws_and_final_warnings_have_distinct_diagnostic_slices() {
             };
             let vtx = match ucode {
                 Microcode::S2dex2 => unreachable!("3D fixture"),
-                Microcode::F3dex2 => gsp_vertex(0, 3, 0x100),
+                Microcode::F3dex2 | Microcode::F3dex2NoN => gsp_vertex(0, 3, 0x100),
                 Microcode::F3d => gsp_vertex_f3d(0, 3, 0x100),
             };
             let tri = match ucode {
                 Microcode::S2dex2 => unreachable!("3D fixture"),
-                Microcode::F3dex2 => gsp_1triangle(0, 1, 2),
+                Microcode::F3dex2 | Microcode::F3dex2NoN => gsp_1triangle(0, 1, 2),
                 Microcode::F3d => gsp_1triangle_f3d(0, 1, 2),
             };
             let mut memory = bytes([combine, vtx, tri, end(ucode)]);
@@ -1386,7 +1392,7 @@ fn rejected_draws_and_final_warnings_have_distinct_diagnostic_slices() {
 
 #[test]
 fn cancellation_on_call_never_fetches_target() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let memory = bytes([
             dl(ucode, 16, false),
             end(ucode),
@@ -1418,10 +1424,10 @@ fn cancellation_on_call_never_fetches_target() {
 
 #[test]
 fn load_tile_and_f3d_only_geometry_flags_are_projected() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let geom = match ucode {
             Microcode::S2dex2 => unreachable!("3D fixture"),
-            Microcode::F3dex2 => gsp_set_geometrymode(0x80000200),
+            Microcode::F3dex2 | Microcode::F3dex2NoN => gsp_set_geometrymode(0x80000200),
             Microcode::F3d => gsp_set_geometrymode_f3d(0x80400202),
         };
         let mut memory = bytes([
@@ -1471,7 +1477,7 @@ fn internal_observation_is_uncapped_and_keeps_configured_segments() {
     );
     assert_eq!(result.commands, MAX_DISPATCHES + 1);
     assert_eq!(result.termination, WalkTermination::End);
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let memory = bytes([dl(ucode, 0x01000000, true), end(ucode)]);
         let result = equivalent(
             || {
@@ -1490,7 +1496,7 @@ fn internal_observation_is_uncapped_and_keeps_configured_segments() {
 
 #[test]
 fn texture_rectangle_keeps_prior_framebuffer_source_and_copy_mode() {
-    for ucode in [Microcode::F3dex2, Microcode::F3d] {
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let commands = [
             gdp_set_color_image(0, 2, 320, 0x100000),
             gdp_set_scissor(0, 0, 0, 1280, 960),
@@ -1587,65 +1593,67 @@ fn conditional_control_modifyvtx_and_quad_have_one_step_per_dispatch() {
     commands.push(gsp_enddl());
     let entry = b.list("main", &commands) as u64 + 8;
     let built = b.finish("main");
-    let mut steps = vec![];
-    let mut triangles = vec![];
-    let ordinary = equivalent(
-        || RdramImage::new(&built.rdram),
-        entry - 8,
-        GbiUcode::F3dex2,
-        DataFormat::Fixed,
-    );
-    let summary = walk(
-        RdramImage::new(&built.rdram),
-        entry - 8,
-        Microcode::F3dex2,
-        DataFormat::Fixed,
-        &mut |step: WalkStep<'_>| {
-            assert_eq!(step.seq as usize, steps.len());
-            assert_eq!(step.words.len(), 1);
-            steps.push((step.pc, step.flow, step.next_pc));
-            for emission in step.emissions {
-                let Emission::Triangles {
-                    index_start,
-                    indices,
-                    ..
-                } = emission
-                else {
-                    panic!("unexpected emission: {emission:?}");
-                };
-                triangles.push((step.pc, *index_start, indices.len()));
-            }
-            ControlFlow::Continue(())
-        },
-    );
-    use WalkFlow::{Branch, Call, End, Next};
-    assert_eq!(
-        steps,
-        vec![
-            (entry - 8, Next, Some(entry)),
-            (entry, Next, Some(entry + 8)),
-            (entry + 8, Next, Some(entry + 16)),
-            (entry + 16, Next, Some(entry + 24)),
-            (entry + 24, Next, Some(entry + 32)),
-            (entry + 32, Call, Some(culled as u64)),
-            (culled as u64, Branch, Some(entry + 40)),
-            (entry + 40, Next, Some(entry + 48)),
-            (entry + 48, Next, Some(entry + 56)),
-            (entry + 56, Next, Some(entry + 64)),
-            (entry + 64, Next, Some(entry + 72)),
-            (entry + 72, Branch, Some(target as u64)),
-            (target as u64, Next, Some(target as u64 + 8)),
-            (target as u64 + 8, End, None),
-        ]
-    );
-    assert_eq!(
-        triangles,
-        [(entry + 16, 0, 6), (target as u64, 6, 6)],
-        "{:?}",
-        summary.diagnostics
-    );
-    assert_eq!(summary.dispatched, ordinary.commands);
-    assert_eq!(summary.termination, WalkTermination::End);
+    for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN] {
+        let mut steps = vec![];
+        let mut triangles = vec![];
+        let ordinary = equivalent(
+            || RdramImage::new(&built.rdram),
+            entry - 8,
+            ucode.into(),
+            DataFormat::Fixed,
+        );
+        let summary = walk(
+            RdramImage::new(&built.rdram),
+            entry - 8,
+            ucode,
+            DataFormat::Fixed,
+            &mut |step: WalkStep<'_>| {
+                assert_eq!(step.seq as usize, steps.len());
+                assert_eq!(step.words.len(), 1);
+                steps.push((step.pc, step.flow, step.next_pc));
+                for emission in step.emissions {
+                    let Emission::Triangles {
+                        index_start,
+                        indices,
+                        ..
+                    } = emission
+                    else {
+                        panic!("unexpected emission: {emission:?}");
+                    };
+                    triangles.push((step.pc, *index_start, indices.len()));
+                }
+                ControlFlow::Continue(())
+            },
+        );
+        use WalkFlow::{Branch, Call, End, Next};
+        assert_eq!(
+            steps,
+            vec![
+                (entry - 8, Next, Some(entry)),
+                (entry, Next, Some(entry + 8)),
+                (entry + 8, Next, Some(entry + 16)),
+                (entry + 16, Next, Some(entry + 24)),
+                (entry + 24, Next, Some(entry + 32)),
+                (entry + 32, Call, Some(culled as u64)),
+                (culled as u64, Branch, Some(entry + 40)),
+                (entry + 40, Next, Some(entry + 48)),
+                (entry + 48, Next, Some(entry + 56)),
+                (entry + 56, Next, Some(entry + 64)),
+                (entry + 64, Next, Some(entry + 72)),
+                (entry + 72, Branch, Some(target as u64)),
+                (target as u64, Next, Some(target as u64 + 8)),
+                (target as u64 + 8, End, None),
+            ]
+        );
+        assert_eq!(
+            triangles,
+            [(entry + 16, 0, 6), (target as u64, 6, 6)],
+            "{:?}",
+            summary.diagnostics
+        );
+        assert_eq!(summary.dispatched, ordinary.commands);
+        assert_eq!(summary.termination, WalkTermination::End);
+    }
 }
 
 #[test]

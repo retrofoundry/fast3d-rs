@@ -39,6 +39,7 @@ impl CaptureFrame {
         renderer.inner.dither_seed = dither_seed;
         let serial = renderer.inner.frame_serial;
         let (width, height) = target_extent(renderer);
+        let features = renderer.device().features();
         Self {
             initial_rdp: renderer.rdp.clone(),
             initial_framebuffers: renderer.interpreter_framebuffers(),
@@ -51,10 +52,8 @@ impl CaptureFrame {
                     width,
                     height,
                     vi: None,
-                    dual_source_blending: renderer
-                        .device()
-                        .features()
-                        .contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+                    dual_source_blending: features.contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+                    depth_clip_control: features.contains(wgpu::Features::DEPTH_CLIP_CONTROL),
                 },
                 tasks: Vec::new(),
                 provenance,
@@ -428,6 +427,21 @@ impl Fixture {
                 "device dual-source blending differs from capture".into(),
             ));
         }
+        let non = self.tasks.iter().any(|task| {
+            task.microcode == Microcode::F3dex2NoN
+                || task
+                    .bindings
+                    .iter()
+                    .any(|&(_, microcode)| microcode == Microcode::F3dex2NoN)
+        });
+        let depth_clip = device
+            .features()
+            .contains(wgpu::Features::DEPTH_CLIP_CONTROL);
+        if non && depth_clip != self.frame.depth_clip_control {
+            return Err(CaptureError::Gpu(
+                "device depth-clip control differs from NoN capture".into(),
+            ));
+        }
         let limits = device.limits();
         let row_bytes = (self.frame.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -463,11 +477,15 @@ impl Fixture {
             .await
             .map_err(|error| CaptureError::Gpu(error.to_string()))?;
         let adapter_info = adapter.get_info();
-        let features = if self.frame.dual_source_blending {
+        let mut features = if self.frame.dual_source_blending {
             wgpu::Features::DUAL_SOURCE_BLENDING
         } else {
             wgpu::Features::empty()
         };
+        // Only NoN draws depend on depth-clip control, and check_device rejects those without it.
+        if self.frame.depth_clip_control {
+            features |= adapter.features() & wgpu::Features::DEPTH_CLIP_CONTROL;
+        }
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("capture-replay"),

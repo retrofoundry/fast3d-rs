@@ -615,12 +615,13 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
                 }
             } else if op == gbi.consts.g_enddl {
                 Control::Return
-            } else if ucode == crate::hle::gbi::GbiUcode::F3dex2
-                && matches!(
-                    op,
-                    crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
-                )
-            {
+            } else if matches!(
+                ucode,
+                crate::hle::gbi::GbiUcode::F3dex2 | crate::hle::gbi::GbiUcode::F3dex2NoN
+            ) && matches!(
+                op,
+                crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
+            ) {
                 let conditional = if op == crate::hle::consts::G_CULLDL {
                     rsp.cull_display_list(c.p0(1, 15), c.p1(1, 15))
                         .map(|culled| {
@@ -699,8 +700,11 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
                 Control::Return => match return_stack.pop() {
                     Some(ret) => {
                         flow = if op == crate::hle::consts::G_CULLDL
-                            && ucode == crate::hle::gbi::GbiUcode::F3dex2
-                        {
+                            && matches!(
+                                ucode,
+                                crate::hle::gbi::GbiUcode::F3dex2
+                                    | crate::hle::gbi::GbiUcode::F3dex2NoN
+                            ) {
                             WalkFlow::Branch
                         } else {
                             WalkFlow::Return
@@ -724,12 +728,13 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
                 pc = walk_try!(Command, checked_span(pc, stride));
                 break 'dispatch;
             }
-            if ucode == crate::hle::gbi::GbiUcode::F3dex2
-                && matches!(
-                    op,
-                    crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
-                )
-            {
+            if matches!(
+                ucode,
+                crate::hle::gbi::GbiUcode::F3dex2 | crate::hle::gbi::GbiUcode::F3dex2NoN
+            ) && matches!(
+                op,
+                crate::hle::consts::G_CULLDL | crate::hle::consts::G_BRANCH_Z
+            ) {
                 pc = walk_try!(Command, checked_span(pc, stride));
                 break 'dispatch;
             }

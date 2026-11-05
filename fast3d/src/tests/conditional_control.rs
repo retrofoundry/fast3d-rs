@@ -68,25 +68,29 @@ impl Rdram for Traced<'_> {
 
 fn walk(b: DlBuilder, expected_offsets: &[u64]) -> InterpResult {
     let built = b.finish("main");
-    let reads = RefCell::new(Vec::new());
-    let result = interpret(
-        Traced {
-            image: RdramImage::new(&built.rdram),
-            reads: &reads,
-        },
-        built.entry as u64,
-        GbiUcode::F3dex2,
-        GbiDataFormat::Fixed,
-        None,
-    );
-    assert_eq!(*reads.borrow(), expected_offsets);
-    let observed = super::inspect::equivalent(
-        || RdramImage::new(&built.rdram),
-        built.entry as u64,
-        GbiUcode::F3dex2,
-        GbiDataFormat::Fixed,
-    );
-    assert_eq!(result, observed);
+    let [result, non] = [GbiUcode::F3dex2, GbiUcode::F3dex2NoN].map(|ucode| {
+        let reads = RefCell::new(Vec::new());
+        let result = interpret(
+            Traced {
+                image: RdramImage::new(&built.rdram),
+                reads: &reads,
+            },
+            built.entry as u64,
+            ucode,
+            GbiDataFormat::Fixed,
+            None,
+        );
+        assert_eq!(*reads.borrow(), expected_offsets, "{ucode:?}");
+        let observed = super::inspect::equivalent(
+            || RdramImage::new(&built.rdram),
+            built.entry as u64,
+            ucode,
+            GbiDataFormat::Fixed,
+        );
+        assert_eq!(result, observed);
+        result
+    });
+    assert_eq!(non, result);
     result
 }
 

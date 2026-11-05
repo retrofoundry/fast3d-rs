@@ -481,6 +481,7 @@ mod phase2_tests {
                 material_index: 0,
                 render_mode_index: 0,
                 cull: CullKind::None,
+                unclipped_depth: false,
                 index_count: 9,
                 index_start: 0,
             }]
@@ -522,6 +523,7 @@ mod phase2_tests {
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::Cull,
+                    unclipped_depth: false,
                     index_count: 3,
                     index_start: 0,
                 },
@@ -531,6 +533,7 @@ mod phase2_tests {
                     material_index: 0,
                     render_mode_index: 0,
                     cull: CullKind::None,
+                    unclipped_depth: false,
                     index_count: 3,
                     index_start: 3,
                 },

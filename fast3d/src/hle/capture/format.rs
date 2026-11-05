@@ -22,6 +22,7 @@ pub struct Frame {
     pub height: u32,
     pub vi: Option<ViRegisters>,
     pub dual_source_blending: bool,
+    pub depth_clip_control: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,7 +88,7 @@ impl Fixture {
             wgpu::PowerPreference::LowPower => 1,
             wgpu::PowerPreference::HighPerformance => 2,
         });
-        w.u32(f.dual_source_blending as u32);
+        w.u32(f.dual_source_blending as u32 | (f.depth_clip_control as u32) << 1);
         w.u32(f.vi.is_some() as u32);
         let vi = f.vi.unwrap_or_default();
         for v in [
@@ -219,7 +220,10 @@ impl Fixture {
             2 => wgpu::PowerPreference::HighPerformance,
             _ => return Err(invalid("power preference")),
         };
-        let dual_source_blending = r.boolean()?;
+        let features = r.u32()?;
+        if features > 3 {
+            return Err(invalid("device features"));
+        }
         let has_vi = r.boolean()?;
         let vi = ViRegisters {
             status: r.u32()?,
@@ -240,7 +244,8 @@ impl Fixture {
             width,
             height,
             vi: has_vi.then_some(vi),
-            dual_source_blending,
+            dual_source_blending: features & 1 != 0,
+            depth_clip_control: features & 2 != 0,
             config: RendererConfig {
                 resolution_multiplier,
                 sample_count,
@@ -375,6 +380,7 @@ fn microcode_id(microcode: Microcode) -> u32 {
         Microcode::F3dex2 => 0,
         Microcode::F3d => 1,
         Microcode::S2dex2 => 2,
+        Microcode::F3dex2NoN => 3,
     }
 }
 
@@ -383,6 +389,7 @@ fn decode_microcode(id: u32, version: u32) -> Result<Microcode> {
         0 => Ok(Microcode::F3dex2),
         1 => Ok(Microcode::F3d),
         2 if version >= 2 => Ok(Microcode::S2dex2),
+        3 if version >= 2 => Ok(Microcode::F3dex2NoN),
         _ => Err(invalid("microcode")),
     }
 }
@@ -487,6 +494,7 @@ impl Sequence {
                 || frame.width != first.frame.width
                 || frame.height != first.frame.height
                 || frame.dual_source_blending != first.frame.dual_source_blending
+                || frame.depth_clip_control != first.frame.depth_clip_control
             {
                 return Err(invalid("sequence configuration, extent or seed changed"));
             }

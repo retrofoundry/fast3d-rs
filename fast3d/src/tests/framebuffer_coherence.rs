@@ -345,6 +345,15 @@ mod gpu {
     }
 
     fn run(r: &mut Renderer, memory: &mut Memory, built: Built) {
+        run_microcode(r, memory, built, crate::Microcode::F3dex2);
+    }
+
+    fn run_microcode(
+        r: &mut Renderer,
+        memory: &mut Memory,
+        built: Built,
+        microcode: crate::Microcode,
+    ) {
         let entry = built.entry;
         let end = built.rdram[entry as usize..]
             .as_chunks::<8>()
@@ -357,11 +366,16 @@ mod gpu {
             + 8;
         memory.0[..end].copy_from_slice(&built.rdram[..end]);
         let mut diagnostics = Vec::new();
-        let result = r.process_dl(
+        let result = r.process_dl_with_bindings(
             memory,
             u64::from(entry),
-            crate::Microcode::F3dex2,
+            microcode,
             &mut diagnostics,
+            &[
+                (0x1000, crate::Microcode::S2dex2),
+                (0x2000, crate::Microcode::F3dex2NoN),
+                (0x3000, crate::Microcode::F3dex2),
+            ],
         );
         assert_eq!(result.termination, crate::inspect::WalkTermination::End);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -393,6 +407,269 @@ mod gpu {
                 queue.submit([encoder.finish()]);
             },
         )
+    }
+
+    #[test]
+    fn non_clamps_depth_and_survives_bound_switches_with_guest_writeback() {
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            if !fallback
+                && !r
+                    .device()
+                    .features()
+                    .contains(wgpu::Features::DEPTH_CLIP_CONTROL)
+            {
+                continue;
+            }
+            let mut memory = Memory(vec![0; OUTPUT as usize + 320 * 240 * 2]);
+            for (z, clamped) in [(-2, 0x0000), (2, 0xfffc)] {
+                for microcode in [crate::Microcode::F3dex2, crate::Microcode::F3dex2NoN] {
+                    r.reset();
+                    let mut b = DlBuilder::new();
+                    let matrix = b.matrix(crate::hle::math::identity());
+                    let viewport = b.viewport(Vp {
+                        vscale: [16, 16, 511, 0],
+                        vtrans: [16, 16, 511, 0],
+                    });
+                    let vertices =
+                        b.vertices(&[[-1, -1, z], [1, -1, z], [0, 1, z]].map(|[x, y, z]| {
+                            VtxColored {
+                                x,
+                                y,
+                                z,
+                                flag: 0,
+                                s: 0,
+                                t: 0,
+                                r: 255,
+                                g: 255,
+                                b: 255,
+                                a: 255,
+                            }
+                        }));
+                    let mut dl = vec![gdp_set_depth_image(Z)];
+                    image(&mut dl, Z, 8, 8, 0, 2);
+                    fill(&mut dl, 0x80008000, [0, 0, 7, 7]);
+                    image(&mut dl, FB, 8, 8, 0, 2);
+                    fill(&mut dl, 0x00010001, [0, 0, 7, 7]);
+                    mode(&mut dl, 0, Z_UPD);
+                    dl.extend([
+                        combine(3, 3),
+                        gdp_set_prim_color(0, 0, 0xff0000ff),
+                        gsp_viewport(viewport),
+                        gsp_vertex(0, 3, vertices),
+                        gsp_1triangle(0, 1, 2),
+                    ]);
+                    if microcode == crate::Microcode::F3dex2NoN {
+                        dl.extend([
+                            (0xe1000000, 0x8000),
+                            (0xdd0007ff, 0x1000),
+                            (0xdd0007ff, 0x2000),
+                            gsp_matrix(matrix, false, true, false),
+                            gsp_vertex(0, 3, vertices),
+                            gdp_set_prim_color(0, 0, 0x00ff00ff),
+                            gsp_1triangle(0, 1, 2),
+                            (0xdd0007ff, 0x3000),
+                            gsp_matrix(matrix, false, true, false),
+                            gsp_vertex(0, 3, vertices),
+                            gdp_set_prim_color(0, 0, 0x0000ffff),
+                            gsp_1triangle(0, 1, 2),
+                        ]);
+                    }
+                    run_microcode(&mut r, &mut memory, built(b, dl), microcode);
+                    let rgba = pixels(&mut r, FB, 8, 8);
+                    let green: Vec<_> = rgba
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(p, color)| (*color == [0, 255, 0, 255]).then_some(p))
+                        .collect();
+                    if microcode == crate::Microcode::F3dex2NoN {
+                        assert!(
+                            !green.is_empty(),
+                            "{microcode:?}, z={z}, fallback={fallback}"
+                        );
+                        assert!(rgba
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .all(|p| *p == [0, 255, 0, 255] || *p == [0, 0, 0, 255]));
+                        for p in green {
+                            assert_eq!(word(&memory, FB, p), 0x07c1);
+                            assert_eq!(word(&memory, Z, p), clamped, "z={z}, fallback={fallback}");
+                        }
+                    } else {
+                        assert!(rgba.as_chunks::<4>().0.iter().all(|p| *p == [0, 0, 0, 255]));
+                        assert!((0..64).all(|p| word(&memory, Z, p) == 0x8000));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn non_keeps_clipping_vertices_behind_the_eye() {
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            if !fallback
+                && !r
+                    .device()
+                    .features()
+                    .contains(wgpu::Features::DEPTH_CLIP_CONTROL)
+            {
+                continue;
+            }
+            let mut memory = Memory(vec![0; OUTPUT as usize + 320 * 240 * 2]);
+            let mut coverage = Vec::new();
+            for microcode in [crate::Microcode::F3dex2, crate::Microcode::F3dex2NoN] {
+                r.reset();
+                let mut b = DlBuilder::new();
+                // clip = (x, y, z / 2, z): the near plane is the eye plane, w = 0.
+                let projection = b.matrix([
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.5, 1.0],
+                    [0.0, 0.0, 0.0, 0.0],
+                ]);
+                let modelview = b.matrix(crate::hle::math::identity());
+                let viewport = b.viewport(Vp {
+                    vscale: [64, 64, 511, 0],
+                    vtrans: [64, 64, 511, 0],
+                });
+                let vertices =
+                    b.vertices(&[[-5, -5, 10], [5, -5, 10], [0, 5, -5]].map(|[x, y, z]| {
+                        VtxColored {
+                            x,
+                            y,
+                            z,
+                            flag: 0,
+                            s: 0,
+                            t: 0,
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                            a: 255,
+                        }
+                    }));
+                let mut dl = vec![gdp_set_depth_image(Z)];
+                image(&mut dl, Z, 32, 32, 0, 2);
+                fill(&mut dl, 0xfffcfffc, [0, 0, 31, 31]);
+                image(&mut dl, FB, 32, 32, 0, 2);
+                fill(&mut dl, 0x00010001, [0, 0, 31, 31]);
+                mode(&mut dl, 0, Z_UPD);
+                dl.extend([
+                    combine(3, 3),
+                    gdp_set_prim_color(0, 0, 0x00ff00ff),
+                    gsp_viewport(viewport),
+                    gsp_matrix(projection, true, true, false),
+                    gsp_matrix(modelview, false, true, false),
+                    gsp_vertex(0, 3, vertices),
+                    gsp_1triangle(0, 1, 2),
+                ]);
+                run_microcode(&mut r, &mut memory, built(b, dl), microcode);
+                let rgba = pixels(&mut r, FB, 32, 32);
+                coverage.push(
+                    rgba.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|p| p[1] == 255)
+                        .collect::<Vec<_>>(),
+                );
+            }
+            assert!(coverage[0][..32].iter().all(|&covered| covered));
+            assert_eq!(coverage[0], coverage[1], "fallback={fallback}");
+        }
+    }
+
+    #[cfg(feature = "capture")]
+    #[test]
+    fn non_capture_replays_with_the_recorded_depth_clip_control() {
+        use crate::capture::{CaptureFrame, Fixture, Provenance};
+        let mut r = renderer(false);
+        if !r
+            .device()
+            .features()
+            .contains(wgpu::Features::DEPTH_CLIP_CONTROL)
+        {
+            return;
+        }
+        let mut b = DlBuilder::new();
+        // clip z = z / 4: the red triangle spans NDC z -3 to 1 and the green one sits at -0.5.
+        // Clamping the red vertices instead of its fragments would lift its depth past the green.
+        let projection = b.matrix([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 0.25, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        let viewport = b.viewport(Vp {
+            vscale: [64, 64, 511, 0],
+            vtrans: [64, 64, 511, 0],
+        });
+        let vertices = b.vertices(
+            &[
+                [-1, -1, -12],
+                [1, -1, -12],
+                [-1, 1, 4],
+                [-1, -1, -2],
+                [1, -1, -2],
+                [-1, 1, -2],
+            ]
+            .map(|[x, y, z]| VtxColored {
+                x,
+                y,
+                z,
+                flag: 0,
+                s: 0,
+                t: 0,
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            }),
+        );
+        let mut dl = vec![gdp_set_depth_image(Z)];
+        image(&mut dl, Z, 32, 32, 0, 2);
+        fill(&mut dl, 0xfffcfffc, [0, 0, 31, 31]);
+        image(&mut dl, FB, 32, 32, 0, 2);
+        fill(&mut dl, 0x00010001, [0, 0, 31, 31]);
+        mode(&mut dl, 0, Z_UPD);
+        dl.extend([
+            combine(3, 3),
+            gdp_set_prim_color(0, 0, 0xff0000ff),
+            gsp_viewport(viewport),
+            gsp_matrix(projection, true, true, false),
+            gsp_vertex(0, 6, vertices),
+            gsp_1triangle(0, 1, 2),
+        ]);
+        mode(&mut dl, 0, Z_CMP);
+        dl.extend([gdp_set_prim_color(0, 0, 0x00ff00ff), gsp_1triangle(3, 4, 5)]);
+        let built = built(b, dl);
+        let memory = Memory(built.rdram);
+        let mut capture = CaptureFrame::begin(&mut r, 0, 0, Provenance::default());
+        let mut diagnostics = Vec::new();
+        capture
+            .process_dl(
+                &mut r,
+                &memory,
+                u64::from(built.entry),
+                crate::Microcode::F3dex2NoN,
+                crate::DataFormat::Fixed,
+                &mut diagnostics,
+            )
+            .unwrap();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let fixture = capture.present_last(&mut r).unwrap();
+        let fixture = Fixture::from_bytes(&fixture.to_bytes().unwrap()).unwrap();
+        let (device, queue, _) = crate::render::headless_device();
+        let recorded = pollster::block_on(fixture.replay(device, queue)).unwrap();
+        let headless = pollster::block_on(fixture.replay_headless()).unwrap();
+        assert_eq!(headless.rgba8, recorded.rgba8);
+        let mut clamped = fixture.clone();
+        clamped.frame.dual_source_blending = false;
+        let (device, queue) = crate::render::headless_device_forced_fallback();
+        let error = pollster::block_on(clamped.replay(device, queue)).unwrap_err();
+        assert!(error.to_string().contains("depth-clip"), "{error}");
     }
 
     #[test]
