@@ -4,8 +4,9 @@ This format freezes Fast3dV1 preimages and XXH3 vectors at fast3d
 `bb0fea399793eb2aeb1ae93d5972763b9761da98`. The serializer lives in
 `fast3d/tests/common/tmem_preimage.rs` and serializes explicitly supplied selected
 bytes. It contains no footprint discovery, HLE validation, decoder or runtime
-cache. Production uses compute decoding. Tile/Lookup streams remain byte-identical to
-this freeze. Representation 2 and its vectors are retired historical fixtures;
+cache. Production uses compute decoding. Unaffected Tile/Lookup streams remain byte-identical to
+this freeze. Recipe fields and the semantic flags byte distinguish corrected
+decode meanings; the version remains 1. Representation 2 and its vectors are retired historical fixtures;
 production neither constructs nor accepts linear requests.
 
 ## Byte layout
@@ -21,12 +22,12 @@ JSON writes it as exactly 16 hexadecimal digits, most significant digit first.
 | 0 | 16 bytes | ASCII `fast3d-tmem-key` followed by `00` |
 | 16 | u16 | Version: `1` |
 | 18 | u8 | Representation: Tile `0`, Lookup4096x4 `1`, retired LinearCompat `2` |
-| 19 | u8 | Output encoding: RGBA8 `0` |
+| 19 | u8 | RGBA8 semantic flags: CI without TLUT `1`, four palette planes `2`, affected tall-T fetch `4`; bitwise OR, otherwise `0` |
 | 20 | u32 | Output width |
-| 24 | u32 | Output height |
+| 24 | u32 | Output height per palette plane |
 | 28 | u32 | Logical width |
 | 32 | u32 | Logical height |
-| 36 | u8 | Effective format: RGBA `0`, CI `2`, IA `3`, I `4` |
+| 36 | u8 | Effective format: RGBA `0`, YUV `1`, CI `2`, IA `3`, I `4`, reserved `5..7` |
 | 37 | u8 | Effective texel size: 4-bit `0`, 8-bit `1`, 16-bit `2`, 32-bit `3` |
 | 38 | u16 | TMEM base in eight-byte words, before format-specific bank masking |
 | 40 | u16 | TMEM line in eight-byte words |
@@ -46,7 +47,9 @@ once, in ascending order. Repeated visits to the same address do not add bytes;
 contradictory values for one address are invalid fixture input.
 
 For Tile and Lookup4096x4, L and Q are zero. P is the union of the encoded texel
-bytes and, for CI, the selected palette halfwords. Palette entries retain their
+bytes and, with TLUT enabled, the selected palette halfwords. Replicated slots
+select their first halfword; requests using any non-replicated slot select all
+four halfwords of every used slot and allocate four stacked output planes. Palette entries retain their
 addresses even when two entries have the same colour. For retired LinearCompat, P is
 zero; L bytes preserve the reconstructed stream's order and flat nibble
 convention, followed by the selected palette pairs in Q. A non-CI request has
@@ -63,11 +66,22 @@ their encoded byte order; the serializer never decodes big-endian halfwords.
 
 ## Canonical fields and equality
 
-For every non-CI format, palette and TLUT are zero. For CI8, palette is zero.
-CI4 retains its selected bank. CI TLUT modes 0 and 1 remain distinct consulted
-interpretations, even though both currently decode to transparent black.
-Modes 2 and 3 are the extracted values; they are not rt64's shifted othermode
-values `0x8000` and `0xc000`.
+TLUT modes 2/3 apply to every format. Their mode remains in the recipe; 4-bit
+sizes retain the palette selector. With TLUT disabled, only CI retains the mode
+and CI4 retains the palette selector. CI4/8 emit the index as intensity; CI16/32
+emit the addressed halfword as `hi,lo,hi,lo`. Modes 0 and 1 remain distinct.
+
+The flags separate CI-off streams from their old transparent-black meaning,
+four-plane output from one-plane output, and tall full-bank fetches whose odd
+line stride makes the eight-bit T wrap observable. Non-CI TLUT requests differ
+through their retained mode and palette fields. Load layout has no key field:
+load history only changes the bank bytes. A framebuffer request never enters
+this identity path.
+
+The frozen production test preserves nine unaffected physical vectors, using
+replicated palette slots for the CI-on cases. It requires distinct streams for
+both CI-off vectors and the non-CI TLUT vector. The two retired linear vectors
+remain historical serialization fixtures. No frozen vector is regenerated.
 
 Base, line, representation, output extent, and logical extent remain in the
 identity for both active representations and the retired representation.

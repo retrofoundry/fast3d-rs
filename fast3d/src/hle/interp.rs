@@ -243,7 +243,9 @@ pub(crate) fn emit_texrect<M: Rdram>(rect: TexRect, cx: &mut Ctx<M>) -> Option<E
         &crate::hle::combiner::decode_combine(rdp.combine_l, rdp.combine_h),
         (rdp.other_mode_h >> 20) & 3,
     );
-    let load_free = !rdp.tmem_bank.tile_has_load(tile_desc);
+    let load_free = !rdp
+        .tmem_bank
+        .tile_has_load(tile_desc, ((rdp.other_mode_h >> 14) & 3) as u8);
     let blend_color =
         crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, 0).blend_class
             == crate::hle::BlendClass::BlendColor;

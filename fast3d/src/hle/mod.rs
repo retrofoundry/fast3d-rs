@@ -51,3 +51,6 @@ pub mod framebuffer_load;
 
 #[cfg(test)]
 mod tmem16_tests;
+
+#[cfg(test)]
+pub(crate) mod angrylion_tests;

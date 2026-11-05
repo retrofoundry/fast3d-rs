@@ -52,7 +52,7 @@ calls a decoder or derives a footprint by decoding pixels.
 | `format-ci{4,8}-mode{0,1,2,3}`; bank sweep | wrong TLUT interpretation, wrong bank selector, lost endpoint indices; CI8's palette selector must be ignored |
 | `layout-odd-5x3`, `alias-odd-swap`, `alias-final-nibble` | tight stride, missing odd swap or final odd-width byte; padding and unrelated-bank controls remain unchanged |
 | `layout-rgba32-wrap`, `alias-high-bank` | wrong 2 KiB mask, omitted BA bytes or bank wrap |
-| `layout-one-zero-line`, `layout-zero-line-nonci-tlut` | 1×1 bounds; zero-line odd-row addressing and erroneous TLUT masking on a non-CI format |
+| `layout-one-zero-line`, `layout-zero-line-nonci-tlut` | 1×1 bounds; zero-line odd-row addressing; TLUT ignored on a non-CI format or its indices read outside the low bank |
 | `layout-lookup-wrap`, `alias-wrapped-lookup` | nominal-extent lookup, missing wrap or any odd/nibble plane; all 16,384 texels are compared |
 | `layout-loadtile-padded`, `layout-block-dxt0`, `layout-block-dxt683` | conflated LoadTile/LoadBlock rows, padded source stride or DXT parity drift |
 | equal-bank load history | different load histories cannot split equal physical contents and recipes |
@@ -63,7 +63,7 @@ calls a decoder or derives a footprint by decoding pixels.
 
 Existing `unsupported_formats`, `load_provenance`, `framebuffer_aliases`, role,
 LOD, capture, retained-scene and prefix tests remain part of validation. They cover
-all 23 unsupported format pairs, physical narrow RGBA32 decoding, mixed and
+all 21 unsupported format pairs, physical narrow RGBA32 decoding, mixed and
 partially overwritten loads, initial zeros and cross-task source lifetime.
 
 `dispatch-expectations.json` contains explicit CPU-side count expectations tied to

@@ -31,7 +31,7 @@ pub(super) fn fixture(width: u16, height: u16) -> (Vec<u8>, u64) {
         (0xef008cf0, 0),
         gdp_set_combine_lerp(color, alpha, color, alpha),
         (0xfd100000, PALETTE as u32),
-        (0xf5100100, 0x07000000),
+        (0xf5000100, 0x07000000),
         (0xf0000000, 0x073fc000),
         (0x0b000000, 12),
         (0x09000000, OBJECT as u32),

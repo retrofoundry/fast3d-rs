@@ -364,39 +364,47 @@ struct TileTaps {
 
 fn tile_taps(tile: TileSampling, base: vec2<i32>) -> TileTaps {
     let x0 = u32(tile_address_axis(base.x, tile.modes.x, tile.shift_mask.z, tile.modes.z));
-    let x1 = u32(tile_address_axis(base.x + 1, tile.modes.x, tile.shift_mask.z, tile.modes.z));
-    let y0 = u32(tile_address_axis(base.y, tile.modes.y, tile.shift_mask.w, tile.modes.w));
-    let y1 = u32(tile_address_axis(base.y + 1, tile.modes.y, tile.shift_mask.w, tile.modes.w));
+    var x1 = u32(tile_address_axis(base.x + 1, tile.modes.x, tile.shift_mask.z, tile.modes.z));
+    let addressed_y0 = tile_address_axis(base.y, tile.modes.y, tile.shift_mask.w, tile.modes.w);
+    let addressed_y1 = tile_address_axis(base.y + 1, tile.modes.y, tile.shift_mask.w, tile.modes.w);
+    var y0 = addressed_y0;
+    var y1 = addressed_y1;
+    let tlut = tile.palette.y >= 2u && tile.image.z != 2u;
+    let nearest_tlut = tlut && (tile.palette.w & 8u) == 0u;
+    if tile.image.z == 1u && !nearest_tlut {
+        y0 = addressed_y0 & 255;
+        y1 = y0 + addressed_y1 - addressed_y0;
+        if tile.shift_mask.w != 0u && (tile.modes.y & 1u) == 0u && addressed_y1 < addressed_y0 {
+            y1 = 0;
+        }
+    }
+    if tlut && tile.tmem.z == 1u {
+        x1 = u32(i32(x0) + 2 * (i32(x1) - i32(x0)));
+    }
+    if nearest_tlut {
+        x1 = x0;
+        y1 = y0;
+    }
 
     // RGBA32 occupies two bytes per bank; the CPU lookup already resolves both banks.
-    let half_byte_shift = min(tile.tmem.w, 2u);
+    let half_byte_shift = select(min(tile.tmem.w, 2u), 1u, tlut && tile.tmem.z == 1u);
     let tmem_x0 = (x0 << half_byte_shift) >> 1u;
     let tmem_x1 = (x1 << half_byte_shift) >> 1u;
-    let tmem_y0 = y0 * tile.tmem.y;
-    let tmem_y1 = y1 * tile.tmem.y;
+    let tmem_y0 = u32(y0) * tile.tmem.y;
+    let tmem_y1 = u32(y1) * tile.tmem.y;
     let row_x0 = x0 & 1u;
     let row_x1 = x1 & 1u;
-    let row_y0 = (y0 & 1u) * 2u;
-    let row_y1 = (y1 & 1u) * 2u;
+    let row_y0 = (u32(y0) & 1u) * 2u;
+    let row_y1 = (u32(y1) & 1u) * 2u;
     let lookup = tile.image.z == 1u;
-    let tap00 = select(vec2<u32>(x0, y0), vec2<u32>((tmem_y0 + tmem_x0) & 4095u, row_y0 + row_x0), lookup);
-    let tap10 = select(vec2<u32>(x1, y0), vec2<u32>((tmem_y0 + tmem_x1) & 4095u, row_y0 + row_x1), lookup);
-    let tap01 = select(vec2<u32>(x0, y1), vec2<u32>((tmem_y1 + tmem_x0) & 4095u, row_y1 + row_x0), lookup);
-    let tap11 = select(vec2<u32>(x1, y1), vec2<u32>((tmem_y1 + tmem_x1) & 4095u, row_y1 + row_x1), lookup);
+    let tap00 = select(vec2<u32>(x0, u32(y0)), vec2<u32>((tmem_y0 + tmem_x0) & 4095u, row_y0 + row_x0), lookup);
+    let tap10 = select(vec2<u32>(x1, u32(y0)), vec2<u32>((tmem_y0 + tmem_x1) & 4095u, row_y0 + row_x1), lookup);
+    let tap01 = select(vec2<u32>(x0, u32(y1)), vec2<u32>((tmem_y1 + tmem_x0) & 4095u, row_y1 + row_x0), lookup);
+    let tap11 = select(vec2<u32>(x1, u32(y1)), vec2<u32>((tmem_y1 + tmem_x1) & 4095u, row_y1 + row_x1), lookup);
     return TileTaps(vec2<i32>(tap00), vec2<i32>(tap10), vec2<i32>(tap01), vec2<i32>(tap11));
 }
 
-fn tile_filter(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<f32>) -> vec4<f32> {
-    let base = vec2<i32>(floor(coordinate));
-    let taps = tile_taps(tile, base);
-    let c00 = textureLoad(texture, taps.tap00, 0);
-    let c10 = textureLoad(texture, taps.tap10, 0);
-    let c01 = textureLoad(texture, taps.tap01, 0);
-    let c11 = textureLoad(texture, taps.tap11, 0);
-    let mode = u32(combiner.inv_tex1_size.w);
-    if mode == 0u { return c00; }
-
-    let fraction = fract(coordinate);
+fn tile_interpolate(c00: vec4<f32>, c10: vec4<f32>, c01: vec4<f32>, c11: vec4<f32>, fraction: vec2<f32>, mode: u32) -> vec4<f32> {
     if mode == 3u && all(abs(fraction - 0.5) <= vec2<f32>(1.0 / 128.0)) {
         return (c00 + c10 + c01 + c11) * 0.25;
     }
@@ -406,7 +414,61 @@ fn tile_filter(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<f3
     return c11 + (1.0 - fraction.x) * (c01 - c11) + (1.0 - fraction.y) * (c10 - c11);
 }
 
-fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>) -> vec4<f32> {
+fn tile_filter(texture: texture_2d<f32>, tile: TileSampling, coordinate: vec2<f32>, cycle: u32) -> vec4<f32> {
+    let base = vec2<i32>(floor(coordinate));
+    var taps = tile_taps(tile, base);
+    var mode = u32(combiner.inv_tex1_size.w);
+    let tlut = tile.palette.y >= 2u && tile.image.z != 2u;
+    let bilerp = (tile.palette.w & select(2u, 1u, cycle != 0u)) != 0u;
+    if tlut && (tile.palette.w & 8u) == 0u && bilerp && combiner.cycle_type != 2u {
+        mode = select(2u, 3u, (tile.palette.w & 4u) != 0u);
+    }
+    if mode == 0u { return textureLoad(texture, taps.tap00, 0); }
+
+    var fraction = fract(coordinate);
+    if tlut && tile.palette.z != 0u {
+        for (var axis = 0u; axis < 2u; axis++) {
+            if ((tile.modes[axis] & 2u) != 0u || tile.shift_mask[axis + 2u] == 0u) &&
+                (coordinate[axis] < 0.0 || coordinate[axis] >= f32(tile.modes[axis + 2u] - 1u)) {
+                fraction[axis] = 0.0;
+            }
+        }
+    }
+    var fraction_rg = fraction;
+    let yuv_tlut = tlut && tile.tmem.z == 1u;
+    if yuv_tlut {
+        let s = tile_address_axis(base.x, tile.modes.x, tile.shift_mask.z, tile.modes.z);
+        fraction_rg.x = f32((u32(fraction.x * 32.0) >> 1u) | (u32(s & 1) << 4u)) / 32.0;
+    }
+    let upper = fraction.x + fraction.y >= 1.0;
+    let upper_rg = fraction_rg.x + fraction_rg.y >= 1.0;
+    if tlut && tile.palette.z != 0u {
+        let lane_xor = select(0u, 3u, upper_rg);
+        taps.tap00.y += i32((0u ^ lane_xor) * tile.palette.z);
+        taps.tap10.y += i32((1u ^ lane_xor) * tile.palette.z);
+        taps.tap01.y += i32((2u ^ lane_xor) * tile.palette.z);
+        taps.tap11.y += i32((3u ^ lane_xor) * tile.palette.z);
+    }
+    var c00 = textureLoad(texture, taps.tap00, 0);
+    var c10 = textureLoad(texture, taps.tap10, 0);
+    var c01 = textureLoad(texture, taps.tap01, 0);
+    var c11 = textureLoad(texture, taps.tap11, 0);
+    if yuv_tlut && upper != upper_rg {
+        let ba00 = c00.ba;
+        let ba10 = c10.ba;
+        c00 = vec4<f32>(c00.rg, c11.ba);
+        c10 = vec4<f32>(c10.rg, c01.ba);
+        c01 = vec4<f32>(c01.rg, ba10);
+        c11 = vec4<f32>(c11.rg, ba00);
+    }
+    var result = tile_interpolate(c00, c10, c01, c11, fraction, mode);
+    if yuv_tlut {
+        result = vec4<f32>(tile_interpolate(c00, c10, c01, c11, fraction_rg, mode).rg, result.ba);
+    }
+    return result;
+}
+
+fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>, cycle: u32) -> vec4<f32> {
     var tile = tile_sampling[index];
     var coordinate: vec2<f32>;
     if tile.image.z == 2u {
@@ -416,28 +478,28 @@ fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>) -> vec4<
     } else {
         coordinate = tile_coordinate(tile, uv);
     }
-    return tile_filter(texture, tile, coordinate);
+    return tile_filter(texture, tile, coordinate, cycle);
 }
 
-fn sample_level(level_idx: u32, uv: vec2<f32>) -> vec4<f32> {
+fn sample_level(level_idx: u32, uv: vec2<f32>, cycle: u32) -> vec4<f32> {
     switch level_idx {
-        case 0u: { return sample_physical(tex0, 0u, uv); }
-        case 1u: { return sample_physical(tex_lod1, 3u, uv); }
-        case 2u: { return sample_physical(tex_lod2, 4u, uv); }
-        case 3u: { return sample_physical(tex_lod3, 5u, uv); }
-        case 4u: { return sample_physical(tex_lod4, 6u, uv); }
-        case 5u: { return sample_physical(tex_lod5, 7u, uv); }
-        case 6u: { return sample_physical(tex_lod6, 8u, uv); }
-        default: { return sample_physical(tex_lod7, 9u, uv); }
+        case 0u: { return sample_physical(tex0, 0u, uv, cycle); }
+        case 1u: { return sample_physical(tex_lod1, 3u, uv, cycle); }
+        case 2u: { return sample_physical(tex_lod2, 4u, uv, cycle); }
+        case 3u: { return sample_physical(tex_lod3, 5u, uv, cycle); }
+        case 4u: { return sample_physical(tex_lod4, 6u, uv, cycle); }
+        case 5u: { return sample_physical(tex_lod5, 7u, uv, cycle); }
+        case 6u: { return sample_physical(tex_lod6, 8u, uv, cycle); }
+        default: { return sample_physical(tex_lod7, 9u, uv, cycle); }
     }
 }
 
-fn sample_tile(idx: f32, uv: vec2<f32>, detail_active: bool) -> vec4<f32> {
+fn sample_tile(idx: f32, uv: vec2<f32>, detail_active: bool, cycle: u32) -> vec4<f32> {
     if detail_active && idx == 0.0 {
-        return sample_physical(tex_detail, 2u, uv);
+        return sample_physical(tex_detail, 2u, uv, cycle);
     }
     let mip = select(idx, idx - 1.0, detail_active);
-    return sample_level(u32(clamp(mip, 0.0, 7.0)), uv);
+    return sample_level(u32(clamp(mip, 0.0, 7.0)), uv, cycle);
 }
 
 // Evaluate the full color combiner for a fragment, returning RGB + alpha.
@@ -472,7 +534,7 @@ fn eval_combiner(in: VsOut) -> CycleResult {
 
     var texel: vec4<f32>;
     if combiner.tex_enable != 0u {
-        texel = sample_physical(tex0, 0u, uv);
+        texel = sample_physical(tex0, 0u, uv, 0u);
     } else {
         texel = vec4<f32>(1.0);
     }
@@ -482,7 +544,7 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     }
 
     let use_tex1 = combiner.inv_tex1_size.z != 0.0;
-    let texel1 = sample_physical(tex1, 1u, uv);
+    let texel1 = sample_physical(tex1, 1u, uv, select(0u, 1u, combiner.cycle_type == 1u));
     let sentinel1 = vec4<f32>(1.0, 0.0, 1.0, 1.0); // unwired-TEXEL1 sentinel (never read when gated)
     // The value a TEXEL1 selector reads in CYCLE 0 (no swap yet): the tex1 sample when present, else
     // the sentinel.
@@ -507,8 +569,8 @@ fn eval_combiner(in: VsOut) -> CycleResult {
         let n_levels = min(combiner.lod_params.y, 8.0);
 
         let lod = compute_lod(ddx_uv, ddy_uv, n_levels, combiner.inv_detail_size.z, combiner.lod_params.w, combiner.inv_detail_size.w);
-        texel = sample_tile(lod.level0, uv, detail_active);
-        t1_cyc0 = sample_tile(lod.level1, uv, detail_active);
+        texel = sample_tile(lod.level0, uv, detail_active, 0u);
+        t1_cyc0 = sample_tile(lod.level1, uv, detail_active, 1u);
         lod_fraction = lod.lod_fraction;
     }
 

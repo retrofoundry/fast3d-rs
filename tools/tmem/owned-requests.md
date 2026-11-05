@@ -38,8 +38,9 @@ residency compares the exact Fast3dV1 witness before sharing an image.
 
 The canonical recipe records representation, logical/output extents, format/size,
 base/line in 64-bit words and palette/TLUT interpretation. Fast3dV1 has version 1
-and explicit little-endian fields. Non-CI palette/TLUT and CI8's bank selector are
-canonicalized away. The physical footprint builder selects encoded bytes without
+and explicit little-endian fields. TLUT modes 2/3 keep the mode for every format and
+the palette selector for every 4-bit size. With TLUT disabled only CI keeps the mode
+and only CI4 the selector. CI8's bank selector is canonicalized away. The physical footprint builder selects encoded bytes without
 RGBA expansion. Every ordinary request uses Tile or Lookup4096x4; equal bank
 contents and recipes have equal identities regardless of load history.
 
@@ -75,11 +76,11 @@ accounts for its own witness ownership separately; overlapping scopes must not b
 Live trace capture copies the request's encoded bank with tile/role/extent metadata
 and any rejection. It performs no RGBA expansion or decoder read-visitation.
 `Request::output`, `reachable_bytes`, `read_operations` and `palette_bytes` stay
-empty or zero until the offline `Request::analyze` helper runs. Trace schema 2
-requires `Request::version == 2`, removes `linear` and bank `sources`/`blocks`, and
+empty or zero until the offline `Request::analyze` helper runs. The trace format
+requires `Request::version == 3`, removes `linear` and bank `sources`/`blocks`, and
 rejects older records. `Request::decode` replaces the reconstruction/executor APIs;
 offline validation returns a string error, not a rendering diagnostic.
-`Request::canonical()` uses the diagnostic `fast3d-b1-bank-v2` stream. Production
+`Request::canonical()` uses the diagnostic `fast3d-b1-bank-v3` stream. Production
 Tile/Lookup Fast3dV1 keys retain their version and bytes. Retired linear vectors
 remain historical serializer fixtures, not production recipes.
 
@@ -96,3 +97,10 @@ a cloned prior RDP, so its three-frame reload gate counts 27 bank copies rather
 than the moved-RDP fixture's 26. Timed native/Chrome rows
 must retain the operation and memory counters with separate instrumentation
 controls under the frozen policy.
+
+Diagnostic version 3 uses the corrected angrylion decode semantics. `extent` is
+the extent of one plane; `decode()`/`analyze()` append four planes when used
+palette slots have differing lanes. GPU allocation and census PNG extents
+include every plane. Version 1/2 diagnostic requests are rejected. Fast3dV1
+keys retain version 1 and distinguish only affected requests through recipe
+fields and semantic flags.

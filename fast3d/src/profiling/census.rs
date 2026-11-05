@@ -92,7 +92,7 @@ pub(crate) fn census_material(
         .or_else(|| {
             roles.iter().find_map(|(index, _)| {
                 rdp.tmem_bank
-                    .rejection(&rdp.tiles[*index])
+                    .rejection(&rdp.tiles[*index], ((rdp.other_mode_h >> 14) & 3) as u8)
                     .map(|diag| diag.kind)
             })
         });
@@ -137,7 +137,7 @@ impl CensusAttempt {
             }
             _ => None,
         });
-        let framebuffer = rdp.tmem_bank.has_framebuffer(tile);
+        let framebuffer = rdp.tmem_bank.has_framebuffer(tile, tlut);
         let bank = rdp.tmem_bank.share_bank();
         let framebuffer_tags =
             rdp.tmem_bank
@@ -159,7 +159,14 @@ impl CensusAttempt {
                 });
         let mut reads = [false; 4096];
         let mut read = |address| reads[address] = true;
-        let footprint = if lookup {
+        let footprint = if let Ok(binding) = &old {
+            let request = match &binding.source {
+                TextureSource::Encoded(request) => request,
+                TextureSource::Framebuffer(request) => &request.encoded,
+                TextureSource::Rgba(_) => unreachable!(),
+            };
+            Ok(request.decode_observed(&mut read))
+        } else if lookup {
             rdp.tmem_bank
                 .sampling_lookup_observed(tile, tlut, &mut read)
         } else {
@@ -235,7 +242,16 @@ impl CensusAttempt {
             sampled_hash: twox_hash::XxHash3_64::oneshot(&sample_bytes),
             writers,
             physical_representation: if lookup { "Lookup4096x4" } else { "Tile" }.into(),
-            extent: sampling.allocation_extent(),
+            extent: old.as_ref().map_or_else(
+                |_| sampling.allocation_extent(),
+                |binding| match &binding.source {
+                    TextureSource::Encoded(request) => request.recipe().allocation_extent(),
+                    TextureSource::Framebuffer(request) => {
+                        request.encoded.recipe().allocation_extent()
+                    }
+                    TextureSource::Rgba(_) => unreachable!(),
+                },
+            ),
             physical,
             class,
             decode_error,
@@ -246,6 +262,109 @@ impl CensusAttempt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn census_palette_planes_have_exportable_extents_and_lane_footprints() {
+        let mut rdp = Rdp {
+            other_mode_h: 3 << 14,
+            ..Default::default()
+        };
+        rdp.tmem_bank.write_tlut(&[0x10, 255], 1, 256);
+        rdp.tmem_bank.write_tile(
+            &[0x10, 255, 0x30, 255, 0x50, 255, 0x70, 255],
+            256,
+            0,
+            1,
+            1,
+            8,
+            1,
+        );
+        let tile = TileDescriptor {
+            fmt: 2,
+            siz: 1,
+            width: 1,
+            height: 1,
+            ..Default::default()
+        };
+        let attempt = CensusAttempt::capture(&rdp, &tile, 0, "tex0".into());
+        assert_eq!(attempt.extent, [1, 4]);
+        assert_eq!(
+            attempt.physical,
+            [
+                0x10, 0x10, 0x10, 255, 0x30, 0x30, 0x30, 255, 0x50, 0x50, 0x50, 255, 0x70, 0x70,
+                0x70, 255
+            ]
+        );
+        assert_eq!(
+            attempt.sampled,
+            [0, 2048, 2049, 2050, 2051, 2052, 2053, 2054, 2055]
+        );
+    }
+
+    #[test]
+    fn framebuffer_footprints_follow_lookup_and_palette_lanes() {
+        use crate::hle::framebuffer_load::FramebufferCopy;
+        use crate::render::framebuffers::{targets::ImageDescriptor, ImageLayout};
+        use std::sync::Arc;
+        let source = ImageDescriptor {
+            address: 0x10000,
+            layout: ImageLayout {
+                width: 4,
+                fmt: 0,
+                siz: 2,
+            },
+            height: 1,
+            generation: 1,
+            depth: false,
+        };
+        let copy = || Arc::new(FramebufferCopy::new(1, source, source.address, 8, 8, 1));
+
+        let mut rdp = Rdp::default();
+        rdp.tmem_bank
+            .copy_load(copy(), |bank| bank.write_tile(&[], 1, 1, 1, 1, 8, 1));
+        let tile = TileDescriptor {
+            fmt: 0,
+            siz: 2,
+            width: 4,
+            height: 1,
+            line: 1,
+            masks: 3,
+            ..Default::default()
+        };
+        let attempt = CensusAttempt::capture(&rdp, &tile, 0, "tex0".into());
+        assert_eq!(attempt.outcome, "Framebuffer");
+        assert_eq!(attempt.physical_representation, "Lookup4096x4");
+        assert!(attempt.sampled_framebuffer);
+
+        let mut rdp = Rdp {
+            other_mode_h: 3 << 14,
+            ..Default::default()
+        };
+        rdp.tmem_bank
+            .copy_load(copy(), |bank| bank.write_tile(&[], 0, 1, 1, 1, 8, 1));
+        rdp.tmem_bank.write_tile(
+            &[0x10, 255, 0x30, 255, 0x50, 255, 0x70, 255],
+            256,
+            0,
+            1,
+            1,
+            8,
+            1,
+        );
+        let tile = TileDescriptor {
+            fmt: 2,
+            siz: 1,
+            width: 1,
+            height: 1,
+            ..Default::default()
+        };
+        let attempt = CensusAttempt::capture(&rdp, &tile, 0, "tex0".into());
+        assert_eq!(attempt.outcome, "Framebuffer");
+        assert_eq!(
+            attempt.sampled,
+            [0, 2048, 2049, 2050, 2051, 2052, 2053, 2054, 2055]
+        );
+    }
 
     #[test]
     fn narrow_blocks_decode_physical_rows() {

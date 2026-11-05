@@ -17,11 +17,18 @@ pub struct FormatInfo {
 impl FormatInfo {
     pub fn validate(&self) -> Result<(), DiagKind> {
         match (self.fmt, self.siz) {
-            (0, 2 | 3) | (2, 0 | 1) | (3, 0..=2) | (4, 0 | 1) => Ok(()),
+            (0, 2 | 3) | (2, 0..=3) | (3, 0..=2) | (4, 0 | 1) => Ok(()),
             (fmt, siz) => Err(DiagKind::UnsupportedTextureFormat { fmt, siz }),
         }
     }
 
+    pub fn validate_tlut(&self, tlut: u8) -> Result<(), DiagKind> {
+        if tlut >= 2 && self.fmt <= 7 && self.siz <= 3 {
+            Ok(())
+        } else {
+            self.validate()
+        }
+    }
     /// Decode TMEM bytes to RGBA8 (`w × h × 4` bytes).
     ///
     /// Dispatches on `(fmt, siz)`:
@@ -33,7 +40,7 @@ impl FormatInfo {
     /// - `(0, 2)` → RGBA16 (delegates to `combiner::decode_rgba16` for byte-identity)
     /// - other    → error; RGBA32 requires the dual-bank TMEM decoder
     ///
-    /// `tlut`/`palette`/`tlut_fmt` carry TLUT state for CI formats (Task 3); non-CI ignore them.
+    /// TLUT modes 2/3 apply before the format decoder, as in angrylion's `tlutswitch`.
     #[cfg(test)]
     pub fn decode(
         &self,
@@ -44,6 +51,24 @@ impl FormatInfo {
         palette: u8,
         tlut_fmt: u8,
     ) -> Result<Vec<u8>, DiagKind> {
+        self.validate_tlut(tlut_fmt)?;
+        if tlut_fmt >= 2 {
+            if self.siz == 0 && self.fmt != 1 {
+                return Ok(decode_ci4(src, w, h, tlut, palette, tlut_fmt));
+            }
+            let stride = if self.siz >= 2 && self.fmt != 1 { 2 } else { 1 };
+            let indices: Vec<_> = (0..(w * h) as usize)
+                .map(|i| {
+                    let byte = src.get(i * stride).copied().unwrap_or(0);
+                    if self.siz == 0 {
+                        (palette << 4) | (byte >> 4)
+                    } else {
+                        byte
+                    }
+                })
+                .collect();
+            return Ok(decode_ci8(&indices, w, h, tlut, tlut_fmt));
+        }
         Ok(match (self.fmt, self.siz) {
             (4, 1) => decode_i8(src, w, h),
             (4, 0) => decode_i4(src, w, h),
@@ -53,6 +78,13 @@ impl FormatInfo {
             (0, 2) => crate::hle::combiner::decode_rgba16(src),
             (2, 1) => decode_ci8(src, w, h, tlut, tlut_fmt),
             (2, 0) => decode_ci4(src, w, h, tlut, palette, tlut_fmt),
+            (2, 2 | 3) => (0..(w * h) as usize)
+                .flat_map(|i| {
+                    let hi = src.get(i * 2).copied().unwrap_or(0);
+                    let lo = src.get(i * 2 + 1).copied().unwrap_or(0);
+                    [hi, lo, hi, lo]
+                })
+                .collect(),
             (fmt, siz) => return Err(DiagKind::UnsupportedTextureFormat { fmt, siz }),
         })
     }
@@ -206,7 +238,7 @@ pub(crate) fn decode_ia16_entry(v: u16) -> [u8; 4] {
 ///
 /// Each source byte is a palette index. `tlut_offset = index << 3`. Entry is a
 /// big-endian u16 at `tlut[off..off+2]`. Out-of-range index → 0 (zero-pad safety net).
-/// Decodes by `tlut_fmt`: 2=RGBA16 entry, 3=IA16 entry, else → transparent black.
+/// Decodes by `tlut_fmt`: 2=RGBA16 entry, 3=IA16 entry, otherwise index intensity.
 ///
 /// The `palette` field (CI4 sub-palette select) is IGNORED for CI8 — CI8 has no sub-palette.
 #[cfg(test)]
@@ -215,6 +247,10 @@ pub fn decode_ci8(src: &[u8], w: u32, h: u32, tlut: &[u8], tlut_fmt: u8) -> Vec<
     let mut out = vec![0u8; n * 4];
     for i in 0..n {
         let index = src.get(i).copied().unwrap_or(0) as usize;
+        if tlut_fmt < 2 {
+            out[i * 4..i * 4 + 4].fill(index as u8);
+            continue;
+        }
         let off = index << 3;
         let entry = match (tlut.get(off), tlut.get(off + 1)) {
             (Some(&hi), Some(&lo)) => u16::from_be_bytes([hi, lo]),
@@ -252,6 +288,10 @@ pub fn decode_ci4(src: &[u8], w: u32, h: u32, tlut: &[u8], palette: u8, tlut_fmt
         let byte = src.get(i / 2).copied().unwrap_or(0);
         // Even column (i%2==0) → high nibble; odd column (i%2==1) → low nibble.
         let index = if i % 2 == 0 { byte >> 4 } else { byte & 0x0F } as usize;
+        if tlut_fmt < 2 {
+            out[i * 4..i * 4 + 4].fill((palette << 4) | index as u8);
+            continue;
+        }
         let off = base + (index << 3);
         let entry = match (tlut.get(off), tlut.get(off + 1)) {
             (Some(&hi), Some(&lo)) => u16::from_be_bytes([hi, lo]),
@@ -293,12 +333,11 @@ mod tests {
 
     #[test]
     fn rgba16_dispatch_is_byte_identical() {
-        // The refactor MUST NOT change RGBA16 output: FormatInfo(0,2) == standalone decode_rgba16.
         let src: Vec<u8> = (0u8..8).collect(); // 2×2 RGBA16 (w*h*2 = 8 bytes)
         let src = &src[..8];
         assert_eq!(
             FormatInfo { fmt: 0, siz: 2 }
-                .decode(src, 2, 2, &[], 0, 2)
+                .decode(src, 2, 2, &[], 0, 0)
                 .unwrap(),
             crate::hle::combiner::decode_rgba16(src)
         );

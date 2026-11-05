@@ -108,7 +108,7 @@ fn reinterpret(fmt: u32) -> Built {
         let address = b.bytes(8, &palette);
         dl.extend([
             gdp_set_texture_image(0, 2, 1, address),
-            gdp_set_tile(0, 2, 0, 256, 7, 0, 0, 0, 0, 0, 0, 0),
+            gdp_set_tile(0, 0, 0, 256, 7, 0, 0, 0, 0, 0, 0, 0),
             (0xf0000000, (7 << 24) | (255 << 14)),
             gdp_set_other_mode_h(14, 2, 3 << 14),
             gdp_set_texture_image(2, 2, 1, SOURCE),
