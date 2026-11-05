@@ -36,7 +36,6 @@ pub struct Rsp {
     microcode: crate::Microcode,
     pub(crate) obj_render_mode: u32,
     mvp_valid: bool,
-    pub(crate) fog_factors_valid: bool,
     pub(crate) profiling: crate::profiling::Recorder,
     cache_global_index: [u32; RSP_MAX_VERTICES],
     loaded: [bool; RSP_MAX_VERTICES],
@@ -90,7 +89,6 @@ impl Default for Rsp {
             microcode: crate::Microcode::F3dex2,
             obj_render_mode: 0,
             mvp_valid: true,
-            fog_factors_valid: true,
             profiling: Default::default(),
             cache_global_index: [0u32; RSP_MAX_VERTICES],
             loaded: [false; RSP_MAX_VERTICES],
@@ -155,7 +153,6 @@ impl Rsp {
 
     pub(crate) fn set_initial_microcode(&mut self, ucode: crate::hle::gbi::GbiUcode) {
         self.microcode = ucode.into();
-        self.fog_factors_valid = ucode != crate::hle::gbi::GbiUcode::S2dex2;
     }
 
     pub(crate) fn switch_microcode(&mut self, ucode: crate::hle::gbi::GbiUcode) {
@@ -170,7 +167,6 @@ impl Rsp {
         // Known SDK divergence: geometry and lights retain values; OoT restores geometry via SETUPDL.
         if ucode == crate::hle::gbi::GbiUcode::S2dex2 {
             self.obj_render_mode = 0;
-            self.fog_factors_valid = false;
         }
     }
 
@@ -182,12 +178,6 @@ impl Rsp {
             });
             self.recompute_mvp();
             self.mvp_valid = false;
-        }
-        if !self.fog_factors_valid && self.geom & self.consts.g_fog_geom != 0 {
-            diags.push(Diagnostic {
-                at: pc,
-                kind: DiagKind::UndefinedFogFactors,
-            });
         }
     }
 
@@ -204,7 +194,6 @@ impl Rsp {
             microcode: self.microcode,
             obj_render_mode: self.obj_render_mode,
             mvp_valid: self.mvp_valid,
-            fog_factors_valid: self.fog_factors_valid,
             geometry_mode: self.geom,
             geometry_names,
             texture: self.texture_state,

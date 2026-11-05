@@ -10,7 +10,7 @@ fn image(commands: &[(u32, u32)]) -> Vec<u8> {
 }
 
 #[derive(Default)]
-struct Steps(Vec<(Microcode, Microcode, u32, bool, bool)>);
+struct Steps(Vec<(Microcode, Microcode, u32, bool)>);
 impl WalkObserver for Steps {
     fn command(&mut self, step: WalkStep<'_>) -> ControlFlow<()> {
         self.0.push((
@@ -18,7 +18,6 @@ impl WalkObserver for Steps {
             step.state.microcode,
             step.state.obj_render_mode,
             step.state.mvp_valid,
-            step.state.fog_factors_valid,
         ));
         ControlFlow::Continue(())
     }
@@ -250,7 +249,7 @@ fn s2dex_ignores_unsupported_command_from_before_switch() {
 }
 
 #[test]
-fn s2dex_fog_use_without_restore_is_reported() {
+fn s2dex_fog_factors_reset_until_rewritten() {
     let mut bytes = image(&[
         (0xdb080000, 0x0500fc00),
         (0xf8000000, 0x12345678),
@@ -276,16 +275,13 @@ fn s2dex_fog_use_without_restore_is_reported() {
         &[(0x1000, Microcode::S2dex2), (0x2000, Microcode::F3dex2)],
     );
     assert_eq!(result.termination, WalkTermination::End);
-    assert_eq!(
-        result
-            .diags
-            .iter()
-            .filter(|d| matches!(d.kind, crate::DiagKind::UndefinedFogFactors))
-            .count(),
-        1
-    );
+    assert!(result
+        .diags
+        .iter()
+        .all(|d| matches!(d.kind, crate::DiagKind::UndefinedMvp)));
     assert_eq!(result.rdp.fog_color, [0x12, 0x34, 0x56, 0x78]);
-    assert_eq!(result.scene.fog_table, vec![[1280, -1024]]);
+    assert_eq!(result.scene.fog, vec![1, 2]);
+    assert_eq!(result.scene.fog_table, vec![[0, 0], [1280, -1024]]);
 }
 
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]

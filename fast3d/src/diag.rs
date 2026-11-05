@@ -62,8 +62,6 @@ pub enum FramebufferAccess {
 pub enum DiagKind {
     /// MP was undefined after a microcode load; recomputed M/P was used.
     UndefinedMvp,
-    /// Fog factors were undefined after S2DEX2; previous values were reused.
-    UndefinedFogFactors,
     MemoryRead {
         access: MemoryAccess,
         error: crate::hardware::MemoryError,
@@ -213,7 +211,6 @@ impl DiagKind {
             | DiagKind::UnwiredSelector { .. } => Severity::Error,
             DiagKind::RdramReadZeroFilled { .. }
             | DiagKind::UndefinedMvp
-            | DiagKind::UndefinedFogFactors
             | DiagKind::UnsupportedImageReinterpretation { .. }
             | DiagKind::UnsupportedGuestWriteback { .. }
             | DiagKind::RenderModeNeverSet
@@ -227,7 +224,6 @@ impl std::fmt::Display for DiagKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DiagKind::UndefinedMvp => write!(f, "undefined MP after microcode load; recomputing preserved M/P"),
-            DiagKind::UndefinedFogFactors => write!(f, "undefined fog factors after S2DEX2; reusing previous values"),
             DiagKind::UnsupportedFramebufferAccess { address, reason } => write!(f, "unsupported framebuffer access at {address:#x}: {reason:?}"),
             DiagKind::FramebufferRangeOverflow { address, length } => write!(f, "framebuffer range overflows at {address:#x}, length {length}"),
             DiagKind::MemoryRead { access, error } => write!(

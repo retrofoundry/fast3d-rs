@@ -709,6 +709,15 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
                             ucode = target.into();
                             gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
                             rsp.switch_microcode(ucode);
+                            if matches!(
+                                ucode,
+                                crate::hle::gbi::GbiUcode::F3dex2
+                                    | crate::hle::gbi::GbiUcode::F3dex2NoN
+                            ) {
+                                // F3DEX2 reloads the zeroed fog slot from its data image.
+                                rdp.fog_mul = 0;
+                                rdp.fog_offset = 0;
+                            }
                             pc = walk_try!(Command, checked_span(pc, stride));
                             break 'dispatch;
                         }
