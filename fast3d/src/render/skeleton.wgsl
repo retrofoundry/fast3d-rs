@@ -7,12 +7,8 @@
 fn shade_fragment(in: VsOut) -> vec4<f32> {
     let r = eval_combiner(in);
     var rgb = r.rgb;
-    // C3: fog mix — applied when cyc1 blender P == CLR_FOG (3).
-    // fog_factor = in.color.a (shade alpha, written by the C2 RSP-process fog pass).
-    // Non-fog runs have P != CLR_FOG, so this branch is never taken → zero output change.
-    let p1 = (combiner.blender_mux >> 14u) & 3u;
-    if (p1 == 3u && combiner.primitive_depth.w == 0u) {
-        rgb = mix(rgb, combiner.fog_color.rgb, in.color.a);
+    if (combiner.primitive_depth.w == 0u) {
+        rgb = blend_fog(rgb, r.alpha, in.color.a);
     }
     alpha_discard(r, in.clip_position.xy);
     return vec4<f32>(rgb, r.alpha);

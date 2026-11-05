@@ -45,13 +45,7 @@ fn blend_b(sel: u32, a: f32) -> f32 {
 
 fn shade_dual(in: VsOut) -> FragOut {
     let r = eval_combiner(in);
-    // C3: fog mix — when cyc1 blender P == CLR_FOG (3), mix combiner output toward fog color
-    // before it is used as CLR_IN in the fb-cycle blender below.
-    let p1 = (combiner.blender_mux >> 14u) & 3u;
-    var comb3 = r.rgb;
-    if (p1 == 3u) {
-        comb3 = mix(comb3, combiner.fog_color.rgb, in.color.a);
-    }
+    let comb3 = blend_fog(r.rgb, r.alpha, in.color.a);
     let out_a = r.alpha;
     alpha_discard(r, in.clip_position.xy);
 
