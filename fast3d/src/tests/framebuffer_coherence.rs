@@ -410,6 +410,76 @@ mod gpu {
     }
 
     #[test]
+    fn canonical_writeback_round_trip_across_tasks_and_reconfigure() {
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            r.set_guest_writeback_with_encoding(true, crate::FramebufferEncoding::BigEndian);
+            r.reconfigure(r.config);
+            let mut memory = Memory(vec![0; OUTPUT as usize + 320 * 240 * 2]);
+            let mut dl = Vec::new();
+            image(&mut dl, FB, 2, 1, 0, 2);
+            fill(&mut dl, 0xf801_07c1, [0, 0, 1, 0]);
+            run(&mut r, &mut memory, built(DlBuilder::new(), dl));
+            assert_eq!(
+                &memory.0[FB as usize..FB as usize + 4],
+                &[0xf8, 0x01, 0x07, 0xc1]
+            );
+            assert_eq!(memory.rdram().read_u16(FB.into()).unwrap(), 0xf801);
+            assert_eq!(memory.rdram().read_u16(u64::from(FB) + 2).unwrap(), 0x07c1);
+            memory.0[FB as usize..FB as usize + 2].copy_from_slice(&[0x00, 0x3f]);
+            let mut dl = Vec::new();
+            image(&mut dl, FB, 2, 1, 0, 2);
+            mode(&mut dl, 0, 0);
+            dl.extend([
+                combine(3, 3),
+                gdp_set_prim_color(0, 0, 0xff0000ff),
+                gdp_fill_rectangle(4, 0, 8, 4),
+            ]);
+            run(&mut r, &mut memory, built(DlBuilder::new(), dl));
+            assert_eq!(
+                &memory.0[FB as usize..FB as usize + 4],
+                &[0x00, 0x3f, 0xf8, 0x01]
+            );
+            assert_eq!(pixels(&mut r, FB, 2, 1), [0, 0, 255, 255, 255, 0, 0, 255]);
+            r.reset();
+            let mut dl = Vec::new();
+            image(&mut dl, FB, 2, 1, 0, 2);
+            fill(&mut dl, 0xf801_07c1, [0, 0, 1, 0]);
+            let built = built(DlBuilder::new(), dl);
+            let entry = u64::from(built.entry);
+            run(&mut r, &mut memory, built);
+            assert_eq!(
+                &memory.0[FB as usize..FB as usize + 4],
+                &[0xf8, 0x01, 0x07, 0xc1]
+            );
+            let summary = r.process_dl(
+                &memory,
+                entry,
+                crate::Microcode::F3dex2,
+                &mut crate::NopSink,
+            );
+            assert_eq!(summary.termination, crate::inspect::WalkTermination::End);
+            r.set_guest_writeback(true);
+            assert!(r.take_guest_writes().is_empty());
+            assert!(r.inner.coherence.as_ref().unwrap().owners.0.is_empty());
+            let summary = r.process_dl(
+                &memory,
+                entry,
+                crate::Microcode::F3dex2,
+                &mut crate::NopSink,
+            );
+            assert_eq!(summary.termination, crate::inspect::WalkTermination::End);
+            r.set_guest_writeback(true);
+            let patches = r.take_guest_writes();
+            assert_eq!(patches.len(), 1);
+            #[cfg(target_endian = "little")]
+            assert_eq!(patches[0].bytes, [0x01, 0xf8, 0xc1, 0x07]);
+            #[cfg(target_endian = "big")]
+            assert_eq!(patches[0].bytes, [0xf8, 0x01, 0x07, 0xc1]);
+        }
+    }
+
+    #[test]
     fn non_clamps_depth_and_survives_bound_switches_with_guest_writeback() {
         for fallback in [false, true] {
             let mut r = renderer(fallback);

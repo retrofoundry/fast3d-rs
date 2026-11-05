@@ -14,6 +14,13 @@ pub struct CaptureSequence {
 
 impl CaptureSequence {
     pub fn begin(renderer: &mut Renderer, dither_seed: u32) -> Result<Self> {
+        if renderer.guest_writeback
+            && renderer.guest_writeback_encoding == crate::FramebufferEncoding::BigEndian
+        {
+            return Err(invalid(
+                "BigEndian framebuffer write-back cannot be captured: fixtures do not record framebuffer encoding",
+            ));
+        }
         if renderer.config.clear_policy != ClearPolicy::Persist {
             return Err(invalid("sequence recording requires Persist clear policy"));
         }

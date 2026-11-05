@@ -188,7 +188,17 @@ fn pick_surface_format(
     (wgpu::TextureFormat::Bgra8Unorm, None) // degenerate empty caps
 }
 
-/// Owned guest bytes at a native address, with 16-bit pixels encoded as native-endian u16 words.
+/// Byte representation shared by framebuffer write-back and CPU-edit imports.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FramebufferEncoding {
+    /// Native-endian 16-bit words and byte-sized 8-bit pixels, for native host allocations.
+    #[default]
+    Native,
+    /// Canonical N64 bytes, with big-endian words, for logical RDRAM byte images.
+    BigEndian,
+}
+
+/// Owned guest bytes at a guest address, in the selected [`FramebufferEncoding`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuestWrite {
     pub address: u64,
@@ -207,6 +217,7 @@ pub struct Renderer {
     rdp: crate::hle::rdp::Rdp,
     color_image_epoch: u64,
     guest_writeback: bool,
+    guest_writeback_encoding: FramebufferEncoding,
     guest_writes: Vec<GuestWrite>,
     #[cfg(feature = "capture")]
     capture_generation: std::rc::Rc<()>,
@@ -310,6 +321,7 @@ impl Renderer {
             rdp: Default::default(),
             color_image_epoch: 0,
             guest_writeback: false,
+            guest_writeback_encoding: FramebufferEncoding::Native,
             guest_writes: Vec::new(),
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
@@ -390,6 +402,7 @@ impl Renderer {
             rdp: Default::default(),
             color_image_epoch: 0,
             guest_writeback: false,
+            guest_writeback_encoding: FramebufferEncoding::Native,
             guest_writes: Vec::new(),
             #[cfg(feature = "capture")]
             capture_generation: std::rc::Rc::new(()),
@@ -489,7 +502,9 @@ impl Renderer {
             dual_source,
             self.inner.profiling.clone(),
         );
-        self.inner.coherence = self.guest_writeback.then(Default::default);
+        self.inner.coherence = self.guest_writeback.then(|| {
+            render::framebuffers::coherence::Coherence::new(self.guest_writeback_encoding)
+        });
         if self.guest_writeback {
             self.inner.warm_coverage(&self.device);
         }
@@ -518,18 +533,36 @@ impl Renderer {
     /// Disabled by default and on wasm. Apply returned patches before the next task; 16-bit pixels
     /// use native-endian words and 8-bit pixels use bytes. Guest reads occur only during processing.
     pub fn set_guest_writeback(&mut self, enabled: bool) {
+        self.set_guest_writeback_with_encoding(enabled, FramebufferEncoding::Native);
+    }
+
+    /// Enable blocking color/depth write-back in the memory backend's framebuffer representation.
+    ///
+    /// The encoding must match `Rdram::read_bytes`; it is never inferred from `is_rdram_image`.
+    /// Apply patches before the next task. Changing encoding discards queued patches and ownership.
+    /// Disabled on wasm. Big-endian write-back cannot be recorded in capture fixtures.
+    pub fn set_guest_writeback_with_encoding(
+        &mut self,
+        enabled: bool,
+        encoding: FramebufferEncoding,
+    ) {
         let enabled = enabled && !cfg!(target_arch = "wasm32");
-        if enabled != self.guest_writeback {
+        if enabled != self.guest_writeback || encoding != self.guest_writeback_encoding {
             self.mark_mutation();
-            self.inner.coherence = enabled.then(Default::default);
+            self.inner.coherence =
+                enabled.then(|| render::framebuffers::coherence::Coherence::new(encoding));
+            if encoding != self.guest_writeback_encoding {
+                self.guest_writes.clear();
+            }
             if enabled {
                 self.inner.warm_coverage(&self.device);
             }
         }
         self.guest_writeback = enabled;
+        self.guest_writeback_encoding = encoding;
     }
 
-    /// Drain native image patches accumulated by accepted tasks since the previous drain.
+    /// Drain image patches in the selected encoding, accumulated by accepted tasks since the previous drain.
     pub fn take_guest_writes(&mut self) -> Vec<GuestWrite> {
         std::mem::take(&mut self.guest_writes)
     }
