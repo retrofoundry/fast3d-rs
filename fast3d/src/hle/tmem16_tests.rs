@@ -605,7 +605,7 @@ fn process_task(
 }
 
 #[test]
-fn census_preserves_task_history_and_rolls_back_failed_guest_reads() {
+fn census_preserves_task_history_and_rolls_back_failed_command_fetches() {
     let mut interpreter = crate::profiling::CpuInterpreter::default();
     interpreter.recorder = Recorder::new(Mode::Census);
     let mut first = DlBuilder::new();
@@ -627,10 +627,7 @@ fn census_preserves_task_history_and_rolls_back_failed_guest_reads() {
     let source = failed.bytes(8, &[91; 8]);
     let mut commands = gdp_load_texture_block(4, 1, 8, 1, source, 2, 0, 2, 0);
     commands.extend(draw);
-    commands.extend([
-        gdp_set_texture_image(4, 1, 8, 0x1fff_ffff),
-        gdp_load_block(7, 0, 0, 7, 0),
-    ]);
+    commands.push(gsp_branchlist(0x00ff_fff8));
     let diags = process_task(&mut interpreter, failed, commands);
     assert!(
         diags

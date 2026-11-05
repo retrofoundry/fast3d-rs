@@ -527,6 +527,7 @@ fn bg_observation_adds_no_reads() {
 
 #[test]
 fn bg_object_and_texture_failures_stop_decomposition() {
+    use crate::tests::memory_failures::StrictMemory;
     let (bytes, _) = fixture(320, 240);
     for (end, access, address, length) in [
         (OBJECT + 19, crate::MemoryAccess::ObjBg, OBJECT + 16, 4),
@@ -539,7 +540,7 @@ fn bg_object_and_texture_failures_stop_decomposition() {
         ),
     ] {
         let result = interp::interpret(
-            RdramImage::new(&bytes[..end]),
+            StrictMemory::new(&bytes[..end]),
             if end < SOURCE { 64 } else { 0 },
             Microcode::S2dex2.into(),
             DataFormat::Fixed,
@@ -779,10 +780,31 @@ fn bg_1cyc_loadblock_selector_uses_tile_transfer() {
 }
 
 #[test]
+fn bg_image_k0_segment_reads_masked_physical_bytes() {
+    for mut bytes in [fixture(8, 2).0, copy_fixture(8, 2)] {
+        let expected = run(&bytes);
+        bytes[OBJECT + 16..OBJECT + 20]
+            .copy_from_slice(&(0x0100_0000 | SOURCE as u32).to_be_bytes());
+        let mut memory = RdramImage::new(&bytes);
+        memory.set_segment(1, 0x8000_0000);
+        let result =
+            interp::interpret(memory, 0, Microcode::S2dex2.into(), DataFormat::Fixed, None);
+        assert_eq!(result.termination, WalkTermination::End);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
+        assert_eq!(result.rdp.tmem_bank, expected.rdp.tmem_bank);
+        assert_eq!(result.scene.materials.len(), expected.scene.materials.len());
+        for (actual, expected) in result.scene.materials.iter().zip(&expected.scene.materials) {
+            assert_eq!(actual.texture.decode(), expected.texture.decode());
+        }
+    }
+}
+
+#[test]
 fn bg_copy_missing_final_field_reports_exact_span() {
+    use crate::tests::memory_failures::StrictMemory;
     let bytes = copy_fixture(64, 32);
     let result = interp::interpret(
-        RdramImage::new(&bytes[..OBJECT + 39]),
+        StrictMemory::new(&bytes[..OBJECT + 39]),
         64,
         Microcode::S2dex2.into(),
         DataFormat::Fixed,

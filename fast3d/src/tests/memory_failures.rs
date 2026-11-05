@@ -1,3 +1,7 @@
+mod rdram_zero_fill;
+mod strict_memory;
+pub(crate) use strict_memory::StrictMemory;
+
 use crate::hle::{gbi::GbiUcode, interp::interpret, mem::GbiDataFormat};
 use crate::RdramImage;
 
@@ -28,7 +32,7 @@ fn failed_command_discards_recorded_operations() {
 fn bad_vertex_input_returns_error_without_partial_vertices() {
     let bytes = image(&[(0x0100_2004, 16), (0xdf00_0000, 0)]);
     let result = interpret(
-        RdramImage::new(&bytes),
+        StrictMemory::new(&bytes),
         0,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,
@@ -40,7 +44,7 @@ fn bad_vertex_input_returns_error_without_partial_vertices() {
 }
 
 #[test]
-fn image_operand_bounds_all_read_kinds() {
+fn strict_backend_operand_bounds_all_read_kinds() {
     use crate::{DiagKind, Diagnostic, MemoryAccess as A, MemoryError, MemoryErrorKind as K};
     type OperandFailure = (&'static [(u32, u32)], A, u64, u64, u64, u32);
     let cases: &[OperandFailure] = &[
@@ -87,7 +91,7 @@ fn image_operand_bounds_all_read_kinds() {
     for &(commands, access, at, address, length, attempted) in cases {
         let bytes = image(commands);
         let result = interpret(
-            RdramImage::new(&bytes),
+            StrictMemory::new(&bytes),
             0,
             GbiUcode::F3dex2,
             GbiDataFormat::Fixed,
@@ -207,7 +211,7 @@ fn failed_task_submits_no_operations() {
     struct Image(Vec<u8>);
     impl crate::Hardware for Image {
         fn rdram(&self) -> impl crate::Rdram + '_ {
-            RdramImage::new(&self.0)
+            StrictMemory::new(&self.0)
         }
     }
     let good = Image(image(&[
@@ -369,31 +373,33 @@ fn compound_reads_leave_prior_rsp_state_intact() {
     let rdp = Rdp::default();
     let mut vertex = [0; 16];
     vertex[..2].copy_from_slice(&7i16.to_be_bytes());
-    rsp.set_vertex(&RdramImage::new(&vertex), 0, 1, 0, &rdp, &mut scene)
+    rsp.set_vertex(&StrictMemory::new(&vertex), 0, 1, 0, &rdp, &mut scene)
         .unwrap();
     let before = scene.clone();
     vertex[..2].copy_from_slice(&9i16.to_be_bytes());
     assert!(rsp
-        .set_vertex(&RdramImage::new(&vertex), 0, 2, 0, &rdp, &mut scene)
+        .set_vertex(&StrictMemory::new(&vertex), 0, 2, 0, &rdp, &mut scene)
         .is_err());
     assert_eq!(scene, before);
 
     let before = (rsp.lights, rsp.ambient_col, rsp.light_version);
-    assert!(rsp.set_light(&RdramImage::new(&[255, 64]), 0, 0).is_err());
+    assert!(rsp.set_light(&StrictMemory::new(&[255, 64]), 0, 0).is_err());
     assert_eq!((rsp.lights, rsp.ambient_col, rsp.light_version), before);
     rsp.set_num_lights_direct(1);
     let before = (rsp.lights, rsp.ambient_col, rsp.light_version);
-    assert!(rsp.set_light(&RdramImage::new(&[255; 10]), 0, 0).is_err());
+    assert!(rsp.set_light(&StrictMemory::new(&[255; 10]), 0, 0).is_err());
     assert_eq!((rsp.lights, rsp.ambient_col, rsp.light_version), before);
     let before = (rsp.lookat_axes, rsp.lookat_version);
-    assert!(rsp.set_lookat(&RdramImage::new(&[127; 10]), 0, 0).is_err());
+    assert!(rsp
+        .set_lookat(&StrictMemory::new(&[127; 10]), 0, 0)
+        .is_err());
     assert_eq!((rsp.lookat_axes, rsp.lookat_version), before);
 
     rsp.finish(&mut scene);
     let before = scene.clone();
-    assert!(rsp.set_viewport(&RdramImage::new(&[0; 15]), 0).is_err());
-    assert!(rsp.matrix(&RdramImage::new(&[0; 63]), 0, 3).is_err());
-    assert!(rsp.force_matrix(&RdramImage::new(&[0; 63]), 0).is_err());
+    assert!(rsp.set_viewport(&StrictMemory::new(&[0; 15]), 0).is_err());
+    assert!(rsp.matrix(&StrictMemory::new(&[0; 63]), 0, 3).is_err());
+    assert!(rsp.force_matrix(&StrictMemory::new(&[0; 63]), 0).is_err());
     rsp.finish(&mut scene);
     assert_eq!(scene, before);
 }
@@ -411,7 +417,7 @@ fn failed_texture_and_palette_loads_preserve_previous_bytes() {
         bytes.resize(0x80, 0);
         bytes.extend([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0]);
         let prior = interpret(
-            RdramImage::new(&bytes),
+            StrictMemory::new(&bytes),
             0,
             GbiUcode::F3dex2,
             GbiDataFormat::Fixed,
@@ -421,7 +427,7 @@ fn failed_texture_and_palette_loads_preserve_previous_bytes() {
         let fault = image(&[(0xfd10_0000, 0x84), (load, word)]);
         bytes[16..16 + fault.len()].copy_from_slice(&fault);
         let failed = interpret(
-            RdramImage::new(&bytes),
+            StrictMemory::new(&bytes),
             0,
             GbiUcode::F3dex2,
             GbiDataFormat::Fixed,

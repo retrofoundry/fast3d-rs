@@ -632,6 +632,10 @@ impl<R: Rdram> DecodeMemory for RecordingRdram<'_, R> {
 }
 
 impl<R: Rdram> Rdram for RecordingRdram<'_, R> {
+    fn take_zero_filled_read(&self) -> Option<(u64, u64)> {
+        self.inner.take_zero_filled_read()
+    }
+
     fn set_segment(&mut self, seg: u32, value: u64) {
         self.inner.set_segment(seg, value);
     }

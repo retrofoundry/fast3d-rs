@@ -68,6 +68,10 @@ pub enum DiagKind {
         access: MemoryAccess,
         error: crate::hardware::MemoryError,
     },
+    RdramReadZeroFilled {
+        address: u64,
+        length: u64,
+    },
     UnsupportedFramebufferAccess {
         address: u64,
         reason: FramebufferAccess,
@@ -174,8 +178,7 @@ fn unwired_slot_names(slots: u16) -> Vec<String> {
 }
 
 impl DiagKind {
-    /// Severity is a pure function of kind (no stored field to desync). Every variant that
-    /// drops/aborts draw data is `Error`; only cosmetic ones are `Warn` (spec §3.6).
+    /// Kinds that drop or abort draw data are errors; warnings keep the task (spec §3.6).
     pub fn severity(&self) -> Severity {
         match self {
             DiagKind::UnsupportedCommand { opcode: 0xd6, .. } => Severity::Warn,
@@ -208,7 +211,8 @@ impl DiagKind {
             | DiagKind::UnhandledMovemem(_)
             | DiagKind::UnhandledMoveword(_)
             | DiagKind::UnwiredSelector { .. } => Severity::Error,
-            DiagKind::UndefinedMvp
+            DiagKind::RdramReadZeroFilled { .. }
+            | DiagKind::UndefinedMvp
             | DiagKind::UndefinedFogFactors
             | DiagKind::UnsupportedImageReinterpretation { .. }
             | DiagKind::UnsupportedGuestWriteback { .. }
@@ -230,6 +234,10 @@ impl std::fmt::Display for DiagKind {
                 f,
                 "{access:?} memory read failed at {:#018x}, length {}: {:?}",
                 error.address, error.length, error.kind
+            ),
+            DiagKind::RdramReadZeroFilled { address, length } => write!(
+                f,
+                "RDRAM data read at {address:#010x}, length {length}: bytes beyond installed RDRAM read as zero"
             ),
             DiagKind::UnknownOpcode(op) => write!(f, "unknown opcode 0x{op:02X}"),
             DiagKind::UnsupportedCommand { opcode, w0, w1 } => {
@@ -447,6 +455,10 @@ mod tests {
                 opcode: 0xd6,
                 w0: 0,
                 w1: 0,
+            },
+            DiagKind::RdramReadZeroFilled {
+                address: 0,
+                length: 16,
             },
             DiagKind::RenderModeNeverSet,
             DiagKind::NonCanonicalBlend,

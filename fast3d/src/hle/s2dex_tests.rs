@@ -159,13 +159,10 @@ fn switch_roundtrip_preserves_shared_state_and_return_stack() {
     rdp.tiles[7].uls = 12;
     let mut steps = Steps::default();
     let result = super::interp::interpret_with_bindings(
-        RdramImage {
-            bytes: &bytes,
-            segments: {
-                let mut segments = [0; 16];
-                segments[1] = 24;
-                segments
-            },
+        {
+            let mut memory = RdramImage::new(&bytes);
+            memory.set_segment(1, 24);
+            memory
         },
         0,
         Microcode::F3dex2.into(),

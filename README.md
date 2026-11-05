@@ -65,6 +65,15 @@ with intentional 32-bit wrapping. Masked resolution then applies `0x00ff_fff8`.
 Operands above `u32::MAX` are rejected. Float matrix/vertex requests are errors;
 custom readers can implement their own decoded layouts.
 
+`RdramImage` data reads apply the 24-bit physical address mask to each byte,
+preserve available bytes and zero-fill bytes beyond the installed image.
+The first such read per task emits `DiagKind::RdramReadZeroFilled { address, length }`
+with warning severity. Command fetches and `read_slice` stay strict. Custom backends
+must override their data-read policy and `Rdram::take_zero_filled_read` to get
+zero filling and its warning; `is_rdram_image()` alone does not enable either.
+`HostRam` continues to refuse invalid reads.
+Construct image readers with `RdramImage::new`, then set their segments.
+
 A failed read produces `DiagKind::MemoryRead { access, error }` at the command
 that initiated it. The first memory failure discards that task before GPU
 submission, with `errors > 0`, `tris = 0` and `renderable = false`. Earlier tasks

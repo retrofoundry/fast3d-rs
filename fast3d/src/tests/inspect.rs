@@ -194,6 +194,7 @@ fn rectangle_words(ucode: Microcode, mut words: [(u32, u32); 3]) -> [(u32, u32);
 
 #[test]
 fn memory_read_discards_scene_and_observes_fault() {
+    use crate::tests::memory_failures::StrictMemory;
     for ucode in [Microcode::F3dex2, Microcode::F3dex2NoN, Microcode::F3d] {
         let fault = gdp_load_tlut(7, 3);
         let memory = bytes([
@@ -207,7 +208,7 @@ fn memory_read_discards_scene_and_observes_fault() {
             end(ucode),
         ]);
         let ordinary = interpret(
-            RdramImage::new(&memory),
+            StrictMemory::new(&memory),
             0,
             ucode.into(),
             DataFormat::Fixed,
@@ -237,7 +238,7 @@ fn memory_read_discards_scene_and_observes_fault() {
             let mut count = 0;
             let mut diags = vec![];
             let observed = interpret(
-                RdramImage::new(&memory),
+                StrictMemory::new(&memory),
                 0,
                 ucode.into(),
                 DataFormat::Fixed,

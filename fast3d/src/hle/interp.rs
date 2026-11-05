@@ -550,6 +550,12 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
     rdp.fog_offset = 0;
     let mut scene = Scene::default();
     let mut diags = Vec::new();
+    if let Some((address, length)) = mem.take_zero_filled_read() {
+        diags.push(Diagnostic {
+            at: entry,
+            kind: DiagKind::RdramReadZeroFilled { address, length },
+        });
+    }
     let mut dropped_runs: u32 = 0;
     let mut unknown_seen = [false; 256];
     let mut rdphalf_1 = None;
@@ -596,6 +602,7 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
             termination = WalkTermination::Runaway;
             break;
         }
+        let command_pc = pc;
         let origin_start = scene.draw_origins.len();
         let stride = mem.command_stride();
         dispatched += 1;
@@ -1117,6 +1124,17 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
         if rejected {
             flow = WalkFlow::Fault;
             termination = fault_termination(&diags);
+        }
+        if let Some((address, length)) = mem.take_zero_filled_read() {
+            if !diags
+                .iter()
+                .any(|d| matches!(d.kind, DiagKind::RdramReadZeroFilled { .. }))
+            {
+                diags.push(Diagnostic {
+                    at: command_pc,
+                    kind: DiagKind::RdramReadZeroFilled { address, length },
+                });
+            }
         }
         final_diagnostics_start = diags.len();
         if let (Some(observer), Some(observed)) = (observer.as_deref_mut(), observed) {

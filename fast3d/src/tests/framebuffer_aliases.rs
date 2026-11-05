@@ -28,7 +28,7 @@ fn run(commands: &[(u32, u32)]) -> crate::hle::interp::InterpResult {
         .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes()))
         .collect();
     interpret(
-        RdramImage::new(&bytes),
+        crate::tests::memory_failures::StrictMemory::new(&bytes),
         0,
         GbiUcode::F3dex2,
         GbiDataFormat::Fixed,

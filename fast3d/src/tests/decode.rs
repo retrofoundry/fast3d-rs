@@ -247,6 +247,7 @@ fn ci8_tlut_has_correct_count_and_content() {
 
 #[test]
 fn tlut_truncated_source_rejects_task() {
+    use crate::tests::memory_failures::StrictMemory;
     use n64_gbi::encode::*;
     let mut bytes: Vec<_> = [
         gdp_set_tile(0, 2, 0, 0x100, 7, 0, 0, 0, 0, 0, 0, 0),
@@ -265,7 +266,13 @@ fn tlut_truncated_source_rejects_task() {
     .collect();
     bytes.resize(0x80, 0);
     bytes.extend([0xab, 0xcd, 0xf8, 0x01, 0x07, 0xc1, 0x00, 0x3f, 0xff]);
-    let result = crate::hle::interpret_rdram(&bytes, 0);
+    let result = crate::hle::interp::interpret(
+        StrictMemory::new(&bytes),
+        0,
+        crate::hle::GbiUcode::F3dex2,
+        crate::DataFormat::Fixed,
+        None,
+    );
     assert_eq!(
         result.diags,
         [crate::Diagnostic {

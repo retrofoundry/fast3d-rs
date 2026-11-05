@@ -1,6 +1,7 @@
 //! Fallible memory readers for N64 byte images and consumer-provided address spaces.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::ops::Range;
 
 /// A decoded 4×4 matrix in the renderer's row-vector convention.
@@ -136,13 +137,21 @@ pub(crate) fn decode_obj_bg(
 /// One memory address space for the interpreter.
 ///
 /// Reads return decoded values rather than guest-layout structs. Implementations must return an
-/// error unless the complete requested value is available. `in_bounds` is advisory: a successful
-/// query does not make a later read infallible. The interpreter does not catch panics from a
-/// consumer implementation.
+/// error unless the complete requested value is available. Image backends may zero-fill data
+/// beyond installed RDRAM and report it through `take_zero_filled_read`. Command fetches must
+/// remain strict. `in_bounds` is advisory: a successful query does not make a later read infallible.
+/// The interpreter does not catch panics from a consumer implementation.
 pub trait Rdram {
     /// Describes the byte and address layout used when recording memory reads.
     #[cfg(feature = "capture")]
     fn capture_layout(&self) -> Option<crate::capture::SourceLayout> {
+        None
+    }
+
+    /// Takes the first data span zero-filled since the previous call. Backends that refuse
+    /// out-of-range data reads leave this at its default. The interpreter reports one warning
+    /// per task; wrappers must forward this to preserve their backend's diagnostics.
+    fn take_zero_filled_read(&self) -> Option<(u64, u64)> {
         None
     }
 
@@ -259,6 +268,7 @@ pub struct RdramImage<'a> {
     pub bytes: &'a [u8],
     /// Raw 32-bit segment bases. Zero bases preserve the operand's physical low 24 bits.
     pub segments: [u32; 16],
+    zero_filled_read: Cell<Option<(u64, u64)>>,
 }
 
 impl<'a> RdramImage<'a> {
@@ -266,6 +276,7 @@ impl<'a> RdramImage<'a> {
         Self {
             bytes,
             segments: [0; 16],
+            zero_filled_read: Cell::new(None),
         }
     }
 
@@ -291,17 +302,17 @@ impl<'a> RdramImage<'a> {
     }
 
     pub fn read_i16(&self, address: u64) -> Result<i16, MemoryError> {
-        let bytes = self.read_slice(address, 2)?;
+        let bytes = self.read_data(address, 2)?;
         Ok(i16::from_be_bytes([bytes[0], bytes[1]]))
     }
 
     pub fn read_u16(&self, address: u64) -> Result<u16, MemoryError> {
-        let bytes = self.read_slice(address, 2)?;
+        let bytes = self.read_data(address, 2)?;
         Ok(u16::from_be_bytes([bytes[0], bytes[1]]))
     }
 
     pub fn read_u8(&self, address: u64) -> Result<u8, MemoryError> {
-        Ok(self.read_slice(address, 1)?[0])
+        Ok(self.read_data(address, 1)?[0])
     }
 
     pub fn read_i8(&self, address: u64) -> Result<i8, MemoryError> {
@@ -313,8 +324,48 @@ impl<'a> RdramImage<'a> {
         Ok(&self.bytes[range])
     }
 
+    fn read_data(&self, address: u64, length: usize) -> Result<Cow<'_, [u8]>, MemoryError> {
+        const ADDRESS_SPACE: usize = 0x0100_0000;
+        address.checked_add(length as u64).ok_or_else(|| {
+            memory_error(address, length as u64, MemoryErrorKind::AddressOverflow)
+        })?;
+        let start = u32::try_from(address)
+            .map_err(|_| memory_error(address, length as u64, MemoryErrorKind::AddressOverflow))?
+            as usize
+            & (ADDRESS_SPACE - 1);
+        if length <= ADDRESS_SPACE - start {
+            if let Some(bytes) = self.bytes.get(start..start + length) {
+                return Ok(Cow::Borrowed(bytes));
+            }
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|_| memory_error(address, length as u64, MemoryErrorKind::Unavailable))?;
+        bytes.resize(length, 0);
+        let mut remaining = bytes.as_mut_slice();
+        let mut physical = start;
+        let mut zero_filled = false;
+        while !remaining.is_empty() {
+            let count = remaining.len().min(ADDRESS_SPACE - physical);
+            let (chunk, rest) = remaining.split_at_mut(count);
+            let available = self.bytes.len().saturating_sub(physical).min(count);
+            if available != 0 {
+                chunk[..available].copy_from_slice(&self.bytes[physical..physical + available]);
+            }
+            zero_filled |= available < count;
+            remaining = rest;
+            physical = 0;
+        }
+        if zero_filled && self.zero_filled_read.get().is_none() {
+            self.zero_filled_read
+                .set(Some((start as u64, length as u64)));
+        }
+        Ok(Cow::Owned(bytes))
+    }
+
     fn decode_matrix(&self, address: u64) -> Result<Matrix, MemoryError> {
-        let bytes = self.read_slice(address, 64)?;
+        let bytes = self.read_data(address, 64)?;
         let mut matrix = [[0.0; 4]; 4];
         for (row_index, row) in matrix.iter_mut().enumerate() {
             for (column_index, cell) in row.iter_mut().enumerate() {
@@ -343,6 +394,10 @@ impl<'a> RdramImage<'a> {
 }
 
 impl Rdram for RdramImage<'_> {
+    fn take_zero_filled_read(&self) -> Option<(u64, u64)> {
+        self.zero_filled_read.take()
+    }
+
     #[cfg(feature = "capture")]
     fn capture_layout(&self) -> Option<crate::capture::SourceLayout> {
         Some(crate::capture::SourceLayout {
@@ -366,7 +421,7 @@ impl Rdram for RdramImage<'_> {
     fn read_obj_bg(&self, address: u64, kind: ObjBgKind) -> Result<ObjBg, MemoryError> {
         decode_obj_bg(address, kind, 4, |address, length| {
             Ok(self
-                .read_slice(address, length)?
+                .read_data(address, length)?
                 .iter()
                 .fold(0, |v, &b| (v << 8) | b as u64))
         })
@@ -410,7 +465,7 @@ impl Rdram for RdramImage<'_> {
     }
 
     fn read_bytes(&self, address: u64, length: usize) -> Result<Cow<'_, [u8]>, MemoryError> {
-        Ok(Cow::Borrowed(self.read_slice(address, length)?))
+        self.read_data(address, length)
     }
 
     fn read_matrix(&self, address: u64, format: GbiDataFormat) -> Result<Matrix, MemoryError> {
@@ -432,8 +487,8 @@ impl Rdram for RdramImage<'_> {
                 MemoryErrorKind::UnsupportedFormat,
             ));
         }
-        self.range(address, 16)?;
-        read_fixed_vertex(self, address)
+        let bytes = self.read_data(address, 16)?;
+        read_fixed_vertex(&RdramImage::new(&bytes), 0)
     }
 
     fn is_rdram_image(&self) -> bool {
