@@ -29,10 +29,10 @@ every selected expected output against the CPU oracle. The full inventory is unc
 
 Windows runs the `tests::goldens`, `tests::tmem_witnesses` and native compute library
 modules in each configuration. All-features also runs `tmem_fixture_replay` and the
-tested checkout's `texture_decode_gpu`, `texture_residency` and
-`texture_residency_pressure` integration targets. Metal still runs the complete
-workspace suites. This limits repeated WARP shader compilation while preserving
-all 171 parent-comparison rows and the compute/residency execution gates.
+tested checkout's `texture_decode_gpu`, `texture_residency`,
+`texture_residency_pressure` and `rt64_v5` integration targets. Metal still runs
+the complete workspace suites. This limits repeated WARP shader compilation while
+preserving all 171 parent-comparison rows and the compute/residency execution gates.
 
 Windows builds use two Cargo jobs, no debug symbols or incremental cache, and a
 capture-owned temporary target directory shared by its three configurations. The
@@ -51,6 +51,17 @@ travels with the artifact. Missing or corrupt supplemental rows cannot supply a
 successful artifact, including when Cargo otherwise reports success. Partial failed
 configurations retain their authenticated rows and missing-row report, with the
 comparison still marked incomplete.
+
+Texture replacement readbacks are a third supplement, `replacement-manifest.json`.
+A checkout containing `fast3d/tests/texture_residency/replacements.rs` requires
+all 25 rows of `tools/tmem/replacement-inventory.json` under all-features, written
+through `FAST3D_REPLACEMENT_OUTPUT` into that configuration's `replacements`
+directory. Each row keeps its RGBA output with expected, before and change-mask
+bytes. The loader checks those three against the frozen inventory hashes, requires
+the output to equal the expected bytes, and recomputes the mask. A copy of the
+source test travels with the artifact as `replacement-source.rs`, and the base
+harness overlay may carry the inventory. Missing rows fail or leave the comparison
+incomplete in the same way as GPU decode rows.
 
 Every comparison uses all four RGBA channels, threshold zero and zero differing
 pixels. The existing tolerance-two golden assertions still run. A missing adapter,

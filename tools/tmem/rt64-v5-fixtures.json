@@ -1,0 +1,530 @@
+{
+  "pin": "43373749dac9bbc1b653e6a02aed40a9e1783bed",
+  "fixtures": {
+    "tmem-layouts.f3dcap": "6f0d156da5f91a5f1b902a2b4c0718ca0518d02794044ea484a21f284af94540",
+    "tmem-tlut-mutation.f3dcap": "a746ce5bda182b9a24a55749181f4f0ec0cf6cc14591b8d713c4b7b46ad99c1c",
+    "tmem-roles-lifetime.f3dcap": "7dbd8e448a0397199ce92557edd9b129dafc22759516f1055358bcc6c54ab794"
+  },
+  "rows": [
+    {
+      "name": "tmem-layouts-texture0-0",
+      "spans": [
+        [
+          128,
+          96
+        ]
+      ],
+      "stream": "f80107c1003ffffff80107c1003ffffff80107c1003ffffff80107c1003fffff003ffffff80107c1003ffffff80107c1003ffffff80107c1003ffffff80107c1f80107c1003ffffff80107c1003ffffff80107c1003ffffff80107c1003fffff100003000000000004000200",
+      "xxh3_64": "aa6c798162fcdb74"
+    },
+    {
+      "name": "tmem-layouts-texture0-1",
+      "spans": [
+        [
+          128,
+          96
+        ]
+      ],
+      "stream": "f80107c1003ffffff80107c1003ffffff80107c1003ffffff80107c1003fffff003ffffff80107c1003ffffff80107c1003ffffff80107c1003ffffff80107c1f80107c1003ffffff80107c1003ffffff80107c1003ffffff80107c1003fffff100003000000000004000200",
+      "xxh3_64": "aa6c798162fcdb74"
+    },
+    {
+      "name": "tmem-layouts-texture0-2",
+      "spans": [
+        [
+          128,
+          96
+        ],
+        [
+          2176,
+          96
+        ]
+      ],
+      "stream": "112b6597d347efe3112b6597d347efe3112b6597d347efe3112b6597d347efe3d347efe3112b6597d347efe3112b6597d347efe3112b6597d347efe3112b6597112b6597d347efe3112b6597d347efe3112b6597d347efe3112b6597d347efe359ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff100003000000000004000300",
+      "xxh3_64": "51d066d65c28dbb2"
+    },
+    {
+      "name": "tmem-layouts-texture0-3",
+      "spans": [
+        [
+          128,
+          96
+        ],
+        [
+          2176,
+          96
+        ]
+      ],
+      "stream": "112b6597d347efe3112b6597d347efe3112b6597d347efe3112b6597d347efe3d347efe3112b6597d347efe3112b6597d347efe3112b6597d347efe3112b6597112b6597d347efe3112b6597d347efe3112b6597d347efe3112b6597d347efe359ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff59ffc7ff1fffb5ff100003000000000004000300",
+      "xxh3_64": "51d066d65c28dbb2"
+    },
+    {
+      "name": "tmem-layouts-texture0-4",
+      "spans": [
+        [
+          128,
+          24
+        ]
+      ],
+      "stream": "37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf100003000000000001000004",
+      "xxh3_64": "5a2a8151823b7f96"
+    },
+    {
+      "name": "tmem-layouts-texture0-5",
+      "spans": [
+        [
+          128,
+          24
+        ]
+      ],
+      "stream": "37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf100003000000000001000004",
+      "xxh3_64": "5a2a8151823b7f96"
+    },
+    {
+      "name": "tmem-layouts-texture0-6",
+      "spans": [
+        [
+          128,
+          48
+        ]
+      ],
+      "stream": "255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1100003000000000002000104",
+      "xxh3_64": "44b4f8d4daeb08f6"
+    },
+    {
+      "name": "tmem-layouts-texture0-7",
+      "spans": [
+        [
+          128,
+          48
+        ]
+      ],
+      "stream": "255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1255badf1100003000000000002000104",
+      "xxh3_64": "44b4f8d4daeb08f6"
+    },
+    {
+      "name": "tmem-layouts-texture0-8",
+      "spans": [
+        [
+          128,
+          24
+        ]
+      ],
+      "stream": "37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf100003000000000001000003",
+      "xxh3_64": "eb40d10c7a39def3"
+    },
+    {
+      "name": "tmem-layouts-texture0-9",
+      "spans": [
+        [
+          128,
+          24
+        ]
+      ],
+      "stream": "37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf37bf100003000000000001000003",
+      "xxh3_64": "eb40d10c7a39def3"
+    },
+    {
+      "name": "tmem-layouts-texture0-10",
+      "spans": [
+        [
+          128,
+          48
+        ]
+      ],
+      "stream": "3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff100003000000000002000103",
+      "xxh3_64": "3f1a927adbebf0bf"
+    },
+    {
+      "name": "tmem-layouts-texture0-11",
+      "spans": [
+        [
+          128,
+          48
+        ]
+      ],
+      "stream": "3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff3f7fbfff100003000000000002000103",
+      "xxh3_64": "3f1a927adbebf0bf"
+    },
+    {
+      "name": "tmem-layouts-texture0-12",
+      "spans": [
+        [
+          128,
+          96
+        ]
+      ],
+      "stream": "25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff100003000000000004000203",
+      "xxh3_64": "6f0fb79c43e9598c"
+    },
+    {
+      "name": "tmem-layouts-texture0-13",
+      "spans": [
+        [
+          128,
+          96
+        ]
+      ],
+      "stream": "25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff25ff5bffadfff1ff100003000000000004000203",
+      "xxh3_64": "6f0fb79c43e9598c"
+    },
+    {
+      "name": "tmem-layouts-texture0-14",
+      "spans": [
+        [
+          128,
+          24
+        ],
+        [
+          2048,
+          8
+        ],
+        [
+          2056,
+          8
+        ],
+        [
+          2064,
+          8
+        ],
+        [
+          2072,
+          8
+        ]
+      ],
+      "stream": "012301230123012301230123012301230123012301230123f801f801f801f80107c107c107c107c1003f003f003f003fffffffffffffffff100003000080000001000002",
+      "xxh3_64": "f3c1a61768319ecf"
+    },
+    {
+      "name": "tmem-layouts-texture0-15",
+      "spans": [
+        [
+          128,
+          24
+        ],
+        [
+          2048,
+          8
+        ],
+        [
+          2056,
+          8
+        ],
+        [
+          2064,
+          8
+        ],
+        [
+          2072,
+          8
+        ]
+      ],
+      "stream": "012301230123012301230123012301230123012301230123f801f801f801f80107c107c107c107c1003f003f003f003fffffffffffffffff100003000080000001000002",
+      "xxh3_64": "f3c1a61768319ecf"
+    },
+    {
+      "name": "tmem-layouts-texture0-16",
+      "spans": [
+        [
+          128,
+          48
+        ],
+        [
+          2048,
+          8
+        ],
+        [
+          2056,
+          8
+        ],
+        [
+          2064,
+          8
+        ],
+        [
+          2072,
+          8
+        ]
+      ],
+      "stream": "000102030001020300010203000102030001020300010203000102030001020300010203000102030001020300010203f801f801f801f80107c107c107c107c1003f003f003f003fffffffffffffffff100003000080000002000102",
+      "xxh3_64": "ca67fa7ea8cf6c3c"
+    },
+    {
+      "name": "tmem-layouts-texture0-17",
+      "spans": [
+        [
+          128,
+          48
+        ],
+        [
+          2048,
+          8
+        ],
+        [
+          2056,
+          8
+        ],
+        [
+          2064,
+          8
+        ],
+        [
+          2072,
+          8
+        ]
+      ],
+      "stream": "000102030001020300010203000102030001020300010203000102030001020300010203000102030001020300010203f801f801f801f80107c107c107c107c1003f003f003f003fffffffffffffffff100003000080000002000102",
+      "xxh3_64": "ca67fa7ea8cf6c3c"
+    },
+    {
+      "name": "tmem-roles-lifetime-texture0-0",
+      "spans": [
+        [
+          0,
+          32
+        ]
+      ],
+      "stream": "2525252525252525252525252525252525252525252525252525252525252525080004000000000001000104",
+      "xxh3_64": "421b59cb775ff746"
+    },
+    {
+      "name": "tmem-roles-lifetime-lod0-1",
+      "spans": [
+        [
+          0,
+          32
+        ]
+      ],
+      "stream": "2525252525252525252525252525252525252525252525252525252525252525080004000000000001000104",
+      "xxh3_64": "421b59cb775ff746"
+    },
+    {
+      "name": "tmem-roles-lifetime-lod1-2",
+      "spans": [
+        [
+          128,
+          3
+        ],
+        [
+          140,
+          3
+        ],
+        [
+          144,
+          3
+        ],
+        [
+          156,
+          3
+        ],
+        [
+          160,
+          3
+        ]
+      ],
+      "stream": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b030005000000000001000104",
+      "xxh3_64": "fa1e4c90c98db3ae"
+    },
+    {
+      "name": "tmem-roles-lifetime-texture0-3",
+      "spans": [
+        [
+          128,
+          3
+        ],
+        [
+          140,
+          3
+        ],
+        [
+          144,
+          3
+        ],
+        [
+          156,
+          3
+        ],
+        [
+          160,
+          3
+        ]
+      ],
+      "stream": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b030005000000000001000104",
+      "xxh3_64": "fa1e4c90c98db3ae"
+    },
+    {
+      "name": "tmem-roles-lifetime-lod0-4",
+      "spans": [
+        [
+          128,
+          3
+        ],
+        [
+          140,
+          3
+        ],
+        [
+          144,
+          3
+        ],
+        [
+          156,
+          3
+        ],
+        [
+          160,
+          3
+        ]
+      ],
+      "stream": "5b5b5b5b5b5b5b5b5b5b5b5b5b5b5b030005000000000001000104",
+      "xxh3_64": "fa1e4c90c98db3ae"
+    },
+    {
+      "name": "tmem-roles-lifetime-lod1-5",
+      "spans": [
+        [
+          256,
+          5
+        ],
+        [
+          264,
+          1
+        ],
+        [
+          268,
+          4
+        ]
+      ],
+      "stream": "adadadadadadadadadad050002000000000001000104",
+      "xxh3_64": "7fe08af38267347b"
+    },
+    {
+      "name": "tmem-roles-lifetime-texture0-6",
+      "spans": [
+        [
+          256,
+          5
+        ],
+        [
+          264,
+          1
+        ],
+        [
+          268,
+          4
+        ]
+      ],
+      "stream": "adadadadadadadadadad050002000000000001000104",
+      "xxh3_64": "7fe08af38267347b"
+    },
+    {
+      "name": "tmem-roles-lifetime-lod0-7",
+      "spans": [
+        [
+          256,
+          5
+        ],
+        [
+          264,
+          1
+        ],
+        [
+          268,
+          4
+        ]
+      ],
+      "stream": "adadadadadadadadadad050002000000000001000104",
+      "xxh3_64": "7fe08af38267347b"
+    },
+    {
+      "name": "tmem-roles-lifetime-lod1-8",
+      "spans": [
+        [
+          384,
+          2
+        ],
+        [
+          396,
+          2
+        ]
+      ],
+      "stream": "d3d3d3d3020002000000000001000104",
+      "xxh3_64": "17c327185450b955"
+    },
+    {
+      "name": "tmem-tlut-mutation-texture0-0",
+      "spans": [
+        [
+          0,
+          32
+        ],
+        [
+          2048,
+          8
+        ]
+      ],
+      "stream": "0000000000000000000000000000000000000000000000000000000000000000f801f801f801f801080004000080000001000102",
+      "xxh3_64": "e05937df20b9417f"
+    },
+    {
+      "name": "tmem-tlut-mutation-texture0-1",
+      "spans": [
+        [
+          0,
+          32
+        ],
+        [
+          2048,
+          8
+        ]
+      ],
+      "stream": "000000000000000000000000000000000000000000000000000000000000000007c107c107c107c1080004000080000001000102",
+      "xxh3_64": "940e8e9181bb96f0"
+    },
+    {
+      "name": "tmem-tlut-mutation-texture0-2",
+      "spans": [
+        [
+          0,
+          32
+        ],
+        [
+          2048,
+          8
+        ]
+      ],
+      "stream": "000000000000000000000000000000000000000000000000000000000000000007c107c107c107c1080004000080000001000102",
+      "xxh3_64": "940e8e9181bb96f0"
+    },
+    {
+      "name": "tmem-tlut-mutation-texture0-3",
+      "spans": [
+        [
+          0,
+          32
+        ],
+        [
+          2048,
+          8
+        ]
+      ],
+      "stream": "000000000000000000000000000000000000000000000000000000000000000007c107c107c107c1080004000080000001000102",
+      "xxh3_64": "940e8e9181bb96f0"
+    },
+    {
+      "name": "tmem-tlut-mutation-texture0-4",
+      "spans": [
+        [
+          0,
+          32
+        ],
+        [
+          2048,
+          8
+        ]
+      ],
+      "stream": "0000000000000000000000000000000000000000000000000000000000000000003f003f003f003f080004000080000001000102",
+      "xxh3_64": "ab5b4b33800bc63f"
+    }
+  ]
+}

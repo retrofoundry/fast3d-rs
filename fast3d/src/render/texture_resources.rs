@@ -11,7 +11,10 @@ use super::{
     texture_residency::{Limits, Residency, Resident},
 };
 use crate::{
-    hle::texture_request::{EncodedTextureRequest, TextureSource},
+    hle::{
+        texture_request::{EncodedTextureRequest, TextureSource},
+        tile_sampling::TileSampling,
+    },
     profiling::Recorder,
 };
 
@@ -29,6 +32,8 @@ struct Submission {
 }
 
 pub(super) struct TextureResources {
+    pub(super) replacements: super::replacement_resources::ProviderFrames,
+    replacement_lifetime: Option<Box<super::replacement_resources::Lifetime>>,
     pub cache: Residency<GpuImage>,
     pipeline: DecodePipeline,
     free: Vec<DecodeStaging>,
@@ -41,6 +46,8 @@ pub(super) struct TextureResources {
 impl TextureResources {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
+            replacements: Default::default(),
+            replacement_lifetime: None,
             cache: Residency::new(Limits::default()),
             pipeline: DecodePipeline::new(device),
             free: Vec::new(),
@@ -51,7 +58,59 @@ impl TextureResources {
         }
     }
 
+    pub(crate) fn set_provider(
+        &mut self,
+        provider: Option<Arc<crate::replacement::ReplacementProvider>>,
+    ) {
+        self.replacements.queue(provider);
+    }
+
+    pub fn begin_frame(&mut self) {
+        self.replacements.begin_frame();
+    }
+
+    pub fn resolve_replacement(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        request: &EncodedTextureRequest,
+        sampling: &TileSampling,
+        profiling: &Recorder,
+    ) -> Option<(Arc<RgbaImage>, u32)> {
+        let replacements = self.replacements.active.as_mut()?;
+        let v5_allowed = crate::replacement::rt64_v5::allowed(sampling, request.recipe());
+        let lifetime = self
+            .replacement_lifetime
+            .get_or_insert_with(Default::default);
+        let result = replacements.resolve_with(
+            request,
+            v5_allowed,
+            device.limits().max_texture_dimension_2d,
+            profiling,
+            |image| {
+                let image = upload_rgba(
+                    device,
+                    queue,
+                    &TextureSource::Rgba(image.pixels.clone()),
+                    image.extent,
+                    "replacement",
+                    profiling,
+                );
+                lifetime.created(&image);
+                image
+            },
+        );
+        if let Some((image, _)) = &result {
+            lifetime.used(image);
+        }
+        result
+    }
+
     pub fn collect(&mut self, profiling: &Recorder) {
+        if let Some(lifetime) = &mut self.replacement_lifetime {
+            lifetime.collect();
+        }
+
         if self.submissions.is_empty() {
             return;
         }
@@ -142,6 +201,9 @@ impl TextureResources {
 
     pub fn submitted(&mut self, queue: &wgpu::Queue, profiling: &Recorder) {
         self.cache.submitted();
+        if let Some(lifetime) = &mut self.replacement_lifetime {
+            lifetime.submitted(queue);
+        }
         if !self.images.is_empty() {
             let complete = Arc::new(AtomicBool::new(false));
             let callback = complete.clone();
@@ -160,6 +222,12 @@ impl TextureResources {
             return;
         }
         self.cache.profile(profiling);
+        if let Some(lifetime) = &self.replacement_lifetime {
+            lifetime.profile(profiling, self.replacements.active.as_deref());
+        }
+        if let Some(replacements) = &self.replacements.active {
+            replacements.profile(profiling);
+        }
         let mut in_flight = std::collections::HashSet::new();
         let (gpu, cpu) = self
             .submissions

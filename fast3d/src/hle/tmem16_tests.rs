@@ -817,3 +817,35 @@ fn written_zeroes_prevent_load_free_framebuffer_triangle_rejection() {
         }
     }
 }
+
+#[test]
+fn crystal_replacement_alias_keeps_stale_sampled_bytes() {
+    use crate::replacement::{ReplacementTarget, TextureKeyScheme};
+    let mut rdp = crystal();
+    let binding = prepare(&rdp, &rdp.tiles[0], 0, &Recorder::default()).unwrap();
+    let request = encoded(&binding.source);
+    let target = |request: &EncodedTextureRequest, scheme| {
+        ReplacementTarget::new(request.recipe().clone(), request.input().clone(), scheme).unwrap()
+    };
+    let native = target(request, TextureKeyScheme::Fast3dV1);
+    let alias = target(request, TextureKeyScheme::Rt64V5);
+    assert_eq!(native.witness(), request.witness());
+    assert_eq!(
+        &alias.witness()[..16],
+        &[
+            0x01, 0x12, 0x23, 0x34, 0x89, 0x9a, 0xab, 0xbc, 0x90, 0x91, 0x92, 0x93, 0x98, 0x99,
+            0x9a, 0x9b
+        ]
+    );
+    rdp.tmem_bank.write_tile(&[0xa0; 8], 2, 0, 1, 1, 8, 1);
+    let changed = prepare(&rdp, &rdp.tiles[0], 0, &Recorder::default()).unwrap();
+    assert_ne!(
+        target(encoded(&changed.source), TextureKeyScheme::Fast3dV1),
+        native
+    );
+    assert_ne!(
+        target(encoded(&changed.source), TextureKeyScheme::Rt64V5),
+        alias
+    );
+    assert_eq!(binding.source.decode().as_ref(), CRYSTAL.concat());
+}
