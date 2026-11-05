@@ -49,6 +49,7 @@ pub enum GbiUcode {
     F3dex2,
     /// Original F3D microcode.
     F3d,
+    S2dex2,
 }
 
 impl GbiUcode {
@@ -56,12 +57,13 @@ impl GbiUcode {
         match self {
             GbiUcode::F3dex2 => f3dex2::install_f3dex2(table),
             GbiUcode::F3d => f3d::install_f3d(table),
+            GbiUcode::S2dex2 => crate::hle::rsp_s2dex2::install(table),
         }
     }
 
     pub fn constants(self) -> GbiConstants {
         match self {
-            GbiUcode::F3dex2 => f3dex2::F3DEX2_CONSTS,
+            GbiUcode::F3dex2 | GbiUcode::S2dex2 => f3dex2::F3DEX2_CONSTS,
             GbiUcode::F3d => f3d::F3D_CONSTS,
         }
     }

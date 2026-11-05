@@ -2,7 +2,7 @@ use super::*;
 use crate::{ClearPolicy, RendererConfig};
 
 const MAGIC: &[u8; 8] = b"F3DCAP\0\0";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const LITTLE_ENDIAN: u32 = 0x0403_0201;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -112,10 +112,7 @@ impl Fixture {
         }
         for task in &self.tasks {
             w.u32(task.order);
-            w.u32(match task.microcode {
-                Microcode::F3dex2 => 0,
-                Microcode::F3d => 1,
-            });
+            w.u32(microcode_id(task.microcode));
             w.u32(match task.data_format {
                 DataFormat::Fixed => 0,
                 DataFormat::Float => 1,
@@ -145,6 +142,15 @@ impl Fixture {
             for base in task.source.segments {
                 w.u64(base);
             }
+            w.u32(match m.obj_bg_abi {
+                ObjBgAbi::N64 => 0,
+                ObjBgAbi::Host64 => 1,
+            });
+            w.count(task.bindings.len())?;
+            for &(token, microcode) in &task.bindings {
+                w.u64(token);
+                w.u32(microcode_id(microcode));
+            }
             w.count(task.spans.len())?;
             w.u32(0);
             let payload_len: u64 = task.spans.iter().map(|s| s.bytes.len() as u64).sum();
@@ -167,8 +173,12 @@ impl Fixture {
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let mut r = Reader(bytes);
-        if r.take(8)? != MAGIC || r.u32()? != VERSION || r.u32()? != LITTLE_ENDIAN {
-            return Err(invalid("magic, version or container byte order"));
+        if r.take(8)? != MAGIC {
+            return Err(invalid("magic"));
+        }
+        let version = r.u32()?;
+        if !(1..=VERSION).contains(&version) || r.u32()? != LITTLE_ENDIAN {
+            return Err(invalid("version or container byte order"));
         }
         if r.u64()? != bytes.len() as u64 {
             return Err(invalid("container length"));
@@ -249,11 +259,7 @@ impl Fixture {
         let mut tasks = Vec::new();
         for _ in 0..task_count {
             let order = r.u32()?;
-            let microcode = match r.u32()? {
-                0 => Microcode::F3dex2,
-                1 => Microcode::F3d,
-                _ => return Err(invalid("microcode")),
-            };
+            let microcode = decode_microcode(r.u32()?, version)?;
             let data_format = match r.u32()? {
                 0 => DataFormat::Fixed,
                 1 => DataFormat::Float,
@@ -262,7 +268,12 @@ impl Fixture {
             r.zero()?;
             let entry = r.u64()?;
             let m = r.take(8)?;
-            let memory = MemoryLayout {
+            let mut memory = MemoryLayout {
+                obj_bg_abi: if m[0] == 0 {
+                    ObjBgAbi::N64
+                } else {
+                    ObjBgAbi::Host64
+                },
                 address_space: match m[0] {
                     0 => AddressSpace::Image,
                     1 => AddressSpace::Host,
@@ -284,11 +295,22 @@ impl Fixture {
             if m[5..] != [0, 0, 0] {
                 return Err(invalid("reserved layout bytes"));
             }
-            memory.validate()?;
             let mut segments = [0; 16];
             for s in &mut segments {
                 *s = r.u64()?;
             }
+            let mut bindings = Vec::new();
+            if version >= 2 {
+                memory.obj_bg_abi = match r.u32()? {
+                    0 => ObjBgAbi::N64,
+                    1 => ObjBgAbi::Host64,
+                    _ => return Err(invalid("background object ABI")),
+                };
+                for _ in 0..r.u32()? {
+                    bindings.push((r.u64()?, decode_microcode(r.u32()?, version)?));
+                }
+            }
+            memory.validate()?;
             let count = r.u32()? as u64;
             r.zero()?;
             let payload_len = r.u64()?;
@@ -326,6 +348,7 @@ impl Fixture {
                 return Err(invalid("unreferenced payload bytes"));
             }
             tasks.push(Task {
+                bindings,
                 entry,
                 microcode,
                 data_format,
@@ -344,6 +367,23 @@ impl Fixture {
         };
         fixture.validate()?;
         Ok(fixture)
+    }
+}
+
+fn microcode_id(microcode: Microcode) -> u32 {
+    match microcode {
+        Microcode::F3dex2 => 0,
+        Microcode::F3d => 1,
+        Microcode::S2dex2 => 2,
+    }
+}
+
+fn decode_microcode(id: u32, version: u32) -> Result<Microcode> {
+    match id {
+        0 => Ok(Microcode::F3dex2),
+        1 => Ok(Microcode::F3d),
+        2 if version >= 2 => Ok(Microcode::S2dex2),
+        _ => Err(invalid("microcode")),
     }
 }
 
@@ -414,7 +454,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// A complete reset-to-output prefix. Frames retain their version-one payload and original serial.
+/// A complete reset-to-output prefix. Frames retain their own versioned payload and original serial.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sequence {
     pub frames: Vec<Fixture>,

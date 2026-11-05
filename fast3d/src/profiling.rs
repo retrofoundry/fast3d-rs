@@ -53,8 +53,20 @@ impl CpuInterpreter {
         microcode: crate::Microcode,
         format: crate::DataFormat,
     ) -> (crate::DlSummary, Vec<crate::Diagnostic>) {
+        self.process_with_bindings(memory, entry, microcode, format, &[])
+    }
+
+    /// Profiles a task with immutable microcode text-token bindings.
+    pub fn process_with_bindings(
+        &mut self,
+        memory: impl crate::Rdram,
+        entry: u64,
+        microcode: crate::Microcode,
+        format: crate::DataFormat,
+        bindings: &[(u64, crate::Microcode)],
+    ) -> (crate::DlSummary, Vec<crate::Diagnostic>) {
         let _span = self.recorder.span("interpretation");
-        let result = crate::hle::interp::interpret_profiled(
+        let result = crate::hle::interp::interpret_with_bindings(
             memory,
             entry,
             microcode.into(),
@@ -63,6 +75,7 @@ impl CpuInterpreter {
             self.framebuffers.clone(),
             None,
             self.recorder.clone(),
+            bindings,
         );
         self.recorder
             .count("geometry.vertices", result.scene.raw_pos.len() as u64);

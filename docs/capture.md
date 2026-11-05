@@ -13,13 +13,13 @@ pixels. These async operations work on native and wasm32; wasm readback awaits t
 callback. The device must match the recorded dual-source-blending feature. Missing memory
 latches an error and rejects the output, including missing TexRect continuation commands.
 
-A version-one fixture starts with default RDP registers, empty TMEM and no established color
+A single-frame fixture starts with default RDP registers, empty TMEM and no established color
 image. Replay preserves register state between its tasks. Each replay and clear-policy probe
 restarts the registers, so framebuffer initialization commands cannot affect the fixture's RDP
 starting state. The fixture format does not store a prior register or TMEM snapshot.
 
 `CaptureFrame::begin` preserves live RDP state. At completion, capture walks its owned task
-snapshots from both the live starting registers and the version-one defaults. It rejects a
+snapshots from both the live starting registers and default registers. It rejects a
 difference in prepared render inputs, diagnostics or summaries as dependence on prior RDP
 state. GPU submission consumes those same prepared inputs, including target effects, uniforms,
 owned encoded texture requests and RSP buffers. Texture comparison uses the
@@ -35,7 +35,7 @@ unrecorded submissions, invalidate the capture. Recording and completion report 
 live rendering continues. Returning registers or configuration to their earlier values does
 not make the capture valid again.
 
-A version-one fixture must also be self-contained in framebuffer contents. Replay compares
+A single-frame fixture must also be self-contained in framebuffer contents. Replay compares
 `PerFrame` and `Persist` output after initializing used color targets with two contrasting
 colors and depth targets with distinct near (`0x0000`) and far (`0xfffc`) packed depths through
 display lists. Every color/depth combination starts with a fresh renderer. A mismatch rejects
@@ -118,7 +118,7 @@ The `capture` feature also exposes `Renderer::set_depth_reset_policy`. `Never` i
 path. `ColorImageSwitch`, `TaskBoundary` and `FrameBoundary` discard only depth at their named
 boundaries. Color, explicit fills, task order, seed and presentation stay fixed. These switches
 are diagnostic controls, separate from `ClearPolicy`. `CaptureFrame` rejects recording with a
-diagnostic reset policy because version-one metadata cannot preserve it.
+diagnostic reset policy because single-frame metadata cannot preserve it.
 
 Pack a complete, ordered set of frame payloads and replay all controls:
 
@@ -171,7 +171,7 @@ All integer fields are little-endian and reserved fields must be zero.
 | 36 | 4 | Reserved |
 
 The header is followed by selected presentation serials as u64 values. Each frame then has a
-u64 payload length and a complete version-one fixture, including its header and provenance.
+u64 payload length and a complete version-one or version-two frame fixture, including its header and provenance.
 Lengths must fit the container and trailing bytes are rejected. The version-two contract implies
 a reset origin; there is no optional missing-prefix flag. Version-one decoding is unchanged.
 
@@ -188,14 +188,19 @@ Native and browser runs share semantic assertions; the browser dither check allo
 survivors among 1024 pixels with alpha 128/255. The native transparent-Mario test also checks
 the exact deterministic mask. No pixel goldens are generated here.
 
-Regenerate the checked-in files from the workspace root. The ignored writer and byte-drift
-test need no GPU; the writer records the synthetic command reads through the CPU interpreter.
-Cargo runs tests from the crate directory, so use an absolute output path:
+Regenerate the checked-in files from the workspace root. The ignored writer and drift test
+need no GPU; the writer records the synthetic command reads through the CPU interpreter.
+The drift test decodes each checked-in file and compares it with its builder, so files still
+at frame version 1 pass even though the writer emits version 2. The writer also rewrites
+`host64-fill.f3dcap`, which `capture_v1_fixture_remains_readable` reads as the version-1
+sample, so restore it afterwards. Cargo runs tests from the crate directory, so use an
+absolute output path:
 
 ```sh
 FAST3D_WRITE_FIXTURES="$PWD/fast3d/tests/fixtures" \
   cargo test -p fast3d --features capture --lib \
   write_browser_sm64_fixtures -- --ignored
+git checkout -- fast3d/tests/fixtures/host64-fill.f3dcap
 cargo test -p fast3d --features capture --lib browser_fixture_bytes_match_builders
 cargo test -p fast3d --features capture --lib sm64_corpus_roundtrips_without_diagnostics
 ```
@@ -231,7 +236,7 @@ export CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}"
 export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
 cargo test -p fast3d --features capture --target wasm32-unknown-unknown \
   --test browser_sm64_fixture_replay --test capture_facade \
-  --test capture_memory_wasm -- --nocapture
+  --test capture_memory_wasm --test capture_s2dex_wasm -- --nocapture
 ```
 
 Replay requests `Features::empty()` and default limits, exercising the fallback blender.
@@ -309,3 +314,31 @@ two successive tasks may contain different bytes at the same virtual address. Ve
 and trailing float-vertex padding are not read or captured. Fixed vertices use 16-byte strides,
 float vertices 24; matrix records use 64 bytes. Host fixed matrices contain native-endian
 packed u32s, while image matrices contain big-endian split halfwords. Textures remain verbatim.
+
+## Version-two frame payloads
+
+Frame writers emit version 2. Readers retain version 1 with empty microcode bindings and
+an object ABI inferred from its image or host memory layout. F3DEX2 remains microcode ID 0,
+F3D remains 1, and S2DEX2 is 2. Each task snapshots its immutable full-width text-token
+bindings; replay, admission and sequence measurement use that task's snapshot.
+
+The frame header, frame record, provenance and first 160 bytes of each task retain the
+version-one layout. After the sixteen segment bases, version 2 inserts:
+
+| Size | Field |
+| --- | --- |
+| 4 | Object ABI: N64=0, host64=1 |
+| 4 | Binding count |
+| 12 per binding | Text token (u64), microcode ID (u32) |
+
+The span count, reserved word, payload length, directory and payload follow. All reserved
+bytes remain zero. N64 objects use big-endian fields and a four-byte pointer; host64 objects
+use the recorded byte order and an eight-byte pointer. Both use a signed four-byte
+`imageYorig`. BG_1CYC reads through byte 36 (N64) or 40 (host); BG_COPY reads through byte 40
+or 44. Union padding is absent from the recorded reads. Replay uses this metadata even on
+wasm32.
+
+The existing version-two sequence envelope is unchanged and accepts either frame version.
+`Fixture::from_bytes` parses frame payloads; `Sequence::from_bytes` parses sequence envelopes.
+The replay example tries the frame parser first, since the outer version alone no longer
+identifies the container kind.

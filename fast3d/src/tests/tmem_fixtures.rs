@@ -343,8 +343,8 @@ fn tmem_captures_keep_one_rgba32_target_layout() {
                 .join(format!("{name}.f3dcap")),
         )
         .unwrap();
-        assert_eq!(encoded, fixture(name).to_bytes().unwrap(), "{name}");
         let capture = crate::capture::Fixture::from_bytes(&encoded).unwrap();
+        assert_eq!(capture, fixture(name), "{name}");
         assert_eq!(capture.frame.vi.unwrap().status, 3);
         assert_eq!(capture.tasks.len(), 1);
         let task = &capture.tasks[0];

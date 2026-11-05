@@ -14,6 +14,7 @@ pub mod rdp;
 pub mod rsp;
 pub mod rsp_f3d;
 pub mod rsp_f3dex2;
+pub mod rsp_s2dex2;
 pub mod texdec;
 pub mod texture_request;
 pub mod tile_sampling;
@@ -40,3 +41,8 @@ pub use mem::Rdram;
 pub use rsp::{
     ColorImage, CullKind, DrawRun, FramebufferPair, Rect, Scene, SceneOp, Scissor, TexRectBounds,
 };
+
+#[cfg(test)]
+mod s2dex_bg_tests;
+#[cfg(test)]
+mod s2dex_tests;

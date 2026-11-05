@@ -30,6 +30,7 @@ fn host64_fill() -> Fixture {
             dual_source_blending: false,
         },
         tasks: vec![Task {
+            bindings: Vec::new(),
             entry: 0x0000_0001_2345_6000,
             microcode: Microcode::F3d,
             data_format: DataFormat::Fixed,
@@ -156,8 +157,8 @@ fn browser_fixture_bytes_match_builders() {
             .join("tests/fixtures")
             .join(case.filename());
         assert_eq!(
-            std::fs::read(path).unwrap(),
-            fixture.to_bytes().unwrap(),
+            crate::capture::Fixture::from_bytes(&std::fs::read(path).unwrap()).unwrap(),
+            fixture,
             "{:?}: regenerate with write_browser_sm64_fixtures",
             case
         );

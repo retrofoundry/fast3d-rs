@@ -63,6 +63,7 @@ fn inherited_fill_and_scissor_respect_clear_policy() {
                 &hw([
                     gdp_set_color_image(0, 2, 64, address),
                     gdp_set_scissor(0, 0, 0, 256, 256),
+                    gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
                     gdp_set_fill_color(0xf801f801),
                     gdp_fill_rectangle(0, 0, 252, 252),
                     gdp_set_fill_color(0x07c107c1),

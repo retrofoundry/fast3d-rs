@@ -36,8 +36,8 @@ pub use hooks::{HookFrame, RenderHook};
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 pub use hardware::HostRam;
 pub use hardware::{
-    Command, Hardware, Matrix, MemoryError, MemoryErrorKind, RawVertex, Rdram, RdramImage,
-    ViRegisters,
+    Command, Hardware, Matrix, MemoryError, MemoryErrorKind, ObjBg, ObjBgKind, RawVertex, Rdram,
+    RdramImage, ViRegisters,
 };
 
 /// How internal framebuffers are cleared across frames (spec §4).
@@ -505,7 +505,19 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
     ) -> DlSummary {
-        self.process_dl_memory(hw.rdram(), entry, ucode, diags)
+        self.process_dl_with_bindings(hw, entry, ucode, diags, &[])
+    }
+
+    /// Processes a display list with immutable microcode text-token bindings.
+    pub fn process_dl_with_bindings(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        bindings: &[(u64, Microcode)],
+    ) -> DlSummary {
+        self.process_dl_memory_with_bindings(hw.rdram(), entry, ucode, diags, bindings)
     }
 
     /// Consume native display-list memory before returning; retained scenes own their inputs.
@@ -531,8 +543,24 @@ impl Renderer {
         ucode: Microcode,
         diags: &mut dyn DiagSink,
     ) -> DlSummary {
+        unsafe { self.process_dl_host_with_bindings(ram, entry, ucode, diags, &[]) }
+    }
+
+    /// Processes a display list with immutable microcode text-token bindings.
+    ///
+    /// # Safety
+    /// The memory requirements of [`Self::process_dl_host`] apply.
+    #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+    pub unsafe fn process_dl_host_with_bindings(
+        &mut self,
+        ram: HostRam<'_>,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        bindings: &[(u64, Microcode)],
+    ) -> DlSummary {
         let mem = unsafe { crate::hle::host_mem::HostMemory::new(ram) };
-        self.process_dl_memory(mem, entry, ucode, diags)
+        self.process_dl_memory_with_bindings(mem, entry, ucode, diags, bindings)
     }
 
     /// Interpret at most `command_count` dispatched commands and rasterize the finalized prefix
@@ -573,6 +601,19 @@ impl Renderer {
         diags: &mut dyn DiagSink,
         command_count: u32,
     ) -> DlSummary {
+        self.process_dl_prefix_with_bindings(hw, entry, ucode, diags, command_count, &[])
+    }
+
+    /// Processes a display list with immutable microcode text-token bindings.
+    pub fn process_dl_prefix_with_bindings(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        command_count: u32,
+        bindings: &[(u64, Microcode)],
+    ) -> DlSummary {
         if command_count == 0 {
             return DlSummary {
                 termination: inspect::WalkTermination::Cap,
@@ -588,6 +629,7 @@ impl Renderer {
                 remaining: command_count,
             }),
             Submission::RasterizePrefix,
+            bindings,
         )
     }
 
@@ -605,6 +647,19 @@ impl Renderer {
         diags: &mut dyn DiagSink,
         observer: &mut dyn inspect::WalkObserver,
     ) -> DlSummary {
+        self.process_dl_observed_with_bindings(hw, entry, ucode, diags, observer, &[])
+    }
+
+    /// Processes a display list with immutable microcode text-token bindings.
+    pub fn process_dl_observed_with_bindings(
+        &mut self,
+        hw: &impl Hardware,
+        entry: u64,
+        ucode: Microcode,
+        diags: &mut dyn DiagSink,
+        observer: &mut dyn inspect::WalkObserver,
+        bindings: &[(u64, Microcode)],
+    ) -> DlSummary {
         self.process_dl_inner(
             hw,
             entry,
@@ -612,9 +667,11 @@ impl Renderer {
             diags,
             Some(observer),
             Submission::DiscardOnStop,
+            bindings,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_dl_inner(
         &mut self,
         hw: &impl Hardware,
@@ -623,18 +680,36 @@ impl Renderer {
         diags: &mut dyn DiagSink,
         observer: Option<&mut dyn inspect::WalkObserver>,
         submission: Submission,
+        bindings: &[(u64, Microcode)],
     ) -> DlSummary {
-        self.process_dl_memory_observed(hw.rdram(), entry, ucode, diags, observer, submission)
+        self.process_dl_memory_observed(
+            hw.rdram(),
+            entry,
+            ucode,
+            diags,
+            observer,
+            submission,
+            bindings,
+        )
     }
 
-    pub(crate) fn process_dl_memory(
+    pub(crate) fn process_dl_memory_with_bindings(
         &mut self,
         mem: impl Rdram,
         entry: u64,
         ucode: Microcode,
         diags: &mut dyn DiagSink,
+        bindings: &[(u64, Microcode)],
     ) -> DlSummary {
-        self.process_dl_memory_observed(mem, entry, ucode, diags, None, Submission::DiscardOnStop)
+        self.process_dl_memory_observed(
+            mem,
+            entry,
+            ucode,
+            diags,
+            None,
+            Submission::DiscardOnStop,
+            bindings,
+        )
     }
 
     fn interpreter_framebuffers(&self) -> crate::hle::interp::FramebufferState {
@@ -644,6 +719,7 @@ impl Renderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_dl_memory_observed(
         &mut self,
         mem: impl Rdram,
@@ -652,6 +728,7 @@ impl Renderer {
         diags: &mut dyn DiagSink,
         observer: Option<&mut dyn inspect::WalkObserver>,
         submission: Submission,
+        bindings: &[(u64, Microcode)],
     ) -> DlSummary {
         let _process = self.inner.profiling.span("process_dl");
         self.mark_mutation();
@@ -671,7 +748,7 @@ impl Renderer {
             self.interpreter_framebuffers()
         };
         let interpretation = self.inner.profiling.span("interpretation");
-        let mut result = crate::hle::interp::interpret_profiled(
+        let mut result = crate::hle::interp::interpret_with_bindings(
             mem,
             entry,
             ucode.into(),
@@ -680,6 +757,7 @@ impl Renderer {
             framebuffers,
             observer,
             self.inner.profiling.clone(),
+            bindings,
         );
         drop(interpretation);
         self.inner.profiling.count("tasks", 1);

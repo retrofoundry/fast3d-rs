@@ -936,8 +936,8 @@ mod phase5_tests {
     use crate::tests::inspect::equivalent as interpret;
     use n64_gbi::encode::{
         gdp_fill_rectangle, gdp_load_texture_block, gdp_set_color_image, gdp_set_combine_lerp,
-        gdp_set_fill_color, gdp_set_render_mode_f3d, gdp_set_scissor, gsp_1triangle_f3d,
-        gsp_branchlist_f3d, gsp_displaylist_f3d, gsp_enddl_f3d, gsp_segment_f3d,
+        gdp_set_cycle_type_f3d, gdp_set_fill_color, gdp_set_render_mode_f3d, gdp_set_scissor,
+        gsp_1triangle_f3d, gsp_branchlist_f3d, gsp_displaylist_f3d, gsp_enddl_f3d, gsp_segment_f3d,
         gsp_texture_rectangle, gsp_vertex_f3d, CcPass, VtxColored, ZERO_A, ZERO_C,
     };
 
@@ -1091,8 +1091,13 @@ mod phase5_tests {
         }
         push(&mut bytes, gdp_set_color_image(0, 2, 64, 0x0001_0000));
         push(&mut bytes, gdp_set_scissor(0, 0, 0, 64 * 4, 64 * 4));
+        push(
+            &mut bytes,
+            gdp_set_cycle_type_f3d(crate::hle::consts::G_CYC_FILL),
+        );
         push(&mut bytes, gdp_set_fill_color(0xCAFE_F00D));
         push(&mut bytes, gdp_fill_rectangle(4 * 4, 6 * 4, 20 * 4, 22 * 4));
+        push(&mut bytes, gdp_set_cycle_type_f3d(0));
         let mut texrect =
             gsp_texture_rectangle(8 * 4, 12 * 4, 31 * 4, 35 * 4, 0, 11, 13, 1024, 512, false);
         texrect[1].0 = (G_RDPHALF_1 as u32) << 24;

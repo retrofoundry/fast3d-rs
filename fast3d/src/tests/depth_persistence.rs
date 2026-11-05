@@ -706,8 +706,11 @@ fn write_rt64_shared_depth_fixture() {
 fn shared_depth_fixture_pixels() {
     let fixture = shared_depth_fixture();
     assert_eq!(
-        fixture.to_bytes().unwrap(),
-        include_bytes!("../../tests/fixtures/shared-depth.f3dcap")
+        fixture,
+        crate::capture::Fixture::from_bytes(include_bytes!(
+            "../../tests/fixtures/shared-depth.f3dcap"
+        ))
+        .unwrap()
     );
     assert_eq!(
         fixture.tasks[0].source.memory,

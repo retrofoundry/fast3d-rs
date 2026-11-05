@@ -11,12 +11,15 @@ pub enum Microcode {
     F3dex2,
     /// Original F3D microcode.
     F3d,
+    /// S2DEX2 object and background microcode.
+    S2dex2,
 }
 
 impl From<Microcode> for GbiUcode {
     fn from(m: Microcode) -> Self {
         match m {
             Microcode::F3dex2 => GbiUcode::F3dex2,
+            Microcode::S2dex2 => GbiUcode::S2dex2,
             Microcode::F3d => GbiUcode::F3d,
         }
     }
@@ -26,6 +29,7 @@ impl From<GbiUcode> for Microcode {
     fn from(u: GbiUcode) -> Self {
         match u {
             GbiUcode::F3dex2 => Microcode::F3dex2,
+            GbiUcode::S2dex2 => Microcode::S2dex2,
             GbiUcode::F3d => Microcode::F3d,
         }
     }

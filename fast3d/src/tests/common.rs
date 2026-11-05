@@ -216,6 +216,7 @@ pub fn dl_2d_fill_rect_with_scissor_height(
         addr as u32,
     ));
     push(gdp_set_scissor(0, 0, 0, 64 * 4, scissor_height * 4));
+    push(gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL));
     push(gdp_set_fill_color(fill5551));
     push(gdp_fill_rectangle(x0 * 4, y0 * 4, x1 * 4, y1 * 4));
     push(gsp_enddl());

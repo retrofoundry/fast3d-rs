@@ -4,6 +4,7 @@ use n64_gbi::encode::*;
 
 fn task(commands: &[(u32, u32)], order: u32) -> Task {
     Task {
+        bindings: Vec::new(),
         entry: 0,
         microcode: Microcode::F3dex2,
         data_format: DataFormat::Fixed,
@@ -30,6 +31,7 @@ fn fixture() -> Fixture {
             &[
                 gdp_set_color_image(0, 2, 64, 0),
                 gdp_set_scissor(0, 0, 0, 256, 192),
+                gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
                 gdp_set_fill_color(0xf801f801),
                 gsp_enddl(),
             ],
@@ -102,7 +104,7 @@ fn capture_admission_checks_prior_framebuffer_extent_during_preparation() {
         &[
             gdp_set_color_image(0, 2, 64, address),
             gdp_set_scissor(0, 0, 0, 256, 256),
-            gdp_set_cycle_type(3),
+            gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
             gdp_set_fill_color(0xf801f801),
             gdp_fill_rectangle(0, 0, 252, 252),
             gsp_enddl(),
@@ -319,7 +321,7 @@ fn replay_resets_prior_registers_but_inherits_between_recorded_tasks() {
                 gdp_set_depth_image(0),
                 gdp_set_convert(1, 2, 3, 4, 5, 6),
                 gdp_set_key_r(7, 8, 9),
-                gdp_set_cycle_type(3),
+                gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
                 gsp_enddl(),
             ],
             0,
@@ -399,6 +401,7 @@ fn full_fill() -> Task {
         &[
             gdp_set_color_image(0, 2, 64, 0),
             gdp_set_scissor(0, 0, 0, 256, 192),
+            gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
             gdp_set_fill_color(0xf801f801),
             gdp_fill_rectangle(0, 0, 252, 188),
             gsp_enddl(),
@@ -450,6 +453,7 @@ fn capture_rejects_reset_between_tasks_even_when_final_registers_match() {
             &[
                 gdp_set_color_image(0, 2, 64, 0),
                 gdp_set_scissor(0, 0, 0, 256, 192),
+                gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
                 gdp_fill_rectangle(0, 0, 252, 188),
                 gdp_set_fill_color(0xf801f801),
                 gsp_enddl(),
@@ -602,6 +606,7 @@ fn capture_host_rejects_reset_and_still_executes_the_task() {
         let words: Vec<[usize; 2]> = [
             gdp_set_color_image(0, 2, 64, 0),
             gdp_set_scissor(0, 0, 0, 256, 192),
+            gdp_set_cycle_type(crate::hle::consts::G_CYC_FILL),
             gdp_fill_rectangle(0, 0, 252, 188),
             gsp_enddl(),
         ]

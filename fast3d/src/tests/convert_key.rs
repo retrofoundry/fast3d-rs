@@ -843,7 +843,7 @@ fn textconv_partial_writes_reject_and_unrelated_writes_preserve_mode() {
 fn fill_rect_only_adds_rejection_for_convert_key_inputs() {
     for cycle_type in [0, 1] {
         for (command, expected) in [
-            ((0xfc7f_feff, 0xfffd_f6fb), None),
+            ((0xfcff_ffff, 0xfffd_f6fb), None),
             (
                 combine(Some((1, false, 6))),
                 Some(DiagKind::UnsupportedKeyInput {

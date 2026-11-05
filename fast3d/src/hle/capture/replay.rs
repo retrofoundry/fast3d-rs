@@ -27,7 +27,7 @@ impl CaptureFrame {
     /// Begins a renderer frame. The legacy `serial` argument is ignored; the recorded serial
     /// counts the renderer's `begin_frame` calls, starting at one after construction or reset.
     /// Leaves live RDP state intact. Finishing rejects render inputs or diagnostics that depend
-    /// on prior RDP state, which version-one fixtures cannot store. Renderer mutations outside
+    /// on prior RDP state, which single-frame fixtures cannot store. Renderer mutations outside
     /// this wrapper (including resets) invalidate the capture; live rendering still proceeds.
     pub fn begin(
         renderer: &mut Renderer,
@@ -74,18 +74,44 @@ impl CaptureFrame {
         data_format: DataFormat,
         diagnostics: &mut dyn DiagSink,
     ) -> Result<DlSummary> {
+        self.process_dl_with_bindings(
+            renderer,
+            hardware,
+            entry,
+            microcode,
+            data_format,
+            diagnostics,
+            &[],
+        )
+    }
+
+    /// Records and processes a task with immutable microcode bindings.
+    #[allow(clippy::too_many_arguments)]
+    pub fn process_dl_with_bindings(
+        &mut self,
+        renderer: &mut Renderer,
+        hardware: &impl Hardware,
+        entry: u64,
+        microcode: Microcode,
+        data_format: DataFormat,
+        diagnostics: &mut dyn DiagSink,
+        bindings: &[(u64, Microcode)],
+    ) -> Result<DlSummary> {
         self.check_renderer(renderer);
         renderer.set_data_format(data_format);
         if let Some(error) = &self.error {
-            renderer.process_dl(hardware, entry, microcode, diagnostics);
+            renderer.process_dl_with_bindings(hardware, entry, microcode, diagnostics, bindings);
             return Err(error.clone());
         }
         let recording = RecordingHardware::new(hardware);
-        let summary = renderer.process_dl(&recording, entry, microcode, diagnostics);
+        let summary =
+            renderer.process_dl_with_bindings(&recording, entry, microcode, diagnostics, bindings);
         self.expected_generation = renderer.capture_generation.clone();
         let task = u32::try_from(self.fixture.tasks.len())
             .map_err(|_| invalid("too many tasks in one frame"))
-            .and_then(|order| recording.finish(entry, microcode, data_format, order));
+            .and_then(|order| {
+                recording.finish_with_bindings(entry, microcode, data_format, order, bindings)
+            });
         match task {
             Ok(task) => {
                 self.fixture.tasks.push(task);
@@ -115,10 +141,41 @@ impl CaptureFrame {
         data_format: DataFormat,
         diagnostics: &mut dyn DiagSink,
     ) -> Result<DlSummary> {
+        unsafe {
+            self.process_dl_host_with_bindings(
+                renderer,
+                ram,
+                entry,
+                microcode,
+                data_format,
+                diagnostics,
+                &[],
+            )
+        }
+    }
+
+    /// Records and processes a task with immutable microcode bindings.
+    ///
+    /// # Safety
+    /// The memory requirements of [`Self::process_dl_host`] apply.
+    #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+    #[allow(clippy::too_many_arguments)]
+    pub unsafe fn process_dl_host_with_bindings(
+        &mut self,
+        renderer: &mut Renderer,
+        ram: crate::HostRam<'_>,
+        entry: u64,
+        microcode: Microcode,
+        data_format: DataFormat,
+        diagnostics: &mut dyn DiagSink,
+        bindings: &[(u64, Microcode)],
+    ) -> Result<DlSummary> {
         self.check_renderer(renderer);
         renderer.set_data_format(data_format);
         if let Some(error) = &self.error {
-            unsafe { renderer.process_dl_host(ram, entry, microcode, diagnostics) };
+            unsafe {
+                renderer.process_dl_host_with_bindings(ram, entry, microcode, diagnostics, bindings)
+            };
             return Err(error.clone());
         }
         let source = ram.capture_layout();
@@ -132,12 +189,23 @@ impl CaptureFrame {
             layout: source.memory,
             log: &log,
         };
-        let summary = renderer.process_dl_memory(recording, entry, microcode, diagnostics);
+        let summary = renderer.process_dl_memory_with_bindings(
+            recording,
+            entry,
+            microcode,
+            diagnostics,
+            bindings,
+        );
         self.expected_generation = renderer.capture_generation.clone();
         let task = u32::try_from(self.fixture.tasks.len())
             .map_err(|_| invalid("too many tasks in one frame"))
             .and_then(|order| {
-                finish_recording(log.into_inner(), entry, microcode, data_format, order)
+                finish_recording(log.into_inner(), entry, microcode, data_format, order).map(
+                    |mut task| {
+                        task.bindings = bindings.to_vec();
+                        task
+                    },
+                )
             });
         match task {
             Ok(task) => {
@@ -259,7 +327,7 @@ impl CaptureFrame {
                 || actual.summary(false) != expected.summary(false)
             {
                 return Err(invalid(
-                    "frame depends on prior RDP state or framebuffer history not stored in version-one captures",
+                    "frame depends on prior RDP state or framebuffer history not stored in single-frame captures",
                 ));
             }
             if actual.commits_rdp() {
@@ -494,8 +562,13 @@ impl Fixture {
             let hardware = ReplayHardware::new(task, self.frame.vi)?;
             let mut task_diagnostics = Vec::new();
             renderer.set_data_format(task.data_format);
-            let summary =
-                renderer.process_dl(&hardware, task.entry, task.microcode, &mut task_diagnostics);
+            let summary = renderer.process_dl_with_bindings(
+                &hardware,
+                task.entry,
+                task.microcode,
+                &mut task_diagnostics,
+                &task.bindings,
+            );
             hardware.check()?;
             commands.extend(hardware.commands.into_inner().into_iter().map(|command| {
                 super::TaskCommand {
@@ -598,6 +671,7 @@ fn prime_framebuffers(
             commands.insert(0, [0xFE00_0000, address]);
         }
         let task = Task {
+            bindings: Vec::new(),
             entry: 0,
             microcode: Microcode::F3d,
             data_format: DataFormat::Fixed,

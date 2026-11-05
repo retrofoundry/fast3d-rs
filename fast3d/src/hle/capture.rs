@@ -1,5 +1,5 @@
 use super::math::Mat4;
-use super::mem::{Command, RawVertex};
+use super::mem::{decode_obj_bg, Command, ObjBg, ObjBgKind, RawVertex, SEGMENT_SPACE_END};
 use crate::{DataFormat, Hardware, MemoryError, MemoryErrorKind, Microcode, Rdram, ViRegisters};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -72,6 +72,13 @@ pub enum FixedMatrixPacking {
     PackedWords,
 }
 
+/// The background-object layout recorded from the source backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjBgAbi {
+    N64,
+    Host64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MemoryLayout {
     pub address_space: AddressSpace,
@@ -79,6 +86,8 @@ pub struct MemoryLayout {
     pub command_word_bytes: u8,
     pub command_stride: u8,
     pub fixed_matrix_packing: FixedMatrixPacking,
+    /// Object pointer width and field offsets, independent of the replay platform.
+    pub obj_bg_abi: ObjBgAbi,
 }
 
 impl MemoryLayout {
@@ -88,6 +97,7 @@ impl MemoryLayout {
         command_word_bytes: 4,
         command_stride: 8,
         fixed_matrix_packing: FixedMatrixPacking::SplitHalfwords,
+        obj_bg_abi: ObjBgAbi::N64,
     };
     pub const HOST64_LE: Self = Self {
         address_space: AddressSpace::Host,
@@ -95,6 +105,7 @@ impl MemoryLayout {
         command_word_bytes: 8,
         command_stride: 16,
         fixed_matrix_packing: FixedMatrixPacking::PackedWords,
+        obj_bg_abi: ObjBgAbi::Host64,
     };
 
     #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
@@ -146,6 +157,8 @@ pub struct MemorySpan {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Task {
+    /// Immutable microcode text-token bindings captured for this task.
+    pub bindings: Vec<(u64, Microcode)>,
     pub entry: u64,
     pub microcode: Microcode,
     pub data_format: DataFormat,
@@ -165,7 +178,7 @@ impl Task {
         framebuffers: super::interp::FramebufferState,
     ) -> Result<super::interp::InterpResult> {
         let hardware = ReplayHardware::new(self, None)?;
-        let result = super::interp::interpret_with_framebuffers(
+        let result = super::interp::interpret_with_bindings(
             hardware.rdram(),
             self.entry,
             self.microcode.into(),
@@ -173,6 +186,8 @@ impl Task {
             rdp,
             framebuffers,
             None,
+            Default::default(),
+            &self.bindings,
         );
         hardware.check()?;
         Ok(result)
@@ -365,7 +380,22 @@ impl<'a, H: Hardware> RecordingHardware<'a, H> {
         data_format: DataFormat,
         order: u32,
     ) -> Result<Task> {
-        finish_recording(self.log.into_inner(), entry, microcode, data_format, order)
+        self.finish_with_bindings(entry, microcode, data_format, order, &[])
+    }
+
+    /// Finishes a task with a snapshot of its microcode bindings.
+    pub fn finish_with_bindings(
+        self,
+        entry: u64,
+        microcode: Microcode,
+        data_format: DataFormat,
+        order: u32,
+        bindings: &[(u64, Microcode)],
+    ) -> Result<Task> {
+        let mut task =
+            finish_recording(self.log.into_inner(), entry, microcode, data_format, order)?;
+        task.bindings = bindings.to_vec();
+        Ok(task)
     }
 }
 
@@ -380,6 +410,7 @@ fn finish_recording(
         return Err(error);
     }
     let task = Task {
+        bindings: Vec::new(),
         entry,
         microcode,
         data_format,
@@ -436,6 +467,16 @@ trait DecodeMemory {
     fn word(&self, address: u64, length: usize) -> std::result::Result<u64, MemoryError> {
         let bytes = self.bytes(address, length)?;
         Ok(self.layout().word(&bytes))
+    }
+
+    fn obj_bg(&self, address: u64, kind: ObjBgKind) -> std::result::Result<ObjBg, MemoryError> {
+        let pointer_bytes = match self.layout().obj_bg_abi {
+            ObjBgAbi::N64 => 4,
+            ObjBgAbi::Host64 => 8,
+        };
+        decode_obj_bg(address, kind, pointer_bytes, |address, length| {
+            self.word(address, length)
+        })
     }
 
     fn command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
@@ -599,6 +640,15 @@ impl<R: Rdram> Rdram for RecordingRdram<'_, R> {
     }
     fn resolve_masked(&self, addr: u64) -> std::result::Result<u64, MemoryError> {
         self.inner.resolve_masked(addr)
+    }
+    fn read_obj_bg(
+        &self,
+        address: u64,
+        kind: ObjBgKind,
+    ) -> std::result::Result<ObjBg, MemoryError> {
+        let bg = self.source(self.inner.read_obj_bg(address, kind))?;
+        self.obj_bg(address, kind)?;
+        Ok(bg)
     }
     fn read_command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
         let command = self.source(self.inner.read_command(address))?;
@@ -877,6 +927,9 @@ impl Rdram for ReplayRdram<'_> {
                 Ok(base.wrapping_add(address & 0x00ff_ffff) as u64)
             }
             AddressSpace::Host => {
+                if addr >= SEGMENT_SPACE_END {
+                    return Ok(addr);
+                }
                 let base = self.segments[((addr >> 24) & 15) as usize];
                 if base == 0 {
                     Ok(addr)
@@ -893,6 +946,13 @@ impl Rdram for ReplayRdram<'_> {
             AddressSpace::Image => Ok(resolved & 0x00ff_fff8),
             AddressSpace::Host => Ok(resolved),
         }
+    }
+    fn read_obj_bg(
+        &self,
+        address: u64,
+        kind: ObjBgKind,
+    ) -> std::result::Result<ObjBg, MemoryError> {
+        self.obj_bg(address, kind)
     }
     fn read_command(&self, address: u64) -> std::result::Result<Command, MemoryError> {
         let command = self.command(address)?;

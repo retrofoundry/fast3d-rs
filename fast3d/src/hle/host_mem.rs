@@ -2,7 +2,8 @@
 #![cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 
 use crate::hle::mem::{
-    Command, GbiDataFormat, Matrix, MemoryError, MemoryErrorKind, RawVertex, Rdram,
+    decode_obj_bg, Command, GbiDataFormat, Matrix, MemoryError, MemoryErrorKind, ObjBg, ObjBgKind,
+    RawVertex, Rdram, SEGMENT_SPACE_END,
 };
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::{marker::PhantomData, ptr};
@@ -42,7 +43,8 @@ fn probe_log_nonident(args: core::fmt::Arguments<'_>) {
 /// reads and does not implement [`Rdram`]. Native memory is interpreted only by the crate's unsafe
 /// host entry point. Its fixed layout uses native-endian 16-byte commands with full-width address
 /// words, unaligned scalar reads, native packed Fixed matrices, 16-byte Fixed vertices, and
-/// 24-byte Float vertices.
+/// 24-byte Float vertices. Address words below `0x1000_0000` are segmented, and reads that resolve
+/// below that bound fail, so every input must sit at or above 256 MiB.
 ///
 /// ```compile_fail
 /// use fast3d::{HostRam, Rdram};
@@ -96,6 +98,9 @@ impl<'a> HostMemory<'a> {
     }
 
     fn checked_span(address: u64, length: u64) -> Result<(), MemoryError> {
+        if address < SEGMENT_SPACE_END {
+            return Err(memory_error(address, length, MemoryErrorKind::Unavailable));
+        }
         address
             .checked_add(length)
             .ok_or_else(|| memory_error(address, length, MemoryErrorKind::AddressOverflow))?;
@@ -122,6 +127,9 @@ impl Rdram for HostMemory<'_> {
     }
 
     fn resolve(&self, address: u64) -> Result<u64, MemoryError> {
+        if address >= SEGMENT_SPACE_END {
+            return Ok(address);
+        }
         let segment = ((address >> 24) & 0x0f) as usize;
         let base = self.ram.segments[segment];
         let resolved = if base == 0 {
@@ -142,6 +150,17 @@ impl Rdram for HostMemory<'_> {
         self.resolve(address)
     }
 
+    fn read_obj_bg(&self, address: u64, kind: ObjBgKind) -> Result<ObjBg, MemoryError> {
+        decode_obj_bg(address, kind, 8, |address, length| {
+            let bytes = self.read_bytes(address, length)?;
+            Ok(if cfg!(target_endian = "little") {
+                bytes.iter().rev().fold(0, |v, &b| (v << 8) | b as u64)
+            } else {
+                bytes.iter().fold(0, |v, &b| (v << 8) | b as u64)
+            })
+        })
+    }
+
     fn read_command(&self, address: u64) -> Result<Command, MemoryError> {
         Self::checked_span(address, 16)?;
         let second = address + 8;
@@ -159,7 +178,7 @@ impl Rdram for HostMemory<'_> {
     }
 
     fn in_bounds(&self, address: u64, length: u64) -> bool {
-        address.checked_add(length).is_some()
+        address >= SEGMENT_SPACE_END && address.checked_add(length).is_some()
     }
 
     fn read_u8(&self, address: u64) -> Result<u8, MemoryError> {
@@ -277,6 +296,71 @@ impl Rdram for HostMemory<'_> {
                     ]
                 },
             }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod obj_bg_tests {
+    use super::*;
+    use crate::{ObjBgKind, RdramImage};
+
+    #[test]
+    fn obj_bg_image_and_host_decode_equally() {
+        for kind in [ObjBgKind::Copy, ObjBgKind::Scaled] {
+            let mut image = [0u8; 40];
+            let mut host = [0u8; 48];
+            for (offset, value) in [
+                (0, 12u16),
+                (2, 1280),
+                (4, 0xfff8),
+                (6, 640),
+                (8, 24),
+                (10, 960),
+                (12, 0xfffc),
+                (14, 480),
+            ] {
+                image[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+                host[offset..offset + 2].copy_from_slice(&value.to_ne_bytes());
+            }
+            image[16..20].copy_from_slice(&0x12345678u32.to_be_bytes());
+            host[16..24].copy_from_slice(&0x12345678u64.to_ne_bytes());
+            for (offset, value) in [
+                (20, 0xfff4u16),
+                (24, 3),
+                (26, 1),
+                (28, 83),
+                (30, 24),
+                (32, 3840),
+                (34, 23),
+                (36, 160),
+                (38, 7),
+            ] {
+                image[offset..offset + 2].copy_from_slice(&value.to_be_bytes());
+                host[offset + 4..offset + 6].copy_from_slice(&value.to_ne_bytes());
+            }
+            image[22..24].copy_from_slice(&[2, 1]);
+            host[26..28].copy_from_slice(&[2, 1]);
+            if kind == ObjBgKind::Scaled {
+                image[32..36].copy_from_slice(&(-0x123456i32).to_be_bytes());
+                host[36..40].copy_from_slice(&(-0x123456i32).to_ne_bytes());
+            }
+            let expected = RdramImage::new(&image).read_obj_bg(0, kind).unwrap();
+            let ram = unsafe { HostMemory::new(HostRam::new(&host)) };
+            let address = host.as_ptr() as u64;
+            let decoded = ram.read_obj_bg(address, kind).unwrap();
+            assert_eq!(decoded, expected);
+            assert_eq!((decoded.frame_x, decoded.frame_y), (-8, -4));
+            assert_eq!(decoded.image_ptr, 0x12345678);
+            if kind == ObjBgKind::Scaled {
+                assert_eq!(decoded.image_y_orig, -0x123456);
+            }
+            host[16..24].copy_from_slice(&0x123456789abcdef0u64.to_ne_bytes());
+            let ram = unsafe { HostMemory::new(HostRam::new(&host)) };
+            assert_eq!(
+                ram.read_obj_bg(address, kind).unwrap().image_ptr,
+                0x123456789abcdef0
+            );
         }
     }
 }
