@@ -163,6 +163,19 @@ fn fog_modify_rgba_preserves_supplied_alpha() {
 }
 
 #[test]
+fn fog_signed_clip_z_gpu_readback() {
+    let (mut bytes, entry) = scene_memory(&[(0xBC00_0008, 0x0080_0080), LOAD]);
+    bytes[0x44..0x46].copy_from_slice(&(-3i16).to_be_bytes());
+    bytes[0x80..0xC0].copy_from_slice(&mtx_to_bytes([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 4.0],
+    ]));
+    assert_alphas(&interpret_memory(bytes, entry), &[32.0]);
+}
+
+#[test]
 fn fog_factors_gpu_readback() {
     let scene = scene(&[
         FACTOR_A,
