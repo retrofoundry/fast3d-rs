@@ -745,16 +745,16 @@ fn blend_fog(rgb: vec3<f32>, combiner_alpha: f32, shade_alpha: f32) -> vec3<f32>
         }
         return rgb;
     }
-    // Shade-alpha captures depend on the continuous float lerp and existing blend-enable gate.
-    if (a == 2u && b == 0u) {
-        if (p == 0u) {
-            return select(rgb, mix(combiner.fog_color.rgb, rgb, shade_alpha), blend_enabled);
-        }
-        return mix(rgb, combiner.fog_color.rgb, shade_alpha);
-    }
     // Without FORCE_BL a one-cycle draw blends only coverage edges, which fast3d does not model.
     if (!blend_enabled) {
         return select(rgb, combiner.fog_color.rgb, p == 3u);
+    }
+    // Shade-alpha captures depend on the continuous float lerp.
+    if (a == 2u && b == 0u) {
+        if (p == 0u) {
+            return mix(combiner.fog_color.rgb, rgb, shade_alpha);
+        }
+        return mix(rgb, combiner.fog_color.rgb, shade_alpha);
     }
     var alpha = 0.0;
     switch a {
