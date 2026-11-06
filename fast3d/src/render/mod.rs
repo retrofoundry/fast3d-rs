@@ -9,6 +9,8 @@ mod tmem_sampling_tests;
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;
 mod replacement_resources;
+#[cfg(not(target_arch = "wasm32"))]
+mod strict;
 mod texture_bindings;
 pub(crate) mod texture_decode;
 mod texture_residency;
