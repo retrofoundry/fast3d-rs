@@ -582,3 +582,76 @@ fn sequence_cimg_reset_occurs_within_one_task() {
         assert!(presentation.diagnostics.iter().flatten().next().is_none());
     }
 }
+
+#[test]
+fn replay_options_cover_the_prefix_and_selected_crop() {
+    let (device, queue) = crate::render::headless_device_forced_fallback();
+    let mut sequence = depth_sequence();
+    let mut setup = sequence.frames[0].clone();
+    setup.tasks.truncate(1);
+    setup.tasks[0].entry = 0;
+    setup.tasks[0].spans[0].bytes = [gdp_set_prim_color(0, 0, 0), gsp_enddl()]
+        .into_iter()
+        .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes()))
+        .collect();
+    sequence.frames.insert(0, setup);
+    for (index, fixture) in sequence.frames.iter_mut().enumerate() {
+        fixture.frame.serial = index as u64 + 1;
+    }
+    sequence.warmup_frames = 2;
+    sequence.presentations = vec![3];
+    for fixture in &mut sequence.frames {
+        fixture.frame.vi = Some(crate::ViRegisters {
+            origin: 0x100000 + 320 * 7 * 2,
+            width: 320,
+            status: 2,
+            v_start: 34,
+            y_scale: 1024,
+            ..Default::default()
+        });
+    }
+    let baseline =
+        pollster::block_on(sequence.replay(device.clone(), queue.clone(), DepthResetPolicy::Never))
+            .unwrap();
+    for scale in 2..=4 {
+        let native = pollster::block_on(sequence.replay_with_options(
+            device.clone(),
+            queue.clone(),
+            DepthResetPolicy::Never,
+            ReplayOptions {
+                resolution_multiplier: Some(scale),
+                source: ReplaySource::Native,
+            },
+        ))
+        .unwrap();
+        assert_eq!(native.frames.len(), 3);
+        assert_eq!(
+            native.presentations[0].output.rgba8,
+            baseline.presentations[0].output.rgba8
+        );
+        let presentation = pollster::block_on(sequence.replay_with_options(
+            device.clone(),
+            queue.clone(),
+            DepthResetPolicy::Never,
+            ReplayOptions {
+                resolution_multiplier: Some(scale),
+                source: ReplaySource::Presentation,
+            },
+        ))
+        .unwrap();
+        let output = &presentation.presentations[0].output;
+        assert_eq!((output.width, output.height), (320 * scale, 17 * scale));
+        assert_eq!(output.effective_resolution_multiplier, scale);
+        assert_eq!(output.source, ReplaySource::Presentation);
+        assert_eq!(
+            presentation.frames[0].diagnostics,
+            native.frames[0].diagnostics
+        );
+        assert_eq!(
+            presentation.frames[1].diagnostics,
+            native.frames[1].diagnostics
+        );
+    }
+    sequence.frames[1].frame.config.resolution_multiplier = 2;
+    assert!(sequence.validate().is_err());
+}

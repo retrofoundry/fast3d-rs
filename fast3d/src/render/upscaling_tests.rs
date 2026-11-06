@@ -378,7 +378,7 @@ fn facade(scale: u32, fallback: bool) -> Renderer {
         let (device, queue, _) = headless_device();
         (device, queue)
     };
-    let mut renderer = Renderer::with_device(
+    Renderer::with_device(
         device,
         queue,
         crate::PresentTarget::Headless {
@@ -388,15 +388,13 @@ fn facade(scale: u32, fallback: bool) -> Renderer {
         },
         crate::RendererConfig {
             clear_policy: ClearPolicy::Persist,
-            resolution_multiplier: 1,
+            resolution_multiplier: scale,
             sample_count: 1,
             present_mode: wgpu::PresentMode::Fifo,
             format: Some(FORMAT),
             power_preference: wgpu::PowerPreference::LowPower,
         },
-    );
-    renderer.inner.set_test_scale(scale, BUDGET);
-    renderer
+    )
 }
 
 fn submit(
@@ -615,7 +613,8 @@ fn preflight_rejects_whole_task_and_preserves_cpu_imports() {
         } else {
             2
         };
-        let mut renderer = facade(scale, false);
+        let mut renderer = facade(2, false);
+        renderer.inner.set_test_scale(scale, BUDGET);
         renderer.set_guest_writeback_with_encoding(true, crate::FramebufferEncoding::BigEndian);
         let mut memory = Memory(vec![0; B as usize + 4096]);
         let (_, diagnostics) = submit(
@@ -1906,6 +1905,623 @@ fn raw_scissor_survives_task_boundaries_and_raw_only_rectangle_changes() {
     });
 }
 
+fn loaded_feedback(
+    fmt: u8,
+) -> (
+    crate::Scene,
+    std::sync::Arc<crate::hle::framebuffer_load::FramebufferCopy>,
+) {
+    use crate::hle::{
+        framebuffer_load::FramebufferCopy,
+        rdp::{Rdp, TileDescriptor},
+        texture_request::prepare,
+    };
+    let source = framebuffers::targets::ImageDescriptor {
+        address: A.into(),
+        layout: ImageLayout {
+            width: 32,
+            fmt: 0,
+            siz: 2,
+        },
+        height: 24,
+        generation: 1,
+        depth: false,
+    };
+    let copy = std::sync::Arc::new(FramebufferCopy::new(
+        1,
+        source,
+        u64::from(A) + (9 * 32 + 9) * 2,
+        16,
+        64,
+        8,
+    ));
+    let mut rdp = Rdp::default();
+    rdp.tmem_bank
+        .copy_load(copy.clone(), |bank| bank.write_tile(&[], 0, 2, 8, 2, 64, 2));
+    let tile = TileDescriptor {
+        fmt,
+        siz: 2,
+        width: 8,
+        height: 8,
+        line: 2,
+        cms: 2,
+        cmt: 2,
+        ..Default::default()
+    };
+    let binding = prepare(&rdp, &tile, 0, &crate::profiling::Recorder::default()).unwrap();
+    let mut draw = texrect_scene([0, 0], [1024, 1024], false, false, false);
+    draw.framebuffer_pairs[0].color_image.addr = B.into();
+    draw.materials[0].texture = binding.source;
+    draw.materials[0].sampling = binding.sampling;
+    draw.materials[0].fmt = fmt;
+    draw.materials[0].siz = 2;
+    draw.materials[0].tex_w = 8;
+    draw.materials[0].tex_h = 8;
+    if let SceneOp::TexRect { rect, .. } = &mut draw.framebuffer_pairs[0].ops[0] {
+        *rect = crate::scene::TexRectBounds {
+            ulx: 0,
+            uly: 0,
+            lrx: 32,
+            lry: 32,
+        };
+    }
+    (draw, copy)
+}
+
+#[test]
+fn loaded_subrectangle_retains_scaled_samples_after_overwrite_and_growth() {
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        let producer = scene(&triangle(A, 0, 0, 0xffffffff));
+        renderer.render_into_store(&device, &queue, &producer, ClearPolicy::Persist);
+        let before = read_texture(
+            &device,
+            &queue,
+            &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
+                .presentation
+                .as_ref()
+                .unwrap()
+                .texture,
+        );
+        for fmt in [0, 3] {
+            let (mut draw, copy) = loaded_feedback(fmt);
+            let mut alias_material = draw.materials[0].clone();
+            alias_material.fmt = 0;
+            draw.materials.push(alias_material);
+            let mut alias = draw.framebuffer_pairs[0].ops[0].clone();
+            if let SceneOp::TexRect {
+                rect,
+                fb_source,
+                uls,
+                ult,
+                material_index,
+                ..
+            } = &mut alias
+            {
+                *material_index = 1;
+                rect.ulx = 32;
+                rect.lrx = 64;
+                *fb_source = Some(A.into());
+                *uls = 9 * 32;
+                *ult = 9 * 32;
+            }
+            draw.framebuffer_pairs[0].ops.push(alias);
+            let mut load = fill_scene(A, 32, 24, 0);
+            load.framebuffer_pairs[0].ops = vec![SceneOp::FramebufferCopy(copy.clone())];
+            renderer.render_into_store(&device, &queue, &load, ClearPolicy::Persist);
+            renderer.render_into_store(
+                &device,
+                &queue,
+                &fill_scene(A, 32, 37, 0x07c107c1),
+                ClearPolicy::Persist,
+            );
+            renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+            assert!(
+                renderer.diagnostics.is_empty(),
+                "{:?}",
+                renderer.diagnostics
+            );
+            assert_eq!(renderer.framebuffer_copies.source_scale(&copy, 1), scale);
+            assert_eq!(renderer.material_bindings[0].high_resolution_mask, 0);
+            assert_eq!(renderer.presentation_bindings[0].high_resolution_mask, 1);
+            let fb = &renderer.framebuffers[&workload::TargetId::Guest(B.into())];
+            assert_eq!((fb.color.width(), fb.color.height()), (16, 12));
+            let output = read_texture(&device, &queue, &fb.presentation.as_ref().unwrap().texture);
+            let mut varied = false;
+            for y in 0..8 * scale {
+                for x in 0..8 * scale {
+                    let expected = &before
+                        [(((9 * scale + y) * 32 * scale + 9 * scale + x) * 4) as usize..][..4];
+                    let actual = &output[((y * 16 * scale + x) * 4) as usize..][..4];
+                    let expected = if fmt == 0 {
+                        expected.try_into().unwrap()
+                    } else {
+                        image_ia(expected)
+                    };
+                    assert_eq!(actual, expected, "fmt {fmt}, scale {scale}, ({x},{y})");
+                    let live = &output[((y * 16 * scale + x + 8 * scale) * 4) as usize..][..4];
+                    assert_eq!(live, [0, 255, 0, 255]);
+                    varied |= before
+                        [(((9 * scale + y) * 32 * scale + 9 * scale + x) * 4) as usize..][..4]
+                        != before[(((9 * scale + (y / scale) * scale) * 32 * scale
+                            + 9 * scale
+                            + (x / scale) * scale)
+                            * 4) as usize..][..4];
+                }
+            }
+            assert!(varied);
+            renderer.begin_frame();
+            renderer.render_into_store(&device, &queue, &producer, ClearPolicy::PerFrame);
+        }
+    }
+}
+
+fn image_ia(color: &[u8]) -> [u8; 4] {
+    let rgba: Vec<_> = color
+        .iter()
+        .map(|&c| (f32::from(c) * 1023.0 / 255.0).round() as u32)
+        .collect();
+    let packed =
+        (rgba[0] << 22) | (rgba[1] << 12) | (rgba[2] << 2) | if rgba[3] > 0 { 3 } else { 0 };
+    let i = ((packed >> 16) as f32 * 255.0 / 65535.0).round() as u8;
+    [
+        i,
+        i,
+        i,
+        ((packed & 65535) as f32 * 255.0 / 65535.0).round() as u8,
+    ]
+}
+
+#[test]
+fn byte_routes_keep_native_samples_and_clear_role_bits_at_every_scale() {
+    use crate::hle::{
+        rdp::{Rdp, TileDescriptor},
+        texture_request::{prepare, TextureSource},
+    };
+    let (device, queue, dual) = headless_device();
+    for route in ["ci8", "palette", "partial", "mixed", "split", "lookup"] {
+        let mut baseline = None;
+        for scale in 1..=4 {
+            let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+            renderer.set_test_scale(scale, BUDGET);
+            let mut producer = scene(&triangle(A, 0, 0, 0xffffffff));
+            let (mut draw, copy) = loaded_feedback(0);
+            let mut rdp = Rdp::default();
+            rdp.tmem_bank
+                .copy_load(copy.clone(), |bank| bank.write_tile(&[], 0, 2, 8, 2, 64, 2));
+            let mut tile = TileDescriptor {
+                fmt: 0,
+                siz: 2,
+                width: 8,
+                height: 8,
+                line: 2,
+                cms: 2,
+                cmt: 2,
+                ..Default::default()
+            };
+            let tlut = if route == "ci8" || route == "palette" {
+                tile.fmt = 2;
+                tile.siz = 1;
+                tile.width = 16;
+                let palette: Vec<_> = (0..256u16)
+                    .flat_map(|index| ((index << 8) | 1).to_be_bytes())
+                    .collect();
+                rdp.tmem_bank.write_tlut(&palette, 256, 256);
+                if route == "palette" {
+                    let mut tags = rdp.tmem_bank.framebuffer_tags.clone().unwrap();
+                    tags.bytes[2048] = tags.bytes[0];
+                    tags.bytes[2049] = tags.bytes[1];
+                    rdp.tmem_bank.framebuffer_tags = Some(tags);
+                }
+                2
+            } else {
+                if route == "partial" {
+                    rdp.tmem_bank.framebuffer_tags.as_mut().unwrap().bytes[0] = Default::default();
+                }
+                if route == "mixed" {
+                    rdp.tmem_bank.write_tile(&[0x12, 0x34], 0, 1, 1, 1, 2, 1);
+                }
+                if route == "split" {
+                    rdp.tmem_bank.framebuffer_tags.as_mut().unwrap().bytes[1].pointer = 3;
+                }
+                if route == "lookup" {
+                    tile.cms = 0;
+                    tile.masks = 5;
+                }
+                0
+            };
+            let binding = prepare(&rdp, &tile, tlut, &Default::default()).unwrap();
+            let TextureSource::Framebuffer(request) = &binding.source else {
+                panic!("framebuffer route");
+            };
+            assert!(!request.image_route(), "{route}");
+            if route == "ci8" {
+                assert!(!request.materialize);
+            }
+            draw.materials[0].texture = binding.source;
+            draw.materials[0].sampling = binding.sampling;
+            draw.materials[0].tex_w = u32::from(tile.width);
+            draw.materials[0].fmt = tile.fmt;
+            draw.materials[0].siz = tile.siz;
+            renderer.render_into_store(&device, &queue, &producer, ClearPolicy::Persist);
+            let source = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
+            let source_native = read_texture(&device, &queue, &source.color);
+            if route == "ci8" && scale > 1 {
+                let source_image = read_texture(
+                    &device,
+                    &queue,
+                    &source.presentation.as_ref().unwrap().texture,
+                );
+                assert!((0..8 * scale).any(|y| (0..8 * scale).any(|x| {
+                    packed_rgba16(
+                        &source_native[(((9 + y / scale) * 32 + 9 + x / scale) * 4) as usize..]
+                            [..4],
+                    ) != packed_rgba16(
+                        &source_image
+                            [(((9 * scale + y) * 32 * scale + 9 * scale + x) * 4) as usize..][..4],
+                    )
+                })));
+            }
+            producer.framebuffer_pairs[0]
+                .ops
+                .push(SceneOp::FramebufferCopy(copy));
+            let overwrite = fill_scene(A, 32, 24, 0x07c107c1)
+                .framebuffer_pairs
+                .remove(0)
+                .ops
+                .remove(0);
+            producer.framebuffer_pairs[0].ops.push(overwrite);
+            renderer.render_into_store(&device, &queue, &producer, ClearPolicy::Persist);
+            renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+            assert!(
+                renderer.diagnostics.is_empty(),
+                "{route}: {:?}",
+                renderer.diagnostics
+            );
+            assert_eq!(renderer.material_bindings[0].high_resolution_mask, 0);
+            let fb = &renderer.framebuffers[&workload::TargetId::Guest(B.into())];
+            let native = read_texture(&device, &queue, &fb.color);
+            if route == "ci8" {
+                for y in 0..8 {
+                    for x in 0..8 {
+                        let word = packed_rgba16(
+                            &source_native[(((9 + y) * 32 + 9 + x / 2) * 4) as usize..][..4],
+                        );
+                        let index = word.to_be_bytes()[(x & 1) as usize];
+                        let value = (u16::from(index) << 8) | 1;
+                        let channel = |shift: u32| {
+                            let c = ((value >> shift) & 31u16) as u8;
+                            (c << 3) | (c >> 2)
+                        };
+                        assert_eq!(
+                            &native[((y * 16 + x) * 4) as usize..][..4],
+                            [channel(11), channel(6), channel(1), 255]
+                        );
+                    }
+                }
+            }
+            assert_eq!(
+                baseline.get_or_insert_with(|| native.clone()),
+                &native,
+                "{route} {scale}"
+            );
+            if scale > 1 {
+                assert_eq!(renderer.presentation_bindings[0].high_resolution_mask, 0);
+                let output =
+                    read_texture(&device, &queue, &fb.presentation.as_ref().unwrap().texture);
+                for y in 0..8 * scale {
+                    for x in 0..8 * scale {
+                        assert_eq!(
+                            &output[((y * 16 * scale + x) * 4) as usize..][..4],
+                            &native[(((y / scale) * 16 + x / scale) * 4) as usize..][..4],
+                            "{route} {scale} {x},{y}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn feedback_task(fmt: u32) -> Built {
+    let mut built = triangle(A, 0, 0, 0xffffffff);
+    built.rdram.truncate(built.rdram.len() - 8);
+    let mut commands = vec![
+        gdp_set_texture_image(0, 2, 32, A),
+        gdp_set_tile(0, 2, 2, 0, 7, 0, 2, 0, 0, 2, 0, 0),
+        (0xf400_0000 | (36 << 12) | 36, (7 << 24) | (64 << 12) | 64),
+    ];
+    commands.extend(fill_commands(A, 32, 37, 0x07c107c1));
+    commands.extend(fill_commands(B, 32, 24, 0x003f003f));
+    let pass = CcPass {
+        a: ZERO_C,
+        b: ZERO_C,
+        c: ZERO_C,
+        d: 1,
+    };
+    let alpha = CcPass {
+        a: ZERO_A,
+        b: ZERO_A,
+        c: ZERO_A,
+        d: 1,
+    };
+    commands.extend([
+        gdp_set_cycle_type(0),
+        gdp_set_render_mode(0, 0),
+        gdp_set_combine_lerp(pass, alpha, pass, alpha),
+        gdp_set_tile(fmt, 2, 2, 0, 0, 0, 2, 0, 0, 2, 0, 0),
+        gdp_set_tile_size(0, 0, 0, 28, 28),
+    ]);
+    commands.extend(gsp_texture_rectangle(
+        0, 0, 32, 32, 0, 0, 0, 1024, 1024, false,
+    ));
+    commands.extend([
+        gdp_set_tile(0, 2, 8, 128, 1, 0, 2, 0, 0, 2, 0, 0),
+        gdp_set_tile_size(1, 0, 0, 124, 92),
+    ]);
+    commands.extend(gsp_texture_rectangle(
+        32,
+        0,
+        64,
+        32,
+        1,
+        9 * 32,
+        9 * 32,
+        1024,
+        1024,
+        false,
+    ));
+    commands.push(gsp_enddl());
+    built.rdram.extend(
+        commands
+            .into_iter()
+            .flat_map(|(a, b)| a.to_be_bytes().into_iter().chain(b.to_be_bytes())),
+    );
+    built
+}
+
+#[test]
+fn loaded_and_live_feedback_keep_writeback_bytes_coverage_and_patch_ranges_native() {
+    for fallback in [false, true] {
+        for fmt in [0, 3] {
+            let mut baseline = None;
+            for scale in 1..=4 {
+                let mut renderer = facade(scale, fallback);
+                renderer
+                    .set_guest_writeback_with_encoding(true, crate::FramebufferEncoding::BigEndian);
+                let mut memory = Memory(vec![0xa5; B as usize + 4096]);
+                let (_, diagnostics) = submit(&mut renderer, &mut memory, &feedback_task(fmt));
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+                let patches = apply(&mut renderer, &mut memory);
+                let bytes = read_texture(
+                    renderer.device(),
+                    renderer.queue(),
+                    &renderer.inner.framebuffers[&workload::TargetId::Guest(B.into())].color,
+                );
+                let coverage: Vec<_> = (0..32 * 24)
+                    .map(|pixel| {
+                        renderer
+                            .inner
+                            .coherence
+                            .as_ref()
+                            .unwrap()
+                            .stored_coverage_code(u64::from(B) + pixel * 2)
+                    })
+                    .collect();
+                let result = (memory.0, patches, bytes, coverage);
+                assert_eq!(
+                    baseline.get_or_insert_with(|| result.clone()),
+                    &result,
+                    "fmt {fmt}, scale {scale}, fallback {fallback}"
+                );
+                assert_eq!(&result.0[B as usize - 16..B as usize], &[0xa5; 16]);
+                assert_eq!(&result.0[B as usize + 32 * 24 * 2..][..16], &[0xa5; 16]);
+            }
+        }
+    }
+}
+
+#[test]
+fn retained_snapshot_uses_its_source_scale_after_reconfigure() {
+    let mut renderer = facade(3, false);
+    let producer = scene(&triangle(A, 0, 0, 0xffffffff));
+    let (draw, copy) = loaded_feedback(0);
+    let mut prefix = producer;
+    prefix.framebuffer_pairs[0]
+        .ops
+        .push(SceneOp::FramebufferCopy(copy.clone()));
+    let device = renderer.device().clone();
+    let queue = renderer.queue().clone();
+    renderer
+        .inner
+        .render_into_store(&device, &queue, &prefix, ClearPolicy::Persist);
+    let before = read_texture(
+        renderer.device(),
+        renderer.queue(),
+        &renderer.inner.framebuffers[&workload::TargetId::Guest(A.into())]
+            .presentation
+            .as_ref()
+            .unwrap()
+            .texture,
+    );
+    let config = crate::RendererConfig {
+        resolution_multiplier: 2,
+        ..renderer.config
+    };
+    renderer.reconfigure(config);
+    assert_eq!(renderer.inner.framebuffer_copies.source_scale(&copy, 2), 3);
+    let device = renderer.device().clone();
+    let queue = renderer.queue().clone();
+    renderer
+        .inner
+        .render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+    let texture = &renderer.inner.framebuffers[&workload::TargetId::Guest(B.into())]
+        .presentation
+        .as_ref()
+        .unwrap()
+        .texture;
+    let output = read_texture(&device, &queue, texture);
+    for y in 0..16 {
+        for x in 0..16 {
+            let sx = ((x as f32 + 0.5) * 1.5).floor() as u32;
+            let sy = ((y as f32 + 0.5) * 1.5).floor() as u32;
+            assert_eq!(
+                &output[((y * 32 + x) * 4) as usize..][..4],
+                &before[(((27 + sy) * 96 + 27 + sx) * 4) as usize..][..4]
+            );
+        }
+    }
+}
+
+fn packed_rgba16(color: &[u8]) -> u16 {
+    ((u16::from(color[0]) >> 3) << 11)
+        | ((u16::from(color[1]) >> 3) << 6)
+        | ((u16::from(color[2]) >> 3) << 1)
+        | ((u16::from(color[3]) >> 2) & 1)
+}
+
+#[test]
+fn overlapping_load_rows_keep_scaled_span_phase() {
+    use crate::hle::{
+        framebuffer_load::FramebufferCopy,
+        rdp::{Rdp, TileDescriptor},
+        texture_request::prepare,
+    };
+    let (device, queue, dual) = headless_device();
+    for scale in 2..=4 {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        let (mut draw, original) = loaded_feedback(0);
+        let copy = std::sync::Arc::new(FramebufferCopy::new(
+            1,
+            original.source,
+            u64::from(A) + (9 * 32 + 9) * 2,
+            64,
+            16,
+            2,
+        ));
+        let mut rdp = Rdp::default();
+        rdp.tmem_bank
+            .copy_load(copy.clone(), |bank| bank.write_tile(&[], 0, 8, 2, 8, 16, 2));
+        let tile = TileDescriptor {
+            fmt: 0,
+            siz: 2,
+            width: 32,
+            height: 2,
+            line: 8,
+            cms: 2,
+            cmt: 2,
+            ..Default::default()
+        };
+        let binding = prepare(&rdp, &tile, 0, &Default::default()).unwrap();
+        draw.materials[0].texture = binding.source;
+        draw.materials[0].sampling = binding.sampling;
+        draw.materials[0].tex_w = 32;
+        draw.materials[0].tex_h = 2;
+        draw.framebuffer_pairs[0].color_image.width = 32;
+        draw.framebuffer_pairs[0].size_extent.0 = 32;
+        draw.framebuffer_pairs[0].active_scissor.lrx = 32;
+        if let SceneOp::TexRect { rect, .. } = &mut draw.framebuffer_pairs[0].ops[0] {
+            rect.lrx = 128;
+            rect.lry = 8;
+        }
+        let mut producer = scene(&triangle(A, 0, 0, 0xffffffff));
+        producer.framebuffer_pairs[0]
+            .ops
+            .push(SceneOp::FramebufferCopy(copy));
+        renderer.render_into_store(&device, &queue, &producer, ClearPolicy::Persist);
+        let source = read_texture(
+            &device,
+            &queue,
+            &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
+                .presentation
+                .as_ref()
+                .unwrap()
+                .texture,
+        );
+        renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+        let output = read_texture(
+            &device,
+            &queue,
+            &renderer.framebuffers[&workload::TargetId::Guest(B.into())]
+                .presentation
+                .as_ref()
+                .unwrap()
+                .texture,
+        );
+        for y in 0..2 * scale {
+            for x in 0..32 * scale {
+                let pixel = 9 * 32 + 9 + y / scale * 8 + x / scale;
+                let sx = (pixel % 32) * scale + x % scale;
+                let sy = (pixel / 32) * scale + y % scale;
+                assert_eq!(
+                    &output[((y * 32 * scale + x) * 4) as usize..][..4],
+                    &source[((sy * 32 * scale + sx) * 4) as usize..][..4]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn scaled_feedback_without_writeback_stays_gpu_only() {
+    for scale in 2..=4 {
+        let mut renderer = facade(scale, false);
+        let profiling = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+        renderer.inner.profiling = profiling.clone();
+        let (_, diagnostics) = submit(&mut renderer, &mut Memory(vec![0; 4096]), &feedback_task(0));
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(renderer.inner.coherence.is_none() && renderer.inner.coverage.is_none());
+        assert!(renderer.take_guest_writes().is_empty());
+        assert!(profiling
+            .snapshot()
+            .counters
+            .keys()
+            .all(|name| !name.starts_with("readback.") && !name.starts_with("import.")));
+        assert!(profiling.snapshot().counters["workload.presentation_segments"] > 0);
+    }
+}
+
+#[test]
+fn scaled_snapshot_storage_rejection_leaves_the_store_unpublished() {
+    let (device, _, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+    renderer.set_test_scale(4, BUDGET);
+    let (mut draw, copy) = loaded_feedback(0);
+    let mut producer = scene(&triangle(A, 0, 0, 0xffffffff));
+    producer.framebuffer_pairs[0]
+        .ops
+        .push(SceneOp::FramebufferCopy(copy));
+    if let SceneOp::TexRect { material_index, .. } = &mut draw.framebuffer_pairs[0].ops[0] {
+        *material_index = 1;
+    }
+    producer.materials.extend(draw.materials);
+    producer.render_modes.extend(draw.render_modes);
+    producer.framebuffer_pairs.extend(draw.framebuffer_pairs);
+    let mut inputs = inputs::RenderInputs::with_targets(
+        &producer,
+        (32, 24),
+        [0; 2],
+        &renderer.target_descriptors,
+    )
+    .unwrap();
+    let mut limits = device.limits();
+    limits.max_storage_buffer_binding_size = 4096 + 4096 * 4 + 8 * 256;
+    let descriptors = renderer.target_descriptors.clone();
+    let error = renderer.preflight_inputs(&mut inputs, &limits).unwrap_err();
+    assert!(matches!(
+        error.kind,
+        crate::DiagKind::ResourceAdmission {
+            reason: crate::diag::ResourceAdmission::StorageBinding,
+            ..
+        }
+    ));
+    assert_eq!(renderer.target_descriptors, descriptors);
+    assert!(renderer.framebuffers.is_empty());
+}
+
 fn rejected_native_projection() -> Built {
     let mut builder = DlBuilder::new();
     let viewport = builder.viewport(Vp {
@@ -2261,5 +2877,44 @@ fn process_dl_routes_scaled_validation_failure_to_compatibility_once() {
                 assert_eq!(&pixels[offset..offset + 4], &expected);
             }
         }
+    }
+}
+
+#[test]
+fn strict_layout_failure_restores_presentation_versions_before_fallback_admission() {
+    for scale in [2, 4] {
+        let mut renderer = facade(scale, false);
+        renderer.set_guest_writeback_with_encoding(true, crate::FramebufferEncoding::BigEndian);
+        let mut memory = Memory(vec![0; B as usize + 4096]);
+        let (summary, diagnostics) = submit(
+            &mut renderer,
+            &mut memory,
+            &fill_task(A, 16, 32, 0x003f003f),
+        );
+        assert!(summary.renderable && diagnostics.is_empty());
+        apply(&mut renderer, &mut memory);
+        renderer.inner.attachment_budget = 16 * 32 * 4 * (1 + u64::from(scale * scale))
+            + 32 * 32 * 4 * (1 + u64::from(scale * scale));
+        let (summary, diagnostics) =
+            submit(&mut renderer, &mut memory, &rejected_native_projection());
+        assert!(
+            summary.renderable && diagnostics.is_empty(),
+            "{summary:?}, {diagnostics:?}"
+        );
+        assert_eq!(
+            renderer.take_guest_writes(),
+            [crate::GuestWrite {
+                address: A.into(),
+                bytes: vec![255, 255]
+            }]
+        );
+        let fb = &renderer.inner.framebuffers[&workload::TargetId::Guest(A.into())];
+        let pixels = read_texture(
+            &renderer.device,
+            &renderer.queue,
+            &fb.presentation.as_ref().unwrap().texture,
+        );
+        assert_eq!(&pixels[..4], &[255; 4]);
+        assert_eq!(fb.layout.width, 32);
     }
 }

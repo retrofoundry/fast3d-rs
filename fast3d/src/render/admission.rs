@@ -120,6 +120,8 @@ impl SceneRenderer {
                 std::iter::once(&depth.texture)
                     .chain(depth.presentation.as_ref().map(|p| &p.texture))
             }))
+            .chain(self.color_versions.values())
+            .chain(self.presentation_versions.values())
         {
             plan.charge(u64::from(texture.width()) * u64::from(texture.height()) * 4)?;
         }
@@ -180,6 +182,36 @@ impl SceneRenderer {
                     }
                 }
                 plan.buffer(input_bytes, true)?;
+                if self.render_scale > 1 && request.image_route() {
+                    let mut scale = 1;
+                    let mut image_bytes = 4096u64 + 4096 * 12;
+                    for tag in tags {
+                        let copy = &request.tags.copies[usize::from(tag) - 1];
+                        let q = self
+                            .framebuffer_copies
+                            .source_scale(copy, self.render_scale);
+                        scale = scale.max(q);
+                        let size = if q > 1 {
+                            super::framebuffers::copies::image_layout(copy, q)
+                                .ok_or_else(|| plan.overflow())?
+                                .1
+                        } else {
+                            u64::from(copy.size)
+                        };
+                        image_bytes = image_bytes
+                            .checked_add(size)
+                            .ok_or_else(|| plan.overflow())?;
+                    }
+                    plan.image((
+                        extent[0]
+                            .checked_mul(scale)
+                            .ok_or_else(|| plan.overflow())?,
+                        extent[1]
+                            .checked_mul(scale)
+                            .ok_or_else(|| plan.overflow())?,
+                    ))?;
+                    plan.buffer(image_bytes, true)?;
+                }
             }
         }
         #[cfg(feature = "capture")]
@@ -191,6 +223,15 @@ impl SceneRenderer {
                 if let super::inputs::DrawInputs::FramebufferCopy(copy) = &operation.draw {
                     if copies.insert(super::framebuffers::copies::key(copy)) {
                         plan.buffer(u64::from(copy.size), false)?;
+                        if self.render_scale > 1 {
+                            let (spans, size) =
+                                super::framebuffers::copies::image_layout(copy, self.render_scale)
+                                    .ok_or_else(|| plan.overflow())?;
+                            for span in spans {
+                                plan.image((span.width * self.render_scale, self.render_scale))?;
+                            }
+                            plan.buffer(size, false)?;
+                        }
                     }
                 }
             }

@@ -52,6 +52,7 @@ pub(super) struct Framebuffer {
     pub present_rows: std::ops::Range<u32>,
     pub height: u32,
     pub sampling: wgpu::Buffer,
+    pub presentation_sampling: Option<wgpu::Buffer>,
     pub layout: ImageLayout,
 }
 
@@ -386,9 +387,14 @@ pub(super) fn clear_depth(encoder: &mut wgpu::CommandEncoder, view: &wgpu::Textu
     let _pass = depth_pass(encoder, view, wgpu::LoadOp::Clear(1.0));
 }
 
-pub(super) fn color_sampling(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Buffer {
+pub(super) fn color_sampling(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    scale: u32,
+) -> wgpu::Buffer {
     let tile = crate::hle::tile_sampling::TileSampling {
-        image: [1, 1, 2, 1],
+        image: [1, 1, 2, scale],
         modes: [2, 2, width, height],
         ..Default::default()
     };
@@ -488,7 +494,9 @@ impl SceneRenderer {
             let old = self.framebuffers.get_mut(&id).unwrap();
             if old.height != height {
                 old.height = height;
-                old.sampling = color_sampling(device, layout.width, height);
+                old.sampling = color_sampling(device, layout.width, height, 1);
+                old.presentation_sampling = (self.render_scale > 1)
+                    .then(|| color_sampling(device, layout.width, height, self.render_scale));
                 self.profiling.buffer(
                     "uniforms",
                     old.sampling.size(),
@@ -523,6 +531,16 @@ impl SceneRenderer {
                         },
                         old.color.clone(),
                     );
+                    if let Some(image) = &old.presentation {
+                        self.presentation_versions.insert(
+                            coherence::Writer {
+                                address,
+                                layout: old.layout,
+                                depth: false,
+                            },
+                            image.texture.clone(),
+                        );
+                    }
                 }
             }
             self.reinterpretation(id, false, pc);

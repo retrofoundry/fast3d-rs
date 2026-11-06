@@ -42,3 +42,15 @@ compatibility test for the load-free path.
 [The authored real-load fixtures](framebuffer-load-evidence.md) check snapshot order
 and the unquantised render-target convention. GPU write-back and guest imports remain
 opt-in; framebuffer loads do not require that switch.
+
+At a fixed presentation scale above 1, complete RGBA16 and IA16 image loads retain
+the presentation subrectangle after both producer passes and before later writes.
+Native origin, extent and source scale belong to the retained snapshot. Its scale
+does not depend on a later consumer's scale. Load-free aliases instead sample the
+current presentation attachment, including writes after a load. Native and
+writer-ID draws bind native views in both cases.
+
+CI indices, tagged palettes, split pairs, partial or mixed TMEM and cross-copy
+byte reconstruction use native samples. A request combining image branches and
+byte reconstruction stays native as a whole. TMEM lookup images also stay native.
+These routes keep their native sampling precision at every presentation scale.

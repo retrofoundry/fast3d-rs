@@ -16,6 +16,7 @@ pub(crate) struct StrictTask {
     descriptors: TargetDescriptors,
     first_touch: HashSet<TargetId>,
     versions: HashMap<Writer, wgpu::Texture>,
+    presentation_versions: HashMap<Writer, wgpu::Texture>,
     depth: HashMap<TargetId, DepthImage>,
 }
 
@@ -75,6 +76,7 @@ impl SceneRenderer {
             descriptors: self.target_descriptors.clone(),
             first_touch: self.first_touch.clone(),
             versions: self.color_versions.clone(),
+            presentation_versions: self.presentation_versions.clone(),
             depth,
         }
     }
@@ -97,6 +99,7 @@ impl SceneRenderer {
         self.target_descriptors = task.descriptors;
         self.first_touch = task.first_touch;
         self.color_versions = task.versions;
+        self.presentation_versions = task.presentation_versions;
         self.depthbuffers = task.depth;
     }
 }

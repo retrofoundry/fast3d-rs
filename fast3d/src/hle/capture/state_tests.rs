@@ -329,7 +329,9 @@ fn replay_resets_prior_registers_but_inherits_between_recorded_tasks() {
         for _ in 0..2 {
             let hardware = ReplayHardware::new(&poison, None).unwrap();
             renderer.process_dl(&hardware, 0, Microcode::F3dex2, &mut crate::NopSink);
-            let output = pollster::block_on(fixture.render_frame(&mut renderer)).unwrap();
+            let output =
+                pollster::block_on(fixture.render_frame(&mut renderer, ReplaySource::Native))
+                    .unwrap();
             assert_eq!(output.rgba8, expected.rgba8);
             assert_eq!(output.summaries, expected.summaries);
             assert_eq!(output.diagnostics, expected.diagnostics);
@@ -813,5 +815,50 @@ fn capture_writeback_requires_native_encoding_when_enabled() {
             assert_eq!(capture.present_last(&mut renderer).unwrap().tasks.len(), 1);
         }
         assert_eq!(!renderer.take_guest_writes().is_empty(), enabled);
+    }
+}
+
+#[test]
+fn captures_record_the_effective_fixed_scale() {
+    let template = fixture();
+    let (device, queue) = crate::render::headless_device_forced_fallback();
+    for scale in 1..=4 {
+        let mut renderer = template.renderer_with_options(
+            device.clone(),
+            queue.clone(),
+            ClearPolicy::Persist,
+            ReplayOptions {
+                resolution_multiplier: Some(scale),
+                ..Default::default()
+            },
+        );
+        let mut capture = CaptureFrame::begin(&mut renderer, 0, 0, Provenance::default());
+        for task in &template.tasks {
+            let hardware = ReplayHardware::new(task, None).unwrap();
+            capture
+                .process_dl(
+                    &mut renderer,
+                    &hardware,
+                    task.entry,
+                    task.microcode,
+                    task.data_format,
+                    &mut crate::NopSink,
+                )
+                .unwrap();
+        }
+        let fixture = capture.finish(None).unwrap();
+        assert_eq!(
+            fixture.frame.config.resolution_multiplier,
+            renderer.effective_resolution_multiplier()
+        );
+        let bytes = fixture.to_bytes().unwrap();
+        assert_eq!(
+            Fixture::from_bytes(&bytes)
+                .unwrap()
+                .frame
+                .config
+                .resolution_multiplier,
+            scale
+        );
     }
 }

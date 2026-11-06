@@ -450,11 +450,37 @@ impl SceneRenderer {
             resources: &mut self.texture_resources,
             copies: &mut self.framebuffer_copies,
             profiling: &self.profiling,
+            presentation: false,
         };
         self.material_bindings = textures
             .iter()
             .map(|texture| builder.build(texture, previous.next().flatten()))
             .collect();
+        self.presentation_bindings.clear();
+        if self.render_scale > 1 {
+            builder.presentation = true;
+            self.presentation_bindings = textures
+                .iter()
+                .zip(&self.material_bindings)
+                .map(|(texture, native)| {
+                    if std::iter::once(&texture.texture)
+                        .chain(texture.tex1.iter())
+                        .chain(texture.mip_levels.iter())
+                        .chain(texture.detail_tex.iter())
+                        .any(|binding| {
+                            matches!(
+                                binding.source,
+                                crate::hle::texture_request::TextureSource::Framebuffer(_)
+                            )
+                        })
+                    {
+                        builder.build(texture, None)
+                    } else {
+                        native.clone()
+                    }
+                })
+                .collect();
+        }
     }
 
     fn upload_draws(&self, device: &wgpu::Device, target: &TargetInputs) -> DrawUpload {
@@ -477,7 +503,10 @@ impl SceneRenderer {
                         material_index: Some(material_index),
                         fb_source: None,
                         ..
-                    } => self.material_bindings[material_index as usize].high_resolution_mask,
+                    } => self.presentation_bindings[material_index as usize].high_resolution_mask,
+                    DrawInputs::Rectangle {
+                        fb_source: Some(_), ..
+                    } => 1,
                     _ => 0,
                 };
                 uniform.lod_params[3] = self.render_scale as f32;
@@ -595,6 +624,7 @@ impl SceneRenderer {
                     DrawInputs::FramebufferCopy(copy) => Some(copy.clone()),
                     _ => None,
                 }),
+            self.render_scale,
         );
         self.upload_materials(device, queue, &inputs.textures);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -626,6 +656,7 @@ impl SceneRenderer {
                             copy,
                             &self.framebuffers,
                             &self.color_versions,
+                            &self.presentation_versions,
                             self.coherence.as_ref().map(|c| &c.owners),
                             &self.profiling,
                         );
@@ -833,6 +864,7 @@ impl SceneRenderer {
                             copy,
                             &self.framebuffers,
                             &self.color_versions,
+                            &self.presentation_versions,
                             self.coherence.as_ref().map(|c| &c.owners),
                             &self.profiling,
                         );
@@ -966,6 +998,11 @@ impl SceneRenderer {
                 .iter()
                 .map(|cache| &cache.bind_group)
                 .collect();
+            let presentation_bgs: Vec<_> = self
+                .presentation_bindings
+                .iter()
+                .map(|cache| &cache.bind_group)
+                .collect();
             let depth_bg = depth.map(|depth| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("workload-depth"),
@@ -1088,6 +1125,7 @@ impl SceneRenderer {
                         copy,
                         &self.framebuffers,
                         &self.color_versions,
+                        &self.presentation_versions,
                         self.coherence.as_ref().map(|c| &c.owners),
                         &self.profiling,
                     );
@@ -1153,6 +1191,11 @@ impl SceneRenderer {
                         presentation_depth_bg.as_ref()
                     } else {
                         depth_bg.as_ref()
+                    };
+                    let material_bgs = if presentation {
+                        &presentation_bgs
+                    } else {
+                        &material_bgs
                     };
                     let uniform_base = if presentation {
                         target.operations.len()
@@ -1267,13 +1310,14 @@ impl SceneRenderer {
                                     &mut pass,
                                     device,
                                     &operation.draw,
-                                    &material_bgs,
+                                    material_bgs,
                                     upload.rectangles.as_ref(),
                                     Some(&upload.uniforms),
                                     start as u32,
                                     target.rect_indices[start],
                                     any_depth,
                                     Some(&pipeline),
+                                    false,
                                 ),
                                 _ => {}
                             }
@@ -1392,13 +1436,14 @@ impl SceneRenderer {
                                     &mut pass,
                                     device,
                                     &operation.draw,
-                                    &material_bgs,
+                                    material_bgs,
                                     upload.rectangles.as_ref(),
                                     Some(&upload.uniforms),
                                     (uniform_base + slot) as u32,
                                     target.rect_indices[slot],
                                     any_depth,
                                     None,
+                                    presentation,
                                 );
                             }
                         }

@@ -108,7 +108,10 @@ class CaptureFailures(unittest.TestCase):
                     "tests::framebuffer_coherence::gpu::triangles::guest_route_gpu_triangle",
                     "tests::framebuffer_coherence::gpu::triangles::batches::guest_route_gpu_batch",
                     "tests::framebuffer_coherence::gpu::compatibility_literal_fill_matches_f4b3240",
-                    "tests::framebuffer_coherence::gpu::compatibility_literal_fill_then_invalid_projection_matches_67345dc"])
+                    "tests::framebuffer_coherence::gpu::compatibility_literal_fill_then_invalid_projection_matches_67345dc",
+                    "hle::capture::tests::legacy_scales_are_ignored_and_v3_preserves_effective_scale",
+                    "hle::capture::replay::state_tests::captures_record_the_effective_fixed_scale",
+                    "hle::capture::replay::sequence_tests::replay_options_cover_the_prefix_and_selected_crop"])
                 return subprocess.CompletedProcess(command, 101)
             for name in ["tmem_fixture_replay", "texture_decode_gpu", "texture_residency", "texture_residency_pressure"]:
                 self.assertIn(name, command)
@@ -131,6 +134,19 @@ class CaptureFailures(unittest.TestCase):
         self.assertEqual(commands[1][-2:], ["--test", "tmem_fixture_replay"])
         for config in ci.COMMANDS:
             self.assertEqual(ci.test_commands(self.checkout, config, "Darwin"), [ci.COMMANDS[config]])
+
+    def test_windows_selects_scaled_feedback_and_public_api_when_present(self):
+        for name in ["fast3d/src/render/upscaling_tests.rs", "fast3d/src/render/framebuffers/copies_tests.rs", "fast3d/tests/upscaling.rs"]:
+            path = self.checkout / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        commands = ci.test_commands(self.checkout, "all-features", "Windows")
+        self.assertIn("render::upscaling_tests::", commands[0])
+        self.assertIn("render::framebuffers::copies::tests::", commands[0])
+        self.assertIn("hle::capture::tests::legacy_scales_are_ignored_and_v3_preserves_effective_scale", commands[0])
+        self.assertIn("hle::capture::replay::state_tests::captures_record_the_effective_fixed_scale", commands[0])
+        self.assertIn("hle::capture::replay::sequence_tests::replay_options_cover_the_prefix_and_selected_crop", commands[0])
+        self.assertIn("upscaling", commands[1])
 
     def test_dependency_artifacts_are_authenticated(self):
         def runner(command, **kwargs):

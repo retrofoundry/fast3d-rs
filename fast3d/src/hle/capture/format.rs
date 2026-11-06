@@ -2,7 +2,7 @@ use super::*;
 use crate::{ClearPolicy, RendererConfig};
 
 const MAGIC: &[u8; 8] = b"F3DCAP\0\0";
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const LITTLE_ENDIAN: u32 = 0x0403_0201;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -34,6 +34,10 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn validate(&self) -> Result<()> {
+        self.frame
+            .config
+            .validate()
+            .map_err(|error| invalid(&error.to_string()))?;
         if self.frame.width == 0
             || self.frame.height == 0
             || self.frame.width > 16384
@@ -190,7 +194,8 @@ impl Fixture {
         let dither_seed = r.u32()?;
         let width = r.u32()?;
         let height = r.u32()?;
-        let resolution_multiplier = r.u32()?;
+        let stored_multiplier = r.u32()?;
+        let resolution_multiplier = if version >= 3 { stored_multiplier } else { 1 };
         let sample_count = r.u32()?;
         let present_mode = match r.u32()? {
             0 => wgpu::PresentMode::AutoVsync,
