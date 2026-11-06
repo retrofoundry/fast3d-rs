@@ -371,7 +371,7 @@ impl Sequence {
                 diagnostics.push(task_diags);
                 adapter_ms += now_ms() - start;
             }
-            renderer.present_to(
+            renderer.present_native_to(
                 &super::replay::PresentationHardware(fixture.frame.vi),
                 &view,
             );

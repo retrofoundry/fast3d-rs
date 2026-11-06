@@ -933,6 +933,15 @@ impl Renderer {
             result.scene.use_compatibility_policy();
             self.inner.coherence.as_mut().unwrap().begin_task();
         }
+        let prepared = match self.inner.prepare_inputs(&self.device, &result.scene) {
+            Ok(inputs) => inputs,
+            Err(diagnostic) => {
+                diags.emit(diagnostic);
+                result.diags.push(diagnostic);
+                result.termination = inspect::WalkTermination::Rejected;
+                return result.summary(false);
+            }
+        };
         #[cfg(not(target_arch = "wasm32"))]
         let staged = native.then(|| {
             let target = workload.as_ref().unwrap().targets[0].id;
@@ -942,12 +951,12 @@ impl Renderer {
         if let Some(coherence) = &mut self.inner.coherence {
             coherence.strict_fills = native;
         }
-        let scanout = self.inner.render_into_store(
-            &self.device,
-            &self.queue,
-            &result.scene,
-            self.config.clear_policy,
-        );
+        self.inner.diagnostics.clear();
+        self.inner.dropped_runs = 0;
+        let scanout = prepared.as_ref().and_then(|inputs| {
+            self.inner
+                .render_prepared(&self.device, &self.queue, inputs, self.config.clear_policy)
+        });
         #[cfg(not(target_arch = "wasm32"))]
         let scanout = if let Some(task) = staged {
             let valid = self
@@ -1274,18 +1283,18 @@ impl Renderer {
     /// golden capture). The caller owns acquisition + present. No-op if nothing has been rendered
     /// yet (leaves `target` as-is).
     pub fn present_to(&mut self, hw: &impl Hardware, target: &wgpu::TextureView) {
-        self.present_to_source(self.scanout_source(hw.vi()), target);
+        self.present_to_source(self.scanout_source(hw.vi()), target, false);
     }
 
     /// Scan out the last rendered framebuffer without consulting guest memory or VI registers.
     /// Uses that target's retained logical height.
     pub fn present_last_to(&mut self, target: &wgpu::TextureView) {
-        self.present_to_source(self.scanout_source(None), target);
+        self.present_to_source(self.scanout_source(None), target, false);
     }
 
     /// Present a full-width HOST color address into `target`, falling back to the last rendered target.
     pub fn present_host_to(&mut self, address: Option<u64>, target: &wgpu::TextureView) {
-        self.present_to_source(self.host_scanout_source(address), target);
+        self.present_to_source(self.host_scanout_source(address), target, false);
     }
 
     fn host_scanout_source(&self, address: Option<u64>) -> Option<ScanoutSource> {
@@ -1298,7 +1307,17 @@ impl Renderer {
             .or_else(|| self.scanout_source(None))
     }
 
-    fn present_to_source(&mut self, src: Option<ScanoutSource>, target: &wgpu::TextureView) {
+    #[cfg(feature = "capture")]
+    pub(crate) fn present_native_to(&mut self, hw: &impl Hardware, target: &wgpu::TextureView) {
+        self.present_to_source(self.scanout_source(hw.vi()), target, true);
+    }
+
+    fn present_to_source(
+        &mut self,
+        src: Option<ScanoutSource>,
+        target: &wgpu::TextureView,
+        native: bool,
+    ) {
         let _span = self.inner.profiling.span("presentation");
         self.mark_mutation();
         // Always create an encoder + run the render hook, even when nothing has been scanned out yet
@@ -1310,8 +1329,13 @@ impl Renderer {
                 label: Some("present_to"),
             });
         if let Some(src) = src {
-            self.inner
-                .scanout(&self.device, &mut encoder, target, src.target, src.rows);
+            if native {
+                self.inner
+                    .scanout_native(&self.device, &mut encoder, target, src.target, src.rows);
+            } else {
+                self.inner
+                    .scanout(&self.device, &mut encoder, target, src.target, src.rows);
+            }
         }
         self.record_and_submit(encoder, target);
     }

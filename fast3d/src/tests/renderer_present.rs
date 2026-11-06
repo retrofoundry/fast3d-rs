@@ -236,7 +236,7 @@ fn vi_scanout_maps_rows_and_alternates_stored_buffers() {
             ..Default::default()
         };
         let pixels = pixels_from_render(&device, &queue, 512, height, format, |view| {
-            renderer.present_to_source(renderer.scanout_source(Some(vi)), view);
+            renderer.present_to_source(renderer.scanout_source(Some(vi)), view, false);
         });
         for row in 0..height {
             let source = row + offset;

@@ -40,6 +40,13 @@ impl SceneRenderer {
                 staged.color.as_image_copy(),
                 old.color.size(),
             );
+            if let (Some(old), Some(staged)) = (&old.presentation, &staged.presentation) {
+                encoder.copy_texture_to_texture(
+                    old.texture.as_image_copy(),
+                    staged.texture.as_image_copy(),
+                    old.texture.size(),
+                );
+            }
             queue.submit([encoder.finish()]);
             self.framebuffers.insert(id, staged);
         }
