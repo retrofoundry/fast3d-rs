@@ -934,6 +934,7 @@ impl Renderer {
         }
         if let Some(coherence) = &mut self.inner.coherence {
             coherence.begin_task();
+            coherence.strict_fills = native;
         }
         let scanout = self.inner.render_into_store(
             &self.device,

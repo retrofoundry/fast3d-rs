@@ -34,7 +34,8 @@ def test_commands(checkout, config, system):
     command = ["cargo", "test", "--locked", "--no-fail-fast", "-p", "fast3d"] + features[config]
     commands = [command + ["--lib", "--", "tests::goldens::", "tests::tmem_witnesses::",
                            "render::texture_decode::gpu_tests::",
-                           "tests::framebuffer_coherence::gpu::guest_route_"]]
+                           "tests::framebuffer_coherence::gpu::guest_route_",
+                           "tests::framebuffer_coherence::gpu::compatibility_literal_fill_matches_f4b3240"]]
     if config == "all-features":
         targets = ["--test", "tmem_fixture_replay"]
         for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure", "rt64_v5"]:
