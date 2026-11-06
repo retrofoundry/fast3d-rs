@@ -27,9 +27,6 @@ impl SceneRenderer {
         id: TargetId,
     ) -> StrictTask {
         let framebuffer = self.framebuffers.remove(&id);
-        let depth = self.depthbuffers.clone();
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let mut copied = false;
         if let Some(old) = &framebuffer {
             let staged = self.make_fb(
                 device,
@@ -37,6 +34,7 @@ impl SceneRenderer {
                 (old.color.width(), old.color.height()),
                 old.height,
             );
+            let mut encoder = device.create_command_encoder(&Default::default());
             encoder.copy_texture_to_texture(
                 old.color.as_image_copy(),
                 staged.color.as_image_copy(),
@@ -49,23 +47,8 @@ impl SceneRenderer {
                     old.texture.size(),
                 );
             }
-            copied = true;
-            self.framebuffers.insert(id, staged);
-        }
-        for depth in self.depthbuffers.values_mut() {
-            if let Some(old) = &mut depth.presentation {
-                let staged = DepthImage::new(
-                    device,
-                    old.layout,
-                    (old.texture.width(), old.texture.height()),
-                );
-                self.depth_pipeline.copy(device, &mut encoder, old, &staged);
-                **old = staged;
-                copied = true;
-            }
-        }
-        if copied {
             queue.submit([encoder.finish()]);
+            self.framebuffers.insert(id, staged);
         }
         let staged = self.coherence.as_mut().unwrap().stage_task();
         StrictTask {
@@ -75,7 +58,7 @@ impl SceneRenderer {
             descriptors: self.target_descriptors.clone(),
             first_touch: self.first_touch.clone(),
             versions: self.color_versions.clone(),
-            depth,
+            depth: self.depthbuffers.clone(),
         }
     }
 
