@@ -229,6 +229,21 @@ fn setup(cycle: u32, paired: bool) -> (DlBuilder, Vec<(u32, u32)>) {
     (dl, commands)
 }
 
+fn textured_setup(cycle: u32, paired: bool) -> (DlBuilder, Vec<(u32, u32)>) {
+    let (mut dl, mut commands) = setup(cycle, paired);
+    let texture = dl.bytes(8, &[0xff; 8]);
+    commands.extend([
+        gsp_texture(0xffff, 0xffff, 0, 0, true),
+        gdp_set_texture_image(0, 2, 1, texture),
+        gdp_set_tile(0, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        gdp_set_tile(0, 2, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0),
+        gdp_load_block(0, 0, 0, 0, 0),
+        gdp_set_tile_size(0, 0, 0, 0, 0),
+        (0xfcff_ffff, 0xfffc_f279),
+    ]);
+    (dl, commands)
+}
+
 fn combine(input: Option<(usize, bool, u32)>) -> (u32, u32) {
     let mut color = [CcPass {
         a: 15,
@@ -261,7 +276,11 @@ fn finish(mut dl: DlBuilder, mut commands: Vec<(u32, u32)>) -> (crate::hle::Inte
 
 fn assert_rejected(cycle_type: u32, command: (u32, u32), kind: DiagKind) {
     for draw in DRAWS {
-        let (dl, mut commands) = setup(cycle_type, true);
+        let (dl, mut commands) = if kind == DiagKind::UnsupportedTextureConversion {
+            textured_setup(cycle_type, true)
+        } else {
+            setup(cycle_type, true)
+        };
         commands.push(command);
         let offset = commands.len() as u64 * 8;
         commands.extend(draw.commands());
@@ -341,6 +360,43 @@ fn yuv_and_chroma_key_mode_are_rejected() {
             (0xef00_0d00 | cycle << 20, 0x0f0a_4000),
             DiagKind::UnsupportedChromaKey,
         );
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn unused_texture_conversion_preserves_shaded_triangle() {
+    use super::common::{pixel, render_to_pixels};
+    use crate::render::{headless_device, SceneRenderer};
+    use n64_gbi::consts::{G_SHADE, G_SHADING_SMOOTH};
+
+    let (device, queue, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 320, 240, dual);
+    for (cycle, combine_h) in [(0, 0xfffe_793c), (0, 0xfffc_f93c), (1, 0xfffe_793c)] {
+        for mode in [
+            gdp_set_other_mode_h(9, 3, 0),
+            gdp_set_other_mode_h(9, 3, 0xa00),
+            (0xef00_0000 | cycle << 20, 0x0f0a_4000),
+        ] {
+            let (dl, mut commands) = setup(cycle, true);
+            commands.extend([
+                gsp_set_geometrymode(G_SHADE | G_SHADING_SMOOTH),
+                (0xfcff_ffff, combine_h),
+                mode,
+                gsp_1triangle(0, 1, 2),
+            ]);
+            let (result, _) = finish(dl, commands);
+            let pixels = render_to_pixels(&device, &queue, &mut renderer, &result.scene, 320, 240);
+            assert_eq!(
+                pixel(&pixels, 320, 240, 180),
+                [255, 0, 0, 255],
+                "cycle={cycle} combine_h={combine_h:#x} mode={mode:?}: {:?}",
+                result.diags
+            );
+            assert!(result.diags.is_empty(), "{:?}", result.diags);
+            assert_eq!(result.summary(true).tris, 1);
+            assert_eq!(result.dropped_runs, 0);
+        }
     }
 }
 
@@ -426,7 +482,11 @@ fn rejected_register_inputs_recover_after_cached_draw() {
                     if !paired && matches!(draw, Draw::TexRect | Draw::TexRectFlip) {
                         continue;
                     }
-                    let (dl, mut commands) = setup(cycle, paired);
+                    let (dl, mut commands) = if kind == DiagKind::UnsupportedTextureConversion {
+                        textured_setup(cycle, paired)
+                    } else {
+                        setup(cycle, paired)
+                    };
                     commands.extend(draw.commands());
                     commands.push(command);
                     let first = commands.len() as u64 * 8;
@@ -617,7 +677,11 @@ fn fill_rect_keeps_register_snapshots_and_rejects_consuming_modes() {
                 DiagKind::UnsupportedChromaKey,
             ),
         ] {
-            let (dl, mut commands) = setup(cycle, true);
+            let (dl, mut commands) = if kind == DiagKind::UnsupportedTextureConversion {
+                textured_setup(cycle, true)
+            } else {
+                setup(cycle, true)
+            };
             commands.push(command);
             let offset = commands.len() as u64 * 8;
             commands.push(gdp_fill_rectangle(0, 0, 10, 10));
@@ -754,7 +818,7 @@ fn unsupported_register_inputs_render_no_pixels() {
                     gdp_set_other_mode_h(9, 3, 0xa00),
                     gdp_set_other_mode_h(8, 1, 0x100),
                 ] {
-                    let (dl, mut commands) = setup(cycle_type, true);
+                    let (dl, mut commands) = textured_setup(cycle_type, true);
                     commands.push(command);
                     commands.extend(draw.commands());
                     let (rejected, _) = finish(dl, commands);
@@ -791,6 +855,7 @@ fn f3d_registers_and_conversion_mode_use_shared_rdp_state() {
             (0xeb00_0000, 0x0abc_1234),
             (0xea12_3fed, 0x5678_9abc),
             (0xff10_013f, 0x10000),
+            (0xfcff_ffff, 0xfffc_f279),
             mode,
             (0xf600_4004, 0),
             (0xb800_0000, 0),
@@ -811,7 +876,7 @@ fn f3d_registers_and_conversion_mode_use_shared_rdp_state() {
             result.rdp.key.map(|channel| channel.width),
             [0xabc, 0x123, 0xfed]
         );
-        assert_eq!(result.diags, [Diagnostic { at: 40, kind }]);
+        assert_eq!(result.diags, [Diagnostic { at: 48, kind }]);
         assert_eq!(result.summary(false).errors, 1);
         assert_eq!(result.dropped_runs, 1);
         assert!(result.scene.framebuffer_pairs.is_empty());
@@ -839,7 +904,7 @@ fn textconv_partial_writes_reject_and_unrelated_writes_preserve_mode() {
         ),
         (vec![gdp_set_cycle_type(1)], false),
     ] {
-        let (dl, mut prefix) = setup(0, true);
+        let (dl, mut prefix) = textured_setup(0, true);
         prefix.extend(commands);
         let offset = prefix.len() as u64 * 8;
         prefix.extend(Draw::Triangle.commands());

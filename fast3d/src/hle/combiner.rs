@@ -558,6 +558,8 @@ pub(crate) fn validate_conversion_modes(
         Some(crate::diag::DiagKind::UnsupportedChromaKey)
     } else if rdp.texture_conversion_set
         && rdp.other_mode_h & (7 << 9) != crate::hle::consts::G_TC_FILT
+        && physical_texture_uses(&decode_combine(rdp.combine_l, rdp.combine_h), cycle_type)
+            != (false, false)
     {
         Some(crate::diag::DiagKind::UnsupportedTextureConversion)
     } else {
