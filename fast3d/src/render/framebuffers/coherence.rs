@@ -1926,7 +1926,7 @@ struct ReplayGeometry {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ReplayGeometry {
-    fn read_vertices(&mut self, bytes: Vec<u8>, width: usize, height: u32) {
+    fn read_vertices(&mut self, bytes: &[u8], width: usize, height: u32) {
         for vertex in bytes.as_chunks::<48>().0.iter() {
             let p: [f32; 4] = std::array::from_fn(|i| {
                 f32::from_ne_bytes(vertex[i * 4..i * 4 + 4].try_into().unwrap())
@@ -2045,6 +2045,7 @@ struct Snapshot {
     first_draw: usize,
     generation: u64,
     native_fills: Option<Vec<Option<super::native_fill::FillReadback>>>,
+    native_triangles: Option<Readback>,
 }
 
 struct PendingWrite {
@@ -2191,6 +2192,7 @@ impl Coherence {
     ) {
         let generation = self.generation;
         self.generation += draws.len() as u64 * 2;
+        let vertex_buffer = vertices;
         let vertices = vertices
             .filter(|_| {
                 color.is_some_and(|(writer, _)| !writer.depth && (writer.layout.fmt, writer.layout.siz) == (0, 2))
@@ -2200,6 +2202,10 @@ impl Coherence {
                     })
             })
             .map(|buffer| Readback::vertices(device, encoder, buffer));
+        let has_triangles = draws
+            .iter()
+            .any(|draw| matches!(draw.geometry, CoverageGeometry::Triangles(_)));
+        let mut native_triangles = None;
         let native_fills = self.strict_fills.then(|| {
             let (writer, texture) = color.unwrap();
             let width = texture.width();
@@ -2208,7 +2214,21 @@ impl Coherence {
             let fills = draws
                 .iter()
                 .skip(first_draw)
-                .map(|draw| {
+                .enumerate()
+                .map(|(index, draw)| {
+                    let slot = (first_draw + index + 1) as u32;
+                    if matches!(draw.geometry, CoverageGeometry::Triangles(_)) {
+                        super::native_triangle::dispatch(
+                            device,
+                            encoder,
+                            &store,
+                            vertex_buffer.unwrap(),
+                            draw,
+                            render_height,
+                            slot,
+                        );
+                        return None;
+                    }
                     let (x, y, w, h) = draw.possible_bounds(&[]).unwrap();
                     let bounds = (
                         x.min(width),
@@ -2222,9 +2242,30 @@ impl Coherence {
                         bounds,
                         ((writer.address >> 1) & 1) as u32,
                         draw.literal,
-                    )
+                        if has_triangles { slot } else { 1 },
+                    );
+                    (draw.literal.is_some() && !has_triangles && bounds.2 != 0 && bounds.3 != 0)
+                        .then(|| super::native_fill::FillReadback {
+                            bounds,
+                            readback: Readback::native_fill(
+                                device,
+                                encoder,
+                                &store.buffer,
+                                width,
+                                bounds,
+                            ),
+                        })
                 })
                 .collect::<Vec<_>>();
+            if has_triangles {
+                native_triangles = Some(Readback::native_fill(
+                    device,
+                    encoder,
+                    &store.buffer,
+                    width,
+                    (0, 0, width, height),
+                ));
+            }
             self.native_fill_store = Some(store);
             fills
         });
@@ -2240,6 +2281,7 @@ impl Coherence {
             first_draw,
             generation,
             native_fills,
+            native_triangles,
         });
     }
 
@@ -2274,11 +2316,13 @@ impl Coherence {
                 continue;
             };
             let mut geometry = ReplayGeometry::default();
-            geometry.read_vertices(
-                readback.read(device),
-                snapshot.coverage.width,
-                snapshot.render_height,
-            );
+            let bytes = readback.read(device);
+            if !snapshot.coverage.width.is_power_of_two()
+                || !snapshot.render_height.is_power_of_two()
+            {
+                return Err(UnsupportedGuestTask);
+            }
+            geometry.read_vertices(&bytes, snapshot.coverage.width, snapshot.render_height);
             for draw in &snapshot.draws {
                 let CoverageGeometry::Triangles(triangles) = &draw.geometry else {
                     continue;
@@ -2293,9 +2337,19 @@ impl Coherence {
                     {
                         return Err(UnsupportedGuestTask);
                     }
+                    let offset = index as usize * 48 + 12;
+                    let w = f32::from_ne_bytes(bytes[offset..offset + 4].try_into().unwrap());
+                    if w != 1.0
+                        || geometry.vertices[index as usize]
+                            .unwrap()
+                            .position
+                            .iter()
+                            .any(|v| (v * 4.0).fract() != 0.0)
+                    {
+                        return Err(UnsupportedGuestTask);
+                    }
                 }
             }
-            return Err(UnsupportedGuestTask);
         }
         Ok(())
     }
@@ -2611,6 +2665,42 @@ impl Coherence {
         let mut scratch = std::mem::take(&mut self.resolve_scratch);
         for snapshot in std::mem::take(&mut self.snapshots) {
             self.commit_pending(snapshot.generation);
+            if let Some(readback) = snapshot.native_triangles {
+                let (writer, _) = snapshot.color.unwrap();
+                let bytes = readback.read(device);
+                let values = bytes.as_chunks::<12>().0;
+                let value = |pixel: &[u8; 12], offset| {
+                    u32::from_ne_bytes(pixel[offset..offset + 4].try_into().unwrap())
+                };
+                let mut start = 0;
+                while start < values.len() {
+                    let slot = value(&values[start], 8);
+                    if slot == 0 {
+                        start += 1;
+                        continue;
+                    }
+                    let mut end = start + 1;
+                    while end < values.len() && value(&values[end], 8) == slot {
+                        end += 1;
+                    }
+                    self.pending.push(PendingWrite {
+                        generation: snapshot.generation + u64::from(slot) * 2,
+                        writer,
+                        address: writer.address + writer.byte_offset(start),
+                        bytes: values[start..end]
+                            .iter()
+                            .flat_map(|p| self.encoding.encode_u16(value(p, 0) as u16))
+                            .collect(),
+                        coverage: values[start..end]
+                            .iter()
+                            .map(|p| value(p, 4) as u8)
+                            .collect(),
+                        invalidate: None,
+                    });
+                    start = end;
+                }
+                continue;
+            }
             let width = snapshot.coverage.width;
             let height = snapshot.render_height;
             let target_height = snapshot.coverage.height;
@@ -2660,7 +2750,7 @@ impl Coherence {
                 geometry.vertices.clear();
                 if coverage_enabled || native_candidate {
                     if let Some(readback) = projected_vertices.take() {
-                        geometry.read_vertices(readback.read(device), width, height);
+                        geometry.read_vertices(&readback.read(device), width, height);
                     }
                     geometry.prepare(&snapshot.draws);
                 }

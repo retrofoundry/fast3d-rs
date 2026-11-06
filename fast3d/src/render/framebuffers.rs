@@ -1,5 +1,6 @@
 pub(crate) mod coherence;
 mod native_fill;
+mod native_triangle;
 pub(crate) mod targets;
 pub(super) mod writeback;
 

@@ -54,6 +54,14 @@ impl Workload {
             return Err(UnsupportedGuestTask);
         }
         let (width, height) = target.logical_extent;
+        let has_triangle = target
+            .operations
+            .iter()
+            .any(|op| matches!(op.draw, SceneOp::Tris(_)));
+        if has_triangle && (!width.is_power_of_two() || !height.is_power_of_two()) {
+            return Err(UnsupportedGuestTask);
+        }
+        let mut triangles = 0;
         let mut known: Vec<std::ops::Range<u64>> = Vec::new();
         for operation in &target.operations {
             if operation.scissor.mode != 0 {
@@ -78,6 +86,9 @@ impl Workload {
                     fb_source: None,
                     ..
                 } => {
+                    if has_triangle {
+                        return Err(UnsupportedGuestTask);
+                    }
                     let mode = scene.render_modes[*render_mode_index as usize];
                     let material = &scene.materials[*material_index as usize];
                     let uniform = super::CombinerUniform::from_run(material, &mode, *fog_color);
@@ -106,10 +117,37 @@ impl Workload {
                     let mode = scene.render_modes[run.render_mode_index as usize];
                     let material = &scene.materials[run.material_index as usize];
                     let uniform = super::CombinerUniform::from_run(material, &mode, run.fog_color);
-                    super::framebuffers::writeback::Combiner::new(&uniform, mode)
+                    let combiner = super::framebuffers::writeback::Combiner::new(&uniform, mode)
                         .ok_or(UnsupportedGuestTask)?;
-                    if mode.key_enabled || mode.force_blend || mode.blender_mux != 0 {
+                    triangles += run.index_count / 3;
+                    if triangles != 1
+                        || run.index_count != 3
+                        || combiner.strict_color().is_none()
+                        || mode.rgb_dither != 0
+                        || mode.alpha_dither != 3
+                        || mode.key_enabled
+                        || mode.force_blend
+                        || mode.blender_mux != 0
+                        || !matches!(mode.cvg_dst, 0 | 2)
+                    {
                         return Err(UnsupportedGuestTask);
+                    }
+                    if mode.image_read && mode.cvg_dst == 0 {
+                        let s = operation.scissor;
+                        for row in s.uly.max(0) as u32..(s.lry.max(0) as u32).min(height) {
+                            let left = (s.ulx.max(0) as u32).min(width);
+                            let right = (s.lrx.max(0) as u32).min(width);
+                            let start =
+                                address + (u64::from(row) * u64::from(width) + u64::from(left)) * 2;
+                            let end = address
+                                + (u64::from(row) * u64::from(width) + u64::from(right)) * 2;
+                            if (start..end)
+                                .step_by(2)
+                                .any(|p| !known.iter().any(|range| range.contains(&p)))
+                            {
+                                return Err(UnsupportedGuestTask);
+                            }
+                        }
                     }
                     continue;
                 }
