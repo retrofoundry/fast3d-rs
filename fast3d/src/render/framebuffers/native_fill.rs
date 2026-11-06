@@ -44,10 +44,11 @@ impl Store {
         bounds: (u32, u32, u32, u32),
         parity: u32,
         literal: Option<u32>,
-    ) -> Option<FillReadback> {
+        writer: u32,
+    ) {
         let (x, y, w, h) = bounds;
         if w == 0 || h == 0 {
-            return None;
+            return;
         }
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("native-fill"),
@@ -59,7 +60,7 @@ impl Store {
                 self.extent.0,
                 parity,
                 literal.unwrap_or(0),
-                u32::from(literal.is_some()),
+                if literal.is_some() { writer } else { 0 },
             ]),
             usage: wgpu::BufferUsages::UNIFORM,
         });
@@ -86,16 +87,12 @@ impl Store {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
         }
-        literal.map(|_| FillReadback {
-            bounds,
-            readback: Readback::native_fill(device, encoder, &self.buffer, self.extent.0, bounds),
-        })
     }
 }
 
 pub(super) struct FillReadback {
-    bounds: (u32, u32, u32, u32),
-    readback: Readback,
+    pub bounds: (u32, u32, u32, u32),
+    pub readback: Readback,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -122,7 +119,7 @@ impl Pixels {
         let data = &self.bytes[index * 12..index * 12 + 12];
         let [word, coverage, valid] =
             std::array::from_fn(|i| u32::from_ne_bytes(data[i * 4..i * 4 + 4].try_into().unwrap()));
-        assert_eq!(valid, 1);
+        assert_ne!(valid, 0);
         (word as u16, coverage as u8)
     }
 }

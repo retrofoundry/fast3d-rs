@@ -13,6 +13,32 @@ pub(in crate::render) struct Combiner {
 }
 
 impl Combiner {
+    pub(in crate::render) fn strict_color(&self) -> Option<u16> {
+        let s = &self.selectors;
+        if [s.ca, s.cb, s.cc] != [ColorIn::Zero; 3]
+            || [s.aa, s.ab, s.ac] != [AlphaIn::Zero; 3]
+            || !matches!(
+                s.cd,
+                ColorIn::Primitive | ColorIn::Environment | ColorIn::One | ColorIn::Zero
+            )
+            || !matches!(
+                s.ad,
+                AlphaIn::Primitive | AlphaIn::Environment | AlphaIn::One
+            )
+        {
+            return None;
+        }
+        let c = self.color([1.0; 4])?;
+        if c[3] != 1.0 || c[..3].iter().any(|&v| v != 0.0 && v != 1.0) {
+            return None;
+        }
+        Some(
+            (u16::from(c[0] == 1.0) * 0xf800)
+                | (u16::from(c[1] == 1.0) * 0x07c0)
+                | (u16::from(c[2] == 1.0) * 0x003e),
+        )
+    }
+
     pub fn new(
         uniform: &crate::render::CombinerUniform,
         mode: crate::hle::RenderMode,

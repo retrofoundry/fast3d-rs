@@ -45,6 +45,32 @@ case is not a claim of equality with quantized RDP setup. The walker does not
 model arbitrary overflow, scissor clipping, interpolation, Z correction or VI.
 AA render modes still have binary coverage in these native-resolution HLE tests.
 
+The strict guest triangle kernel separately evaluates the staggered eight-sample
+RDP mask from GPU RSP output. Admission requires finite clip coordinates with w=1, power-of-two projection
+extents, z within
+the clip interval, and projected quarter-pixel coordinates within
+x=[-1024,1023.75], y=[-2048,2047.75]. Setup rounds signed slopes away from zero
+before clearing their low three bits, advances each quarter-row with the
+truncated slope, and retains the endpoint's sticky bit. The largest slope
+numerator is `8191*65536`; the bounded edge products and signed areas fit i32.
+This validates a reconstructed setup domain, not arbitrary microcode setup.
+
+`guest-triangle-e-counts.bin` contains 320×32 literal u8 counts from the archived
+E geometry calibration: vertices (3.25,3.25), (316.75,6.75), (8.25,29.5), all
+counts 0–8, including 515 partially covered pixels. Both independent reference
+replays agreed before this kernel existed. Its SHA-256 is
+`fe5418c0a67667cd0cd01c64c76c2830f4e5de285920ab320b8634df35b422c4`.
+The strict GPU tests also retain W3's literal hardware RGBA16 edge row and compare
+complete native words and coverage with W3 replay, with AA on/off and both
+windings. Presentation sampling remains as described above.
+
+This strict slice accepts one triangle per task, direct primitive/environment/
+one/zero RGB passes with endpoint channels and opaque direct alpha, CLAMP/FULL,
+and no Z, texture, key, alpha or blend effects. IM_RD CLAMP requires literal
+initialization of the entire scissor earlier in that task. Normal rectangles
+cannot share a strict triangle task. Destination history and ordered triangle
+batches remain outside admission.
+
 The IMAGE builders initialize color/depth memory, set viewport/scissor and end
 with FullSync. Captures record the final color-image origin and width, vertical
 endpoints `0..2*height` and unit X/Y scales (`1024`). The decoded VI height equals
