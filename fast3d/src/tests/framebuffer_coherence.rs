@@ -145,6 +145,67 @@ fn built(mut b: DlBuilder, mut dl: Vec<Command>) -> Built {
 }
 
 #[test]
+fn writeback_cvg_policy_survives_later_othermode() {
+    for triangle in [false, true] {
+        let mut b = DlBuilder::new();
+        let vertices = b.vertices(&[[-1, -1], [1, -1], [0, 1]].map(|[x, y]| VtxColored {
+            x,
+            y,
+            z: 0,
+            flag: 0,
+            s: 0,
+            t: 0,
+            r: 64,
+            g: 128,
+            b: 192,
+            a: 0,
+        }));
+        let mut dl = Vec::new();
+        image(&mut dl, FB, 32, 24, 0, 2);
+        dl.extend([
+            combine(3, 3),
+            gsp_vertex(0, 3, vertices),
+            (0xef00_0000 | G_TC_FILT | 0xf0, 0),
+        ]);
+        dl.push(if triangle {
+            gsp_1triangle(0, 1, 2)
+        } else {
+            gdp_fill_rectangle(0, 0, 32, 32)
+        });
+        dl.push((0xef00_0000 | G_TC_FILT | 0xf0, CVG_DST_FULL));
+        dl.push(if triangle {
+            gsp_1triangle(0, 1, 2)
+        } else {
+            gdp_fill_rectangle(32, 0, 64, 32)
+        });
+        dl.push((0xef00_0000 | G_TC_FILT | 0x30, CVG_DST_SAVE));
+        let built = built(b, dl);
+        let result = crate::hle::interpret_rdram(&built.rdram, built.entry);
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
+        let modes: Vec<_> = result
+            .scene
+            .framebuffer_pairs
+            .iter()
+            .flat_map(|pair| &pair.ops)
+            .filter_map(|op| {
+                let index = match op {
+                    crate::scene::SceneOp::TexRect {
+                        render_mode_index, ..
+                    } => *render_mode_index,
+                    crate::scene::SceneOp::Tris(run) => run.render_mode_index,
+                    _ => return None,
+                };
+                Some(result.scene.render_modes[index as usize])
+            })
+            .collect();
+        assert_eq!(modes.len(), 2);
+        assert_ne!(modes[0], modes[1]);
+        assert_eq!(modes[0].cvg_dst, 0);
+        assert_eq!(modes[1].cvg_dst, 2);
+    }
+}
+
+#[test]
 fn pause_setup_and_ready_record_without_rejections() {
     let built = built(DlBuilder::new(), [setup(), ready()].concat());
     let mut state = crate::hle::interp::FramebufferState::default();
@@ -389,6 +450,193 @@ mod gpu {
     fn word(memory: &Memory, address: u32, pixel: usize) -> u16 {
         let start = address as usize + pixel * 2;
         u16::from_ne_bytes(memory.0[start..start + 2].try_into().unwrap())
+    }
+
+    #[test]
+    fn writeback_copy_alpha_rejection_demotes_prior_coverage() {
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            for copy in [false, true] {
+                r.reset();
+                let mut memory = Memory(vec![0; OUTPUT as usize + 320 * 240 * 2]);
+                let mut b = DlBuilder::new();
+                let transparent = b.bytes(8, &[0; 32]);
+                let mut dl = Vec::new();
+                image(&mut dl, FB, 32, 24, 0, 2);
+                mode(&mut dl, 0, AA_EN);
+                dl.extend([
+                    combine(3, 3),
+                    gdp_set_prim_color(0, 0, 0x4080c000),
+                    gdp_fill_rectangle(0, 0, 128, 96),
+                ]);
+                if copy {
+                    mode(&mut dl, 2, AC_THRESHOLD);
+                    dl.extend(gdp_load_texture_block(0, 2, 4, 4, transparent, 2, 0, 2, 0));
+                    dl.extend(gsp_texture_rectangle(
+                        32, 32, 60, 60, 0, 0, 0, 4096, 1024, false,
+                    ));
+                }
+                run(&mut r, &mut memory, built(b, dl));
+                assert_eq!(
+                    word(&memory, FB, 12 * 32 + 12),
+                    if copy { 0x4430 } else { 0x4431 },
+                    "fallback={fallback}, copy={copy}"
+                );
+                assert_eq!(word(&memory, FB, 3 * 32 + 3), 0x4431);
+            }
+        }
+    }
+
+    #[test]
+    fn writeback_full_triangle_ignores_opacity() {
+        full_writeback_ignores_opacity(true);
+    }
+
+    #[test]
+    fn writeback_full_rectangle_ignores_opacity() {
+        full_writeback_ignores_opacity(false);
+    }
+
+    fn full_writeback_ignores_opacity(triangle: bool) {
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            let mut memory = Memory(vec![0; OUTPUT as usize + 320 * 240 * 2]);
+            for cycle in [0, 1] {
+                for alpha in [0, 4, 128, 255] {
+                    r.reset();
+                    let mut b = DlBuilder::new();
+                    let viewport = b.viewport(Vp {
+                        vscale: [64, 48, 511, 0],
+                        vtrans: [64, 48, 511, 0],
+                    });
+                    let vertices =
+                        b.vertices(&[[-1, -1], [1, -1], [0, 1]].map(|[x, y]| VtxColored {
+                            x,
+                            y,
+                            z: 0,
+                            flag: 0,
+                            s: 0,
+                            t: 0,
+                            r: 64,
+                            g: 128,
+                            b: 192,
+                            a: alpha,
+                        }));
+                    let mut dl = Vec::new();
+                    image(&mut dl, FB, 32, 24, 0, 2);
+                    mode(&mut dl, cycle, AA_EN);
+                    dl.extend([combine(4, 4), gsp_viewport(viewport)]);
+                    if triangle {
+                        dl.extend([gsp_vertex(0, 3, vertices), gsp_1triangle(0, 1, 2)]);
+                    } else {
+                        dl.extend([
+                            combine(3, 3),
+                            gdp_set_prim_color(0, 0, 0x4080c000 | u32::from(alpha)),
+                            gdp_fill_rectangle(0, 0, 128, 96),
+                        ]);
+                    }
+                    run(&mut r, &mut memory, built(b, dl));
+                    assert_eq!(
+                        word(&memory, FB, 12 * 32 + 16),
+                        0x4431,
+                        "fallback={fallback}, triangle={triangle}, alpha={alpha}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn writeback_uses_native_target_with_upscaled_presentation() {
+        for fallback in [false, true] {
+            let mut native_bytes = None;
+            for scale in [1, 3] {
+                let mut r = renderer(fallback);
+                r.target = crate::PresentTarget::Headless {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    width: 320 * scale,
+                    height: 240 * scale,
+                };
+                r.reconfigure(crate::RendererConfig {
+                    resolution_multiplier: scale,
+                    ..r.config
+                });
+                let mut memory = Memory(vec![0; OUTPUT as usize + 320 * 240 * 2]);
+                let mut dl = Vec::new();
+                image(&mut dl, FB, 32, 24, 0, 2);
+                mode(&mut dl, 0, CVG_DST_FULL);
+                dl.extend([
+                    combine(3, 3),
+                    gdp_set_prim_color(0, 0, 0x4080c000),
+                    gdp_fill_rectangle(0, 0, 128, 96),
+                ]);
+                run(&mut r, &mut memory, built(DlBuilder::new(), dl));
+                assert_eq!(word(&memory, FB, 12 * 32 + 16), 0x4431);
+                assert_eq!(
+                    &memory.0[FB as usize + 32 * 24 * 2..FB as usize + 32 * 24 * 2 + 4],
+                    &[0, 0, 0, 0]
+                );
+                let mut b = DlBuilder::new();
+                let viewport = b.viewport(Vp {
+                    vscale: [64, 16, 511, 0],
+                    vtrans: [64, 16, 511, 0],
+                });
+                let vertices = b.vertices(&[[-1, -1], [1, -1], [0, 1]].map(|[x, y]| VtxColored {
+                    x,
+                    y,
+                    z: 0,
+                    flag: 0,
+                    s: 0,
+                    t: 0,
+                    r: if x < 0 { 0 } else { 255 },
+                    g: 128,
+                    b: 192,
+                    a: 0,
+                }));
+                let mut dl = Vec::new();
+                image(&mut dl, FB, 32, 8, 0, 2);
+                mode(&mut dl, 0, AA_EN);
+                dl.extend([
+                    combine(4, 4),
+                    gsp_viewport(viewport),
+                    gsp_vertex(0, 3, vertices),
+                    gsp_1triangle(0, 1, 2),
+                ]);
+                run(&mut r, &mut memory, built(b, dl));
+                assert_eq!(word(&memory, FB, 32 + 16) & 1, 1);
+                let bytes = memory.0[FB as usize..FB as usize + 32 * 24 * 2].to_vec();
+                if let Some(expected) = &native_bytes {
+                    assert_eq!(&bytes, expected);
+                } else {
+                    native_bytes = Some(bytes);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn writeback_full_mode_fixes_edges_and_keeps_unknown_clamp_edges() {
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            r.set_guest_writeback_with_encoding(true, crate::FramebufferEncoding::BigEndian);
+            let mut memory = Memory(vec![0; OUTPUT as usize + 320 * 240 * 2]);
+            let mut dl = Vec::new();
+            image(&mut dl, FB, 32, 24, 0, 2);
+            mode(&mut dl, 0, AA_EN);
+            dl.extend([
+                combine(3, 3),
+                gdp_set_prim_color(0, 0, 0x4080c000),
+                gdp_fill_rectangle(9, 9, 21, 21),
+            ]);
+            mode(&mut dl, 0, AA_EN | CVG_DST_FULL);
+            dl.push(gdp_fill_rectangle(49, 9, 61, 21));
+            mode(&mut dl, 0, CVG_DST_SAVE | IM_RD);
+            run(&mut r, &mut memory, built(DlBuilder::new(), dl));
+            let pixel = |p: usize| &memory.0[FB as usize + p * 2..FB as usize + p * 2 + 2];
+            assert_eq!(pixel(5 * 32 + 5), &[0x44, 0x30]);
+            assert_eq!(pixel(5 * 32 + 15), &[0x44, 0x31]);
+            assert_eq!(pixel(0), &[0, 0]);
+        }
     }
 
     fn pixels(r: &mut Renderer, address: u32, width: u32, height: u32) -> Vec<u8> {

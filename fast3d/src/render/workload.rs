@@ -813,7 +813,13 @@ impl SceneRenderer {
                                 depth_writer.map(|writer| {
                                     (writer, &self.depthbuffers[&depth_id.unwrap()].texture)
                                 }),
-                                target.operations.iter().map(|op| op.literal_fill).collect(),
+                                target.coverage_draws(
+                                    &source_valid,
+                                    start,
+                                    inputs.rsp.as_ref().map_or(&[], |rsp| rsp.indices),
+                                ),
+                                buffers.vertices.get(&target.logical_extent),
+                                target.output_extent.1,
                             );
                             ownership_start = start + 1;
                         }
@@ -1148,7 +1154,13 @@ impl SceneRenderer {
                     coverage,
                     color,
                     depth,
-                    target.operations.iter().map(|op| op.literal_fill).collect(),
+                    target.coverage_draws(
+                        &source_valid,
+                        target.operations.len(),
+                        inputs.rsp.as_ref().map_or(&[], |rsp| rsp.indices),
+                    ),
+                    buffers.vertices.get(&target.logical_extent),
+                    target.output_extent.1,
                 );
             }
             if self.coherence.is_some() {

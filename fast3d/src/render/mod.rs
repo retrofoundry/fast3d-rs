@@ -1768,7 +1768,9 @@ impl RspProcessPipeline {
                 let dst = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("out-vertices"),
                     size: (n as u64) * 48,
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::VERTEX
+                        | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 });
                 profiling.buffer("compute_outputs", dst.size(), 0);

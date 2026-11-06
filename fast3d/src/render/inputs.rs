@@ -100,6 +100,46 @@ pub(super) struct TargetInputs {
 }
 
 impl TargetInputs {
+    pub(super) fn coverage_draws(
+        &self,
+        source_valid: &[bool],
+        end: usize,
+        indices: &[u32],
+    ) -> Vec<super::framebuffers::coherence::CoverageDraw> {
+        self.operations[..end]
+            .iter()
+            .zip(source_valid)
+            .map(|(op, &valid)| {
+                if valid && !matches!(op.draw, DrawInputs::Rejected) {
+                    use super::framebuffers::coherence::{CoverageDraw, CoverageGeometry};
+                    CoverageDraw {
+                        literal: op.literal_fill,
+                        mode: op.coverage_mode,
+                        scissor: op.scissor,
+                        geometry: match op.draw {
+                            DrawInputs::Tris {
+                                index_start,
+                                index_count,
+                                ..
+                            } => CoverageGeometry::Triangles(
+                                indices[index_start as usize..(index_start + index_count) as usize]
+                                    .as_chunks::<3>()
+                                    .0
+                                    .to_vec(),
+                            ),
+                            _ => op
+                                .coverage_rect
+                                .map(CoverageGeometry::Rectangle)
+                                .unwrap_or_default(),
+                        },
+                    }
+                } else {
+                    Default::default()
+                }
+            })
+            .collect()
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn write_bounds(&self, slot: usize) -> (u32, u32, u32, u32) {
         let op = &self.operations[slot];
@@ -180,6 +220,8 @@ impl TargetInputs {
 #[derive(Debug, PartialEq)]
 pub(super) struct OperationInputs {
     pub literal_fill: Option<u32>,
+    pub coverage_mode: Option<crate::hle::RenderMode>,
+    pub coverage_rect: Option<[f32; 4]>,
     pub pc: u64,
     pub scissor: (u32, u32, u32, u32),
     pub draw: DrawInputs,
@@ -388,6 +430,8 @@ impl<'a> RenderInputs<'a> {
                                 SceneOp::FramebufferCopy(copy) => {
                                     inputs.operations.push(OperationInputs {
                                         literal_fill: None,
+                                        coverage_mode: None,
+                                        coverage_rect: None,
                                         pc: 0,
                                         scissor: (0, 0, 0, 0),
                                         draw: DrawInputs::FramebufferCopy(copy.clone()),
@@ -510,6 +554,8 @@ impl<'a> RenderInputs<'a> {
                                         };
                                         inputs.operations.push(OperationInputs {
                                             literal_fill: Some(*color_raw),
+                                            coverage_mode: None,
+                                            coverage_rect: None,
                                             pc: operation.pc.unwrap_or(0),
                                             scissor: super::clamp_scissor(&scissor, w, h),
                                             draw: DrawInputs::DepthFill { word: *color_raw },
@@ -595,11 +641,51 @@ impl<'a> RenderInputs<'a> {
                                 target.logical_extent,
                                 (w, h),
                             );
+                            let (literal_fill, coverage_mode, coverage_rect) = match &operation.draw
+                            {
+                                SceneOp::Tris(run) => (
+                                    None,
+                                    Some(scene.render_modes[run.render_mode_index as usize]),
+                                    None,
+                                ),
+                                SceneOp::TexRect {
+                                    rect,
+                                    copy_mode: false,
+                                    render_mode_index,
+                                    ..
+                                } => (
+                                    None,
+                                    Some(scene.render_modes[*render_mode_index as usize]),
+                                    Some([
+                                        rect.ulx as f32 / 4.0,
+                                        rect.uly as f32 / 4.0,
+                                        rect.lrx as f32 / 4.0,
+                                        rect.lry as f32 / 4.0,
+                                    ]),
+                                ),
+                                SceneOp::TexRect {
+                                    rect,
+                                    copy_mode: true,
+                                    ..
+                                } => (
+                                    None,
+                                    None,
+                                    Some([
+                                        (rect.ulx >> 2) as f32,
+                                        (rect.uly >> 2) as f32,
+                                        ((rect.lrx >> 2) + 1) as f32,
+                                        ((rect.lry >> 2) + 1) as f32,
+                                    ]),
+                                ),
+                                SceneOp::FillRect { color_raw, .. } => {
+                                    (Some(*color_raw), None, None)
+                                }
+                                _ => (None, None, None),
+                            };
                             inputs.operations.push(OperationInputs {
-                                literal_fill: match operation.draw {
-                                    SceneOp::FillRect { color_raw, .. } => Some(color_raw),
-                                    _ => None,
-                                },
+                                literal_fill,
+                                coverage_mode,
+                                coverage_rect,
                                 pc: operation.pc.unwrap_or(0),
                                 scissor: super::clamp_scissor(&scissor, w, h),
                                 draw,
