@@ -176,6 +176,55 @@ fn fog_signed_clip_z_gpu_readback() {
 }
 
 #[test]
+fn fog_ucode_reload_gpu_readback() {
+    use n64_gbi::encode::{
+        gsp_enddl, gsp_load_ucode, gsp_matrix, gsp_set_geometrymode, gsp_vertex,
+    };
+
+    for target in [crate::Microcode::F3dex2, crate::Microcode::F3dex2NoN] {
+        for roundtrip in [true, false] {
+            let (mut bytes, entry) = scene_memory(&[]);
+            bytes.truncate(entry as usize);
+            let mut commands = vec![
+                gsp_matrix(0x80, true, true, false),
+                gsp_set_geometrymode(0x0001_0000),
+                (0xDB08_0000, FACTOR_B.1),
+                gsp_vertex(0, 1, 0x40),
+            ];
+            if roundtrip {
+                commands.extend(gsp_load_ucode(0x1000, 0x8000, 0x800));
+            }
+            commands.extend(gsp_load_ucode(0x2000, 0x9000, 0x800));
+            commands.extend([
+                gsp_matrix(0x80, true, true, false),
+                gsp_vertex(0, 1, 0x40),
+                (0xDB08_0000, FACTOR_B.1),
+                gsp_vertex(0, 1, 0x40),
+                gsp_enddl(),
+            ]);
+            for (w0, w1) in commands {
+                bytes.extend_from_slice(&w0.to_be_bytes());
+                bytes.extend_from_slice(&w1.to_be_bytes());
+            }
+            let result = crate::hle::interp::interpret_with_bindings(
+                RdramImage::new(&bytes),
+                entry.into(),
+                target.into(),
+                GbiDataFormat::Fixed,
+                Default::default(),
+                Default::default(),
+                None,
+                Default::default(),
+                &[(0x1000, crate::Microcode::S2dex2), (0x2000, target)],
+            );
+            assert_alphas(&result.scene, &[128.0, 0.0, 128.0]);
+            assert!(result.diags.is_empty(), "{:?}", result.diags);
+            assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+        }
+    }
+}
+
+#[test]
 fn fog_factors_gpu_readback() {
     let scene = scene(&[
         FACTOR_A,

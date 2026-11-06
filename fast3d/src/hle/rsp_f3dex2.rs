@@ -229,7 +229,6 @@ pub(crate) fn move_word<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     } else if ty == cx.gbi_consts.g_mw_fog as u32 {
         // G_MW_FOG data word: high i16 = fog multiplier (fm), low i16 = fog offset (fo).
         // The ucode already converted min/max to fm/fo; HLE reads them directly (no re-derive).
-        cx.rsp.fog_factors_valid = true;
         cx.rdp.fog_mul = (c.w1 >> 16) as i16;
         cx.rdp.fog_offset = (c.w1 & 0xFFFF) as i16;
     } else {
