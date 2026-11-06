@@ -147,3 +147,96 @@ impl Transfers {
         }
     }
 }
+
+impl super::super::SceneRenderer {
+    pub(crate) fn change_scale(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scale: u32,
+    ) -> Result<(), crate::Diagnostic> {
+        if scale == self.render_scale {
+            return Ok(());
+        }
+        self.preflight_scale(scale, &device.limits())?;
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut expand = |source: &wgpu::Texture| {
+            let allocation = (source.width() * scale, source.height() * scale);
+            let color = Color::new(device, allocation);
+            let spans: Vec<_> = (0..source.height())
+                .map(|y| (0, y, source.width()))
+                .collect();
+            self.presentation_transfers
+                .get_or_init(|| Transfers::new(device))
+                .import(
+                    device,
+                    &mut encoder,
+                    &source.create_view(&Default::default()),
+                    &color.attach,
+                    scale,
+                    &spans,
+                    &self.profiling,
+                );
+            color
+        };
+        let colors: Vec<_> = self
+            .framebuffers
+            .iter()
+            .map(|(&id, fb)| (id, (scale > 1).then(|| expand(&fb.color))))
+            .collect();
+        let versions = self
+            .color_versions
+            .iter()
+            .filter(|_| scale > 1)
+            .map(|(&writer, texture)| (writer, expand(texture).texture))
+            .collect();
+        for depth in self.depthbuffers.values_mut() {
+            depth.presentation = (scale > 1).then(|| {
+                let target = super::DepthImage::new(
+                    device,
+                    depth.layout,
+                    (
+                        depth.texture.width() * scale,
+                        depth.texture.height() * scale,
+                    ),
+                );
+                let spans: Vec<_> = (0..depth.texture.height())
+                    .map(|y| (0, y, depth.texture.width()))
+                    .collect();
+                self.depth_pipeline.expand(
+                    device,
+                    &mut encoder,
+                    &depth.attach,
+                    &target.attach,
+                    scale,
+                    &spans,
+                    &self.profiling,
+                );
+                Box::new(target)
+            });
+        }
+        self.render_scale = scale;
+        self.presentation_versions = versions;
+        for (id, color) in colors {
+            let fb = &self.framebuffers[&id];
+            let bindings = self
+                .make_present_bindings(device, color.as_ref().map_or(&fb.sampled, |p| &p.attach));
+            let extent = self.make_present_extent(
+                device,
+                fb.layout.width * scale,
+                0..fb.height * scale,
+                fb.color.height() * scale,
+            );
+            let fb = self.framebuffers.get_mut(&id).unwrap();
+            fb.presentation_sampling = (scale > 1)
+                .then(|| super::color_sampling(device, fb.layout.width, fb.height, scale));
+            fb.presentation = color;
+            fb.present_bg = bindings;
+            fb.present_extent = extent;
+            fb.present_rows = 0..fb.height;
+        }
+        // wgpu retains submitted resources until completion, including replaced attachments.
+        queue.submit([encoder.finish()]);
+        Ok(())
+    }
+}

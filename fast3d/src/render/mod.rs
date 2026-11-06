@@ -9,6 +9,7 @@ mod tmem_sampling_tests;
 mod upscaling_tests;
 
 mod admission;
+mod downsample;
 mod extents;
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;
@@ -1943,6 +1944,8 @@ pub struct SceneRenderer {
     depth_pipeline: DepthPipeline,
     pub(crate) render_scale: u32,
     attachment_budget: u64,
+    pub(crate) reduction_factor: u32,
+    downsample: std::sync::OnceLock<downsample::BoxFilter>,
     presentation_transfers: std::sync::OnceLock<framebuffers::presentation::Transfers>,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     pub(crate) dropped_runs: u32,
@@ -2193,6 +2196,8 @@ impl SceneRenderer {
             coverage: None,
             depth_pipeline: DepthPipeline::new(device),
             render_scale: 1,
+            reduction_factor: 1,
+            downsample: Default::default(),
             attachment_budget: 256 * 1024 * 1024,
             presentation_transfers: Default::default(),
             diagnostics: Vec::new(),
@@ -2499,6 +2504,10 @@ impl SceneRenderer {
         }
     }
 
+    pub(crate) fn legacy_height(&self) -> u32 {
+        self.fb_h
+    }
+
     pub(crate) fn scanout_images(
         &self,
     ) -> impl Iterator<Item = (workload::TargetId, ImageLayout, u32)> + '_ {
@@ -2528,6 +2537,29 @@ impl SceneRenderer {
             .get(&src_addr)
             .expect("scanout: src_addr not in the store");
         let rows = rows.unwrap_or(0..fb.height);
+        if self.reduction_factor > 1 {
+            let source = fb.presentation.as_ref().map_or(&fb.color, |p| &p.texture);
+            let reduced = self
+                .downsample
+                .get_or_init(|| downsample::BoxFilter::new(device))
+                .reduce(
+                    device,
+                    encoder,
+                    source,
+                    rows.start * self.render_scale..rows.end.min(fb.height) * self.render_scale,
+                    self.reduction_factor,
+                );
+            let bindings =
+                self.make_present_bindings(device, &reduced.create_view(&Default::default()));
+            let extent = self.make_present_extent(
+                device,
+                reduced.width(),
+                0..reduced.height(),
+                reduced.height(),
+            );
+            self.blit_to(encoder, target, &bindings, &extent);
+            return;
+        }
         if rows != fb.present_rows {
             let extent = self.make_present_extent(
                 device,
@@ -2551,7 +2583,7 @@ impl SceneRenderer {
         src: workload::TargetId,
         rows: Option<std::ops::Range<u32>>,
     ) {
-        if self.render_scale == 1 {
+        if self.render_scale == 1 && self.reduction_factor == 1 {
             self.scanout(device, encoder, target, src, rows);
             return;
         }
