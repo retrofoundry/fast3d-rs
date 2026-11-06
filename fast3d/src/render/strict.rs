@@ -38,7 +38,7 @@ impl SceneRenderer {
             queue.submit([encoder.finish()]);
             self.framebuffers.insert(id, staged);
         }
-        let staged = self.coherence.as_ref().unwrap().stage_task();
+        let staged = self.coherence.as_mut().unwrap().stage_task();
         StrictTask {
             id,
             framebuffer,
@@ -50,11 +50,20 @@ impl SceneRenderer {
         }
     }
 
-    pub(crate) fn discard_strict_task(&mut self, task: StrictTask) {
+    pub(crate) fn commit_strict_task(&mut self, task: StrictTask) {
+        self.coherence
+            .as_mut()
+            .unwrap()
+            .recycle_native(task.coherence);
+    }
+
+    pub(crate) fn discard_strict_task(&mut self, mut task: StrictTask) {
         self.framebuffers.remove(&task.id);
         if let Some(original) = task.framebuffer {
             self.framebuffers.insert(task.id, original);
         }
+        task.coherence
+            .recycle_native(self.coherence.take().unwrap());
         self.coherence = Some(task.coherence);
         self.target_descriptors = task.descriptors;
         self.first_touch = task.first_touch;

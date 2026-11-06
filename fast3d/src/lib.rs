@@ -961,6 +961,7 @@ impl Renderer {
                 && self.inner.dropped_runs == 0
                 && scanout.is_some();
             if valid {
+                self.inner.commit_strict_task(task);
                 self.inner.profiling.count("tasks.guest.native", 1);
                 scanout
             } else {

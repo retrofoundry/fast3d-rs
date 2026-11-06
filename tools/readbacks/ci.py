@@ -36,6 +36,7 @@ def test_commands(checkout, config, system):
                            "render::texture_decode::gpu_tests::",
                            "tests::framebuffer_coherence::gpu::guest_route_",
                            "tests::framebuffer_coherence::gpu::triangles::guest_route_gpu_triangle",
+                           "tests::framebuffer_coherence::gpu::triangles::batches::guest_route_gpu_batch",
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_matches_f4b3240",
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_then_invalid_projection_matches_67345dc"]]
     if config == "all-features":

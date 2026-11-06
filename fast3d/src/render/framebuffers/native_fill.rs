@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 pub(super) struct Store {
     pub extent: (u32, u32),
     pub buffer: wgpu::Buffer,
-    pipeline: wgpu::ComputePipeline,
+    pub pipeline: wgpu::ComputePipeline,
 }
 
 impl Store {
@@ -24,10 +24,20 @@ impl Store {
             compilation_options: Default::default(),
             cache: None,
         });
+        Self::with_pipeline(device, extent, pipeline)
+    }
+
+    pub fn with_pipeline(
+        device: &wgpu::Device,
+        extent: (u32, u32),
+        pipeline: wgpu::ComputePipeline,
+    ) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("native-rgba16"),
             size: u64::from(extent.0) * u64::from(extent.1) * 12,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         Self {
@@ -35,6 +45,20 @@ impl Store {
             buffer,
             pipeline,
         }
+    }
+
+    pub fn reset(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        extent: (u32, u32),
+    ) {
+        let size = u64::from(extent.0) * u64::from(extent.1) * 12;
+        if self.buffer.size() < size {
+            *self = Self::with_pipeline(device, extent, self.pipeline.clone());
+        }
+        self.extent = extent;
+        encoder.clear_buffer(&self.buffer, 0, None);
     }
 
     pub fn update(

@@ -1,5 +1,7 @@
 use super::*;
 
+mod batches;
+
 const POINTS: [[i16; 2]; 3] = [[13, 13], [1267, 27], [33, 118]];
 const COUNTS: &[u8; 320 * 32] =
     include_bytes!("../../../../tests/fixtures/guest-triangle-e-counts.bin");
@@ -387,8 +389,8 @@ fn matrix_halfword(mut task: Built, offset: usize, value: u16) -> Built {
 fn guest_route_gpu_triangle_routes_unimplemented_inputs_atomically() {
     let mut tasks = vec![
         triangle(POINTS, AA_EN | IM_RD, false, false),
-        triangle(POINTS, AA_EN | CVG_DST_WRAP, false, true),
-        triangle(POINTS, AA_EN | CVG_DST_SAVE, false, true),
+        triangle(POINTS, AA_EN | IM_RD | CVG_DST_WRAP, false, false),
+        triangle(POINTS, AA_EN | IM_RD | CVG_DST_SAVE, false, false),
         insert(triangle(POINTS, AA_EN, false, true), combine(4, 4)),
         insert(
             triangle(POINTS, AA_EN, false, true),
@@ -398,7 +400,6 @@ fn guest_route_gpu_triangle_routes_unimplemented_inputs_atomically() {
             triangle(POINTS, AA_EN, false, true),
             gdp_set_prim_color(0, 0, 0xffffff80),
         ),
-        insert(triangle(POINTS, AA_EN, false, true), gsp_1triangle(0, 1, 2)),
         insert(
             triangle(POINTS, AA_EN, false, true),
             gdp_fill_rectangle(0, 0, 4, 4),
