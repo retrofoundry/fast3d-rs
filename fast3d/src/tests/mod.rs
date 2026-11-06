@@ -33,6 +33,7 @@ mod filter;
 #[cfg(feature = "capture")]
 mod filter_fixtures;
 mod fog;
+mod fog_mirror;
 mod framebuffer;
 mod framebuffer_aliases;
 mod framebuffer_coherence;

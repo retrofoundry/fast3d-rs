@@ -39,6 +39,8 @@ def test_commands(checkout, config, system):
                            "tests::framebuffer_coherence::gpu::triangles::batches::guest_route_gpu_batch",
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_matches_f4b3240",
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_then_invalid_projection_matches_67345dc"]]
+    if config == "default":
+        commands[0].extend(["tests::fog::", "tests::fog_mirror::"])
     if config == "all-features":
         targets = ["--test", "tmem_fixture_replay"]
         for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure", "rt64_v5"]:
