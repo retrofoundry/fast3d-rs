@@ -448,6 +448,99 @@ fn fog_blender_p_and_m_match_the_equation() {
     }
 }
 
+#[test]
+fn fog_one_cycle_bypass_gpu_readback() {
+    let mut failures = Vec::new();
+    for fallback in [false, true] {
+        let (device, queue, dual) = if fallback {
+            let (device, queue) = headless_device_forced_fallback();
+            (device, queue, false)
+        } else {
+            headless_device()
+        };
+        // RGB literals from matrix-hw-01; RGBA16 compares stored RGB5, not coverage.
+        for (name, size, mode, fog, primitive, expected) in [
+            (
+                "fog-02",
+                3,
+                0xc811_0004,
+                0xd838_1860,
+                0x5b81_d5ff,
+                [216, 56, 24],
+            ),
+            (
+                "fog-19",
+                3,
+                0xc811_004c,
+                0xd838_1860,
+                0x5b81_d5ff,
+                [216, 56, 24],
+            ),
+            (
+                "fog-37",
+                2,
+                0xc811_0004,
+                0x1122_3360,
+                0x5b81_d5ff,
+                [2, 4, 6],
+            ),
+            (
+                "fog-38",
+                2,
+                0xc811_1004,
+                0xd838_1860,
+                0x5b81_d580,
+                [27, 7, 3],
+            ),
+        ] {
+            let mut renderer =
+                SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 320, 240, dual);
+            let (mut bytes, entry) = scene_memory(&[
+                (0xff00_013f | size << 19, 0x0010_0000),
+                (0xed00_0000, 0x0050_03c0),
+                (0xef00_0cf0, mode),
+                (0xfcff_ffff, 0xfffe_773b),
+                (0xfa00_0000, primitive),
+                (0xf800_0000, fog),
+                (0xb600_0000, 0x0001_0000),
+                (0x0430_0040, 0x40),
+                (0xbf00_0000, 0x0000_0a14),
+                (0xbf00_0000, 0x0000_141e),
+            ]);
+            for vertex in bytes[0x40..0x80].as_chunks_mut::<16>().0 {
+                vertex[12..16].copy_from_slice(&[40, 104, 200, 128]);
+            }
+            let pixels = render_to_pixels(
+                &device,
+                &queue,
+                &mut renderer,
+                &interpret_memory(bytes, entry),
+                320,
+                240,
+            );
+            let actual = pixel(&pixels, 320, 160, 100);
+            let rgb = [actual[0], actual[1], actual[2]].map(|channel| {
+                if size == 2 {
+                    channel >> 3
+                } else {
+                    channel
+                }
+            });
+            if rgb != expected {
+                failures.push(format!(
+                    "{name} fallback={fallback} dual={dual}: {actual:?}, RGB {rgb:?} != {expected:?}"
+                ));
+            }
+            assert!(
+                renderer.diagnostics.is_empty(),
+                "{:?}",
+                renderer.diagnostics
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 type FogPixelCase = (u8, u8, u8, [[u8; 3]; 2]);
 
 const INPUT_RGB: [u8; 3] = [200, 100, 50];
