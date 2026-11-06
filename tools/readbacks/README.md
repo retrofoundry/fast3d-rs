@@ -84,7 +84,7 @@ compiler, runner image and dependency graph. The generated `Cargo.lock`, build l
 and test logs travel with the artifact.
 
 For PRs, `ci.py` searches successful main push runs with the exact PR base SHA and
-downloads `readbacks-macos-14` or `readbacks-windows-latest`. It verifies the manifest
+downloads `readbacks-macos-latest` or `readbacks-windows-latest`. It verifies the manifest
 source SHA and run ID before comparing. Missing, expired or incompatible artifacts
 trigger a capture of the exact base checkout in the same job. A cross-run byte delta
 also triggers this capture and retains the original comparison report. A nonzero
