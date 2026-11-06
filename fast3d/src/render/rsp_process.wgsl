@@ -114,7 +114,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // Gate PER-VERTEX (fog indices): only vertices loaded with G_FOG get the fog factor, so
     // unfogged overlay geometry (HUD / dialog box) keeps its real alpha.
     if (v.fog != 0u) {
-        let fz = max(clip.z, 0.0) / w;
+        let fz = clip.z / w;
         let factors = fog_table[v.fog - 1u];
         let fog_alpha = clamp(fz * factors.x + factors.y, 0.0, 255.0) / 255.0;
         o.color.a = fog_alpha;
