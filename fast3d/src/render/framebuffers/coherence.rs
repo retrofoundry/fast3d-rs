@@ -2071,7 +2071,12 @@ pub(crate) struct Coherence {
     snapshots: Vec<Snapshot>,
     pending: Vec<PendingWrite>,
     pub strict_fills: bool,
+    #[cfg(test)]
+    pub native_batch_limits: Option<(usize, u32)>,
     native_fill_store: Option<super::native_fill::Store>,
+    native_fill_spare: Option<super::native_fill::Store>,
+    native_fill_pipeline: Option<wgpu::ComputePipeline>,
+    native_batch: Option<super::native_triangle::Batch>,
     /// Edits reported once by `release_changed`, uploaded when the next task begins.
     pub imports: Vec<crate::GuestWrite>,
     pub imported: bool,
@@ -2115,9 +2120,14 @@ impl Coherence {
         }
     }
 
-    pub(in crate::render) fn stage_task(&self) -> Self {
+    pub(in crate::render) fn stage_task(&mut self) -> Self {
         let mut staged = Self {
             encoding: self.encoding,
+            native_fill_spare: self.native_fill_spare.take(),
+            native_fill_pipeline: self.native_fill_pipeline.clone(),
+            native_batch: self.native_batch.take(),
+            #[cfg(test)]
+            native_batch_limits: self.native_batch_limits,
             owners: self.owners.clone(),
             hidden: self.hidden.clone(),
             generation: self.generation,
@@ -2128,12 +2138,28 @@ impl Coherence {
         staged
     }
 
+    pub(in crate::render) fn recycle_native(&mut self, mut previous: Self) {
+        self.native_fill_spare = previous
+            .native_fill_store
+            .take()
+            .or(previous.native_fill_spare.take());
+        if self.native_batch.is_none() {
+            self.native_batch = previous.native_batch.take();
+        }
+        if self.native_fill_pipeline.is_none() {
+            self.native_fill_pipeline = previous.native_fill_pipeline.take();
+        }
+    }
+
     pub fn begin_task(&mut self) {
         self.first_generation = self.generation + 1;
         self.snapshots.clear();
         self.pending.clear();
         self.strict_fills = false;
-        self.native_fill_store = None;
+        self.native_fill_spare = self
+            .native_fill_store
+            .take()
+            .or(self.native_fill_spare.take());
         self.imported = !self.imports.is_empty();
     }
 
@@ -2210,7 +2236,27 @@ impl Coherence {
             let (writer, texture) = color.unwrap();
             let width = texture.width();
             let height = texture.height();
-            let store = super::native_fill::Store::new(device, (width, height));
+            let mut store = self.native_fill_spare.take().unwrap_or_else(|| {
+                if let Some(pipeline) = &self.native_fill_pipeline {
+                    super::native_fill::Store::with_pipeline(
+                        device,
+                        (width, height),
+                        pipeline.clone(),
+                    )
+                } else {
+                    super::native_fill::Store::new(device, (width, height))
+                }
+            });
+            self.native_fill_pipeline = Some(store.pipeline.clone());
+            store.reset(device, encoder, (width, height));
+            let limits = None;
+            #[cfg(test)]
+            let limits = self.native_batch_limits.or(limits);
+            let mut batch = has_triangles.then(|| {
+                self.native_batch
+                    .take()
+                    .unwrap_or_else(|| super::native_triangle::Batch::new(device, limits))
+            });
             let fills = draws
                 .iter()
                 .skip(first_draw)
@@ -2218,7 +2264,7 @@ impl Coherence {
                 .map(|(index, draw)| {
                     let slot = (first_draw + index + 1) as u32;
                     if matches!(draw.geometry, CoverageGeometry::Triangles(_)) {
-                        super::native_triangle::dispatch(
+                        batch.as_mut().unwrap().push(
                             device,
                             encoder,
                             &store,
@@ -2228,6 +2274,9 @@ impl Coherence {
                             slot,
                         );
                         return None;
+                    }
+                    if let Some(batch) = &mut batch {
+                        batch.flush(device, encoder, &store, vertex_buffer.unwrap());
                     }
                     let (x, y, w, h) = draw.possible_bounds(&[]).unwrap();
                     let bounds = (
@@ -2258,6 +2307,10 @@ impl Coherence {
                 })
                 .collect::<Vec<_>>();
             if has_triangles {
+                batch
+                    .as_mut()
+                    .unwrap()
+                    .flush(device, encoder, &store, vertex_buffer.unwrap());
                 native_triangles = Some(Readback::native_fill(
                     device,
                     encoder,
@@ -2265,6 +2318,9 @@ impl Coherence {
                     width,
                     (0, 0, width, height),
                 ));
+            }
+            if let Some(batch) = batch {
+                self.native_batch = Some(batch);
             }
             self.native_fill_store = Some(store);
             fills

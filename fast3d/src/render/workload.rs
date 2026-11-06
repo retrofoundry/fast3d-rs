@@ -61,7 +61,6 @@ impl Workload {
         if has_triangle && (!width.is_power_of_two() || !height.is_power_of_two()) {
             return Err(UnsupportedGuestTask);
         }
-        let mut triangles = 0;
         let mut known: Vec<std::ops::Range<u64>> = Vec::new();
         for operation in &target.operations {
             if operation.scissor.mode != 0 {
@@ -119,20 +118,16 @@ impl Workload {
                     let uniform = super::CombinerUniform::from_run(material, &mode, run.fog_color);
                     let combiner = super::framebuffers::writeback::Combiner::new(&uniform, mode)
                         .ok_or(UnsupportedGuestTask)?;
-                    triangles += run.index_count / 3;
-                    if triangles != 1
-                        || run.index_count != 3
-                        || combiner.strict_color().is_none()
+                    if combiner.strict_color().is_none()
                         || mode.rgb_dither != 0
                         || mode.alpha_dither != 3
                         || mode.key_enabled
                         || mode.force_blend
                         || mode.blender_mux != 0
-                        || !matches!(mode.cvg_dst, 0 | 2)
                     {
                         return Err(UnsupportedGuestTask);
                     }
-                    if mode.image_read && mode.cvg_dst == 0 {
+                    if mode.image_read && mode.cvg_dst != 2 {
                         let s = operation.scissor;
                         for row in s.uly.max(0) as u32..(s.lry.max(0) as u32).min(height) {
                             let left = (s.ulx.max(0) as u32).min(width);
