@@ -77,6 +77,7 @@ pub struct Rsp {
     // Material/render-mode dirty flag and snapshot cache (A5). `material_dirty` is pub so
     // rdp.rs and rsp_f3dex2.rs handlers can set it without going through a method.
     pub material_dirty: bool,
+    pub(crate) retain_native_policy: bool,
     last_material: Option<crate::hle::combiner::Material>,
     last_material_index: Option<u32>,
     last_render_mode: Option<crate::hle::blender::RenderMode>,
@@ -132,6 +133,7 @@ impl Default for Rsp {
             material_dirty: true,
             last_material: None,
             last_material_index: None,
+            retain_native_policy: true,
             last_render_mode: None,
             last_render_mode_index: None,
         }
@@ -986,7 +988,7 @@ pub(crate) fn snapshot_run(
     };
 
     // --- Render mode (decoded every call; cheap, no texture) ---
-    let rm = crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, rsp.geom);
+    let rm = render_mode_for_run(rsp, rdp, scene);
     let render_mode_index = if rsp.last_render_mode == Some(rm) {
         // Same render mode: reuse the existing index (dedup).
         rsp.last_render_mode_index.unwrap()
@@ -1098,6 +1100,23 @@ pub(crate) fn record_scissor_if_changed(
     }
 }
 
+fn render_mode_for_run(
+    rsp: &Rsp,
+    rdp: &crate::hle::rdp::Rdp,
+    scene: &mut Scene,
+) -> crate::hle::blender::RenderMode {
+    let mut mode =
+        crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, rsp.geom);
+    scene.unsupported_native_policy |=
+        mode.rgb_dither != 0 || mode.alpha_dither != 3 || mode.key_enabled;
+    if !rsp.retain_native_policy {
+        mode.rgb_dither = 0;
+        mode.alpha_dither = 0;
+        mode.key_enabled = false;
+    }
+    mode
+}
+
 /// Snapshot a valid TexRect material and render mode, deduped against the last scene entry.
 pub(crate) fn snapshot_rect_run(
     rsp: &Rsp,
@@ -1127,7 +1146,7 @@ pub(crate) fn snapshot_rect_run(
             (scene.materials.len() - 1) as u32
         }
     };
-    let rm = crate::hle::blender::decode_render_mode(rdp.other_mode_l, rdp.other_mode_h, rsp.geom);
+    let rm = render_mode_for_run(rsp, rdp, scene);
     let render_mode_index = match scene.render_modes.last() {
         Some(last) if *last == rm => (scene.render_modes.len() - 1) as u32,
         _ => {

@@ -103,7 +103,8 @@ class CaptureFailures(unittest.TestCase):
             executions.append(command)
             if "--lib" in command:
                 self.assertEqual(command[command.index("--") + 1:], [
-                    "tests::goldens::", "tests::tmem_witnesses::", "render::texture_decode::gpu_tests::"])
+                    "tests::goldens::", "tests::tmem_witnesses::", "render::texture_decode::gpu_tests::",
+                    "tests::framebuffer_coherence::gpu::guest_route_"])
                 return subprocess.CompletedProcess(command, 101)
             for name in ["tmem_fixture_replay", "texture_decode_gpu", "texture_residency", "texture_residency_pressure"]:
                 self.assertIn(name, command)

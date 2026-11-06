@@ -117,6 +117,7 @@ pub(crate) struct DrawOrigin {
 /// The flat scene the renderer consumes: vertex buffer + triangle index buffer + per-run materials.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
+    pub(crate) unsupported_native_policy: bool,
     pub(crate) draw_origins: Vec<DrawOrigin>,
     pub indices: Vec<u32>,
     pub materials: Vec<crate::hle::combiner::Material>,
@@ -170,4 +171,14 @@ pub struct Scene {
     /// Texgen ST-scale `[texgen_scale_s, texgen_scale_t]`, index-parallel to `texcoord_table`
     /// (same dedup, same `texcoord_index`). Separate from `texcoord_table` so this stays additive.
     pub texgen_scale_table: Vec<[f32; 2]>,
+}
+
+impl Scene {
+    pub(crate) fn use_compatibility_policy(&mut self) {
+        for mode in &mut self.render_modes {
+            mode.rgb_dither = 0;
+            mode.alpha_dither = 0;
+            mode.key_enabled = false;
+        }
+    }
 }
