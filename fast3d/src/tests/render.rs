@@ -1,3 +1,7 @@
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "decal_depth.rs"]
+mod decal_depth;
+
 use crate::render::{
     decode_rgba16, headless_device, CombinerUniform, OutVertex, RspProcessParams,
     RspProcessPipeline, TexturedPipeline, CLEAR_COLOR, DEPTH_FORMAT,

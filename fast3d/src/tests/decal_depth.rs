@@ -1,6 +1,6 @@
-use super::common::{render_to_pixels, scene_from_fixture};
 use crate::render::{headless_device, headless_device_forced_fallback, SceneRenderer};
 use crate::scene::{DrawRun, PrimitiveDepth, Scene};
+use crate::tests::common::{render_to_pixels, scene_from_fixture};
 
 #[derive(Clone, Copy, serde::Deserialize)]
 struct Case<'a> {

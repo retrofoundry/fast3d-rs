@@ -86,7 +86,7 @@ def generate(directory):
     cases = manifest['cases']
     for case in cases:
         selected = (case['group'] == 'interp' or case['id'] in ('compare-next-forward', 'shade-next-forward')
-                    or case['group'] == 'modes'
+                    or (case['group'] == 'modes' and case['state']['othermode_l'] & 0xc00 != 0xc00)
                     or (case['group'] == 'matrix' and int(case['id'][4:6]) in (23, 29, 30, 31, 33, 34, 39, 40)))
         if not selected:
             (directory / f'{case["id"]}.modern.bin').unlink(missing_ok=True)
