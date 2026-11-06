@@ -6,6 +6,7 @@ mod texrect_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tmem_sampling_tests;
 
+mod extents;
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;
 mod replacement_resources;
@@ -1762,7 +1763,7 @@ impl RspProcessPipeline {
         let extents = targets
             .iter()
             .filter(|target| !target.depth_clear)
-            .map(|target| target.logical_extent);
+            .map(|target| target.extents.logical);
         let mut vertices = std::collections::HashMap::new();
         for extent in extents {
             vertices.entry(extent).or_insert_with(|| {
@@ -2343,11 +2344,11 @@ impl SceneRenderer {
         &self,
         device: &wgpu::Device,
         layout: ImageLayout,
-        h: u32,
-        logical_height: u32,
+        allocation: (u32, u32),
+        native_height: u32,
     ) -> Framebuffer {
         let _span = self.profiling.span("resources");
-        let w = layout.width;
+        let (w, h) = allocation;
         self.profiling
             .texture("framebuffer", u64::from(w) * u64::from(h) * 4, 0);
         let color = device.create_texture(&wgpu::TextureDescriptor {
@@ -2406,18 +2407,20 @@ impl SceneRenderer {
             .chain([sampling_entry(&self.image_sampling)])
             .collect::<Vec<_>>(),
         });
-        let present_extent = self.make_present_extent(device, w, 0..logical_height, h);
-        let sampling = framebuffers::color_sampling(device, w, logical_height);
+        let presentation_scale = w / layout.width;
+        let present_extent =
+            self.make_present_extent(device, w, 0..native_height * presentation_scale, h);
+        let sampling = framebuffers::color_sampling(device, layout.width, native_height);
         self.profiling.buffer(
             "uniforms",
             sampling.size(),
             std::mem::size_of::<TileSamplingArray>() as u64,
         );
         Framebuffer {
-            height: logical_height,
+            height: native_height,
             sampling,
             present_extent,
-            present_rows: 0..logical_height,
+            present_rows: 0..native_height,
             color,
             attach,
             sampled,
@@ -2456,8 +2459,13 @@ impl SceneRenderer {
             .expect("scanout: src_addr not in the store");
         let rows = rows.unwrap_or(0..fb.height);
         if rows != fb.present_rows {
-            let extent =
-                self.make_present_extent(device, fb.layout.width, rows.clone(), fb.color.height());
+            let presentation_scale = fb.color.width() / fb.layout.width;
+            let extent = self.make_present_extent(
+                device,
+                fb.color.width(),
+                rows.start * presentation_scale..rows.end * presentation_scale,
+                fb.color.height(),
+            );
             let fb = self.framebuffers.get_mut(&src_addr).unwrap();
             fb.present_extent = extent;
             fb.present_rows = rows;

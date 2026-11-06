@@ -571,7 +571,7 @@ impl SceneRenderer {
             }
 
             self.profiling
-                .target(target.logical_extent, target.output_extent);
+                .target(target.extents.logical, target.extents.presentation);
             #[cfg(feature = "capture")]
             if self.depth_reset_policy == crate::DepthResetPolicy::ColorImageSwitch
                 && self.depth_color_epoch != Some(target.color_image_epoch)
@@ -590,7 +590,10 @@ impl SceneRenderer {
                     continue;
                 }
             }
-            let (w, h) = target.output_extent;
+            let (native_w, native_h) = target.extents.native;
+            let (presentation_w, presentation_h) = target.extents.presentation;
+            let native_texture_height =
+                |texture: &wgpu::Texture| texture.height() / (texture.width() / native_w);
             let any_depth = target.any_depth;
             let depth_id = target
                 .depth_image
@@ -598,44 +601,54 @@ impl SceneRenderer {
                 .map(TargetId::Guest)
                 .or_else(|| any_depth.then_some(TargetId::Legacy));
             let color_layout = ImageLayout {
-                width: w,
+                width: native_w,
                 fmt: target.color_image.fmt,
                 siz: target.color_image.siz,
             };
             let depth_layout = ImageLayout {
-                width: w,
+                width: native_w,
                 fmt: 0,
                 siz: 2,
             };
-            let mut height = h;
+            let mut native_allocation_height = native_h;
             if !target.depth_clear {
                 if let Some(old) = self.framebuffers.get(&target.id).filter(|old| {
-                    old.layout == color_layout && (target.id != TargetId::Legacy || old.height == h)
+                    old.layout == color_layout
+                        && (target.id != TargetId::Legacy || old.height == native_h)
                 }) {
-                    height = height.max(old.color.height());
+                    native_allocation_height =
+                        native_allocation_height.max(native_texture_height(&old.color));
                 }
             }
             if let Some(old) = depth_id
                 .and_then(|id| self.depthbuffers.get(&id))
                 .filter(|old| {
                     old.layout == depth_layout
-                        && (depth_id != Some(TargetId::Legacy) || old.texture.height() == h)
+                        && (depth_id != Some(TargetId::Legacy)
+                            || native_texture_height(&old.texture) == native_h)
                 })
             {
-                height = height.max(old.texture.height());
+                native_allocation_height =
+                    native_allocation_height.max(native_texture_height(&old.texture));
             }
+            let presentation_allocation = (
+                presentation_w,
+                native_allocation_height * (presentation_h / native_h),
+            );
             let color_restore_from = self
                 .framebuffers
                 .get(&target.id)
                 .filter(|old| old.layout == color_layout)
                 .map_or(Some(0), |old| {
-                    (old.color.height() < height).then_some(old.color.height())
+                    (native_texture_height(&old.color) < native_allocation_height)
+                        .then_some(native_texture_height(&old.color))
                 });
             let depth_restore_from = depth_id
                 .and_then(|id| self.depthbuffers.get(&id))
                 .filter(|old| old.layout == depth_layout)
                 .map_or(Some(0), |old| {
-                    (old.texture.height() < height).then_some(old.texture.height())
+                    (native_texture_height(&old.texture) < native_allocation_height)
+                        .then_some(native_texture_height(&old.texture))
                 });
             let color_initialize =
                 clear_policy == ClearPolicy::PerFrame && !self.first_touch.contains(&target.id);
@@ -667,7 +680,7 @@ impl SceneRenderer {
                 color
                     .into_iter()
                     .chain(depth)
-                    .any(|writer| coherence.pending_overlaps(writer, height))
+                    .any(|writer| coherence.pending_overlaps(writer, native_allocation_height))
             }) {
                 queue.submit([encoder.finish()]);
                 self.profiling.count("submissions", 1);
@@ -683,9 +696,10 @@ impl SceneRenderer {
                     ImageRequest {
                         id,
                         layout: depth_layout,
-                        height,
+                        height: native_allocation_height,
                         pc: target.pc,
                     },
+                    presentation_allocation,
                     clear_policy,
                 );
             }
@@ -714,7 +728,7 @@ impl SceneRenderer {
             }
             if target.depth_clear {
                 let depth = &self.depthbuffers[&depth_id.unwrap()];
-                for operation in &target.operations {
+                for (slot, operation) in target.operations.iter().enumerate() {
                     if let DrawInputs::DepthFill { word } = operation.draw {
                         if let (Some(coherence), Some(TargetId::Guest(address))) =
                             (&mut self.coherence, depth_id)
@@ -734,7 +748,7 @@ impl SceneRenderer {
                             &mut encoder,
                             depth,
                             word,
-                            operation.scissor,
+                            target.presentation_scissor(slot),
                             &self.profiling,
                         );
                     } else if let DrawInputs::FramebufferCopy(copy) = &operation.draw {
@@ -776,10 +790,10 @@ impl SceneRenderer {
                 ImageRequest {
                     id: target.id,
                     layout: color_layout,
-                    height: h,
+                    height: native_h,
                     pc: target.pc,
                 },
-                height,
+                presentation_allocation,
                 clear_policy,
             );
             if self.coherence.is_some() {
@@ -852,10 +866,13 @@ impl SceneRenderer {
                     valid
                 })
                 .collect();
-            let coverage_texture = self
-                .coherence
-                .as_ref()
-                .map(|_| super::framebuffers::coherence::coverage_texture(device, w, height));
+            let coverage_texture = self.coherence.as_ref().map(|_| {
+                super::framebuffers::coherence::coverage_texture(
+                    device,
+                    native_w,
+                    native_allocation_height,
+                )
+            });
             let coverage_view = coverage_texture
                 .as_ref()
                 .map(|texture| texture.create_view(&Default::default()));
@@ -966,8 +983,8 @@ impl SceneRenderer {
                                     start,
                                     inputs.rsp.as_ref().map_or(&[], |rsp| rsp.indices),
                                 ),
-                                buffers.vertices.get(&target.logical_extent),
-                                target.output_extent.1,
+                                buffers.vertices.get(&target.extents.logical),
+                                target.extents.native.1,
                                 ownership_start,
                             );
                             ownership_start = start + 1;
@@ -1036,8 +1053,11 @@ impl SceneRenderer {
                     .iter()
                     .any(OperationInputs::writes_depth);
                 let decal_snapshot = (read_depth && writes_depth).then(|| {
-                    let snapshot =
-                        super::framebuffers::DepthImage::new(device, depth_layout, height);
+                    let snapshot = super::framebuffers::DepthImage::new(
+                        device,
+                        depth_layout,
+                        presentation_allocation,
+                    );
                     self.depth_pipeline
                         .copy(device, &mut encoder, depth.unwrap(), &snapshot);
                     snapshot
@@ -1093,7 +1113,7 @@ impl SceneRenderer {
                             occlusion_query_set: None,
                             multiview_mask: None,
                         });
-                        pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                        pass.set_viewport(0.0, 0.0, native_w as f32, native_h as f32, 0.0, 1.0);
                         pass.set_scissor_rect(x, y, width, height);
                         if read_depth {
                             pass.set_bind_group(2, depth_bg.unwrap(), &[]);
@@ -1112,7 +1132,8 @@ impl SceneRenderer {
                                         wgpu::IndexFormat::Uint32,
                                     );
                                 }
-                                if let Some(vertices) = buffers.vertices.get(&target.logical_extent)
+                                if let Some(vertices) =
+                                    buffers.vertices.get(&target.extents.logical)
                                 {
                                     pass.set_vertex_buffer(0, vertices.slice(..));
                                 }
@@ -1158,7 +1179,14 @@ impl SceneRenderer {
                 });
                 color_load = wgpu::LoadOp::Load;
                 self.profiling.count("workload.segments", 1);
-                pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                pass.set_viewport(
+                    0.0,
+                    0.0,
+                    presentation_w as f32,
+                    presentation_h as f32,
+                    0.0,
+                    1.0,
+                );
                 if let Some(index) = &buffers.indices {
                     pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
                 }
@@ -1170,7 +1198,7 @@ impl SceneRenderer {
                     if !source_valid[slot] {
                         continue;
                     }
-                    let (x, y, width, height) = operation.scissor;
+                    let (x, y, width, height) = target.presentation_scissor(slot);
                     if width == 0 || height == 0 {
                         continue;
                     }
@@ -1214,7 +1242,7 @@ impl SceneRenderer {
                                 }
                             };
                             pass.set_pipeline(&pipeline[usize::from(*unclipped_depth)]);
-                            if let Some(vertices) = buffers.vertices.get(&target.logical_extent) {
+                            if let Some(vertices) = buffers.vertices.get(&target.extents.logical) {
                                 pass.set_vertex_buffer(0, vertices.slice(..));
                             }
                             pass.set_bind_group(0, material_bgs[*material_index as usize], &[]);
@@ -1287,15 +1315,19 @@ impl SceneRenderer {
                 };
                 self.profiling.count(
                     "readback.coverage_bytes",
-                    u64::from(w) * u64::from(height) * 8,
+                    u64::from(native_w) * u64::from(native_allocation_height) * 8,
                 );
                 if color.is_some() {
-                    self.profiling
-                        .count("readback.color_bytes", u64::from(w) * u64::from(height) * 4);
+                    self.profiling.count(
+                        "readback.color_bytes",
+                        u64::from(native_w) * u64::from(native_allocation_height) * 4,
+                    );
                 }
                 if depth.is_some() {
-                    self.profiling
-                        .count("readback.depth_bytes", u64::from(w) * u64::from(height) * 4);
+                    self.profiling.count(
+                        "readback.depth_bytes",
+                        u64::from(native_w) * u64::from(native_allocation_height) * 4,
+                    );
                 }
                 coherence.snapshot(
                     device,
@@ -1308,14 +1340,14 @@ impl SceneRenderer {
                         target.operations.len(),
                         inputs.rsp.as_ref().map_or(&[], |rsp| rsp.indices),
                     ),
-                    buffers.vertices.get(&target.logical_extent),
-                    target.output_extent.1,
+                    buffers.vertices.get(&target.extents.logical),
+                    target.extents.native.1,
                     ownership_start,
                 );
             }
             if self.coherence.is_some() {
                 if let TargetId::Guest(address) = target.id {
-                    let end = address + color_layout.row_bytes().unwrap() * u64::from(h);
+                    let end = address + color_layout.row_bytes().unwrap() * u64::from(native_h);
                     self.depthbuffers.retain(|id, depth| {
                         let TargetId::Guest(start) = *id else {
                             return true;
@@ -1402,3 +1434,7 @@ pub(super) fn clear_color(
         multiview_mask: None,
     });
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "workload_tests.rs"]
+mod unit_tests;

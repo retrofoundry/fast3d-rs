@@ -28,7 +28,12 @@ impl SceneRenderer {
     ) -> StrictTask {
         let framebuffer = self.framebuffers.remove(&id);
         if let Some(old) = &framebuffer {
-            let staged = self.make_fb(device, old.layout, old.color.height(), old.height);
+            let staged = self.make_fb(
+                device,
+                old.layout,
+                (old.color.width(), old.color.height()),
+                old.height,
+            );
             let mut encoder = device.create_command_encoder(&Default::default());
             encoder.copy_texture_to_texture(
                 old.color.as_image_copy(),
