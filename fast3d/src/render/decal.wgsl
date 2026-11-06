@@ -16,7 +16,8 @@ fn shade_decal(in: VsOut) -> vec4<f32> {
     }
     // Coplanar bind: discard fragments NOT coplanar with the stored surface (per-pixel slope
     // tolerance dz absorbs depth gradient on tilted surfaces; floored at eps for flat ones).
-    let dz = abs(dpdx(pixel_z)) + abs(dpdy(pixel_z));
+    var dz = abs(dpdx(pixel_z)) + abs(dpdy(pixel_z));
+    if combiner.raster.x > 1u { dz *= f32(combiner.raster.x); }
     if (abs(pixel_z - sampled) > max(dz, eps)) {
         discard;
     }

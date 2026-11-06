@@ -59,6 +59,7 @@ pub(super) struct MaterialBinding {
     wrap: [u8; 2],
     images: Vec<BindingImage>,
     pub bind_group: wgpu::BindGroup,
+    pub high_resolution_mask: u32,
 }
 
 impl MaterialBinding {
@@ -137,6 +138,7 @@ impl BindingBuilder<'_> {
         let _span = self.profiling.span("resources");
         let roles = roles(mat);
         let mut mapped_sampling = None;
+        let mut high_resolution_mask = 0;
         let mut images = Vec::with_capacity(roles.len());
         for (index, role) in roles.into_iter().enumerate() {
             let Some(binding) = role else {
@@ -173,6 +175,7 @@ impl BindingBuilder<'_> {
                         self.profiling,
                     );
                     if let Some((image, scale)) = replacement {
+                        high_resolution_mask |= u32::from(scale > 1) << index;
                         mapped_sampling.get_or_insert(mat.sampling)[index].image[3] = scale;
                         PreparedImage::Replacement(image)
                     } else {
@@ -270,6 +273,7 @@ impl BindingBuilder<'_> {
             wrap,
             images: images.into_iter().map(PreparedImage::binding).collect(),
             bind_group,
+            high_resolution_mask,
         }
     }
 }

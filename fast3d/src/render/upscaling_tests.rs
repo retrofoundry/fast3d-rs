@@ -902,6 +902,1010 @@ fn task_boundary_discards_depth_before_an_early_return() {
         .is_empty());
 }
 
+fn assert_rgba(texture: &wgpu::Texture, bytes: &[u8], expected: impl Fn(u32, u32) -> [u8; 4]) {
+    for (i, pixel) in bytes.as_chunks::<4>().0.iter().enumerate() {
+        let (x, y) = (i as u32 % texture.width(), i as u32 / texture.width());
+        assert_eq!(*pixel, expected(x, y), "({x},{y})");
+    }
+}
+
+#[test]
+fn packed_fill_lanes_follow_native_cells_at_odd_width() {
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        for siz in [1, 2] {
+            let mut renderer = SceneRenderer::new(&device, FORMAT, 9, 5, dual);
+            renderer.set_test_scale(scale, BUDGET);
+            let mut draw = fill_scene(A, 9, 5, if siz == 2 { 0xf80107c1 } else { 0x204080ff });
+            draw.framebuffer_pairs[0].color_image.siz = siz;
+            renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+            let texture = &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
+                .presentation
+                .as_ref()
+                .unwrap()
+                .texture;
+            let bytes = read_texture(&device, &queue, texture);
+            assert_rgba(texture, &bytes, |x, y| {
+                let pixel = y / scale * 9 + x / scale;
+                if siz == 2 {
+                    if pixel & 1 == 0 {
+                        [255, 0, 0, 255]
+                    } else {
+                        [0, 255, 0, 255]
+                    }
+                } else {
+                    let value = [32, 64, 128, 255][(pixel & 3) as usize];
+                    [value; 4]
+                }
+            });
+        }
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 9, 5, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        let mut draw = fill_scene(Z, 9, 5, 0x0000c000);
+        draw.framebuffer_pairs[0].is_depth_clear = true;
+        draw.framebuffer_pairs[0].depth_image = Some(Z.into());
+        renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+        let texture = &renderer.depthbuffers[&workload::TargetId::Guest(Z.into())]
+            .presentation
+            .as_ref()
+            .unwrap()
+            .texture;
+        let bytes = read_texture(&device, &queue, texture);
+        assert_rgba(texture, &bytes, |x, y| {
+            let depth: f32 = if (y / scale * 9 + x / scale) & 1 == 0 {
+                0.0
+            } else {
+                0.984375
+            };
+            depth.to_le_bytes()
+        });
+    }
+}
+
+#[test]
+fn fractional_scissors_ceil_each_boundary_before_scaling() {
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 9, 7, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        for depth in [false, true] {
+            for boundary in 0..4 {
+                for residue in 0..4 {
+                    let mut raw = [4, 4, 28, 20];
+                    raw[boundary] += residue;
+                    let address = if depth { Z } else { A };
+                    let mut commands =
+                        fill_commands(address, 9, 7, if depth { 0xc000c000 } else { 0xf801f801 });
+                    commands.insert(1, gdp_set_depth_image(if depth { Z } else { 0 }));
+                    commands[2] = gdp_set_scissor(0, raw[0], raw[1], raw[2], raw[3]);
+                    let mut draw = scene(&finish(DlBuilder::new(), commands));
+                    draw.framebuffer_pairs[0].size_extent = (9, 7);
+                    let mut inputs = inputs::RenderInputs::new(&draw, (9, 7), [0; 2]).unwrap();
+                    renderer
+                        .preflight_inputs(&mut inputs, &device.limits())
+                        .unwrap();
+                    let l = raw.map(|v| v.div_ceil(4));
+                    assert_eq!(
+                        inputs.targets[0].presentation_scissor(0),
+                        (
+                            l[0] * scale,
+                            l[1] * scale,
+                            (l[2] - l[0]) * scale,
+                            (l[3] - l[1]) * scale
+                        ),
+                        "scale {scale}, boundary {boundary}, residue {residue}, depth {depth}"
+                    );
+                    renderer.begin_frame();
+                    renderer.render_into_store(&device, &queue, &draw, ClearPolicy::PerFrame);
+                    let texture = if depth {
+                        &renderer.depthbuffers[&workload::TargetId::Guest(Z.into())]
+                            .presentation
+                            .as_ref()
+                            .unwrap()
+                            .texture
+                    } else {
+                        &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
+                            .presentation
+                            .as_ref()
+                            .unwrap()
+                            .texture
+                    };
+                    let bytes = read_texture(&device, &queue, texture);
+                    assert_rgba(texture, &bytes, |x, y| {
+                        let inside = (l[0]..l[2]).contains(&(x / scale))
+                            && (l[1]..l[3]).contains(&(y / scale));
+                        if depth {
+                            let value: f32 = if inside { 0.984375 } else { 1.0 };
+                            value.to_le_bytes()
+                        } else if inside {
+                            [255, 0, 0, 255]
+                        } else {
+                            [13, 13, 20, 255]
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn texrect_scene(
+    base: [i16; 2],
+    step: [i16; 2],
+    flip: bool,
+    copy: bool,
+    fractional_y: bool,
+) -> crate::Scene {
+    let mut draw = fill_scene(A, 16, 12, 0);
+    let mut material = scene(&triangle(A, 0, 0, 0xffffffff)).materials.remove(0);
+    let rgb = CcPass {
+        a: ZERO_C,
+        b: ZERO_C,
+        c: ZERO_C,
+        d: 1,
+    };
+    let alpha = CcPass {
+        a: ZERO_A,
+        b: ZERO_A,
+        c: ZERO_A,
+        d: 1,
+    };
+    let (l, h) = gdp_set_combine_lerp(rgb, alpha, rgb, alpha);
+    material.selectors = crate::hle::combiner::decode_combine(l, h);
+    material.tex_enable = true;
+    material.tex_w = 16;
+    material.tex_h = 12;
+    material.tile_count = 1;
+    material.sampling = crate::hle::tile_sampling::TileSampling::from_tile(
+        &crate::hle::rdp::TileDescriptor {
+            width: 16,
+            height: 12,
+            cms: 2,
+            cmt: 2,
+            ..Default::default()
+        },
+        0,
+    );
+    material.texture = crate::hle::texture_request::TextureSource::Rgba(
+        (0..12)
+            .flat_map(|y| (0..16).flat_map(move |x| [x * 12, y * 16, 0, 255]))
+            .collect::<Vec<u8>>()
+            .into(),
+    );
+    draw.materials = vec![material];
+    draw.render_modes = vec![crate::hle::blender::decode_render_mode(0, 0, 0)];
+    draw.framebuffer_pairs[0].ops = vec![SceneOp::TexRect {
+        rect: crate::scene::TexRectBounds {
+            ulx: 8,
+            uly: 8 + i32::from(fractional_y),
+            lrx: if copy { 20 } else { 24 },
+            lry: if copy { 20 } else { 24 },
+        },
+        tile: 0,
+        uls: base[0],
+        ult: base[1],
+        dsdx: step[0],
+        dtdy: step[1],
+        flip,
+        copy_mode: copy,
+        material_index: 0,
+        render_mode_index: 0,
+        fog_color: [0; 4],
+        prim_depth: Default::default(),
+        fb_source: None,
+    }];
+    draw
+}
+
+#[test]
+fn identity_texrect_phase_uses_both_signed_derivatives() {
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        for flip in [false, true] {
+            for copy in [false, true] {
+                for negative_s in [false, true] {
+                    for negative_t in [false, true] {
+                        for fractional_y in [false, true] {
+                            if copy && fractional_y {
+                                continue;
+                            }
+                            let ds = if negative_s { -1024 } else { 1024 };
+                            let dt = if negative_t { -1024 } else { 1024 };
+                            let draw = texrect_scene(
+                                [168, 168],
+                                [if copy { ds * 4 } else { ds }, dt],
+                                flip,
+                                copy,
+                                fractional_y,
+                            );
+                            renderer.begin_frame();
+                            renderer.render_into_store(
+                                &device,
+                                &queue,
+                                &draw,
+                                ClearPolicy::PerFrame,
+                            );
+                            let texture = &renderer.framebuffers
+                                [&workload::TargetId::Guest(A.into())]
+                                .presentation
+                                .as_ref()
+                                .unwrap()
+                                .texture;
+                            let bytes = read_texture(&device, &queue, texture);
+                            let top = if fractional_y { 3 } else { 2 };
+                            assert_rgba(texture, &bytes, |x, y| {
+                                let (x, y) = (x / scale, y / scale);
+                                if !(2..6).contains(&x) || !(top..6).contains(&y) {
+                                    return [13, 13, 20, 255];
+                                }
+                                let (s, t) = if flip {
+                                    (y - top, x - 2)
+                                } else {
+                                    (x - 2, y - top)
+                                };
+                                let s = if negative_s { 4 - s } else { 5 + s };
+                                let t = if negative_t {
+                                    4 - t - u32::from(fractional_y)
+                                } else {
+                                    5 + t + u32::from(fractional_y)
+                                };
+                                [(s * 12) as u8, (t * 16) as u8, 0, 255]
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_only_scissor_change_keeps_triangle_operations_and_retained_rdp_state() {
+    let mut built = triangle(A, 0, 0, 0xffffffff);
+    built.rdram.truncate(built.rdram.len() - 8);
+    for command in [
+        gdp_set_scissor(0, 1, 0, 128, 96),
+        gsp_1triangle(0, 1, 2),
+        gsp_enddl(),
+    ] {
+        built.rdram.extend(command.0.to_be_bytes());
+        built.rdram.extend(command.1.to_be_bytes());
+    }
+    let draw = scene(&built);
+    let inputs = inputs::RenderInputs::new(&draw, (32, 24), [0; 2]).unwrap();
+    assert_eq!(inputs.targets[0].operations.len(), 2);
+    let (device, _, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+    renderer.set_test_scale(3, BUDGET);
+    let mut inputs = inputs;
+    renderer
+        .preflight_inputs(&mut inputs, &device.limits())
+        .unwrap();
+    assert_eq!(inputs.targets[0].presentation_scissor(0), (0, 0, 96, 72));
+    assert_eq!(inputs.targets[0].presentation_scissor(1), (3, 0, 93, 72));
+    assert_eq!(
+        inputs.targets[0].operations[0].scissor,
+        inputs.targets[0].operations[1].scissor
+    );
+}
+
+#[test]
+fn filtered_fractional_phase_and_intentionally_scaled_rects() {
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        for step in [512i16, 1024, -1024] {
+            for flip in [false, true] {
+                let mut draw = texrect_scene([168, 168], [step, step], flip, false, false);
+                draw.materials[0].filter_mode = 2;
+                renderer.begin_frame();
+                renderer.render_into_store(&device, &queue, &draw, ClearPolicy::PerFrame);
+                let texture = &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
+                    .presentation
+                    .as_ref()
+                    .unwrap()
+                    .texture;
+                let bytes = read_texture(&device, &queue, texture);
+                for y in 2 * scale..6 * scale {
+                    for x in 2 * scale..6 * scale {
+                        let position = |p: u32| {
+                            if step.unsigned_abs() == 1024 {
+                                (p / scale - 2) as f32 + 0.5
+                            } else {
+                                (p as f32 + 0.5) / scale as f32 - 2.0
+                            }
+                        };
+                        let (s, t) = if flip {
+                            (position(y), position(x))
+                        } else {
+                            (position(x), position(y))
+                        };
+                        let coordinate = |p: f32| {
+                            ((5.25 + p * f32::from(step) / 1024.0) * 128.0).round() / 128.0
+                        };
+                        let expected = [
+                            (coordinate(s) * 12.0).round() as u8,
+                            (coordinate(t) * 16.0).round() as u8,
+                            0,
+                            255,
+                        ];
+                        let pixel = &bytes[((y * texture.width() + x) * 4) as usize..][..4];
+                        for channel in 0..4 {
+                            assert!(pixel[channel].abs_diff(expected[channel]) <= 1, "({x},{y}) scale {scale}, step {step}, flip {flip}: {pixel:?} vs {expected:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn clipped_empty_and_partial_depth_scissors_use_completed_native_bounds() {
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 9, 7, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        for (raw, expected) in [
+            ([1, 1, 60, 60], [1, 1, 9, 7]),
+            ([36, 0, 60, 28], [9, 0, 9, 7]),
+            ([4, 4, 4, 20], [1, 1, 1, 5]),
+            ([0, 20, 36, 4], [0, 5, 9, 1]),
+        ] {
+            let mut commands = fill_commands(Z, 9, 7, 0xc000c000);
+            commands.insert(1, gdp_set_depth_image(Z));
+            commands[2] = gdp_set_scissor(0, raw[0], raw[1], raw[2], raw[3]);
+            *commands.last_mut().unwrap() = gdp_fill_rectangle(8, 4, 24, 12);
+            let mut draw = scene(&finish(DlBuilder::new(), commands));
+            draw.framebuffer_pairs[0].size_extent = (9, 7);
+            renderer.begin_frame();
+            renderer.render_into_store(&device, &queue, &draw, ClearPolicy::PerFrame);
+            let texture = &renderer.depthbuffers[&workload::TargetId::Guest(Z.into())]
+                .presentation
+                .as_ref()
+                .unwrap()
+                .texture;
+            let bytes = read_texture(&device, &queue, texture);
+            assert_rgba(texture, &bytes, |x, y| {
+                let (x, y) = (x / scale, y / scale);
+                let inside = (expected[0]..expected[2]).contains(&x)
+                    && (expected[1]..expected[3]).contains(&y)
+                    && (2..7).contains(&x)
+                    && (1..4).contains(&y);
+                (if inside { 0.984375f32 } else { 1.0f32 }).to_le_bytes()
+            });
+        }
+    }
+}
+
+fn alpha_threshold(x: u32, y: u32, width: u32, serial: u32, seed: u32) -> u8 {
+    let (mut a, mut b, mut sum) = (serial ^ seed, x + width * y, 0u32);
+    for _ in 0..16 {
+        sum = sum.wrapping_add(0x9e3779b9);
+        a = a.wrapping_add(
+            ((b << 4).wrapping_add(0xa341316c))
+                ^ b.wrapping_add(sum)
+                ^ ((b >> 5).wrapping_add(0xc8013ea4)),
+        );
+        b = b.wrapping_add(
+            ((a << 4).wrapping_add(0xad90777d))
+                ^ a.wrapping_add(sum)
+                ^ ((a >> 5).wrapping_add(0x7e95761e)),
+        );
+    }
+    (a.wrapping_mul(1664525).wrapping_add(1013904223) >> 24) as u8
+}
+
+#[test]
+fn alpha_dither_is_deterministic_and_relative_to_each_raster_role() {
+    let (device, queue, dual) = headless_device();
+    for scale in [1, 2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        let mut draw = texrect_scene([0, 0], [1024, 1024], false, false, false);
+        let (l, h) = gdp_set_combine_lerp(
+            CcPass {
+                a: ZERO_C,
+                b: ZERO_C,
+                c: ZERO_C,
+                d: 3,
+            },
+            CcPass {
+                a: ZERO_A,
+                b: ZERO_A,
+                c: ZERO_A,
+                d: 3,
+            },
+            CcPass {
+                a: ZERO_C,
+                b: ZERO_C,
+                c: ZERO_C,
+                d: 3,
+            },
+            CcPass {
+                a: ZERO_A,
+                b: ZERO_A,
+                c: ZERO_A,
+                d: 3,
+            },
+        );
+        draw.materials[0].selectors = crate::hle::combiner::decode_combine(l, h);
+        draw.materials[0].prim = [255, 255, 255, 128];
+        draw.render_modes[0].alpha_compare = crate::hle::AlphaCompare::Dither;
+        for _ in 0..2 {
+            renderer.begin_frame();
+            renderer.frame_serial = 7;
+            renderer.dither_seed = 0x1234;
+            renderer.render_into_store(&device, &queue, &draw, ClearPolicy::PerFrame);
+            let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
+            for (texture, factor) in std::iter::once((&fb.color, 1))
+                .chain(fb.presentation.as_ref().map(|p| (&p.texture, scale)))
+            {
+                let bytes = read_texture(&device, &queue, texture);
+                assert_rgba(texture, &bytes, |x, y| {
+                    if (2 * factor..6 * factor).contains(&x)
+                        && (2 * factor..6 * factor).contains(&y)
+                        && alpha_threshold(x, y, 16 * factor, 7, 0x1234) <= 128
+                    {
+                        [255, 255, 255, 128]
+                    } else {
+                        [13, 13, 20, 255]
+                    }
+                });
+            }
+        }
+    }
+}
+
+fn replacement_source(
+    tag: u8,
+    scale: u32,
+) -> (
+    crate::hle::texture_request::TextureSource,
+    crate::replacement::ReplacementRegistration,
+) {
+    use crate::hle::texture_request::{
+        DecodeRecipe, EncodedInput, EncodedTextureRequest, Representation, TextureSource,
+    };
+    use crate::replacement::*;
+    let recipe = DecodeRecipe {
+        representation: Representation::Tile,
+        output: [16, 12],
+        logical: [16, 12],
+        fmt: 0,
+        siz: 2,
+        base: 0,
+        line: 4,
+        palette: 0,
+        tlut: 0,
+        palette_lanes: false,
+    };
+    let input = EncodedInput::Tmem(std::sync::Arc::new([tag; 4096]));
+    let target =
+        ReplacementTarget::new(recipe.clone(), input.clone(), TextureKeyScheme::Fast3dV1).unwrap();
+    let request = EncodedTextureRequest::from_test_parts(input, recipe);
+    let pixels = (0..12 * scale)
+        .flat_map(|y| (0..16 * scale).flat_map(move |x| [x as u8, y as u8, tag, 255]))
+        .collect::<Vec<_>>();
+    (
+        TextureSource::Encoded(std::sync::Arc::new(request)),
+        ReplacementRegistration {
+            target,
+            status: ReplacementStatus::Ready(ReplacementImage {
+                extent: [16 * scale, 12 * scale],
+                pixels: pixels.into(),
+                format: FORMAT,
+            }),
+        },
+    )
+}
+
+#[test]
+fn non_square_replacement_copy_uses_target_rate_and_unrounded_coordinates() {
+    let (device, queue, dual) = headless_device();
+    for scale in [1, 2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        for dsdx in [4096, -4096, 4095, -4097] {
+            let base_s = if dsdx == 4096 || dsdx == -4096 {
+                169
+            } else {
+                168
+            };
+            let mut draw = texrect_scene([base_s, 169], [dsdx, 1024], false, true, false);
+            let (source, registration) = replacement_source(20, 8);
+            draw.materials[0].texture = source;
+            renderer.set_replacement_provider(Some(std::sync::Arc::new(
+                crate::replacement::ReplacementProvider::new(1, [registration]),
+            )));
+            renderer.begin_frame();
+            renderer.render_into_store(&device, &queue, &draw, ClearPolicy::PerFrame);
+            let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
+            for (texture, factor) in std::iter::once((&fb.color, 1))
+                .chain(fb.presentation.as_ref().map(|p| (&p.texture, scale)))
+            {
+                let bytes = read_texture(&device, &queue, texture);
+                assert_rgba(texture, &bytes, |x, y| {
+                    if !(2 * factor..6 * factor).contains(&x)
+                        || !(2 * factor..6 * factor).contains(&y)
+                    {
+                        return [13, 13, 20, 255];
+                    }
+                    let slope = match dsdx {
+                        4096 => 1.0,
+                        -4096 => -1.0,
+                        4095 => 127.0 / 128.0,
+                        -4097 => -129.0 / 128.0,
+                        _ => unreachable!(),
+                    };
+                    let s = f64::from(base_s) / 32.0
+                        + ((x as f64 + 0.5) / f64::from(factor) - 2.0) * slope;
+                    let t = 169.0 / 32.0 + (y as f64 + 0.5) / f64::from(factor) - 2.0;
+                    let coordinate = |v: f64| {
+                        if factor == 1 {
+                            (v * 128.0).round_ties_even() / 128.0
+                        } else {
+                            v
+                        }
+                    };
+                    [
+                        (coordinate(s) * 8.0).floor() as u8,
+                        (coordinate(t) * 8.0).floor() as u8,
+                        20,
+                        255,
+                    ]
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn precision_and_snapping_follow_resolved_texel_mip_and_detail_roles() {
+    use crate::hle::combiner::{MipLevel, Tex1};
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        for role in [0, 1, 3, 2] {
+            for (enhanced, precision) in
+                [(false, false), (true, false), (false, true), (true, true)]
+            {
+                let step = if precision {
+                    1023
+                } else if role == 2 {
+                    512
+                } else {
+                    1024
+                };
+                let mut draw = texrect_scene([168, 168], [step, step], false, false, false);
+                let mat = &mut draw.materials[0];
+                let ordinary = mat.texture.clone();
+                let mut registrations = Vec::new();
+                let sources: Vec<_> = (0..4)
+                    .map(|index| {
+                        if (index == role) == enhanced {
+                            let (source, registration) = replacement_source(20 + index as u8, 8);
+                            registrations.push(registration);
+                            source
+                        } else {
+                            ordinary.clone()
+                        }
+                    })
+                    .collect();
+                mat.texture = sources[0].clone();
+                mat.tex1 = Some(Tex1 {
+                    texture: sources[1].clone(),
+                    sampling: mat.sampling,
+                    tex_w: 16,
+                    tex_h: 12,
+                    wrap_s: 2,
+                    wrap_t: 2,
+                    fmt: 0,
+                    siz: 2,
+                });
+                mat.tile_count = 2;
+                mat.mip_levels = [0, 3]
+                    .map(|index| MipLevel {
+                        texture: sources[index].clone(),
+                        sampling: mat.sampling,
+                        w: 16,
+                        h: 12,
+                    })
+                    .to_vec();
+                mat.num_levels = 2;
+                mat.detail_tex = (role == 2).then(|| MipLevel {
+                    texture: sources[2].clone(),
+                    sampling: mat.sampling,
+                    w: 16,
+                    h: 12,
+                });
+                mat.lod = role >= 2;
+                if role == 3 {
+                    mat.text_detail = 1;
+                    mat.prim_min_level = 1.25;
+                }
+                mat.cycle_type = u32::from(role == 1 || role == 3);
+                renderer.set_replacement_provider(Some(std::sync::Arc::new(
+                    crate::replacement::ReplacementProvider::new(1, registrations),
+                )));
+                renderer.begin_frame();
+                renderer.render_into_store(&device, &queue, &draw, ClearPolicy::PerFrame);
+                let texture = &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
+                    .presentation
+                    .as_ref()
+                    .unwrap()
+                    .texture;
+                let bytes = read_texture(&device, &queue, texture);
+                assert_rgba(texture, &bytes, |x, y| {
+                    if !(2 * scale..6 * scale).contains(&x) || !(2 * scale..6 * scale).contains(&y)
+                    {
+                        return [13, 13, 20, 255];
+                    }
+                    let p = |v: u32| {
+                        if !enhanced && step == 1024 {
+                            (v / scale - 2) as f64 + 0.5
+                        } else {
+                            (v as f64 + 0.5) / f64::from(scale) - 2.0
+                        }
+                    };
+                    let slope = if precision {
+                        127.0 / 128.0
+                    } else {
+                        f64::from(step) / 1024.0
+                    };
+                    let coordinate = |v: u32| 5.25 + p(v) * slope;
+                    if enhanced {
+                        [
+                            (coordinate(x) * 8.0).floor() as u8,
+                            (coordinate(y) * 8.0).floor() as u8,
+                            20 + role as u8,
+                            255,
+                        ]
+                    } else {
+                        let texel =
+                            |v| ((coordinate(v) * 128.0).round_ties_even() / 128.0).floor() as u8;
+                        [texel(x) * 12, texel(y) * 16, 0, 255]
+                    }
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn mip_selection_uses_unsnapped_native_derivatives() {
+    use crate::hle::combiner::MipLevel;
+    use crate::hle::texture_request::TextureSource;
+    let (device, queue, dual) = headless_device();
+    for scale in [1, 2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        for step in [1024, 2560, 5120] {
+            let mut draw = texrect_scene([0, 0], [step, step], false, false, false);
+            let mat = &mut draw.materials[0];
+            mat.lod = true;
+            mat.num_levels = 3;
+            let colors = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]];
+            mat.mip_levels = colors
+                .into_iter()
+                .map(|rgba| MipLevel {
+                    sampling: mat.sampling,
+                    texture: TextureSource::Rgba(rgba.repeat(16 * 12).into()),
+                    w: 16,
+                    h: 12,
+                })
+                .collect();
+            mat.texture = mat.mip_levels[0].texture.clone();
+            renderer.begin_frame();
+            renderer.render_into_store(&device, &queue, &draw, ClearPolicy::PerFrame);
+            let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
+            for (texture, factor) in std::iter::once((&fb.color, 1))
+                .chain(fb.presentation.as_ref().map(|p| (&p.texture, scale)))
+            {
+                let bytes = read_texture(&device, &queue, texture);
+                assert_rgba(texture, &bytes, |x, y| {
+                    if (2 * factor..6 * factor).contains(&x)
+                        && (2 * factor..6 * factor).contains(&y)
+                    {
+                        colors[match step {
+                            1024 => 0,
+                            2560 => 1,
+                            _ => 2,
+                        }]
+                    } else {
+                        [13, 13, 20, 255]
+                    }
+                });
+            }
+        }
+    }
+}
+
+fn decal_scene(primitive: bool, dz: u16) -> crate::Scene {
+    let mut draw = scene(&triangle(A, Z, 0x4000, 0xff0000ff));
+    draw.draw_origins.clear();
+    let SceneOp::Tris(base) = draw.framebuffer_pairs[0].ops[0].clone() else {
+        unreachable!()
+    };
+    draw.materials.push(draw.materials[0].clone());
+    draw.materials[1].prim = [0, 255, 0, 255];
+    draw.render_modes = vec![
+        crate::hle::decode_render_mode(crate::hle::consts::rdp::G_RM_AA_ZB_OPA_SURF, 0, 0),
+        crate::hle::decode_render_mode(crate::hle::consts::rdp::G_RM_AA_ZB_XLU_DECAL, 0, 0),
+    ];
+    draw.render_modes[1].z_write = false;
+    if primitive {
+        draw.render_modes[0].z_source_prim = true;
+        draw.render_modes[1].z_source_prim = true;
+    }
+    draw.raw_pos = vec![[-1.0, 1.0, -0.4], [1.0, 1.0, 0.4], [-1.0, -1.0, -0.4]];
+    let mut decal_positions = draw.raw_pos.clone();
+    for position in &mut decal_positions {
+        position[2] -= 0.018;
+    }
+    draw.raw_pos.extend(decal_positions);
+    draw.raw_st.extend_from_within(..);
+    draw.mtx_index.extend_from_within(..);
+    draw.viewport_index.extend_from_within(..);
+    draw.texcoord_index.extend_from_within(..);
+    draw.cn.extend_from_within(..);
+    draw.light_index.extend_from_within(..);
+    draw.light_count.extend_from_within(..);
+    draw.indices.extend([3, 4, 5]);
+    draw.framebuffer_pairs[0].ops = vec![
+        SceneOp::Tris(base),
+        SceneOp::Tris(crate::scene::DrawRun {
+            material_index: 1,
+            render_mode_index: 1,
+            index_start: 3,
+            prim_depth: crate::scene::PrimitiveDepth { z: 0x3ff0, dz },
+            ..base
+        }),
+    ];
+    draw
+}
+
+#[test]
+fn sloped_decal_tolerance_uses_native_derivatives_without_scaling_z() {
+    let (fallback_device, fallback_queue) = headless_device_forced_fallback();
+    for (device, queue, primary) in [(fallback_device, fallback_queue, false), headless_device()] {
+        for scale in [1, 2, 3, 4] {
+            let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, primary);
+            renderer.set_test_scale(scale, BUDGET);
+            renderer.render_into_store(
+                &device,
+                &queue,
+                &decal_scene(false, 0),
+                ClearPolicy::Persist,
+            );
+            let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
+            let depth = &renderer.depthbuffers[&workload::TargetId::Guest(Z.into())];
+            for (color, depth, factor) in std::iter::once((&fb.color, &depth.texture, 1)).chain(
+                fb.presentation.as_ref().map(|p| {
+                    (
+                        &p.texture,
+                        &depth.presentation.as_ref().unwrap().texture,
+                        scale,
+                    )
+                }),
+            ) {
+                let bytes = read_texture(&device, &queue, color);
+                let z = read_texture(&device, &queue, depth);
+                for y in 3 * factor..8 * factor {
+                    for x in 3 * factor..12 * factor {
+                        let offset = ((y * 32 * factor + x) * 4) as usize;
+                        assert_eq!(
+                            &bytes[offset..offset + 4],
+                            [0, 255, 0, 255],
+                            "scale {scale}, primary {primary}, ({x},{y})"
+                        );
+                        let expected =
+                            (0.6 + 0.8 * x as f32 / (32 * factor) as f32) * 511.0 / 1024.0;
+                        let actual = f32::from_le_bytes(z[offset..offset + 4].try_into().unwrap());
+                        assert!((actual - expected).abs() < 1.0e-6, "{actual} vs {expected}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn primitive_z_decal_retains_the_baseline_primitive_dz_gap() {
+    let (fallback_device, fallback_queue) = headless_device_forced_fallback();
+    for (device, queue, primary) in [(fallback_device, fallback_queue, false), headless_device()] {
+        for scale in [1, 2, 3, 4] {
+            for dz in [0, 0x7fff] {
+                let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, primary);
+                renderer.set_test_scale(scale, BUDGET);
+                renderer.render_into_store(
+                    &device,
+                    &queue,
+                    &decal_scene(true, dz),
+                    ClearPolicy::Persist,
+                );
+                let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
+                for (texture, factor) in std::iter::once((&fb.color, 1))
+                    .chain(fb.presentation.as_ref().map(|p| (&p.texture, scale)))
+                {
+                    let bytes = read_texture(&device, &queue, texture);
+                    for y in 3 * factor..8 * factor {
+                        for x in 3 * factor..12 * factor {
+                            assert_eq!(
+                                &bytes[((y * 32 * factor + x) * 4) as usize..][..4],
+                                [255, 0, 0, 255]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn adjacent_normal_and_copy_strips_scale_completed_bounds_on_tall_attachments() {
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        for copy in [false, true] {
+            for residue in 0..4 {
+                let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+                renderer.set_test_scale(scale, BUDGET);
+                renderer.render_into_store(
+                    &device,
+                    &queue,
+                    &fill_scene(A, 16, 20, 0x003f003f),
+                    ClearPolicy::Persist,
+                );
+                let mut draw = texrect_scene(
+                    [0, 0],
+                    [if copy { 4096 } else { 1024 }, 1024],
+                    false,
+                    copy,
+                    false,
+                );
+                draw.materials.push(draw.materials[0].clone());
+                for (mat, rgba) in draw
+                    .materials
+                    .iter_mut()
+                    .zip([[255, 0, 0, 255], [0, 255, 0, 255]])
+                {
+                    mat.texture = crate::hle::texture_request::TextureSource::Rgba(
+                        rgba.repeat(16 * 12).into(),
+                    );
+                }
+                let mut second = draw.framebuffer_pairs[0].ops[0].clone();
+                for (index, op) in [&mut draw.framebuffer_pairs[0].ops[0], &mut second]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let SceneOp::TexRect {
+                        rect,
+                        material_index,
+                        ..
+                    } = op
+                    else {
+                        unreachable!()
+                    };
+                    *material_index = index as u32;
+                    *rect = crate::scene::TexRectBounds {
+                        ulx: (2 + index as i32 * 2) * 4 + residue,
+                        uly: 8 + residue,
+                        lrx: (4 + index as i32 * 2) * 4 + residue - if copy { 4 } else { 0 },
+                        lry: 24 + residue - if copy { 4 } else { 0 },
+                    };
+                }
+                draw.framebuffer_pairs[0].ops.push(second);
+                renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+                let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
+                for (texture, factor) in [
+                    (&fb.color, 1),
+                    (&fb.presentation.as_ref().unwrap().texture, scale),
+                ] {
+                    assert_eq!(texture.height(), 20 * factor);
+                    let bytes = read_texture(&device, &queue, texture);
+                    let offset = u32::from(!copy && residue != 0);
+                    assert_rgba(texture, &bytes, |x, y| {
+                        let (x, y) = (x / factor, y / factor);
+                        if (2 + offset..6 + offset).contains(&y)
+                            && (2 + offset..6 + offset).contains(&x)
+                        {
+                            if x < 4 + offset {
+                                [255, 0, 0, 255]
+                            } else {
+                                [0, 255, 0, 255]
+                            }
+                        } else {
+                            [0, 0, 255, 255]
+                        }
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn triangle_half_target_pixel_offset_uses_draw_height_after_retained_growth() {
+    let (device, queue, dual) = headless_device();
+    for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+        renderer.set_test_scale(scale, BUDGET);
+        renderer.render_into_store(
+            &device,
+            &queue,
+            &fill_scene(A, 32, 37, 0x003f003f),
+            ClearPolicy::Persist,
+        );
+        renderer.render_into_store(
+            &device,
+            &queue,
+            &scene(&triangle(A, 0, 0, 0xffffffff)),
+            ClearPolicy::Persist,
+        );
+        let texture = &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
+            .presentation
+            .as_ref()
+            .unwrap()
+            .texture;
+        let bytes = read_texture(&device, &queue, texture);
+        assert_rgba(texture, &bytes, |x, y| {
+            let inside = y < 24 * scale && 3 * x + 4 * y < 96 * scale;
+            if inside {
+                [255; 4]
+            } else {
+                [0, 0, 255, 255]
+            }
+        });
+    }
+}
+
+#[test]
+fn raw_scissor_survives_task_boundaries_and_raw_only_rectangle_changes() {
+    let mut renderer = facade(3, false);
+    let mut memory = Memory(vec![0; 4096]);
+    let mut commands = fill_commands(A, 9, 7, 0xf801f801);
+    commands[1] = gdp_set_scissor(0, 0, 0, 32, 24);
+    commands.extend([
+        gdp_set_scissor(0, 1, 3, 32, 24),
+        gdp_set_fill_color(0x07c107c1),
+        gdp_fill_rectangle(0, 0, 32, 24),
+    ]);
+    let (_, diagnostics) = submit(
+        &mut renderer,
+        &mut memory,
+        &finish(DlBuilder::new(), commands),
+    );
+    assert!(diagnostics.is_empty());
+    let mut commands = fill_commands(A, 9, 7, 0x003f003f);
+    commands.remove(1);
+    let (_, diagnostics) = submit(
+        &mut renderer,
+        &mut memory,
+        &finish(DlBuilder::new(), commands),
+    );
+    assert!(diagnostics.is_empty());
+    let texture = &renderer.inner.framebuffers[&workload::TargetId::Guest(A.into())]
+        .presentation
+        .as_ref()
+        .unwrap()
+        .texture;
+    let bytes = read_texture(renderer.device(), renderer.queue(), texture);
+    assert_rgba(texture, &bytes, |x, y| {
+        if (3..24).contains(&x) && (3..18).contains(&y) {
+            [0, 0, 255, 255]
+        } else if x < 24 && y < 18 {
+            [255, 0, 0, 255]
+        } else {
+            [13, 13, 20, 255]
+        }
+    });
+}
+
 fn rejected_native_projection() -> Built {
     let mut builder = DlBuilder::new();
     let viewport = builder.viewport(Vp {

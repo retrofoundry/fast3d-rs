@@ -451,7 +451,11 @@ impl<'a> RenderInputs<'a> {
                         any_depth,
                         depth_clear: target.depth_clear,
                         operations: Vec::new(),
-                        logical_scissors: target.operations.iter().map(|op| op.scissor).collect(),
+                        logical_scissors: target
+                            .operations
+                            .iter()
+                            .map(|operation| operation.presentation_scissor)
+                            .collect(),
                         uniforms: vec![0; target.operations.len() * 256],
                         rectangles: Vec::new().into(),
                         rect_indices: Vec::new(),
@@ -545,6 +549,10 @@ impl<'a> RenderInputs<'a> {
                                         None => super::triangle_inv_tex_size(mat),
                                     };
                                     uniform.inv_tex_size[2] = 1.0;
+                                    let (ds, dt) = super::texrect_steps((*dsdx, *dtdy), *copy_mode);
+                                    uniform.raster[2] = u32::from(
+                                        ds.unsigned_abs() == 1024 && dt.unsigned_abs() == 1024,
+                                    );
                                     inputs.rectangles.extend_from_slice(&super::texrect_quad(
                                         rect,
                                         (*uls, *ult),
@@ -574,20 +582,18 @@ impl<'a> RenderInputs<'a> {
                                     rect, color_raw, ..
                                 } => {
                                     if target.depth_clear {
-                                        let scissor = crate::scene::Scissor {
-                                            ulx: operation.scissor.ulx.max(rect.ulx),
-                                            uly: operation.scissor.uly.max(rect.uly),
-                                            lrx: operation
-                                                .scissor
-                                                .lrx
-                                                .min(rect.lrx.saturating_add(1)),
-                                            lry: operation
-                                                .scissor
-                                                .lry
-                                                .min(rect.lry.saturating_add(1)),
-                                            mode: operation.scissor.mode,
+                                        let intersect = |scissor: crate::scene::Scissor| {
+                                            crate::scene::Scissor {
+                                                ulx: scissor.ulx.max(rect.ulx),
+                                                uly: scissor.uly.max(rect.uly),
+                                                lrx: scissor.lrx.min(rect.lrx.saturating_add(1)),
+                                                lry: scissor.lry.min(rect.lry.saturating_add(1)),
+                                                mode: scissor.mode,
+                                            }
                                         };
-                                        inputs.logical_scissors[slot] = scissor;
+                                        let scissor = intersect(operation.scissor);
+                                        inputs.logical_scissors[slot] =
+                                            intersect(operation.presentation_scissor);
                                         inputs.operations.push(OperationInputs {
                                             literal_fill: Some(*color_raw),
                                             coverage_mode: None,

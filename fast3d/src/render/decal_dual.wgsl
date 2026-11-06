@@ -11,7 +11,8 @@ fn shade_decal_dual(in: VsOut) -> FragOut {
     if (pixel_z > sampled + eps) {
         discard;
     }
-    let dz = abs(dpdx(pixel_z)) + abs(dpdy(pixel_z));
+    var dz = abs(dpdx(pixel_z)) + abs(dpdy(pixel_z));
+    if combiner.raster.x > 1u { dz *= f32(combiner.raster.x); }
     if (abs(pixel_z - sampled) > max(dz, eps)) {
         discard;
     }
