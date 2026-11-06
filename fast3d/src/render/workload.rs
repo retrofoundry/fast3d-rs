@@ -449,13 +449,27 @@ impl SceneRenderer {
 
     fn upload_draws(&self, device: &wgpu::Device, target: &TargetInputs) -> DrawUpload {
         let _span = self.profiling.span("resources");
+        let mut uniform_bytes = std::borrow::Cow::Borrowed(target.uniforms.as_slice());
+        if self.render_scale > 1 {
+            let mut presentation = target.uniforms.clone();
+            for slot in presentation.as_chunks_mut::<256>().0 {
+                let len = std::mem::size_of::<CombinerUniform>();
+                let mut uniform: CombinerUniform = bytemuck::pod_read_unaligned(&slot[..len]);
+                uniform.frame[2..].copy_from_slice(&[
+                    target.extents.presentation.0,
+                    target.extents.presentation.1,
+                ]);
+                slot[..len].copy_from_slice(bytemuck::bytes_of(&uniform));
+            }
+            uniform_bytes.to_mut().extend_from_slice(&presentation);
+        }
         let buffer = super::buffer_init(
             device,
             &self.profiling,
             "uniforms",
             &wgpu::util::BufferInitDescriptor {
                 label: Some("workload-uniforms"),
-                contents: &target.uniforms,
+                contents: &uniform_bytes,
                 usage: wgpu::BufferUsages::UNIFORM,
             },
         );
@@ -498,15 +512,43 @@ impl SceneRenderer {
     ) -> Option<TargetId> {
         self.diagnostics.clear();
         self.dropped_runs = 0;
-        let preparation = self.profiling.span("render_inputs");
-        let inputs = RenderInputs::with_targets(
+        let inputs = match self.prepare_inputs(device, scene) {
+            Ok(Some(inputs)) => inputs,
+            Ok(None) => return None,
+            Err(diagnostic) => {
+                self.diagnostics.push(diagnostic);
+                return None;
+            }
+        };
+        self.render_prepared(device, queue, &inputs, clear_policy)
+    }
+
+    pub(crate) fn prepare_inputs<'a>(
+        &mut self,
+        device: &wgpu::Device,
+        scene: &'a Scene,
+    ) -> Result<Option<RenderInputs<'a>>, crate::Diagnostic> {
+        let _preparation = self.profiling.span("render_inputs");
+        let Some(mut inputs) = RenderInputs::with_targets(
             scene,
             (self.fb_w, self.fb_h),
             [self.frame_serial as u32, self.dither_seed],
             &self.target_descriptors,
-        )?;
-        drop(preparation);
-        let result = self.render_inputs(device, queue, &inputs, clear_policy);
+        ) else {
+            return Ok(None);
+        };
+        self.preflight_inputs(&mut inputs, &device.limits())?;
+        Ok(Some(inputs))
+    }
+
+    pub(crate) fn render_prepared(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        inputs: &RenderInputs<'_>,
+        clear_policy: ClearPolicy,
+    ) -> Option<TargetId> {
+        let result = self.render_inputs(device, queue, inputs, clear_policy);
         self.diagnostics.extend_from_slice(&inputs.diagnostics);
         self.dropped_runs += inputs.dropped_runs;
         result
@@ -591,9 +633,6 @@ impl SceneRenderer {
                 }
             }
             let (native_w, native_h) = target.extents.native;
-            let (presentation_w, presentation_h) = target.extents.presentation;
-            let native_texture_height =
-                |texture: &wgpu::Texture| texture.height() / (texture.width() / native_w);
             let any_depth = target.any_depth;
             let depth_id = target
                 .depth_image
@@ -616,39 +655,32 @@ impl SceneRenderer {
                     old.layout == color_layout
                         && (target.id != TargetId::Legacy || old.height == native_h)
                 }) {
-                    native_allocation_height =
-                        native_allocation_height.max(native_texture_height(&old.color));
+                    native_allocation_height = native_allocation_height.max(old.color.height());
                 }
             }
             if let Some(old) = depth_id
                 .and_then(|id| self.depthbuffers.get(&id))
                 .filter(|old| {
                     old.layout == depth_layout
-                        && (depth_id != Some(TargetId::Legacy)
-                            || native_texture_height(&old.texture) == native_h)
+                        && (depth_id != Some(TargetId::Legacy) || old.texture.height() == native_h)
                 })
             {
-                native_allocation_height =
-                    native_allocation_height.max(native_texture_height(&old.texture));
+                native_allocation_height = native_allocation_height.max(old.texture.height());
             }
-            let presentation_allocation = (
-                presentation_w,
-                native_allocation_height * (presentation_h / native_h),
-            );
+            let native_allocation = (native_w, native_allocation_height);
             let color_restore_from = self
                 .framebuffers
                 .get(&target.id)
                 .filter(|old| old.layout == color_layout)
                 .map_or(Some(0), |old| {
-                    (native_texture_height(&old.color) < native_allocation_height)
-                        .then_some(native_texture_height(&old.color))
+                    (old.color.height() < native_allocation_height).then_some(old.color.height())
                 });
             let depth_restore_from = depth_id
                 .and_then(|id| self.depthbuffers.get(&id))
                 .filter(|old| old.layout == depth_layout)
                 .map_or(Some(0), |old| {
-                    (native_texture_height(&old.texture) < native_allocation_height)
-                        .then_some(native_texture_height(&old.texture))
+                    (old.texture.height() < native_allocation_height)
+                        .then_some(old.texture.height())
                 });
             let color_initialize =
                 clear_policy == ClearPolicy::PerFrame && !self.first_touch.contains(&target.id);
@@ -699,7 +731,7 @@ impl SceneRenderer {
                         height: native_allocation_height,
                         pc: target.pc,
                     },
-                    presentation_allocation,
+                    native_allocation,
                     clear_policy,
                 );
             }
@@ -748,9 +780,19 @@ impl SceneRenderer {
                             &mut encoder,
                             depth,
                             word,
-                            target.presentation_scissor(slot),
+                            operation.scissor,
                             &self.profiling,
                         );
+                        if let Some(presentation) = &depth.presentation {
+                            self.depth_pipeline.fill(
+                                device,
+                                &mut encoder,
+                                presentation,
+                                word,
+                                target.presentation_scissor(slot),
+                                &self.profiling,
+                            );
+                        }
                     } else if let DrawInputs::FramebufferCopy(copy) = &operation.draw {
                         #[cfg(not(target_arch = "wasm32"))]
                         if let Some(coherence) = &mut self.coherence {
@@ -793,7 +835,7 @@ impl SceneRenderer {
                     height: native_h,
                     pc: target.pc,
                 },
-                presentation_allocation,
+                native_allocation,
                 clear_policy,
             );
             if self.coherence.is_some() {
@@ -910,6 +952,19 @@ impl SceneRenderer {
                     }],
                 })
             });
+            let presentation_depth_bg =
+                depth
+                    .and_then(|depth| depth.presentation.as_deref())
+                    .map(|depth| {
+                        device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("presentation-depth"),
+                            layout: self.textured_fb.depth_bind_group_layout(),
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&depth.attach),
+                            }],
+                        })
+                    });
             let mut start = 0;
             #[cfg(not(target_arch = "wasm32"))]
             let mut ownership_start = 0;
@@ -1049,219 +1104,279 @@ impl SceneRenderer {
                         source_valid[slot] = false;
                     }
                 }
-                let writes_depth = target.operations[start..end]
-                    .iter()
-                    .any(OperationInputs::writes_depth);
-                let decal_snapshot = (read_depth && writes_depth).then(|| {
-                    let snapshot = super::framebuffers::DepthImage::new(
-                        device,
-                        depth_layout,
-                        presentation_allocation,
-                    );
-                    self.depth_pipeline
-                        .copy(device, &mut encoder, depth.unwrap(), &snapshot);
-                    snapshot
-                });
-                let snapshot_bg = decal_snapshot.as_ref().map(|snapshot| {
-                    device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("decal-depth-snapshot"),
-                        layout: self.textured_fb.depth_bind_group_layout(),
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&snapshot.attach),
-                        }],
-                    })
-                });
-                let depth_bg = snapshot_bg.as_ref().or(depth_bg.as_ref());
-                let attachment = depth.filter(|_| !read_depth || writes_depth).map(|depth| {
-                    wgpu::RenderPassDepthStencilAttachment {
-                        view: &depth.attach,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }
-                });
-                if let Some(view) = &coverage_view {
-                    let operation = &target.operations[start];
-                    let (x, y, width, height) = operation.scissor;
-                    if source_valid[start]
-                        && width != 0
-                        && height != 0
-                        && !matches!(operation.draw, DrawInputs::Rejected)
-                    {
-                        let coverage = self.coverage.get_or_insert_with(|| {
-                            super::framebuffers::coherence::Coverage::new(device)
-                        });
-                        let pipeline = coverage
-                            .pipeline(device, &self.textured_fb, &operation.draw, any_depth)
-                            .clone();
-                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("guest-coverage"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                                depth_slice: None,
-                            })],
-                            depth_stencil_attachment: attachment.clone(),
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
-                        pass.set_viewport(0.0, 0.0, native_w as f32, native_h as f32, 0.0, 1.0);
-                        pass.set_scissor_rect(x, y, width, height);
-                        if read_depth {
-                            pass.set_bind_group(2, depth_bg.unwrap(), &[]);
+                for presentation in
+                    [false, true]
+                        .into_iter()
+                        .take(if self.render_scale > 1 { 2 } else { 1 })
+                {
+                    let (pass_w, pass_h) = if presentation {
+                        target.extents.presentation
+                    } else {
+                        target.extents.native
+                    };
+                    let depth = depth.map(|depth| {
+                        if presentation {
+                            depth.presentation.as_deref().unwrap()
+                        } else {
+                            depth
                         }
+                    });
+                    let pass_allocation = (
+                        pass_w,
+                        native_allocation_height * if presentation { self.render_scale } else { 1 },
+                    );
+                    let depth_bg = if presentation {
+                        presentation_depth_bg.as_ref()
+                    } else {
+                        depth_bg.as_ref()
+                    };
+                    let uniform_base = if presentation {
+                        target.operations.len()
+                    } else {
+                        0
+                    };
+                    let writes_depth = target.operations[start..end]
+                        .iter()
+                        .any(OperationInputs::writes_depth);
+                    let decal_snapshot = (read_depth && writes_depth).then(|| {
+                        let snapshot = super::framebuffers::DepthImage::new(
+                            device,
+                            depth_layout,
+                            pass_allocation,
+                        );
+                        self.depth_pipeline
+                            .copy(device, &mut encoder, depth.unwrap(), &snapshot);
+                        snapshot
+                    });
+                    let snapshot_bg = decal_snapshot.as_ref().map(|snapshot| {
+                        device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("decal-depth-snapshot"),
+                            layout: self.textured_fb.depth_bind_group_layout(),
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&snapshot.attach),
+                            }],
+                        })
+                    });
+                    let depth_bg = snapshot_bg.as_ref().or(depth_bg);
+                    let attachment = depth.filter(|_| !read_depth || writes_depth).map(|depth| {
+                        wgpu::RenderPassDepthStencilAttachment {
+                            view: &depth.attach,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }
+                    });
+                    if let Some(view) = coverage_view.as_ref().filter(|_| !presentation) {
+                        let operation = &target.operations[start];
+                        let (x, y, width, height) = operation.scissor;
+                        if source_valid[start]
+                            && width != 0
+                            && height != 0
+                            && !matches!(operation.draw, DrawInputs::Rejected)
+                        {
+                            let coverage = self.coverage.get_or_insert_with(|| {
+                                super::framebuffers::coherence::Coverage::new(device)
+                            });
+                            let pipeline = coverage
+                                .pipeline(device, &self.textured_fb, &operation.draw, any_depth)
+                                .clone();
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("guest-coverage"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view,
+                                    resolve_target: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                    depth_slice: None,
+                                })],
+                                depth_stencil_attachment: attachment.clone(),
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                multiview_mask: None,
+                            });
+                            pass.set_viewport(0.0, 0.0, native_w as f32, native_h as f32, 0.0, 1.0);
+                            pass.set_scissor_rect(x, y, width, height);
+                            if read_depth {
+                                pass.set_bind_group(2, depth_bg.unwrap(), &[]);
+                            }
+                            match &operation.draw {
+                                DrawInputs::Tris {
+                                    index_start,
+                                    index_count,
+                                    material_index,
+                                    ..
+                                } => {
+                                    pass.set_pipeline(&pipeline);
+                                    if let Some(index) = &buffers.indices {
+                                        pass.set_index_buffer(
+                                            index.slice(..),
+                                            wgpu::IndexFormat::Uint32,
+                                        );
+                                    }
+                                    if let Some(vertices) =
+                                        buffers.vertices.get(&target.extents.logical)
+                                    {
+                                        pass.set_vertex_buffer(0, vertices.slice(..));
+                                    }
+                                    pass.set_bind_group(
+                                        0,
+                                        material_bgs[*material_index as usize],
+                                        &[],
+                                    );
+                                    pass.set_bind_group(
+                                        1,
+                                        &upload.uniforms,
+                                        &[(start * 256) as u32],
+                                    );
+                                    pass.draw_indexed(
+                                        *index_start..*index_start + *index_count,
+                                        0,
+                                        0..1,
+                                    );
+                                }
+                                DrawInputs::Rectangle { .. } => self.draw_rect_op(
+                                    &mut pass,
+                                    device,
+                                    &operation.draw,
+                                    &material_bgs,
+                                    upload.rectangles.as_ref(),
+                                    Some(&upload.uniforms),
+                                    start as u32,
+                                    target.rect_indices[start],
+                                    any_depth,
+                                    Some(&pipeline),
+                                ),
+                                _ => {}
+                            }
+                        }
+                    }
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("workload-segment"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: if presentation {
+                                &self.framebuffers[&target.id]
+                                    .presentation
+                                    .as_ref()
+                                    .unwrap()
+                                    .attach
+                            } else {
+                                &self.framebuffers[&target.id].attach
+                            },
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: color_load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: attachment,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    color_load = wgpu::LoadOp::Load;
+                    self.profiling.count("workload.segments", 1);
+                    if presentation {
+                        self.profiling.count("workload.presentation_segments", 1);
+                    }
+                    pass.set_viewport(0.0, 0.0, pass_w as f32, pass_h as f32, 0.0, 1.0);
+                    if let Some(index) = &buffers.indices {
+                        pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
+                    }
+                    if read_depth {
+                        pass.set_bind_group(2, depth_bg.unwrap(), &[]);
+                    }
+                    for (slot, operation) in
+                        target.operations.iter().enumerate().take(end).skip(start)
+                    {
+                        if !source_valid[slot] {
+                            continue;
+                        }
+                        let (x, y, width, height) = if presentation {
+                            target.presentation_scissor(slot)
+                        } else {
+                            operation.scissor
+                        };
+                        if width == 0 || height == 0 {
+                            continue;
+                        }
+                        pass.set_scissor_rect(x, y, width, height);
                         match &operation.draw {
+                            DrawInputs::Rejected | DrawInputs::FramebufferCopy(_) => {}
+                            DrawInputs::DepthFill { .. } => {
+                                unreachable!("depth fills have no color attachment")
+                            }
                             DrawInputs::Tris {
+                                cull,
+                                unclipped_depth,
                                 index_start,
                                 index_count,
                                 material_index,
-                                ..
+                                mode,
                             } => {
-                                pass.set_pipeline(&pipeline);
-                                if let Some(index) = &buffers.indices {
-                                    pass.set_index_buffer(
-                                        index.slice(..),
-                                        wgpu::IndexFormat::Uint32,
-                                    );
-                                }
+                                let pipeline = if read_depth {
+                                    self.textured_fb.select_decal(
+                                        *cull,
+                                        mode.fallback_class,
+                                        mode.blend_class,
+                                        mode.z_write,
+                                    )
+                                } else {
+                                    let test = any_depth && mode.z_test;
+                                    let write = any_depth && mode.z_write;
+                                    match &self.textured_fb.dual {
+                                        Some(dual)
+                                            if mode.blend_class
+                                                == crate::hle::BlendClass::DualSrc =>
+                                        {
+                                            dual.select(*cull, test, write, any_depth)
+                                        }
+                                        _ => self.textured_fb.select(
+                                            *cull,
+                                            test,
+                                            write,
+                                            any_depth,
+                                            mode.fallback_class,
+                                        ),
+                                    }
+                                };
+                                pass.set_pipeline(&pipeline[usize::from(*unclipped_depth)]);
                                 if let Some(vertices) =
                                     buffers.vertices.get(&target.extents.logical)
                                 {
                                     pass.set_vertex_buffer(0, vertices.slice(..));
                                 }
                                 pass.set_bind_group(0, material_bgs[*material_index as usize], &[]);
-                                pass.set_bind_group(1, &upload.uniforms, &[(start * 256) as u32]);
+                                pass.set_bind_group(
+                                    1,
+                                    &upload.uniforms,
+                                    &[((uniform_base + slot) * 256) as u32],
+                                );
                                 pass.draw_indexed(
                                     *index_start..*index_start + *index_count,
                                     0,
                                     0..1,
                                 );
                             }
-                            DrawInputs::Rectangle { .. } => self.draw_rect_op(
-                                &mut pass,
-                                device,
-                                &operation.draw,
-                                &material_bgs,
-                                upload.rectangles.as_ref(),
-                                Some(&upload.uniforms),
-                                start as u32,
-                                target.rect_indices[start],
-                                any_depth,
-                                Some(&pipeline),
-                            ),
-                            _ => {}
-                        }
-                    }
-                }
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("workload-segment"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.framebuffers[&target.id].attach,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: color_load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: attachment,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                color_load = wgpu::LoadOp::Load;
-                self.profiling.count("workload.segments", 1);
-                pass.set_viewport(
-                    0.0,
-                    0.0,
-                    presentation_w as f32,
-                    presentation_h as f32,
-                    0.0,
-                    1.0,
-                );
-                if let Some(index) = &buffers.indices {
-                    pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
-                }
-                if read_depth {
-                    pass.set_bind_group(2, depth_bg.unwrap(), &[]);
-                }
-                for (slot, operation) in target.operations.iter().enumerate().take(end).skip(start)
-                {
-                    if !source_valid[slot] {
-                        continue;
-                    }
-                    let (x, y, width, height) = target.presentation_scissor(slot);
-                    if width == 0 || height == 0 {
-                        continue;
-                    }
-                    pass.set_scissor_rect(x, y, width, height);
-                    match &operation.draw {
-                        DrawInputs::Rejected | DrawInputs::FramebufferCopy(_) => {}
-                        DrawInputs::DepthFill { .. } => {
-                            unreachable!("depth fills have no color attachment")
-                        }
-                        DrawInputs::Tris {
-                            cull,
-                            unclipped_depth,
-                            index_start,
-                            index_count,
-                            material_index,
-                            mode,
-                        } => {
-                            let pipeline = if read_depth {
-                                self.textured_fb.select_decal(
-                                    *cull,
-                                    mode.fallback_class,
-                                    mode.blend_class,
-                                    mode.z_write,
-                                )
-                            } else {
-                                let test = any_depth && mode.z_test;
-                                let write = any_depth && mode.z_write;
-                                match &self.textured_fb.dual {
-                                    Some(dual)
-                                        if mode.blend_class == crate::hle::BlendClass::DualSrc =>
-                                    {
-                                        dual.select(*cull, test, write, any_depth)
-                                    }
-                                    _ => self.textured_fb.select(
-                                        *cull,
-                                        test,
-                                        write,
-                                        any_depth,
-                                        mode.fallback_class,
-                                    ),
-                                }
-                            };
-                            pass.set_pipeline(&pipeline[usize::from(*unclipped_depth)]);
-                            if let Some(vertices) = buffers.vertices.get(&target.extents.logical) {
-                                pass.set_vertex_buffer(0, vertices.slice(..));
+                            DrawInputs::Rectangle { .. } => {
+                                self.draw_rect_op(
+                                    &mut pass,
+                                    device,
+                                    &operation.draw,
+                                    &material_bgs,
+                                    upload.rectangles.as_ref(),
+                                    Some(&upload.uniforms),
+                                    (uniform_base + slot) as u32,
+                                    target.rect_indices[slot],
+                                    any_depth,
+                                    None,
+                                );
                             }
-                            pass.set_bind_group(0, material_bgs[*material_index as usize], &[]);
-                            pass.set_bind_group(1, &upload.uniforms, &[(slot * 256) as u32]);
-                            pass.draw_indexed(*index_start..*index_start + *index_count, 0, 0..1);
-                        }
-                        DrawInputs::Rectangle { .. } => {
-                            self.draw_rect_op(
-                                &mut pass,
-                                device,
-                                &operation.draw,
-                                &material_bgs,
-                                upload.rectangles.as_ref(),
-                                Some(&upload.uniforms),
-                                slot as u32,
-                                target.rect_indices[slot],
-                                any_depth,
-                                None,
-                            );
                         }
                     }
                 }

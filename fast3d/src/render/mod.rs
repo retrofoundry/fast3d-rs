@@ -5,7 +5,10 @@ use bytemuck::{Pod, Zeroable};
 mod texrect_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tmem_sampling_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod upscaling_tests;
 
+mod admission;
 mod extents;
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;
@@ -1926,6 +1929,9 @@ pub struct SceneRenderer {
     pub(crate) coherence: Option<framebuffers::coherence::Coherence>,
     coverage: Option<framebuffers::coherence::Coverage>,
     depth_pipeline: DepthPipeline,
+    render_scale: u32,
+    attachment_budget: u64,
+    presentation_transfers: std::sync::OnceLock<framebuffers::presentation::Transfers>,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     pub(crate) dropped_runs: u32,
     #[cfg(feature = "capture")]
@@ -1960,6 +1966,29 @@ impl SceneRenderer {
                 .map(|f| u64::from(f.texture.width()) * u64::from(f.texture.height()) * 4)
                 .sum(),
         );
+        self.profiling.gauge(
+            "gpu_presentation_color_bytes",
+            self.framebuffers
+                .values()
+                .filter_map(|fb| fb.presentation.as_ref())
+                .map(|p| u64::from(p.texture.width()) * u64::from(p.texture.height()) * 4)
+                .sum(),
+        );
+        self.profiling.gauge(
+            "gpu_presentation_depth_bytes",
+            self.depthbuffers
+                .values()
+                .filter_map(|d| d.presentation.as_ref())
+                .map(|p| u64::from(p.texture.width()) * u64::from(p.texture.height()) * 4)
+                .sum(),
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_scale(&mut self, scale: u32, attachment_budget: u64) {
+        assert!(self.framebuffers.is_empty() && self.depthbuffers.is_empty());
+        self.render_scale = scale;
+        self.attachment_budget = attachment_budget;
     }
 
     pub fn new(
@@ -2149,6 +2178,9 @@ impl SceneRenderer {
             coherence: None,
             coverage: None,
             depth_pipeline: DepthPipeline::new(device),
+            render_scale: 1,
+            attachment_budget: u64::MAX,
+            presentation_transfers: Default::default(),
             diagnostics: Vec::new(),
             dropped_runs: 0,
             #[cfg(feature = "capture")]
@@ -2340,43 +2372,18 @@ impl SceneRenderer {
         })
     }
 
-    fn make_fb(
+    fn make_present_bindings(
         &self,
         device: &wgpu::Device,
-        layout: ImageLayout,
-        allocation: (u32, u32),
-        native_height: u32,
-    ) -> Framebuffer {
-        let _span = self.profiling.span("resources");
-        let (w, h) = allocation;
-        self.profiling
-            .texture("framebuffer", u64::from(w) * u64::from(h) * 4, 0);
-        let color = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("fb-store-color"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let attach = color.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampled = color.create_view(&wgpu::TextureViewDescriptor::default());
-        let present_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        sampled: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("fb-store-present-bg"),
             layout: self.textured.bind_group_layout(),
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&sampled),
+                    resource: wgpu::BindingResource::TextureView(sampled),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -2406,10 +2413,45 @@ impl SceneRenderer {
             .chain(lod_level_entries(&self.dummy_view))
             .chain([sampling_entry(&self.image_sampling)])
             .collect::<Vec<_>>(),
+        })
+    }
+
+    fn make_fb(
+        &self,
+        device: &wgpu::Device,
+        layout: ImageLayout,
+        allocation: (u32, u32),
+        native_height: u32,
+    ) -> Framebuffer {
+        let _span = self.profiling.span("resources");
+        let (w, h) = allocation;
+        self.profiling
+            .texture("framebuffer", u64::from(w) * u64::from(h) * 4, 0);
+        let color = device.create_texture(&framebuffers::color_descriptor(
+            "fb-store-color",
+            allocation,
+        ));
+        let attach = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampled = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let presentation = (self.render_scale > 1).then(|| {
+            let allocation = (w * self.render_scale, h * self.render_scale);
+            self.profiling.texture(
+                "presentation_color",
+                u64::from(allocation.0) * u64::from(allocation.1) * 4,
+                0,
+            );
+            framebuffers::presentation::Color::new(device, allocation)
         });
-        let presentation_scale = w / layout.width;
-        let present_extent =
-            self.make_present_extent(device, w, 0..native_height * presentation_scale, h);
+        let present_bg = self.make_present_bindings(
+            device,
+            presentation.as_ref().map_or(&sampled, |p| &p.attach),
+        );
+        let present_extent = self.make_present_extent(
+            device,
+            w * self.render_scale,
+            0..native_height * self.render_scale,
+            h * self.render_scale,
+        );
         let sampling = framebuffers::color_sampling(device, layout.width, native_height);
         self.profiling.buffer(
             "uniforms",
@@ -2422,6 +2464,7 @@ impl SceneRenderer {
             present_extent,
             present_rows: 0..native_height,
             color,
+            presentation,
             attach,
             sampled,
             present_bg,
@@ -2459,12 +2502,11 @@ impl SceneRenderer {
             .expect("scanout: src_addr not in the store");
         let rows = rows.unwrap_or(0..fb.height);
         if rows != fb.present_rows {
-            let presentation_scale = fb.color.width() / fb.layout.width;
             let extent = self.make_present_extent(
                 device,
-                fb.color.width(),
-                rows.start * presentation_scale..rows.end * presentation_scale,
-                fb.color.height(),
+                fb.layout.width * self.render_scale,
+                rows.start * self.render_scale..rows.end * self.render_scale,
+                fb.color.height() * self.render_scale,
             );
             let fb = self.framebuffers.get_mut(&src_addr).unwrap();
             fb.present_extent = extent;
@@ -2472,6 +2514,29 @@ impl SceneRenderer {
         }
         let fb = &self.framebuffers[&src_addr];
         self.blit_to(encoder, target, &fb.present_bg, &fb.present_extent);
+    }
+
+    pub(crate) fn scanout_native(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        src: workload::TargetId,
+        rows: Option<std::ops::Range<u32>>,
+    ) {
+        if self.render_scale == 1 {
+            self.scanout(device, encoder, target, src, rows);
+            return;
+        }
+        let fb = &self.framebuffers[&src];
+        let extent = self.make_present_extent(
+            device,
+            fb.layout.width,
+            rows.unwrap_or(0..fb.height),
+            fb.color.height(),
+        );
+        let bindings = self.make_present_bindings(device, &fb.sampled);
+        self.blit_to(encoder, target, &bindings, &extent);
     }
 
     pub(crate) fn reset(&mut self) {

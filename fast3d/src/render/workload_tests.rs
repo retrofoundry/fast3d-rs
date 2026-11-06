@@ -53,6 +53,12 @@ fn read_texture(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Text
 fn scaled_pass_keeps_presentation_pixels_and_native_bounds_separate() {
     let (device, queue, dual) = headless_device();
     let mut renderer = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 16, 12, dual);
+    renderer.set_test_scale(2, 256 * 1024 * 1024);
+    renderer.coherence = Some(crate::render::framebuffers::coherence::Coherence::new(
+        crate::FramebufferEncoding::BigEndian,
+    ));
+    let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+    renderer.profiling = recorder.clone();
     let id = TargetId::Guest(0x100000);
     let depth_id = TargetId::Guest(0x200000);
     let mut scene = Scene {
@@ -97,6 +103,8 @@ fn scaled_pass_keeps_presentation_pixels_and_native_bounds_separate() {
                 target.write_bounds(0),
                 if target.depth_clear {
                     (5, 3, 7, 6)
+                } else if target.extents.native.1 == 6 {
+                    (3, 2, 11, 4)
                 } else {
                     (3, 2, 11, 8)
                 }
@@ -110,9 +118,20 @@ fn scaled_pass_keeps_presentation_pixels_and_native_bounds_separate() {
     let fb = &renderer.framebuffers[&id];
     assert_eq!(
         (fb.color.width(), fb.color.height(), fb.height),
-        (32, 24, 12)
+        (16, 12, 12)
     );
-    let pixels = read_texture(&device, &queue, &fb.color);
+    let counters = recorder.drain().counters;
+    assert_eq!(counters["readback.coverage_bytes"], 1536);
+    assert_eq!(counters["readback.color_bytes"], 768);
+    let writes = renderer.coherence.as_mut().unwrap().finish(&device);
+    assert_eq!(writes.len(), 8);
+    for (row, write) in writes.iter().enumerate() {
+        assert_eq!(write.address, 0x100046 + row as u64 * 32);
+        assert_eq!(write.bytes, [0xf8, 0x01].repeat(11));
+    }
+    let presentation = &fb.presentation.as_ref().unwrap().texture;
+    assert_eq!((presentation.width(), presentation.height()), (32, 24));
+    let pixels = read_texture(&device, &queue, presentation);
     for y in 0..24 {
         for x in 0..32 {
             let pixel = crate::tests::common::pixel(&pixels, 32, x, y);
@@ -173,8 +192,17 @@ fn scaled_pass_keeps_presentation_pixels_and_native_bounds_separate() {
     };
     render(&mut renderer, &scene);
     let depth = &renderer.depthbuffers[&depth_id];
-    assert_eq!((depth.texture.width(), depth.texture.height()), (32, 24));
-    let pixels = read_texture(&device, &queue, &depth.texture);
+    assert_eq!((depth.texture.width(), depth.texture.height()), (16, 12));
+    let presentation_depth = &depth.presentation.as_ref().unwrap().texture;
+    assert_eq!(
+        (presentation_depth.width(), presentation_depth.height()),
+        (32, 24)
+    );
+    let pixels = read_texture(
+        &device,
+        &queue,
+        &depth.presentation.as_ref().unwrap().texture,
+    );
     for y in 0..24 {
         for x in 0..32 {
             let start = ((y * 32 + x) * 4) as usize;
@@ -190,13 +218,31 @@ fn scaled_pass_keeps_presentation_pixels_and_native_bounds_separate() {
     scene.framebuffer_pairs[0].is_depth_clear = false;
     scene.framebuffer_pairs[0].size_extent.1 = 6;
     scene.framebuffer_pairs[0].active_scissor.lry = 6;
-    scene.framebuffer_pairs[0].ops.clear();
+    scene.framebuffer_pairs[0].ops[0] = SceneOp::FillRect {
+        rect: Rect {
+            ulx: 0,
+            uly: 0,
+            lrx: 15,
+            lry: 11,
+        },
+        color_raw: 0xf801f801,
+        convert: [0; 6],
+        key: Default::default(),
+    };
     render(&mut renderer, &scene);
+    let counters = recorder.drain().counters;
+    assert_eq!(counters["readback.coverage_bytes"], 1536);
+    assert_eq!(counters["readback.color_bytes"], 768);
     let fb = &renderer.framebuffers[&id];
     let depth = &renderer.depthbuffers[&depth_id];
     assert_eq!(
         (fb.color.width(), fb.color.height(), fb.height),
-        (32, 24, 12)
+        (16, 12, 12)
     );
-    assert_eq!((depth.texture.width(), depth.texture.height()), (32, 24));
+    assert_eq!((depth.texture.width(), depth.texture.height()), (16, 12));
+    let presentation_depth = &depth.presentation.as_ref().unwrap().texture;
+    assert_eq!(
+        (presentation_depth.width(), presentation_depth.height()),
+        (32, 24)
+    );
 }

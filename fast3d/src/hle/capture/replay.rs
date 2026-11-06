@@ -277,7 +277,7 @@ impl CaptureFrame {
                 .get_or_insert_with(|| invalid("presentation target differs from captured target"));
         }
         let vi = hardware.vi();
-        renderer.present_to(&PresentationHardware(vi), target);
+        renderer.present_native_to(&PresentationHardware(vi), target);
         self.finish(vi)
     }
 
@@ -661,7 +661,7 @@ impl Fixture {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        renderer.present_to(
+        renderer.present_native_to(
             &PresentationHardware(self.frame.vi),
             &target.create_view(&Default::default()),
         );

@@ -55,6 +55,17 @@ pub enum FramebufferAccess {
     TextureMode,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResourceAdmission {
+    Dimensions,
+    ArithmeticOverflow,
+    RowStride,
+    BufferSize,
+    StorageBinding,
+    AttachmentBudget,
+}
+
 /// The kind of a diagnostic. `Copy` (no per-diag allocation). `#[non_exhaustive]`: the walk's
 /// internal set may grow. The variable-length unwired-selector list is a `Copy` bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +84,11 @@ pub enum DiagKind {
     UnsupportedFramebufferAccess {
         address: u64,
         reason: FramebufferAccess,
+    },
+    ResourceAdmission {
+        reason: ResourceAdmission,
+        required: u64,
+        limit: u64,
     },
     FramebufferRangeOverflow {
         address: u64,
@@ -182,6 +198,7 @@ impl DiagKind {
             DiagKind::UnsupportedCommand { opcode: 0xd6, .. } => Severity::Warn,
             DiagKind::MemoryRead { .. }
             | DiagKind::UnsupportedFramebufferAccess { .. }
+            | DiagKind::ResourceAdmission { .. }
             | DiagKind::FramebufferRangeOverflow { .. }
             | DiagKind::UnknownOpcode(_)
             | DiagKind::UnsupportedCommand { .. }
@@ -223,6 +240,7 @@ impl DiagKind {
 impl std::fmt::Display for DiagKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DiagKind::ResourceAdmission { reason, required, limit } => write!(f, "task resource admission failed: {reason:?}, required {required}, limit {limit}"),
             DiagKind::UndefinedMvp => write!(f, "undefined MP after microcode load; recomputing preserved M/P"),
             DiagKind::UnsupportedFramebufferAccess { address, reason } => write!(f, "unsupported framebuffer access at {address:#x}: {reason:?}"),
             DiagKind::FramebufferRangeOverflow { address, length } => write!(f, "framebuffer range overflows at {address:#x}, length {length}"),
