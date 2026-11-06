@@ -11,6 +11,7 @@ pub(crate) struct Operation {
     pub draw: SceneOp,
     pub depth_image: Option<u64>,
     pub scissor: Scissor,
+    pub presentation_scissor: Scissor,
     /// First command in this operation; individual command spans remain in `Scene::draw_origins`.
     pub pc: Option<u64>,
 }
@@ -264,6 +265,8 @@ impl Workload {
                             draw: draw.clone(),
                             depth_image: pair.depth_image,
                             scissor,
+                            presentation_scissor: origin
+                                .map_or(scissor, |origin| origin.presentation_scissor),
                             pc: origin.map(|origin| origin.pc),
                         });
                     }
@@ -310,39 +313,43 @@ fn push_triangles(
     run: &DrawRun,
     scissor: Option<Scissor>,
 ) {
-    let mut push = |start, end, scissor, pc: Option<u64>, depth_image: Option<u64>| {
-        let draw = DrawRun {
-            index_start: start,
-            index_count: end - start,
-            ..*run
-        };
-        match operations[batch_start..].last_mut() {
-            Some(Operation {
-                draw: SceneOp::Tris(previous),
-                scissor: previous_scissor,
-                pc: previous_pc,
-                depth_image: previous_depth,
-            }) if previous.index_start + previous.index_count == start
-                && *previous_scissor == scissor
-                && previous_pc.is_some() == pc.is_some()
-                && *previous_depth == depth_image
-                && *previous
-                    == (DrawRun {
-                        index_start: previous.index_start,
-                        index_count: previous.index_count,
-                        ..draw
-                    }) =>
-            {
-                previous.index_count += draw.index_count;
+    let mut push =
+        |start, end, scissor, presentation_scissor, pc: Option<u64>, depth_image: Option<u64>| {
+            let draw = DrawRun {
+                index_start: start,
+                index_count: end - start,
+                ..*run
+            };
+            match operations[batch_start..].last_mut() {
+                Some(Operation {
+                    draw: SceneOp::Tris(previous),
+                    scissor: previous_scissor,
+                    presentation_scissor: previous_presentation_scissor,
+                    pc: previous_pc,
+                    depth_image: previous_depth,
+                }) if previous.index_start + previous.index_count == start
+                    && *previous_scissor == scissor
+                    && *previous_presentation_scissor == presentation_scissor
+                    && previous_pc.is_some() == pc.is_some()
+                    && *previous_depth == depth_image
+                    && *previous
+                        == (DrawRun {
+                            index_start: previous.index_start,
+                            index_count: previous.index_count,
+                            ..draw
+                        }) =>
+                {
+                    previous.index_count += draw.index_count;
+                }
+                _ => operations.push(Operation {
+                    draw: SceneOp::Tris(draw),
+                    depth_image,
+                    scissor,
+                    presentation_scissor,
+                    pc,
+                }),
             }
-            _ => operations.push(Operation {
-                draw: SceneOp::Tris(draw),
-                depth_image,
-                scissor,
-                pc,
-            }),
-        }
-    };
+        };
     let end = run.index_start + run.index_count;
     let mut start = run.index_start;
     let first = origins.partition_point(|origin| origin.indices.end <= start);
@@ -355,6 +362,7 @@ fn push_triangles(
                 start,
                 origin.indices.start,
                 scissor.unwrap_or_else(legacy_scissor),
+                scissor.unwrap_or_else(legacy_scissor),
                 None,
                 None,
             );
@@ -365,6 +373,7 @@ fn push_triangles(
             start,
             next,
             scissor.unwrap_or(origin.scissor),
+            origin.presentation_scissor,
             Some(origin.pc),
             origin.depth_image,
         );
@@ -374,6 +383,7 @@ fn push_triangles(
         push(
             start,
             end,
+            scissor.unwrap_or_else(legacy_scissor),
             scissor.unwrap_or_else(legacy_scissor),
             None,
             None,
@@ -452,13 +462,25 @@ impl SceneRenderer {
         let mut uniform_bytes = std::borrow::Cow::Borrowed(target.uniforms.as_slice());
         if self.render_scale > 1 {
             let mut presentation = target.uniforms.clone();
-            for slot in presentation.as_chunks_mut::<256>().0 {
+            for (index, slot) in presentation.as_chunks_mut::<256>().0.iter_mut().enumerate() {
                 let len = std::mem::size_of::<CombinerUniform>();
                 let mut uniform: CombinerUniform = bytemuck::pod_read_unaligned(&slot[..len]);
                 uniform.frame[2..].copy_from_slice(&[
                     target.extents.presentation.0,
                     target.extents.presentation.1,
                 ]);
+                uniform.raster[0] = self.render_scale;
+                uniform.raster[1] = target.extents.native.0;
+                uniform.raster[3] = match target.operations[index].draw {
+                    DrawInputs::Tris { material_index, .. }
+                    | DrawInputs::Rectangle {
+                        material_index: Some(material_index),
+                        fb_source: None,
+                        ..
+                    } => self.material_bindings[material_index as usize].high_resolution_mask,
+                    _ => 0,
+                };
+                uniform.lod_params[3] = self.render_scale as f32;
                 slot[..len].copy_from_slice(bytemuck::bytes_of(&uniform));
             }
             uniform_bytes.to_mut().extend_from_slice(&presentation);
@@ -780,6 +802,7 @@ impl SceneRenderer {
                             &mut encoder,
                             depth,
                             word,
+                            1,
                             operation.scissor,
                             &self.profiling,
                         );
@@ -789,6 +812,7 @@ impl SceneRenderer {
                                 &mut encoder,
                                 presentation,
                                 word,
+                                self.render_scale,
                                 target.presentation_scissor(slot),
                                 &self.profiling,
                             );

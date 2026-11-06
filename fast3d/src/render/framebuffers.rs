@@ -309,12 +309,14 @@ impl DepthPipeline {
         pass.draw(0..3, 0..1);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn fill(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         target: &DepthImage,
         word: u32,
+        scale: u32,
         bounds: (u32, u32, u32, u32),
         profiling: &crate::profiling::Recorder,
     ) {
@@ -338,7 +340,7 @@ impl DepthPipeline {
             "uniforms",
             &wgpu::util::BufferInitDescriptor {
                 label: Some("depth-fill"),
-                contents: bytemuck::cast_slice(&[word, target.layout.width, 0, 0]),
+                contents: bytemuck::cast_slice(&[word, target.layout.width / scale, scale, 0]),
                 usage: wgpu::BufferUsages::UNIFORM,
             },
         );

@@ -209,8 +209,10 @@ pub struct CombinerUniform {
     pub fill_siz: u32,      // FillRect color-image siz + 1; 0 for other draws
     /// Primitive depth select and Z; `[3]` selects blend-color-only output.
     pub primitive_depth: [u32; 4],
+    /// Presentation scale, native width, identity texrect, and high-resolution texture-role mask.
+    pub raster: [u32; 4],
 }
-const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 208);
+const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 224);
 
 impl CombinerUniform {
     fn alpha_flags(rm: &crate::hle::RenderMode) -> u32 {
@@ -305,6 +307,7 @@ impl CombinerUniform {
                 [dw, dh, mat.prim_min_level, sharpen_bit + detail_bit]
             },
             frame: [0; 4],
+            raster: [0; 4],
             is_rect: 0,
             coverage_slot: 0,
             fill_word: 0,
@@ -400,6 +403,7 @@ impl CombinerUniform {
             // No DETAIL tile on the fill path.
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
             frame: [0; 4],
+            raster: [0; 4],
             is_rect: 1,
             coverage_slot: 0,
             fill_word: color_raw,
@@ -439,6 +443,7 @@ impl CombinerUniform {
             // No DETAIL tile on the COPY-mode TexRect path.
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
             frame: [0; 4],
+            raster: [0; 4],
             is_rect: 1,
             coverage_slot: 0,
             fill_word: 0,
@@ -454,7 +459,7 @@ mod tests {
 
     #[test]
     fn tile_sampling_uniform_and_shaders_fit_webgpu() {
-        assert_eq!(std::mem::size_of::<CombinerUniform>(), 208);
+        assert_eq!(std::mem::size_of::<CombinerUniform>(), 224);
         assert_eq!(std::mem::size_of::<TileSamplingArray>(), 960);
         let limits = wgpu::Limits::default();
         assert!(
@@ -689,6 +694,10 @@ pub fn triangle_inv_tex_size(mat: &crate::hle::Material) -> [f32; 4] {
     }
 }
 
+fn texrect_steps(step: (i16, i16), copy_mode: bool) -> (i16, i16) {
+    (if copy_mode { step.0 >> 2 } else { step.0 }, step.1)
+}
+
 fn texrect_quad(
     rect: &crate::hle::TexRectBounds,
     base: (i16, i16),
@@ -710,8 +719,8 @@ fn texrect_quad(
     let bounds = [left, top, right.max(left), bottom.max(top)];
     let width = i64::from(bounds[2] - left);
     let height = i64::from(bounds[3] - top);
-    let ds = i64::from(if copy_mode { step.0 >> 2 } else { step.0 });
-    let dt = i64::from(step.1);
+    let (ds, dt) = texrect_steps(step, copy_mode);
+    let (ds, dt) = (i64::from(ds), i64::from(dt));
     let (sw, th) = if flip {
         (height, width)
     } else {

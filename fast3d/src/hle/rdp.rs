@@ -84,11 +84,26 @@ pub struct Rdp {
     /// Current scissor rectangle in pixels (decoded from G_SETSCISSOR 10.2 fields).
     pub scissor: crate::hle::rsp::Scissor,
     pub scissor_set: bool,
+    pub(crate) raw_scissor: Option<[u16; 4]>,
     /// Raw G_SETFILLCOLOR word (stored verbatim; interpreted by fill-rect recording).
     pub fill_color_raw: u32,
 }
 
 impl Rdp {
+    pub(crate) fn presentation_scissor(&self) -> crate::scene::Scissor {
+        let Some(raw) = self.raw_scissor else {
+            return self.scissor;
+        };
+        let [ulx, uly, lrx, lry] = raw.map(|v| (i32::from(v) + 3) >> 2);
+        crate::scene::Scissor {
+            ulx,
+            uly,
+            lrx,
+            lry,
+            mode: self.scissor.mode,
+        }
+    }
+
     /// G_MDSFT_TEXTLOD (othermode_h bit 16): true = G_TL_LOD (LOD / mipmapping enabled). N64
     /// othermode_h layout.
     pub fn lod_enable(&self) -> bool {
@@ -518,6 +533,12 @@ fn set_depth_image<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
 
 fn set_scissor<M: Rdram>(c: &Cmd, cx: &mut Ctx<M>) {
     cx.rdp.scissor_set = true;
+    cx.rdp.raw_scissor = Some([
+        c.p0(12, 12) as u16,
+        c.p0(0, 12) as u16,
+        c.p1(12, 12) as u16,
+        c.p1(0, 12) as u16,
+    ]);
     cx.rdp.scissor = crate::hle::rsp::Scissor {
         ulx: (c.p0(12, 12) as i32) >> 2,
         uly: (c.p0(0, 12) as i32) >> 2,

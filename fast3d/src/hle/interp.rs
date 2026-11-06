@@ -352,6 +352,7 @@ pub(crate) fn emit_texrect<M: Rdram>(rect: TexRect, cx: &mut Ctx<M>) -> Option<E
         pc,
         depth_image: rdp.depth_image,
         scissor: rdp.scissor,
+        presentation_scissor: rdp.presentation_scissor(),
         indices: 0..0,
         rectangle: Some((cur, scene.framebuffer_pairs[cur].ops.len() - 1)),
     });
@@ -976,6 +977,7 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
                         pc,
                         depth_image: rdp.depth_image,
                         scissor: rdp.scissor,
+                        presentation_scissor: rdp.presentation_scissor(),
                         indices: 0..0,
                         rectangle: Some((cur, scene.framebuffer_pairs[cur].ops.len() - 1)),
                     });
@@ -1021,6 +1023,7 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
                     pc,
                     depth_image: rdp.depth_image,
                     scissor: rdp.scissor,
+                    presentation_scissor: rdp.presentation_scissor(),
                     indices: 0..0,
                     rectangle: Some((
                         rec.cur_pair,
@@ -1087,6 +1090,15 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
                         }
                     } else {
                         rdp.scissor
+                    },
+                    presentation_scissor: if !rdp.scissor_set && !rdp.color_image_set {
+                        crate::scene::Scissor {
+                            lrx: 320,
+                            lry: 240,
+                            ..Default::default()
+                        }
+                    } else {
+                        rdp.presentation_scissor()
                     },
                     indices: index_start..index_end,
                     rectangle: None,
