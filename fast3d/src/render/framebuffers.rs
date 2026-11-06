@@ -1,5 +1,6 @@
 pub(crate) mod coherence;
 pub(crate) mod targets;
+pub(super) mod writeback;
 
 use super::{workload::TargetId, SceneRenderer, CLEAR_COLOR, DEPTH_FORMAT};
 use crate::{ClearPolicy, DiagKind, Diagnostic};

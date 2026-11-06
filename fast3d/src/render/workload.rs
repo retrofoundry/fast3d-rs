@@ -820,6 +820,7 @@ impl SceneRenderer {
                                 ),
                                 buffers.vertices.get(&target.logical_extent),
                                 target.output_extent.1,
+                                ownership_start,
                             );
                             ownership_start = start + 1;
                         }
@@ -1161,6 +1162,7 @@ impl SceneRenderer {
                     ),
                     buffers.vertices.get(&target.logical_extent),
                     target.output_extent.1,
+                    ownership_start,
                 );
             }
             if self.coherence.is_some() {

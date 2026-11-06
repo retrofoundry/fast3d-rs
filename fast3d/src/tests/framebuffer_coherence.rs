@@ -487,6 +487,266 @@ mod gpu {
         }
     }
 
+    fn edge_scene(low: u32, repeats: usize, background: bool) -> Built {
+        let mut b = DlBuilder::new();
+        let projection = b.matrix([
+            [1.0 / 1024.0, 0.0, 0.0, 0.0],
+            [0.0, -1.0 / 128.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0, 1.0],
+        ]);
+        let viewport = b.viewport(Vp {
+            vscale: [1024, 128, 511, 0],
+            vtrans: [1024, 128, 511, 0],
+        });
+        let vertices = b.vertices(&[[13, 13], [1267, 27], [33, 118]].map(|[x, y]| VtxColored {
+            x,
+            y,
+            z: 0,
+            flag: 0,
+            s: 0,
+            t: 0,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        }));
+        let mut dl = Vec::new();
+        image(&mut dl, FB, 512, 64, 0, 2);
+        if background {
+            for y in (0..64).step_by(4) {
+                for x in (0..512).step_by(16) {
+                    let word = if (x / 16 + y / 4) & 1 == 0 {
+                        0
+                    } else {
+                        0x00010001
+                    };
+                    fill(&mut dl, word, [x, y, x + 15, y + 3]);
+                    dl.push(gdp_pipe_sync());
+                }
+            }
+        }
+        mode(&mut dl, 0, low);
+        dl.extend([
+            combine(4, 4),
+            gsp_viewport(viewport),
+            gsp_matrix(projection, true, true, false),
+            gsp_vertex(0, 3, vertices),
+        ]);
+        for _ in 0..repeats {
+            dl.push(gsp_1triangle(0, 1, 2));
+        }
+        built(b, dl)
+    }
+
+    #[test]
+    fn writeback_native_edges_match_e_hardware_coverage() {
+        // E's SM64 mode fixture: identical edges/checkerboard, hardware RGBA16 bit 0.
+        let expected = [
+            (137, 4, 0xfffe, 0),
+            (3, 3, 0xfffe, 2),
+            (115, 4, 0xfffe, 3),
+            (4, 3, 0xffff, 4),
+            (182, 5, 0xffff, 5),
+            (71, 4, 0xffff, 5),
+            (70, 4, 0xffff, 6),
+            (4, 4, 0xffff, 7),
+        ];
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            let mut memory = Memory(vec![0; OUTPUT as usize + 512 * 64 * 2]);
+            run(&mut r, &mut memory, edge_scene(AA_EN | IM_RD, 1, true));
+            for (x, y, value, coverage) in expected {
+                assert_eq!(
+                    r.inner
+                        .coherence
+                        .as_ref()
+                        .unwrap()
+                        .stored_coverage_code(u64::from(FB) + (y * 512 + x) as u64 * 2),
+                    Some(coverage)
+                );
+                assert_eq!(
+                    word(&memory, FB, y * 512 + x),
+                    value,
+                    "fallback={fallback}, ({x},{y})"
+                );
+            }
+            let row_words = [
+                0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+                0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+                0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xfffe, 0xfffe, 0xfffe, 0xfffe,
+                0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe,
+                0xfffe, 0xfffe, 0xffff, 0xffff, 0xffff, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe,
+                0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe,
+                0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0x0001, 0x0001,
+            ];
+            let row_coverage = [
+                6, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 4, 4, 4, 3, 3,
+                3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 7, 7,
+            ];
+            for (offset, (word_expected, coverage_expected)) in
+                row_words.into_iter().zip(row_coverage).enumerate()
+            {
+                let pixel = 4 * 512 + 70 + offset;
+                assert_eq!(
+                    word(&memory, FB, pixel),
+                    word_expected,
+                    "row x={}",
+                    70 + offset
+                );
+                assert_eq!(
+                    r.inner
+                        .coherence
+                        .as_ref()
+                        .unwrap()
+                        .stored_coverage_code(u64::from(FB) + pixel as u64 * 2),
+                    Some(coverage_expected)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn writeback_native_edges_overlap_and_history() {
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            let mut memory = Memory(vec![0; OUTPUT as usize + 512 * 64 * 2]);
+            run(
+                &mut r,
+                &mut memory,
+                edge_scene(AA_EN | IM_RD | CVG_DST_WRAP, 2, true),
+            );
+            assert_eq!(word(&memory, FB, 4 * 512 + 115), 0xffff);
+            assert_eq!(
+                r.inner
+                    .coherence
+                    .as_ref()
+                    .unwrap()
+                    .stored_coverage_code(u64::from(FB) + (4 * 512 + 115) * 2),
+                Some(6)
+            );
+            run(
+                &mut r,
+                &mut memory,
+                edge_scene(AA_EN | IM_RD | CVG_DST_SAVE, 1, false),
+            );
+            assert_eq!(word(&memory, FB, 4 * 512 + 115), 0xffff);
+            assert_eq!(
+                r.inner
+                    .coherence
+                    .as_ref()
+                    .unwrap()
+                    .stored_coverage_code(u64::from(FB) + (4 * 512 + 115) * 2),
+                Some(6)
+            );
+            run(
+                &mut r,
+                &mut memory,
+                edge_scene(AA_EN | IM_RD | CVG_DST_WRAP, 1, false),
+            );
+            assert_eq!(word(&memory, FB, 4 * 512 + 115), 0xfffe);
+            assert_eq!(
+                r.inner
+                    .coherence
+                    .as_ref()
+                    .unwrap()
+                    .stored_coverage_code(u64::from(FB) + (4 * 512 + 115) * 2),
+                Some(1)
+            );
+            run(
+                &mut r,
+                &mut memory,
+                edge_scene(AA_EN | CVG_DST_WRAP, 1, false),
+            );
+            assert_eq!(word(&memory, FB, 4 * 512 + 115), 0xfffe);
+        }
+    }
+
+    #[test]
+    fn writeback_native_edges_all_destinations_and_image_read() {
+        let points = [
+            (137, 4),
+            (3, 3),
+            (115, 4),
+            (4, 3),
+            (182, 5),
+            (71, 4),
+            (70, 4),
+            (4, 4),
+        ];
+        for fallback in [false, true] {
+            let mut r = renderer(fallback);
+            for (destination, read, expected, words) in [
+                (
+                    0,
+                    true,
+                    [0, 2, 3, 4, 5, 5, 6, 7],
+                    [
+                        0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+                    ],
+                ),
+                (
+                    CVG_DST_WRAP,
+                    true,
+                    [0, 2, 3, 4, 5, 5, 6, 7],
+                    [
+                        0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
+                    ],
+                ),
+                (CVG_DST_FULL, true, [7; 8], [0xffff; 8]),
+                (
+                    CVG_DST_SAVE,
+                    true,
+                    [7, 0, 0, 0, 0, 7, 7, 7],
+                    [
+                        0xffff, 0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff, 0xffff,
+                    ],
+                ),
+                (
+                    0,
+                    false,
+                    [0, 1, 2, 3, 4, 5, 6, 7],
+                    [
+                        0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff, 0xffff, 0xffff,
+                    ],
+                ),
+                (
+                    CVG_DST_WRAP,
+                    false,
+                    [0, 1, 2, 3, 4, 5, 6, 7],
+                    [
+                        0xfffe, 0xfffe, 0xfffe, 0xfffe, 0xffff, 0xffff, 0xffff, 0xffff,
+                    ],
+                ),
+                (CVG_DST_FULL, false, [7; 8], [0xffff; 8]),
+                (CVG_DST_SAVE, false, [7; 8], [0xffff; 8]),
+            ] {
+                r.reset();
+                let mut memory = Memory(vec![0; OUTPUT as usize + 512 * 64 * 2]);
+                run(
+                    &mut r,
+                    &mut memory,
+                    edge_scene(AA_EN | destination | if read { IM_RD } else { 0 }, 1, true),
+                );
+                for (((x, y), expected), word_expected) in
+                    points.into_iter().zip(expected).zip(words)
+                {
+                    assert_eq!(
+                        r.inner
+                            .coherence
+                            .as_ref()
+                            .unwrap()
+                            .stored_coverage_code(u64::from(FB) + (y * 512 + x) as u64 * 2),
+                        Some(expected),
+                        "fallback={fallback}, dst={destination:x}, read={read}, ({x},{y})"
+                    );
+                    assert_eq!(word(&memory, FB, y * 512 + x), word_expected);
+                }
+            }
+        }
+    }
+
     #[test]
     fn writeback_full_triangle_ignores_opacity() {
         full_writeback_ignores_opacity(true);
