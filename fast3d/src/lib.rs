@@ -66,7 +66,7 @@ pub enum DepthResetPolicy {
 /// Renderer configuration. All fields are `Copy`; the `Renderer` stores it by value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RendererConfig {
-    /// Internal framebuffer scale. **v1: values > 1 are clamped to 1 with a `log::warn!`**.
+    /// Fixed presentation scale, from 1 through 4. Guest rendering stays native.
     pub resolution_multiplier: u32,
     /// MSAA sample count (1 = off). **v1: clamped to 1**.
     pub sample_count: u32,
@@ -76,6 +76,34 @@ pub struct RendererConfig {
     pub format: Option<wgpu::TextureFormat>,
     pub clear_policy: ClearPolicy,
     pub power_preference: wgpu::PowerPreference,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigError {
+    ResolutionMultiplier(u32),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ResolutionMultiplier(value) => {
+                write!(f, "resolution_multiplier must be 1..=4, got {value}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl RendererConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !(1..=4).contains(&self.resolution_multiplier) {
+            return Err(ConfigError::ResolutionMultiplier(
+                self.resolution_multiplier,
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Where a `Renderer` scans out. `Surface` is an owned swapchain (built by `Renderer::new`, or
@@ -97,6 +125,7 @@ pub enum PresentTarget {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum InitError {
+    Config(ConfigError),
     Adapter(wgpu::RequestAdapterError),
     Device(wgpu::RequestDeviceError),
     Surface(wgpu::CreateSurfaceError),
@@ -105,6 +134,7 @@ pub enum InitError {
 impl std::fmt::Display for InitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InitError::Config(e) => write!(f, "invalid renderer configuration: {e}"),
             InitError::Adapter(e) => write!(f, "adapter request failed: {e}"),
             InitError::Device(e) => write!(f, "device request failed: {e}"),
             InitError::Surface(e) => write!(f, "surface creation failed: {e}"),
@@ -115,6 +145,7 @@ impl std::fmt::Display for InitError {
 impl std::error::Error for InitError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            InitError::Config(e) => Some(e),
             InitError::Adapter(e) => Some(e),
             InitError::Device(e) => Some(e),
             InitError::Surface(e) => Some(e),
@@ -159,14 +190,15 @@ fn render_format_of(config: &wgpu::SurfaceConfiguration) -> wgpu::TextureFormat 
         .unwrap_or(config.format)
 }
 
-/// v1 does not support supersampling or MSAA; warn (values are ignored, not normalized).
-fn warn_unsupported(config: &RendererConfig) {
-    if config.resolution_multiplier > 1 {
-        log::warn!("resolution_multiplier > 1 is unsupported in v1; treated as 1");
+fn normalize_config(mut config: RendererConfig) -> RendererConfig {
+    if let Err(error) = config.validate() {
+        log::warn!("{error}; treated as 1");
+        config.resolution_multiplier = 1;
     }
     if config.sample_count > 1 {
         log::warn!("sample_count > 1 (MSAA) is unsupported in v1; treated as 1");
     }
+    config
 }
 
 /// Deterministically choose the swapchain config format and an optional non-sRGB view format, so we
@@ -282,6 +314,10 @@ impl Renderer {
         Self::with_device_recorder(device, queue, target, config, Default::default())
     }
 
+    pub fn effective_resolution_multiplier(&self) -> u32 {
+        self.inner.render_scale
+    }
+
     #[cfg(feature = "profiling")]
     pub fn with_device_profiled(
         device: wgpu::Device,
@@ -310,11 +346,13 @@ impl Renderer {
                 height,
             } => (*format, (*width).max(1), (*height).max(1)),
         };
-        warn_unsupported(&config);
+        let config = normalize_config(config);
         let dual_source = device
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
-        let inner = SceneRenderer::new_profiled(&device, render_fmt, w, h, dual_source, profiling);
+        let mut inner =
+            SceneRenderer::new_profiled(&device, render_fmt, w, h, dual_source, profiling);
+        inner.render_scale = config.resolution_multiplier;
         Self {
             target,
             inner,
@@ -349,6 +387,7 @@ impl Renderer {
         height: u32,
         config: RendererConfig,
     ) -> Result<Self, InitError> {
+        config.validate().map_err(InitError::Config)?;
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(surface_target)?;
         let adapter = instance
@@ -378,7 +417,7 @@ impl Renderer {
         let (surface_fmt, view_fmt) = pick_surface_format(&caps.formats, config.format);
         let render_fmt = view_fmt.unwrap_or(surface_fmt);
         let (w, h) = (width.max(1), height.max(1));
-        warn_unsupported(&config);
+        let config = normalize_config(config);
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -392,7 +431,8 @@ impl Renderer {
         };
         surface.configure(&device, &surface_config);
 
-        let inner = SceneRenderer::new(&device, render_fmt, w, h, dual_source);
+        let mut inner = SceneRenderer::new(&device, render_fmt, w, h, dual_source);
+        inner.render_scale = config.resolution_multiplier;
         Ok(Self {
             target: PresentTarget::Surface {
                 surface,
@@ -466,7 +506,7 @@ impl Renderer {
     pub fn reconfigure(&mut self, config: RendererConfig) {
         self.mark_mutation();
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely()); // #[must_use]; no-op on web
-        warn_unsupported(&config);
+        let config = normalize_config(config);
 
         let (render_fmt, w, h) = match &mut self.target {
             PresentTarget::Surface {
@@ -502,6 +542,7 @@ impl Renderer {
             dual_source,
             self.inner.profiling.clone(),
         );
+        self.inner.render_scale = config.resolution_multiplier;
         self.inner.coherence = self.guest_writeback.then(|| {
             render::framebuffers::coherence::Coherence::new(self.guest_writeback_encoding)
         });
@@ -1307,8 +1348,8 @@ impl Renderer {
             .or_else(|| self.scanout_source(None))
     }
 
-    #[cfg(feature = "capture")]
-    pub(crate) fn present_native_to(&mut self, hw: &impl Hardware, target: &wgpu::TextureView) {
+    /// Scan the selected native framebuffer into a caller-owned target.
+    pub fn present_native_to(&mut self, hw: &impl Hardware, target: &wgpu::TextureView) {
         self.present_to_source(self.scanout_source(hw.vi()), target, true);
     }
 

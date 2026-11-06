@@ -7,6 +7,7 @@ use super::{
 };
 use crate::hle::texture_request::TextureSource;
 
+#[derive(Clone)]
 enum BindingImage {
     Framebuffer,
     Encoded(Image),
@@ -54,6 +55,7 @@ impl PreparedImage {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct MaterialBinding {
     sampling: TileSamplingArray,
     wrap: [u8; 2],
@@ -131,6 +133,7 @@ pub(super) struct BindingBuilder<'a> {
     pub copies: &'a mut super::framebuffers::copies::Copies,
     pub resources: &'a mut TextureResources,
     pub profiling: &'a crate::profiling::Recorder,
+    pub presentation: bool,
 }
 
 impl BindingBuilder<'_> {
@@ -162,10 +165,20 @@ impl BindingBuilder<'_> {
                 "lod7",
             ][index];
             let image = match &binding.source {
-                TextureSource::Framebuffer(request) => PreparedImage::Framebuffer(
-                    self.copies
-                        .texture(self.device, self.queue, request, self.profiling),
-                ),
+                TextureSource::Framebuffer(request) => {
+                    let (view, scale) = self.copies.texture(
+                        self.device,
+                        self.queue,
+                        request,
+                        self.profiling,
+                        self.presentation,
+                    );
+                    if scale > 1 {
+                        high_resolution_mask |= 1 << index;
+                        mapped_sampling.get_or_insert(mat.sampling)[index].image[3] = scale;
+                    }
+                    PreparedImage::Framebuffer(view)
+                }
                 TextureSource::Encoded(request) => {
                     let replacement = self.resources.resolve_replacement(
                         self.device,

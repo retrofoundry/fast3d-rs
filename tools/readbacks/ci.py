@@ -41,9 +41,14 @@ def test_commands(checkout, config, system):
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_then_invalid_projection_matches_67345dc"]]
     if (checkout / "fast3d/src/render/upscaling_tests.rs").is_file():
         commands[0].append("render::upscaling_tests::")
+    if (checkout / "fast3d/src/render/framebuffers/copies_tests.rs").is_file():
+        commands[0].append("render::framebuffers::copies::tests::")
+    commands[0].extend(["hle::capture::tests::legacy_scales_are_ignored_and_v3_preserves_effective_scale",
+                        "hle::capture::replay::state_tests::captures_record_the_effective_fixed_scale",
+                        "hle::capture::replay::sequence_tests::replay_options_cover_the_prefix_and_selected_crop"])
     if config == "all-features":
         targets = ["--test", "tmem_fixture_replay"]
-        for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure", "rt64_v5"]:
+        for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure", "rt64_v5", "upscaling"]:
             if (checkout / "fast3d/tests" / (target + ".rs")).is_file():
                 targets.extend(["--test", target])
         commands.append(command + targets)

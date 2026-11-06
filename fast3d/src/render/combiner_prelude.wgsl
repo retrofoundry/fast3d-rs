@@ -477,7 +477,7 @@ fn tile_plan(index: u32, coordinates: SampleCoordinates, cycle: u32, dimensions:
     } else {
         coordinate = tile_coordinate(tile, uv, high_resolution);
     }
-    let scaled = tile.image.z == 0u && tile.image.w > 1u;
+    let scaled = tile.image.z != 1u && tile.image.w > 1u;
     if scaled { coordinate *= f32(tile.image.w); }
     let base = vec2<i32>(floor(coordinate));
     var plan: TilePlan;

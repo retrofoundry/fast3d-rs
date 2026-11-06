@@ -1915,7 +1915,10 @@ pub struct SceneRenderer {
     pub(crate) framebuffer_copies: framebuffers::copies::Copies,
     pub(crate) color_versions:
         std::collections::HashMap<framebuffers::coherence::Writer, wgpu::Texture>,
+    presentation_versions:
+        std::collections::HashMap<framebuffers::coherence::Writer, wgpu::Texture>,
     material_bindings: Vec<texture_bindings::MaterialBinding>,
+    presentation_bindings: Vec<texture_bindings::MaterialBinding>,
     /// A 1×1 white `@group(0)` (tex + sampler) bind group used as the texture binding for
     /// `FillRect` draws (which carry no material, but the pipeline layout still requires group 0).
     /// The fill combine has `tex_enable = 0`, so this texture is never actually sampled.
@@ -1938,7 +1941,7 @@ pub struct SceneRenderer {
     pub(crate) coherence: Option<framebuffers::coherence::Coherence>,
     coverage: Option<framebuffers::coherence::Coverage>,
     depth_pipeline: DepthPipeline,
-    render_scale: u32,
+    pub(crate) render_scale: u32,
     attachment_budget: u64,
     presentation_transfers: std::sync::OnceLock<framebuffers::presentation::Transfers>,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
@@ -2174,7 +2177,9 @@ impl SceneRenderer {
             texture_resources: texture_resources::TextureResources::new(device),
             framebuffer_copies: Default::default(),
             color_versions: Default::default(),
+            presentation_versions: Default::default(),
             material_bindings: Vec::new(),
+            presentation_bindings: Vec::new(),
             fill_bind_group,
             dummy_view,
             fb_w: w,
@@ -2188,7 +2193,7 @@ impl SceneRenderer {
             coverage: None,
             depth_pipeline: DepthPipeline::new(device),
             render_scale: 1,
-            attachment_budget: u64::MAX,
+            attachment_budget: 256 * 1024 * 1024,
             presentation_transfers: Default::default(),
             diagnostics: Vec::new(),
             dropped_runs: 0,
@@ -2253,6 +2258,7 @@ impl SceneRenderer {
         rect_idx: u32,
         any_depth: bool,
         coverage_pipeline: Option<&wgpu::RenderPipeline>,
+        presentation: bool,
     ) {
         let opt_fb_bg: Option<wgpu::BindGroup> = if let inputs::DrawInputs::Rectangle {
             fb_source: Some(descriptor),
@@ -2272,7 +2278,11 @@ impl SceneRenderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&source.sampled),
+                            resource: wgpu::BindingResource::TextureView(if presentation {
+                                &source.presentation.as_ref().unwrap().attach
+                            } else {
+                                &source.sampled
+                            }),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
@@ -2301,7 +2311,11 @@ impl SceneRenderer {
                     ]
                     .into_iter()
                     .chain(lod_level_entries(&self.dummy_view))
-                    .chain([sampling_entry(&source.sampling)])
+                    .chain([sampling_entry(if presentation {
+                        source.presentation_sampling.as_ref().unwrap()
+                    } else {
+                        &source.sampling
+                    })])
                     .collect::<Vec<_>>(),
                 }),
             )
@@ -2461,7 +2475,10 @@ impl SceneRenderer {
             0..native_height * self.render_scale,
             h * self.render_scale,
         );
-        let sampling = framebuffers::color_sampling(device, layout.width, native_height);
+        let sampling = framebuffers::color_sampling(device, layout.width, native_height, 1);
+        let presentation_sampling = (self.render_scale > 1).then(|| {
+            framebuffers::color_sampling(device, layout.width, native_height, self.render_scale)
+        });
         self.profiling.buffer(
             "uniforms",
             sampling.size(),
@@ -2470,6 +2487,7 @@ impl SceneRenderer {
         Framebuffer {
             height: native_height,
             sampling,
+            presentation_sampling,
             present_extent,
             present_rows: 0..native_height,
             color,
@@ -2556,6 +2574,7 @@ impl SceneRenderer {
         self.target_descriptors = Default::default();
         self.framebuffers.clear();
         self.color_versions.clear();
+        self.presentation_versions.clear();
         self.framebuffer_copies = Default::default();
         self.depthbuffers.clear();
         self.depth_first_touch.clear();

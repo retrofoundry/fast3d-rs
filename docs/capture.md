@@ -15,6 +15,25 @@ F3DEX2 NoN task or binding must also match the recorded depth-clip-control featu
 `replay_headless` requests when the adapter has it. Missing memory latches an error and rejects
 the output, including missing TexRect continuation commands.
 
+Frame format v3 records the renderer's effective resolution multiplier. Frame
+formats v1 and v2 replay at 1x regardless of their stored multiplier. The sequence
+envelope remains version two and requires a constant effective scale.
+
+`replay_with_options` and `replay_headless_with_options` accept
+`ReplayOptions { resolution_multiplier: Option<u32>, source: ReplaySource }` on
+both fixtures and sequences. A scale override must be 1 through 4 and applies
+before renderer construction to every prefix frame, warm-up frame and
+clear-policy probe. `ReplaySource::Native` is the default and preserves the
+recorded output dimensions and native RGBA8 bytes. `Presentation` outputs the
+selected scanout crop at its native extent times the effective scale, excluding
+retained rows outside the crop. Source selection changes output only.
+`ReplayOutput` reports the effective multiplier, source and output dimensions.
+
+```sh
+devenv shell -- cargo run -p fast3d --features capture --example replay_capture -- \
+  frame.f3dcap output --scale 3 --source presentation
+```
+
 A single-frame fixture starts with default RDP registers, empty TMEM and no established color
 image. Replay preserves register state between its tasks. Each replay and clear-policy probe
 restarts the registers, so framebuffer initialization commands cannot affect the fixture's RDP

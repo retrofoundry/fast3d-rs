@@ -522,7 +522,7 @@ fn fixture_container_rejects_corruption() {
             .unwrap(),
     );
     let b = f.to_bytes().unwrap();
-    assert_eq!(&b[..16], b"F3DCAP\0\0\x02\0\0\0\x01\x02\x03\x04");
+    assert_eq!(&b[..16], b"F3DCAP\0\0\x03\0\0\0\x01\x02\x03\x04");
     assert_eq!(Fixture::from_bytes(&b).unwrap(), f);
     for n in 0..b.len() {
         assert!(Fixture::from_bytes(&b[..n]).is_err(), "truncation at {n}");
@@ -1336,4 +1336,39 @@ fn recording_preserves_host_writeback_ranges() {
             length: 16
         })
     );
+}
+
+#[test]
+fn legacy_scales_are_ignored_and_v3_preserves_effective_scale() {
+    let original =
+        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    for version in [1u32, 2] {
+        let mut bytes = include_bytes!("../../../tests/fixtures/host64-fill.f3dcap").to_vec();
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 1);
+        if version == 2 {
+            let mut fixture = original.clone();
+            fixture.frame.config.resolution_multiplier = 1;
+            bytes = fixture.to_bytes().unwrap();
+            bytes[8..12].copy_from_slice(&2u32.to_le_bytes());
+        }
+        for scale in [0u32, 3, u32::MAX] {
+            bytes[52..56].copy_from_slice(&scale.to_le_bytes());
+            let fixture = Fixture::from_bytes(&bytes).unwrap();
+            assert_eq!(fixture.frame.config.resolution_multiplier, 1);
+        }
+    }
+    for scale in 1..=4 {
+        let mut fixture = original.clone();
+        fixture.frame.config.resolution_multiplier = scale;
+        let bytes = fixture.to_bytes().unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 3);
+        assert_eq!(
+            Fixture::from_bytes(&bytes)
+                .unwrap()
+                .frame
+                .config
+                .resolution_multiplier,
+            scale
+        );
+    }
 }
