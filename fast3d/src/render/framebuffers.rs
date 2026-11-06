@@ -32,6 +32,7 @@ pub(super) struct Framebuffer {
     pub layout: ImageLayout,
 }
 
+#[derive(Clone)]
 pub(crate) struct DepthImage {
     pub(crate) texture: wgpu::Texture,
     pub(super) attach: wgpu::TextureView,

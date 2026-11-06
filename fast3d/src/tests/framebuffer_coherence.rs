@@ -575,14 +575,28 @@ mod gpu {
 
     fn assert_native_unavailable(r: &mut Renderer, memory: &Memory, entry: u64) {
         let result = interpret_guest(r, memory, entry);
-        assert!(
-            result.dropped_runs != 0
-                || !result.diags.is_empty()
-                || result.scene.unsupported_native_policy
-                || crate::render::workload::Workload::new(&result.scene)
-                    .check_strict_guest(&result.scene, r.inner.coherence.as_ref().unwrap())
-                    .is_err()
-        );
+        let workload = crate::render::workload::Workload::new(&result.scene);
+        if result.dropped_runs == 0
+            && result.diags.is_empty()
+            && workload
+                .check_strict_guest(&result.scene, r.inner.coherence.as_ref().unwrap())
+                .is_ok()
+        {
+            let staged = r
+                .inner
+                .stage_strict_task(&r.device, &r.queue, workload.targets[0].id);
+            r.inner.coherence.as_mut().unwrap().strict_fills = true;
+            r.inner
+                .render_into_store(&r.device, &r.queue, &result.scene, r.config.clear_policy);
+            assert!(r
+                .inner
+                .coherence
+                .as_mut()
+                .unwrap()
+                .validate_strict(&r.device)
+                .is_err());
+            r.inner.discard_strict_task(staged);
+        }
     }
 
     fn run_compatibility(r: &mut Renderer, memory: &mut Memory, task: Built) {
@@ -896,6 +910,291 @@ mod gpu {
                             bytes
                         })
                         .collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    fn gpu_failure_task(x: i16, extent: (u32, u32)) -> Built {
+        let mut b = DlBuilder::new();
+        let viewport = b.viewport(Vp {
+            vscale: [4, 4, 0, 0],
+            vtrans: [0; 4],
+        });
+        let vertices = b.vertices(&[[x, 0], [x + 1, 0], [x, 1]].map(|[x, y]| VtxColored {
+            x,
+            y,
+            z: 0,
+            flag: 0,
+            s: 0,
+            t: 0,
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        }));
+        let mut dl = Vec::new();
+        image(&mut dl, FB, extent.0, extent.1, 0, 2);
+        fill(&mut dl, 0xffffffff, [0, 0, 0, 0]);
+        dl.extend([
+            (0xef00_0030 | G_TC_FILT, CVG_DST_FULL),
+            combine(3, 3),
+            gdp_set_prim_color(0, 0, 0xffffffff),
+            gsp_viewport(viewport),
+            gsp_vertex(0, 3, vertices),
+            gsp_1triangle(0, 1, 2),
+        ]);
+        built(b, dl)
+    }
+
+    #[test]
+    fn guest_route_gpu_failure_rolls_back_before_compatibility_and_preserves_cpu_import() {
+        for fallback in [false, true] {
+            for encoding in [
+                crate::FramebufferEncoding::Native,
+                crate::FramebufferEncoding::BigEndian,
+            ] {
+                let mut r = renderer(fallback);
+                let mut control = renderer(fallback);
+                let mut memory = Memory(vec![0; OUTPUT as usize + 32]);
+                let mut other = Memory(memory.0.clone());
+                for (renderer, ram) in [(&mut r, &mut memory), (&mut control, &mut other)] {
+                    renderer.set_guest_writeback_with_encoding(true, encoding);
+                    let mut seed = Vec::new();
+                    image(&mut seed, FB, 2, 1, 0, 2);
+                    fill(&mut seed, 0, [0, 0, 1, 0]);
+                    seed.push(gdp_set_prim_color(0, 0, 0x000000ff));
+                    assert_eq!(
+                        submit_guest(renderer, ram, built(DlBuilder::new(), seed)).termination,
+                        crate::inspect::WalkTermination::End
+                    );
+                    for patch in renderer.take_guest_writes() {
+                        ram.0[patch.address as usize..patch.address as usize + patch.bytes.len()]
+                            .copy_from_slice(&patch.bytes);
+                    }
+                    let blue = if encoding == crate::FramebufferEncoding::BigEndian
+                        || cfg!(target_endian = "big")
+                    {
+                        [0x00, 0x3f]
+                    } else {
+                        [0x3f, 0x00]
+                    };
+                    ram.0[FB as usize + 2..FB as usize + 4].copy_from_slice(&blue);
+                }
+                for extent in [(2, 1), (4, 2)] {
+                    let registers = r.rdp.clone();
+                    let epoch = r.color_image_epoch;
+                    let scenes = r.frame_scenes.len();
+                    let descriptors = r.inner.target_descriptors.clone();
+                    let native = r
+                        .inner
+                        .coherence
+                        .as_ref()
+                        .unwrap()
+                        .native_fill_pixels(&r.device, &r.queue);
+                    let task = gpu_failure_task(2000, extent);
+                    memory.0[..FB as usize].copy_from_slice(&task.rdram[..FB as usize]);
+                    let interpreted = interpret_guest(&r, &memory, task.entry.into());
+                    assert!(
+                        crate::render::workload::Workload::new(&interpreted.scene)
+                            .check_strict_guest(
+                                &interpreted.scene,
+                                r.inner.coherence.as_ref().unwrap(),
+                            )
+                            .is_ok()
+                    );
+                    r.inner
+                        .coherence
+                        .as_mut()
+                        .unwrap()
+                        .release_changed(&memory.rdram())
+                        .unwrap();
+                    r.inner.import_existing(&r.device, &r.queue);
+                    let staged = r.inner.stage_strict_task(
+                        &r.device,
+                        &r.queue,
+                        crate::render::workload::TargetId::Guest(FB.into()),
+                    );
+                    r.inner.coherence.as_mut().unwrap().strict_fills = true;
+                    r.inner.render_into_store(
+                        &r.device,
+                        &r.queue,
+                        &interpreted.scene,
+                        r.config.clear_policy,
+                    );
+                    assert_eq!(
+                        r.inner
+                            .coherence
+                            .as_mut()
+                            .unwrap()
+                            .validate_strict(&r.device),
+                        Err(crate::render::workload::UnsupportedGuestTask)
+                    );
+                    r.inner.discard_strict_task(staged);
+                    assert!(r.take_guest_writes().is_empty());
+                    assert_eq!(r.rdp, registers);
+                    assert_eq!(r.color_image_epoch, epoch);
+                    assert_eq!(r.frame_scenes.len(), scenes);
+                    assert_eq!(r.inner.target_descriptors, descriptors);
+                    assert_eq!(r.last_scanout_addr, control.last_scanout_addr);
+                    assert_eq!(r.last_backend_was_image, control.last_backend_was_image);
+                    assert_eq!(
+                        r.inner
+                            .coherence
+                            .as_ref()
+                            .unwrap()
+                            .native_fill_pixels(&r.device, &r.queue),
+                        native
+                    );
+                    assert_eq!(native, Some(([2, 1], vec![[0, 0, 1], [0, 0, 1]])));
+                    assert_eq!(pixels(&mut r, FB, 2, 1), [0, 0, 0, 0, 0, 0, 255, 255]);
+                    let coherence = r.inner.coherence.as_ref().unwrap();
+                    assert_eq!(coherence.stored_coverage_code(FB.into()), Some(0));
+                    assert_eq!(coherence.stored_coverage_code(u64::from(FB) + 2), None);
+                    assert!(coherence.imported);
+                    assert_eq!(memory.0[FB as usize..FB as usize + 2], [0, 0]);
+                }
+                let successor = vec![
+                    (0xef00_0030 | G_TC_FILT, IM_RD | CVG_DST_WRAP),
+                    combine(3, 3),
+                    gdp_fill_rectangle(0, 0, 4, 4),
+                ];
+                for (renderer, ram) in [(&mut r, &mut memory), (&mut control, &mut other)] {
+                    assert_eq!(
+                        submit_guest(renderer, ram, built(DlBuilder::new(), successor.clone()))
+                            .termination,
+                        crate::inspect::WalkTermination::End
+                    );
+                }
+                let patches = r.take_guest_writes();
+                assert_eq!(patches, control.take_guest_writes());
+                assert_eq!(
+                    patches,
+                    [crate::GuestWrite {
+                        address: FB.into(),
+                        bytes: vec![0, 0]
+                    }]
+                );
+                let owners = |renderer: &Renderer| {
+                    renderer
+                        .inner
+                        .coherence
+                        .as_ref()
+                        .unwrap()
+                        .owners
+                        .0
+                        .iter()
+                        .map(|(&address, range)| {
+                            (
+                                address,
+                                range.writer,
+                                range.generation,
+                                range.bytes.clone(),
+                                range.foreign,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(owners(&r), owners(&control));
+                assert_eq!(pixels(&mut r, FB, 2, 1), pixels(&mut control, FB, 2, 1));
+                assert_eq!(pixels(&mut r, FB, 2, 1), [0, 0, 0, 255, 0, 0, 255, 255]);
+                assert_eq!(r.rdp, control.rdp);
+                assert_eq!(r.color_image_epoch, control.color_image_epoch);
+                let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Detailed);
+                r.inner.profiling = recorder.clone();
+                let task = gpu_failure_task(2000, (4, 2));
+                memory.0[..FB as usize].copy_from_slice(&task.rdram[..FB as usize]);
+                let mut diagnostics = Vec::new();
+                let result = r.process_dl(
+                    &memory,
+                    task.entry.into(),
+                    crate::Microcode::F3dex2,
+                    &mut diagnostics,
+                );
+                assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+                let writes = r.take_guest_writes();
+                assert_eq!(
+                    writes,
+                    [crate::GuestWrite {
+                        address: FB.into(),
+                        bytes: vec![0xff, 0xff]
+                    }]
+                );
+                let snapshot = recorder.snapshot();
+                assert_eq!(snapshot.timings["interpretation"].calls, 1);
+                assert_eq!(snapshot.counters["tasks.guest.compatibility"], 1);
+                assert_eq!(snapshot.counters["tasks.guest.fallback"], 1);
+                assert!(!snapshot.counters.contains_key("tasks.guest.native"));
+                run_compatibility(&mut control, &mut other, gpu_failure_task(2000, (4, 2)));
+                for patch in writes {
+                    memory.0[patch.address as usize..patch.address as usize + patch.bytes.len()]
+                        .copy_from_slice(&patch.bytes);
+                }
+                assert_eq!(
+                    memory.0[FB as usize..FB as usize + 16],
+                    other.0[FB as usize..FB as usize + 16]
+                );
+                assert_eq!(r.rdp, control.rdp);
+                assert_eq!(r.inner.target_descriptors, control.inner.target_descriptors);
+                assert_eq!(owners(&r), owners(&control));
+            }
+        }
+    }
+
+    #[test]
+    fn guest_route_gpu_triangle_history_remains_unsupported() {
+        let mut r = renderer(false);
+        let mut memory = Memory(vec![0; OUTPUT as usize + 32]);
+        let mut task = gpu_failure_task(0, (4, 2));
+        for command in task.rdram[task.entry as usize..].as_chunks_mut::<8>().0 {
+            if command[0] == 0xef {
+                command[4..].copy_from_slice(&(IM_RD | CVG_DST_WRAP).to_be_bytes());
+            }
+        }
+        memory.0[..FB as usize].copy_from_slice(&task.rdram[..FB as usize]);
+        let mut diagnostics = Vec::new();
+        assert_native_unavailable(&mut r, &memory, task.entry.into());
+        let result = r.process_dl(
+            &memory,
+            task.entry.into(),
+            crate::Microcode::F3dex2,
+            &mut diagnostics,
+        );
+        assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(!r.take_guest_writes().is_empty());
+        assert!(r.inner.has_fb(u64::from(FB)));
+        assert!(!r.inner.coherence.as_ref().unwrap().owners.0.is_empty());
+    }
+
+    #[test]
+    fn compatibility_literal_fill_then_invalid_projection_matches_67345dc() {
+        for fallback in [false, true] {
+            for encoding in [
+                crate::FramebufferEncoding::Native,
+                crate::FramebufferEncoding::BigEndian,
+            ] {
+                let mut r = renderer(fallback);
+                r.set_guest_writeback_with_encoding(true, encoding);
+                let mut memory = Memory(vec![0; OUTPUT as usize + 32]);
+                let task = gpu_failure_task(2000, (4, 2));
+                memory.0[..FB as usize].copy_from_slice(&task.rdram[..FB as usize]);
+                let mut diagnostics = Vec::new();
+                let result = r.process_dl(
+                    &memory,
+                    task.entry.into(),
+                    crate::Microcode::F3dex2,
+                    &mut diagnostics,
+                );
+                assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+                assert!(diagnostics.is_empty(), "{diagnostics:?}");
+                assert_eq!(
+                    r.take_guest_writes(),
+                    [crate::GuestWrite {
+                        address: FB.into(),
+                        bytes: vec![0xff, 0xff]
+                    }]
                 );
             }
         }

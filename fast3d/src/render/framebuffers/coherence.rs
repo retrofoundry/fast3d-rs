@@ -2,6 +2,8 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 use super::ImageLayout;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::render::workload::UnsupportedGuestTask;
 use crate::FramebufferEncoding;
 use std::collections::BTreeMap;
 
@@ -375,6 +377,7 @@ impl StoredCoverage {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct OwnedRange {
     pub writer: Writer,
     pub generation: u64,
@@ -395,7 +398,7 @@ impl OwnedRange {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Ownership(pub BTreeMap<u64, OwnedRange>);
 
 impl Ownership {
@@ -1923,6 +1926,29 @@ struct ReplayGeometry {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ReplayGeometry {
+    fn read_vertices(&mut self, bytes: Vec<u8>, width: usize, height: u32) {
+        for vertex in bytes.as_chunks::<48>().0.iter() {
+            let p: [f32; 4] = std::array::from_fn(|i| {
+                f32::from_ne_bytes(vertex[i * 4..i * 4 + 4].try_into().unwrap())
+            });
+            let position =
+                (p.iter().all(|v| v.is_finite()) && p[3] > 0.0 && p[2] >= 0.0 && p[2] <= p[3])
+                    .then(|| {
+                        [
+                            (p[0] / p[3] + 1.0) * 0.5 * width as f32,
+                            (1.0 - p[1] / p[3]) * 0.5 * height as f32,
+                        ]
+                    });
+            self.vertices
+                .push(position.map(|position| super::writeback::Vertex {
+                    position,
+                    color: std::array::from_fn(|i| {
+                        f32::from_ne_bytes(vertex[16 + i * 4..20 + i * 4].try_into().unwrap())
+                    }),
+                }));
+        }
+    }
+
     fn prepare(&mut self, draws: &[CoverageDraw]) {
         self.positions.clear();
         self.positions
@@ -2088,6 +2114,19 @@ impl Coherence {
         }
     }
 
+    pub(in crate::render) fn stage_task(&self) -> Self {
+        let mut staged = Self {
+            encoding: self.encoding,
+            owners: self.owners.clone(),
+            hidden: self.hidden.clone(),
+            generation: self.generation,
+            imports: self.imports.clone(),
+            ..Default::default()
+        };
+        staged.begin_task();
+        staged
+    }
+
     pub fn begin_task(&mut self) {
         self.first_generation = self.generation + 1;
         self.snapshots.clear();
@@ -2223,6 +2262,42 @@ impl Coherence {
                         )
                     })
             })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn validate_strict(
+        &mut self,
+        device: &wgpu::Device,
+    ) -> Result<(), UnsupportedGuestTask> {
+        for snapshot in &mut self.snapshots {
+            let Some(readback) = snapshot.vertices.take() else {
+                continue;
+            };
+            let mut geometry = ReplayGeometry::default();
+            geometry.read_vertices(
+                readback.read(device),
+                snapshot.coverage.width,
+                snapshot.render_height,
+            );
+            for draw in &snapshot.draws {
+                let CoverageGeometry::Triangles(triangles) = &draw.geometry else {
+                    continue;
+                };
+                for &index in triangles.iter().flatten() {
+                    if geometry
+                        .vertices
+                        .get(index as usize)
+                        .copied()
+                        .flatten()
+                        .is_none_or(|v| !v.in_range())
+                    {
+                        return Err(UnsupportedGuestTask);
+                    }
+                }
+            }
+            return Err(UnsupportedGuestTask);
+        }
+        Ok(())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2585,31 +2660,7 @@ impl Coherence {
                 geometry.vertices.clear();
                 if coverage_enabled || native_candidate {
                     if let Some(readback) = projected_vertices.take() {
-                        for vertex in readback.read(device).as_chunks::<48>().0.iter() {
-                            let p: [f32; 4] = std::array::from_fn(|i| {
-                                f32::from_ne_bytes(vertex[i * 4..i * 4 + 4].try_into().unwrap())
-                            });
-                            let position = (p.iter().all(|v| v.is_finite())
-                                && p[3] > 0.0
-                                && p[2] >= 0.0
-                                && p[2] <= p[3])
-                                .then(|| {
-                                    [
-                                        (p[0] / p[3] + 1.0) * 0.5 * width as f32,
-                                        (1.0 - p[1] / p[3]) * 0.5 * height as f32,
-                                    ]
-                                });
-                            geometry.vertices.push(position.map(|position| {
-                                super::writeback::Vertex {
-                                    position,
-                                    color: std::array::from_fn(|i| {
-                                        f32::from_ne_bytes(
-                                            vertex[16 + i * 4..20 + i * 4].try_into().unwrap(),
-                                        )
-                                    }),
-                                }
-                            }));
-                        }
+                        geometry.read_vertices(readback.read(device), width, height);
                     }
                     geometry.prepare(&snapshot.draws);
                 }
