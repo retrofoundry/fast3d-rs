@@ -5,12 +5,17 @@
 // primary path lives in blender_dualsrc.wgsl.
 
 fn shade_fragment(in: VsOut) -> vec4<f32> {
-    let r = eval_combiner(in);
+    var r = eval_combiner(in);
     var rgb = r.rgb;
     if (combiner.primitive_depth.w == 0u) {
         rgb = blend_fog(rgb, r.alpha, in.color.a);
     }
     alpha_discard(r, in.clip_position.xy);
+    if memory_in_p(framebuffer_mux()) {
+        let blend = blend_framebuffer(rgb, r.alpha, in.color.a);
+        rgb = blend.rgb;
+        r.alpha = blend.weights.x;
+    }
     return vec4<f32>(rgb, r.alpha);
 }
 
