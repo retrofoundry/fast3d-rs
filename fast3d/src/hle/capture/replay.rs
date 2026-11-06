@@ -29,6 +29,7 @@ impl CaptureFrame {
     /// Leaves live RDP state intact. Finishing rejects render inputs or diagnostics that depend
     /// on prior RDP state, which single-frame fixtures cannot store. Renderer mutations outside
     /// this wrapper (including resets) invalidate the capture; live rendering still proceeds.
+    /// Big-endian write-back is rejected because fixtures do not store its framebuffer encoding.
     pub fn begin(
         renderer: &mut Renderer,
         _serial: u64,
@@ -58,8 +59,16 @@ impl CaptureFrame {
                 tasks: Vec::new(),
                 provenance,
             },
-            error: (renderer.inner.depth_reset_policy != crate::DepthResetPolicy::Never)
-                .then(|| invalid("diagnostic depth resets cannot be recorded in a fixture")),
+            error: if renderer.guest_writeback
+                && renderer.guest_writeback_encoding == crate::FramebufferEncoding::BigEndian
+            {
+                Some(invalid(
+                    "BigEndian framebuffer write-back cannot be captured: fixtures do not record framebuffer encoding",
+                ))
+            } else {
+                (renderer.inner.depth_reset_policy != crate::DepthResetPolicy::Never)
+                    .then(|| invalid("diagnostic depth resets cannot be recorded in a fixture"))
+            },
             sequence: false,
         }
     }

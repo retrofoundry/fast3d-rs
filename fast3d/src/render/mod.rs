@@ -2474,7 +2474,7 @@ impl SceneRenderer {
         self.depthbuffers.clear();
         self.depth_first_touch.clear();
         if let Some(coherence) = &mut self.coherence {
-            *coherence = Default::default();
+            *coherence = framebuffers::coherence::Coherence::new(coherence.encoding);
         }
         self.diagnostics.clear();
         self.first_touch.clear();
@@ -2509,7 +2509,7 @@ impl SceneRenderer {
         self.depthbuffers.clear();
         self.depth_first_touch.clear();
         if let Some(coherence) = &mut self.coherence {
-            *coherence = Default::default();
+            *coherence = framebuffers::coherence::Coherence::new(coherence.encoding);
         }
     }
 }

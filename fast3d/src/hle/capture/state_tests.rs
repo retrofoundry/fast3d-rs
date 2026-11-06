@@ -770,3 +770,48 @@ fn capture_admission_compares_sampled_tmem_including_initial_zeros() {
         }
     }
 }
+
+#[test]
+fn capture_writeback_requires_native_encoding_when_enabled() {
+    let fixture =
+        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let (device, queue) = crate::render::headless_device_forced_fallback();
+    let mut renderer = fixture.renderer(device, queue, ClearPolicy::Persist);
+    for (enabled, encoding) in [
+        (false, crate::FramebufferEncoding::Native),
+        (false, crate::FramebufferEncoding::BigEndian),
+        (true, crate::FramebufferEncoding::Native),
+        (true, crate::FramebufferEncoding::BigEndian),
+    ] {
+        renderer.set_guest_writeback_with_encoding(enabled, encoding);
+        let rejected = enabled && encoding == crate::FramebufferEncoding::BigEndian;
+        let error = "BigEndian framebuffer write-back cannot be captured: fixtures do not record framebuffer encoding";
+        let sequence = super::super::CaptureSequence::begin(&mut renderer, 0);
+        if rejected {
+            assert!(matches!(sequence, Err(CaptureError::Invalid(message)) if message == error));
+        } else {
+            sequence.unwrap();
+        }
+        let mut capture = CaptureFrame::begin(&mut renderer, 0, 0, Provenance::default());
+        let task = &fixture.tasks[0];
+        let hardware = ReplayHardware::new(task, None).unwrap();
+        let result = capture.process_dl(
+            &mut renderer,
+            &hardware,
+            task.entry,
+            task.microcode,
+            task.data_format,
+            &mut crate::NopSink,
+        );
+        if rejected {
+            assert!(matches!(result, Err(CaptureError::Invalid(message)) if message == error));
+            assert!(
+                matches!(capture.present_last(&mut renderer), Err(CaptureError::Invalid(message)) if message == error)
+            );
+        } else {
+            result.unwrap();
+            assert_eq!(capture.present_last(&mut renderer).unwrap().tasks.len(), 1);
+        }
+        assert_eq!(!renderer.take_guest_writes().is_empty(), enabled);
+    }
+}

@@ -2,6 +2,7 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 use super::ImageLayout;
+use crate::FramebufferEncoding;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -9,6 +10,22 @@ pub(crate) struct Writer {
     pub address: u64,
     pub layout: ImageLayout,
     pub depth: bool,
+}
+
+impl FramebufferEncoding {
+    fn encode_u16(self, word: u16) -> [u8; 2] {
+        match self {
+            Self::Native => word.to_ne_bytes(),
+            Self::BigEndian => word.to_be_bytes(),
+        }
+    }
+
+    fn decode_u16(self, bytes: [u8; 2]) -> u16 {
+        match self {
+            Self::Native => u16::from_ne_bytes(bytes),
+            Self::BigEndian => u16::from_be_bytes(bytes),
+        }
+    }
 }
 
 impl Writer {
@@ -25,22 +42,28 @@ impl Writer {
             + (pixel % width) as u64 * (4u64 << self.layout.siz) / 8
     }
 
-    pub fn encode(self, rgba: [u8; 4], pixel: usize, literal: Option<u32>) -> Vec<u8> {
+    pub fn encode(
+        self,
+        rgba: [u8; 4],
+        pixel: usize,
+        literal: Option<u32>,
+        encoding: FramebufferEncoding,
+    ) -> Vec<u8> {
         if !self.supported() {
             return vec![0; self.pixel_bytes()];
         }
         if let Some(word) = literal {
             return if self.pixel_bytes() == 2 {
-                ((word >> (16 * (1 - pixel % 2))) as u16)
-                    .to_ne_bytes()
+                encoding
+                    .encode_u16((word >> (16 * (1 - pixel % 2))) as u16)
                     .to_vec()
             } else {
                 vec![(word >> (8 * (3 - pixel % 4))) as u8]
             };
         }
         if self.depth {
-            super::pack_depth(f32::from_ne_bytes(rgba))
-                .to_ne_bytes()
+            encoding
+                .encode_u16(super::pack_depth(f32::from_ne_bytes(rgba)))
                 .to_vec()
         } else if self.pixel_bytes() == 1 {
             vec![rgba[(pixel % self.layout.width as usize) & 1]]
@@ -48,8 +71,8 @@ impl Writer {
             const MAGIC: [u8; 16] = [0, 6, 1, 7, 4, 2, 5, 3, 3, 5, 2, 4, 7, 1, 6, 0];
             let x = pixel % self.layout.width as usize;
             let y = pixel / self.layout.width as usize;
-            pack_color(rgba, MAGIC[(y & 3) * 4 + (x & 3)])
-                .to_ne_bytes()
+            encoding
+                .encode_u16(pack_color(rgba, MAGIC[(y & 3) * 4 + (x & 3)]))
                 .to_vec()
         }
     }
@@ -225,6 +248,141 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn canonical_literal_fill_red_green_bytes_and_reader() {
+        let (device, _, _) = crate::render::headless_device();
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        coherence.fill(image(0, 2, 2, false), (0, 0, 2, 1), 0xf801_07c1);
+        coherence.resolve(&device);
+        let patches = coherence.owners.patches(0);
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].bytes, [0xf8, 0x01, 0x07, 0xc1]);
+        let memory = crate::RdramImage::new(&patches[0].bytes);
+        assert_eq!(crate::Rdram::read_u16(&memory, 0).unwrap(), 0xf801);
+        assert_eq!(crate::Rdram::read_u16(&memory, 2).unwrap(), 0x07c1);
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
+    #[test]
+    fn native_literal_fill_red_green_bytes_and_reader() {
+        let (device, _, _) = crate::render::headless_device();
+        let mut coherence = Coherence::default();
+        let mut words = [0u16; 2];
+        let address = words.as_mut_ptr() as u64;
+        coherence.fill(image(address, 2, 2, false), (0, 0, 2, 1), 0xf801_07c1);
+        coherence.resolve(&device);
+        let patches = coherence.owners.patches(0);
+        assert_eq!(patches.len(), 1);
+        #[cfg(target_endian = "little")]
+        assert_eq!(patches[0].bytes, [0x01, 0xf8, 0xc1, 0x07]);
+        #[cfg(target_endian = "big")]
+        assert_eq!(patches[0].bytes, [0xf8, 0x01, 0x07, 0xc1]);
+        unsafe {
+            std::ptr::copy_nonoverlapping(patches[0].bytes.as_ptr(), words.as_mut_ptr().cast(), 4);
+        }
+        let range = address..address + 4;
+        let memory = unsafe {
+            crate::hle::host_mem::HostMemory::new(crate::HostRam::with_ranges(
+                &[],
+                std::slice::from_ref(&range),
+            ))
+        };
+        assert_eq!(crate::Rdram::read_u16(&memory, address).unwrap(), 0xf801);
+        assert_eq!(
+            crate::Rdram::read_u16(&memory, address + 2).unwrap(),
+            0x07c1
+        );
+        assert_eq!(words, [0xf801, 0x07c1]);
+    }
+
+    #[test]
+    fn canonical_cpu_edits_import_split_bytes_and_restore() {
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        let writer = image(0, 2, 2, false);
+        coherence
+            .owners
+            .write(writer, 1, 0, vec![0xf8, 0x01, 0xf8, 0x01]);
+        coherence
+            .release_changed(&crate::RdramImage::new(&[0xf8, 0x01, 0x07, 0xc1]))
+            .unwrap();
+        assert_eq!(
+            coherence.import_pixels(writer, 1, None),
+            BTreeMap::from([(1, [0, 255, 0, 255])])
+        );
+        coherence.imports.clear();
+        coherence
+            .release_changed(&crate::RdramImage::new(&[0xf8, 0x01, 0x07, 0x3f]))
+            .unwrap();
+        assert_eq!(
+            coherence.imports,
+            vec![crate::GuestWrite {
+                address: 3,
+                bytes: vec![0x3f]
+            }]
+        );
+        assert_eq!(
+            coherence.import_pixels(writer, 1, None),
+            BTreeMap::from([(1, [0, 231, 255, 255])])
+        );
+        assert_eq!(
+            coherence.import_pixels(writer, 1, Some(0)),
+            BTreeMap::from([(0, [255, 0, 0, 255]), (1, [0, 231, 255, 255])])
+        );
+    }
+
+    #[test]
+    fn canonical_depth_encodes_and_imports_big_endian_words() {
+        let writer = image(0, 1, 2, true);
+        assert_eq!(
+            writer.encode(
+                0.75f32.to_ne_bytes(),
+                0,
+                None,
+                FramebufferEncoding::BigEndian
+            ),
+            [0x40, 0x00]
+        );
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        coherence.owners.write(writer, 1, 0, vec![0xff, 0xfc]);
+        coherence
+            .release_changed(&crate::RdramImage::new(&[0x40, 0x00]))
+            .unwrap();
+        assert_eq!(
+            f32::from_ne_bytes(coherence.import_pixels(writer, 1, None)[&0]),
+            0.75
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn canonical_odd_i8_overlap_and_one_byte_tail_preserve_lanes() {
+        let (device, _, _) = crate::render::headless_device();
+        let mut coherence = Coherence::new(FramebufferEncoding::BigEndian);
+        coherence.fill(image(0, 3, 2, true), (0, 0, 3, 1), 0x4000_6000);
+        let color = image(0, 2, 2, false);
+        coherence.fill(color, (0, 0, 2, 1), 0xf801_07c1);
+        coherence.fill(image(1, 2, 1, false), (0, 0, 2, 1), 0x1234_0000);
+        coherence.fill(image(3, 1, 1, false), (0, 0, 1, 1), 0xab00_0000);
+        coherence.resolve(&device);
+        let patches = coherence.owners.patches(0);
+        assert_eq!(
+            patches.iter().map(|p| p.address).collect::<Vec<_>>(),
+            [0, 1, 3, 4]
+        );
+        assert_eq!(
+            patches
+                .iter()
+                .flat_map(|p| p.bytes.iter().copied())
+                .collect::<Vec<_>>(),
+            [0xf8, 0x12, 0x34, 0xab, 0x40, 0x00]
+        );
+        assert_eq!(
+            coherence.import_pixels(color, 1, Some(0)),
+            BTreeMap::from([(0, [255, 0, 74, 0]), (1, [49, 148, 173, 255])])
+        );
+    }
+
     #[test]
     fn latest_writer_wins_and_preserves_unwritten_bytes() {
         let mut owners = Ownership::default();
@@ -306,7 +464,12 @@ mod tests {
         let dither = |x: usize, y: usize| {
             (1..8u8)
                 .filter(|&threshold| {
-                    let word = writer.encode([8 - threshold, 0, 0, 255], y * 5 + x, None);
+                    let word = writer.encode(
+                        [8 - threshold, 0, 0, 255],
+                        y * 5 + x,
+                        None,
+                        FramebufferEncoding::Native,
+                    );
                     u16::from_ne_bytes(word.try_into().unwrap()) >> 11 == 1
                 })
                 .count()
@@ -332,8 +495,14 @@ mod tests {
                 },
                 depth: false,
             };
-            assert_eq!(writer.encode([11, 27, 91, 255], 0, None), vec![11]);
-            assert_eq!(writer.encode([11, 27, 91, 255], 1, None), vec![27]);
+            assert_eq!(
+                writer.encode([11, 27, 91, 255], 0, None, FramebufferEncoding::Native),
+                vec![11]
+            );
+            assert_eq!(
+                writer.encode([11, 27, 91, 255], 1, None, FramebufferEncoding::Native),
+                vec![27]
+            );
         }
     }
 
@@ -341,11 +510,11 @@ mod tests {
     fn literal_fill_preserves_words_and_parity() {
         let writer = image(0, 3, 2, false);
         assert_eq!(
-            writer.encode([0; 4], 0, Some(0x1234_abcd)),
+            writer.encode([0; 4], 0, Some(0x1234_abcd), FramebufferEncoding::Native),
             0x1234u16.to_ne_bytes()
         );
         assert_eq!(
-            writer.encode([0; 4], 3, Some(0x1234_abcd)),
+            writer.encode([0; 4], 3, Some(0x1234_abcd), FramebufferEncoding::Native),
             0xabcdu16.to_ne_bytes()
         );
     }
@@ -832,6 +1001,7 @@ struct Snapshot {
 
 #[derive(Default)]
 pub(crate) struct Coherence {
+    pub encoding: FramebufferEncoding,
     pub owners: Ownership,
     generation: u64,
     first_generation: u64,
@@ -843,6 +1013,13 @@ pub(crate) struct Coherence {
 }
 
 impl Coherence {
+    pub fn new(encoding: FramebufferEncoding) -> Self {
+        Self {
+            encoding,
+            ..Default::default()
+        }
+    }
+
     pub fn begin_task(&mut self) {
         self.first_generation = self.generation + 1;
         self.snapshots.clear();
@@ -856,7 +1033,7 @@ impl Coherence {
         for row in y..y + height {
             let pixel = (row * writer.layout.width + x) as usize;
             let bytes = (pixel..pixel + width as usize)
-                .flat_map(|p| writer.encode([0; 4], p, Some(word)))
+                .flat_map(|p| writer.encode([0; 4], p, Some(word), self.encoding))
                 .collect();
             self.pending.push((
                 self.generation,
@@ -955,6 +1132,7 @@ impl Coherence {
                                 } else {
                                     snapshot.literals[slot as usize - 1]
                                 },
+                                self.encoding,
                             )
                         })
                         .collect();
@@ -1082,7 +1260,7 @@ impl Coherence {
                 let rgba = if size == 1 {
                     [bytes[0]; 4]
                 } else {
-                    let word = u16::from_ne_bytes(bytes.try_into().unwrap());
+                    let word = self.encoding.decode_u16(bytes.try_into().unwrap());
                     if writer.depth {
                         unpack_depth(word).to_ne_bytes()
                     } else {
