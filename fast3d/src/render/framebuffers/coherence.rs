@@ -566,7 +566,14 @@ mod tests {
         });
         let stamps: [u8; 8] = bytemuck::cast([1u32, 0]);
         let geometry = ReplayGeometry::new(std::slice::from_ref(&draw), &vertices);
-        let output = coherence.replay(writer, &[draw], (0, 0), &geometry, &stamps, &[255; 4]);
+        let output = coherence.replay(
+            writer,
+            &[draw],
+            (0, 0),
+            &geometry,
+            (&stamps, &[255; 4]),
+            None,
+        );
         assert!(matches!(output[0], super::super::writeback::Pixel::Keep));
         assert_eq!(coherence.owners.0[&0].bytes, [0x12, 0x31]);
         assert_eq!(coherence.stored_coverage_code(0), Some(7));
@@ -607,7 +614,14 @@ mod tests {
         let stamps: [u8; 8] = bytemuck::cast([1u32, 0]);
         let draws = [full, wrap];
         let geometry = ReplayGeometry::new(&draws, &[]);
-        let output = coherence.replay(writer, &draws, (0, 0), &geometry, &stamps, &[255; 4]);
+        let output = coherence.replay(
+            writer,
+            &draws,
+            (0, 0),
+            &geometry,
+            (&stamps, &[255; 4]),
+            None,
+        );
         assert!(matches!(
             output[0],
             super::super::writeback::Pixel::Write([255, 255, 255, 255], 3, 2)
@@ -655,8 +669,8 @@ mod tests {
             &draws,
             (0, 0),
             &geometry,
-            &stamps,
-            &[0, 128, 128, 128],
+            (&stamps, &[0, 128, 128, 128]),
+            None,
         );
         assert!(matches!(
             output[0],
@@ -677,7 +691,7 @@ mod tests {
         };
         let stamps: [u8; 8] = bytemuck::cast([0u32, 0]);
         let geometry = ReplayGeometry::new(std::slice::from_ref(&draw), &[]);
-        coherence.replay(writer, &[draw], (1, 0), &geometry, &stamps, &[0; 4]);
+        coherence.replay(writer, &[draw], (1, 0), &geometry, (&stamps, &[0; 4]), None);
         coherence.commit_pending(u64::MAX);
         assert_eq!(coherence.stored_coverage_code(0), None);
         assert_eq!(coherence.owners.0[&0].bytes, [0x12, 0x31]);
@@ -736,8 +750,8 @@ mod tests {
                             &draws,
                             (1, 0),
                             &geometry,
-                            &stamps,
-                            &[255; 16],
+                            (&stamps, &[255; 16]),
+                            None,
                         );
                         assert_eq!(fallback, height == 2 && !reset && !literal);
                         if fallback {
@@ -1767,7 +1781,7 @@ pub(crate) fn coverage_texture(device: &wgpu::Device, width: u32, height: u32) -
     })
 }
 
-struct Readback {
+pub(super) struct Readback {
     buffer: wgpu::Buffer,
     stride: usize,
     pixel_bytes: usize,
@@ -1776,6 +1790,40 @@ struct Readback {
 }
 
 impl Readback {
+    pub(super) fn native_fill(
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::Buffer,
+        source_width: u32,
+        bounds: (u32, u32, u32, u32),
+    ) -> Self {
+        let (x, y, width, height) = bounds;
+        let pixel_bytes = 12u32;
+        let stride = u64::from(width) * u64::from(pixel_bytes);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("native-fill-readback"),
+            size: stride * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        for row in 0..height {
+            encoder.copy_buffer_to_buffer(
+                source,
+                u64::from((y + row) * source_width + x) * u64::from(pixel_bytes),
+                &buffer,
+                u64::from(row) * stride,
+                stride,
+            );
+        }
+        Self {
+            buffer,
+            stride: stride as usize,
+            pixel_bytes: pixel_bytes as usize,
+            width: width as usize,
+            height: height as usize,
+        }
+    }
+
     fn vertices(
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -1842,7 +1890,7 @@ impl Readback {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn read(self, device: &wgpu::Device) -> Vec<u8> {
+    pub(super) fn read(self, device: &wgpu::Device) -> Vec<u8> {
         let (tx, rx) = std::sync::mpsc::channel();
         self.buffer
             .slice(..)
@@ -1970,6 +2018,7 @@ struct Snapshot {
     render_height: u32,
     first_draw: usize,
     generation: u64,
+    native_fills: Option<Vec<Option<super::native_fill::FillReadback>>>,
 }
 
 struct PendingWrite {
@@ -1994,12 +2043,44 @@ pub(crate) struct Coherence {
     first_generation: u64,
     snapshots: Vec<Snapshot>,
     pending: Vec<PendingWrite>,
+    pub strict_fills: bool,
+    native_fill_store: Option<super::native_fill::Store>,
     /// Edits reported once by `release_changed`, uploaded when the next task begins.
     pub imports: Vec<crate::GuestWrite>,
     pub imported: bool,
 }
 
 impl Coherence {
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn native_fill_pixels(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+    ) -> Option<([u32; 2], Vec<[u32; 3]>)> {
+        let store = self.native_fill_store.as_ref()?;
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let readback = Readback::native_fill(
+            device,
+            &mut encoder,
+            &store.buffer,
+            store.extent.0,
+            (0, 0, store.extent.0, store.extent.1),
+        );
+        queue.submit([encoder.finish()]);
+        let bytes = readback.read(device);
+        let pixels = bytes
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .map(|pixel| {
+                std::array::from_fn(|i| {
+                    u32::from_ne_bytes(pixel[i * 4..i * 4 + 4].try_into().unwrap())
+                })
+            })
+            .collect();
+        Some(([store.extent.0, store.extent.1], pixels))
+    }
+
     pub fn new(encoding: FramebufferEncoding) -> Self {
         Self {
             encoding,
@@ -2011,6 +2092,8 @@ impl Coherence {
         self.first_generation = self.generation + 1;
         self.snapshots.clear();
         self.pending.clear();
+        self.strict_fills = false;
+        self.native_fill_store = None;
         self.imported = !self.imports.is_empty();
     }
 
@@ -2078,6 +2161,34 @@ impl Coherence {
                     })
             })
             .map(|buffer| Readback::vertices(device, encoder, buffer));
+        let native_fills = self.strict_fills.then(|| {
+            let (writer, texture) = color.unwrap();
+            let width = texture.width();
+            let height = texture.height();
+            let store = super::native_fill::Store::new(device, (width, height));
+            let fills = draws
+                .iter()
+                .skip(first_draw)
+                .map(|draw| {
+                    let (x, y, w, h) = draw.possible_bounds(&[]).unwrap();
+                    let bounds = (
+                        x.min(width),
+                        y.min(height),
+                        w.min(width.saturating_sub(x)),
+                        h.min(height.saturating_sub(y)),
+                    );
+                    store.update(
+                        device,
+                        encoder,
+                        bounds,
+                        ((writer.address >> 1) & 1) as u32,
+                        draw.literal,
+                    )
+                })
+                .collect::<Vec<_>>();
+            self.native_fill_store = Some(store);
+            fills
+        });
         self.snapshots.push(Snapshot {
             coverage: Readback::new(device, encoder, coverage, 8),
             color: color
@@ -2089,6 +2200,7 @@ impl Coherence {
             render_height,
             first_draw,
             generation,
+            native_fills,
         });
     }
 
@@ -2216,11 +2328,12 @@ impl Coherence {
         draws: &[CoverageDraw],
         order: (u64, usize),
         geometry: &ReplayGeometry,
-        stamps: &[u8],
-        data: &[u8],
+        images: (&[u8], &[u8]),
+        native_fills: Option<&[Option<super::native_fill::Pixels>]>,
     ) -> Vec<super::writeback::Pixel> {
         use super::writeback::Pixel;
         let (generation, first_draw) = order;
+        let (stamps, data) = images;
         let width = writer.layout.width as usize;
         let height = data.len() / 4 / width;
         let extent = (width, height);
@@ -2316,10 +2429,18 @@ impl Coherence {
                     {
                         let pixel = y * width + x;
                         history[pixel] = index as u32 + 1;
-                        let word = (word >> (16 * (1 - pixel % 2))) as u16;
+                        let (word, stored) = if let Some(fills) = native_fills {
+                            fills[index - first_draw]
+                                .as_ref()
+                                .unwrap()
+                                .get(pixel, width)
+                        } else {
+                            let word = (word >> (16 * (1 - pixel % 2))) as u16;
+                            (word, if word & 1 == 0 { 0 } else { 7 })
+                        };
                         colors[pixel] = unpack(word);
                         color_valid[pixel] = true;
-                        coverage[pixel] = if word & 1 == 0 { 0 } else { 7 };
+                        coverage[pixel] = stored;
                         output[pixel] = Pixel::Write([0; 4], coverage[pixel], index as u32 + 1);
                     }
                 }
@@ -2419,6 +2540,12 @@ impl Coherence {
             let height = snapshot.render_height;
             let target_height = snapshot.coverage.height;
             let mut projected_vertices = snapshot.vertices;
+            let native_fills = snapshot.native_fills.map(|fills| {
+                fills
+                    .into_iter()
+                    .map(|fill| fill.map(|readback| readback.read(device)))
+                    .collect::<Vec<_>>()
+            });
             let stamps = snapshot.coverage.read(device);
             let rgba16 = snapshot.color.as_ref().is_some_and(|(writer, _)| {
                 !writer.depth && (writer.layout.fmt, writer.layout.siz) == (0, 2)
@@ -2543,8 +2670,8 @@ impl Coherence {
                         &snapshot.draws,
                         (snapshot.generation, snapshot.first_draw),
                         geometry,
-                        &stamps,
-                        &data,
+                        (&stamps, &data),
+                        native_fills.as_deref(),
                     )
                 } else {
                     if channel == 0
@@ -2616,6 +2743,21 @@ impl Coherence {
                             let mut rgba: [u8; 4] =
                                 data[pixel * 4..pixel * 4 + 4].try_into().unwrap();
                             let draw = &snapshot.draws[slot as usize - 1];
+                            if draw.literal.is_some() {
+                                if let Some(fills) = &native_fills {
+                                    let (word, coverage) = fills
+                                        [slot as usize - 1 - snapshot.first_draw]
+                                        .as_ref()
+                                        .unwrap()
+                                        .get(pixel, width);
+                                    stored.push(coverage);
+                                    return self
+                                        .encoding
+                                        .encode_u16(word)
+                                        .into_iter()
+                                        .take(writer.pixel_bytes());
+                                }
+                            }
                             let coverage = if coverage_enabled && last_draw[pixel] <= slot {
                                 coverage[slot as usize - 1].get(pixel, width)
                             } else {

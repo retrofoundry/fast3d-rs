@@ -674,9 +674,229 @@ mod gpu {
                     .unwrap_or(0),
                 0
             );
-            if !writeback {
+            if writeback {
+                assert_eq!(
+                    r.inner
+                        .coherence
+                        .as_ref()
+                        .unwrap()
+                        .native_fill_pixels(&r.device, &r.queue),
+                    Some(([2, 1], vec![[0xf800, 0, 1], [0x07c1, 7, 1]]))
+                );
+            } else {
                 assert!(r.take_guest_writes().is_empty());
                 assert!(r.inner.coherence.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn guest_route_gpu_literal_fills_preserve_words_coverage_and_neighbors() {
+        for fallback in [false, true] {
+            for encoding in [
+                crate::FramebufferEncoding::Native,
+                crate::FramebufferEncoding::BigEndian,
+            ] {
+                let mut r = renderer(fallback);
+                r.set_guest_writeback_with_encoding(true, encoding);
+                let mut memory = Memory(vec![0xa5; OUTPUT as usize + 32]);
+                let mut dl = Vec::new();
+                image(&mut dl, FB, 5, 3, 0, 2);
+                fill(&mut dl, 0xf80007c1, [1, 0, 3, 1]);
+                fill(&mut dl, 0x1234abcd, [2, 1, 2, 2]);
+                let mut task = built(DlBuilder::new(), dl);
+                task.rdram[FB as usize - 2..FB as usize].fill(0xa5);
+                let result = submit_guest(&mut r, &mut memory, task);
+                assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+                let coherence = r.inner.coherence.as_ref().unwrap();
+                let (extent, pixels) = coherence.native_fill_pixels(&r.device, &r.queue).unwrap();
+                assert_eq!(extent, [5, 3]);
+                assert_eq!(
+                    pixels,
+                    [
+                        [0, 0, 0],
+                        [0x07c1, 7, 1],
+                        [0xf800, 0, 1],
+                        [0x07c1, 7, 1],
+                        [0, 0, 0],
+                        [0, 0, 0],
+                        [0xf800, 0, 1],
+                        [0xabcd, 7, 1],
+                        [0xf800, 0, 1],
+                        [0, 0, 0],
+                        [0, 0, 0],
+                        [0, 0, 0],
+                        [0x1234, 0, 1],
+                        [0, 0, 0],
+                        [0, 0, 0],
+                    ]
+                );
+                let coverage = [
+                    None,
+                    Some(7),
+                    Some(0),
+                    Some(7),
+                    None,
+                    None,
+                    Some(0),
+                    Some(7),
+                    Some(0),
+                    None,
+                    None,
+                    None,
+                    Some(0),
+                    None,
+                    None,
+                ];
+                for (pixel, expected) in coverage.into_iter().enumerate() {
+                    assert_eq!(
+                        coherence.stored_coverage_code(u64::from(FB) + pixel as u64 * 2),
+                        expected
+                    );
+                }
+                let patches = r.take_guest_writes();
+                let expected = if encoding == crate::FramebufferEncoding::BigEndian
+                    || cfg!(target_endian = "big")
+                {
+                    [
+                        vec![0x07, 0xc1, 0xf8, 0x00, 0x07, 0xc1],
+                        vec![0xf8, 0x00, 0xab, 0xcd, 0xf8, 0x00],
+                        vec![0x12, 0x34],
+                    ]
+                } else {
+                    [
+                        vec![0xc1, 0x07, 0x00, 0xf8, 0xc1, 0x07],
+                        vec![0x00, 0xf8, 0xcd, 0xab, 0x00, 0xf8],
+                        vec![0x34, 0x12],
+                    ]
+                };
+                assert_eq!(
+                    patches,
+                    [2, 12, 24]
+                        .into_iter()
+                        .zip(&expected)
+                        .map(|(offset, bytes)| crate::GuestWrite {
+                            address: u64::from(FB) + offset,
+                            bytes: bytes.clone()
+                        })
+                        .collect::<Vec<_>>()
+                );
+                let mut expected_memory = vec![0xa5; 34];
+                for (offset, bytes) in [4, 14, 26].into_iter().zip(expected) {
+                    expected_memory[offset..offset + bytes.len()].copy_from_slice(&bytes);
+                }
+                for patch in patches {
+                    memory.0[patch.address as usize..patch.address as usize + patch.bytes.len()]
+                        .copy_from_slice(&patch.bytes);
+                }
+                assert_eq!(
+                    &memory.0[FB as usize - 2..FB as usize + 32],
+                    expected_memory
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn guest_route_gpu_fill_feeds_wrap_between_overwrites() {
+        for fallback in [false, true] {
+            for encoding in [
+                crate::FramebufferEncoding::Native,
+                crate::FramebufferEncoding::BigEndian,
+            ] {
+                let mut r = renderer(fallback);
+                r.set_guest_writeback_with_encoding(true, encoding);
+                let mut memory = Memory(vec![0xa5; OUTPUT as usize + 32]);
+                let mut dl = Vec::new();
+                image(&mut dl, FB + 2, 3, 1, 0, 2);
+                fill(&mut dl, 0xf80007c1, [0, 0, 2, 0]);
+                dl.extend([
+                    (0xef00_0030 | G_TC_FILT, IM_RD | CVG_DST_WRAP),
+                    combine(3, 3),
+                    gdp_set_prim_color(0, 0, 0xffffffff),
+                    gdp_fill_rectangle(4, 0, 8, 4),
+                ]);
+                fill(&mut dl, 0x12340000, [0, 0, 0, 0]);
+                let result = submit_guest(&mut r, &mut memory, built(DlBuilder::new(), dl));
+                assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+                let coherence = r.inner.coherence.as_ref().unwrap();
+                assert_eq!(
+                    coherence.native_fill_pixels(&r.device, &r.queue).unwrap(),
+                    ([3, 1], vec![[0, 0, 1], [0, 0, 0], [0x07c1, 7, 1]])
+                );
+                for (offset, coverage) in [(2, 0), (4, 0), (6, 7)] {
+                    assert_eq!(
+                        coherence.stored_coverage_code(u64::from(FB) + offset),
+                        Some(coverage)
+                    );
+                }
+                let bytes = if encoding == crate::FramebufferEncoding::BigEndian
+                    || cfg!(target_endian = "big")
+                {
+                    vec![0x00, 0x00, 0xff, 0xfe, 0x07, 0xc1]
+                } else {
+                    vec![0x00, 0x00, 0xfe, 0xff, 0xc1, 0x07]
+                };
+                assert_eq!(
+                    r.take_guest_writes(),
+                    vec![crate::GuestWrite {
+                        address: u64::from(FB) + 2,
+                        bytes
+                    }]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compatibility_literal_fill_matches_f4b3240() {
+        for fallback in [false, true] {
+            for encoding in [
+                crate::FramebufferEncoding::Native,
+                crate::FramebufferEncoding::BigEndian,
+            ] {
+                let mut r = renderer(fallback);
+                r.set_guest_writeback_with_encoding(true, encoding);
+                let mut memory = Memory(vec![0xa5; OUTPUT as usize + 32]);
+                let mut dl = Vec::new();
+                image(&mut dl, FB, 5, 3, 0, 2);
+                fill(&mut dl, 0xf80007c1, [1, 0, 3, 1]);
+                fill(&mut dl, 0x1234abcd, [2, 1, 2, 2]);
+                let task = built(DlBuilder::new(), dl);
+                memory.0[..FB as usize].copy_from_slice(&task.rdram[..FB as usize]);
+                let result = r.process_dl(
+                    &memory,
+                    task.entry.into(),
+                    crate::Microcode::F3dex2,
+                    &mut crate::NopSink,
+                );
+                assert_eq!(result.termination, crate::inspect::WalkTermination::End);
+                let expected = if encoding == crate::FramebufferEncoding::BigEndian
+                    || cfg!(target_endian = "big")
+                {
+                    [
+                        vec![0x07, 0xc1, 0xf8, 0x00, 0x07, 0xc1],
+                        vec![0xf8, 0x00, 0xab, 0xcd, 0xf8, 0x00],
+                        vec![0x12, 0x34],
+                    ]
+                } else {
+                    [
+                        vec![0xc1, 0x07, 0x00, 0xf8, 0xc1, 0x07],
+                        vec![0x00, 0xf8, 0xcd, 0xab, 0x00, 0xf8],
+                        vec![0x34, 0x12],
+                    ]
+                };
+                assert_eq!(
+                    r.take_guest_writes(),
+                    [2, 12, 24]
+                        .into_iter()
+                        .zip(expected)
+                        .map(|(offset, bytes)| crate::GuestWrite {
+                            address: u64::from(FB) + offset,
+                            bytes
+                        })
+                        .collect::<Vec<_>>()
+                );
             }
         }
     }
