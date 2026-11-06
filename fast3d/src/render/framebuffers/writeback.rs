@@ -98,6 +98,14 @@ pub(super) struct Vertex {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+impl Vertex {
+    pub(super) fn in_range(self) -> bool {
+        (-1024.0..=1023.75).contains(&self.position[0])
+            && (-2048.0..=2047.75).contains(&self.position[1])
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn destination(mode: crate::hle::RenderMode, count: u8, memory: u8) -> u8 {
     let overflow = (count + memory) & 8 != 0;
     let blend = mode.force_blend || (mode.antialias && !overflow);
@@ -130,13 +138,7 @@ pub(super) fn admitted(draw: &CoverageDraw, vertices: &[Option<Vertex>]) -> bool
             return false;
         };
         let v = [a, b, c];
-        if v.iter().any(|v| {
-            !v.position.iter().all(|x| x.is_finite())
-                || v.position[0] < -1024.0
-                || v.position[0] > 1023.75
-                || v.position[1] < -2048.0
-                || v.position[1] > 2047.75
-        }) {
+        if v.iter().any(|v| !v.in_range()) {
             return false;
         }
         let s = &combiner.selectors;

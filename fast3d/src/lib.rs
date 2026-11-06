@@ -931,9 +931,15 @@ impl Renderer {
         }
         if !native && self.guest_writeback {
             result.scene.use_compatibility_policy();
+            self.inner.coherence.as_mut().unwrap().begin_task();
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        let staged = native.then(|| {
+            let target = workload.as_ref().unwrap().targets[0].id;
+            self.inner
+                .stage_strict_task(&self.device, &self.queue, target)
+        });
         if let Some(coherence) = &mut self.inner.coherence {
-            coherence.begin_task();
             coherence.strict_fills = native;
         }
         let scanout = self.inner.render_into_store(
@@ -942,9 +948,38 @@ impl Renderer {
             &result.scene,
             self.config.clear_policy,
         );
-        if native {
-            self.inner.profiling.count("tasks.guest.native", 1);
-        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let scanout = if let Some(task) = staged {
+            let valid = self
+                .inner
+                .coherence
+                .as_mut()
+                .unwrap()
+                .validate_strict(&self.device)
+                .is_ok()
+                && self.inner.diagnostics.is_empty()
+                && self.inner.dropped_runs == 0
+                && scanout.is_some();
+            if valid {
+                self.inner.profiling.count("tasks.guest.native", 1);
+                scanout
+            } else {
+                self.inner.discard_strict_task(task);
+                self.inner.profiling.count("tasks.guest.fallback", 1);
+                result.scene.use_compatibility_policy();
+                self.inner.coherence.as_mut().unwrap().begin_task();
+                let scanout = self.inner.render_into_store(
+                    &self.device,
+                    &self.queue,
+                    &result.scene,
+                    self.config.clear_policy,
+                );
+                self.inner.profiling.count("tasks.guest.compatibility", 1);
+                scanout
+            }
+        } else {
+            scanout
+        };
         if !native && self.guest_writeback {
             self.inner.profiling.count("tasks.guest.compatibility", 1);
         }

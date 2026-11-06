@@ -102,6 +102,17 @@ impl Workload {
                         mode.image_read && matches!(mode.cvg_dst, 1 | 3),
                     )
                 }
+                SceneOp::Tris(run) => {
+                    let mode = scene.render_modes[run.render_mode_index as usize];
+                    let material = &scene.materials[run.material_index as usize];
+                    let uniform = super::CombinerUniform::from_run(material, &mode, run.fog_color);
+                    super::framebuffers::writeback::Combiner::new(&uniform, mode)
+                        .ok_or(UnsupportedGuestTask)?;
+                    if mode.key_enabled || mode.force_blend || mode.blender_mux != 0 {
+                        return Err(UnsupportedGuestTask);
+                    }
+                    continue;
+                }
                 _ => return Err(UnsupportedGuestTask),
             };
             let left = rect[0].max(operation.scissor.ulx).max(0) as u32;
