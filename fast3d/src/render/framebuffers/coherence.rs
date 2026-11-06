@@ -2120,7 +2120,6 @@ impl Coherence {
         self.owners.patches(self.first_generation)
     }
 
-    #[cfg(test)]
     pub(crate) fn stored_coverage_code(&self, address: u64) -> Option<u8> {
         let byte = |address| {
             let (&start, range) = self.owners.0.range(..=address).next_back()?;

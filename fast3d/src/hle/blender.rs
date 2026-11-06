@@ -34,6 +34,9 @@ pub enum AlphaCompare {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RenderMode {
     pub cycle_type: u32,
+    pub rgb_dither: u8,
+    pub alpha_dither: u8,
+    pub key_enabled: bool,
     pub cvg_dst: u8,
     pub image_read: bool,
     pub antialias: bool,
@@ -82,6 +85,9 @@ pub fn decode_render_mode(other_mode_l: u32, other_mode_h: u32, geom: u32) -> Re
         classify_blend(blender_mux, force_blend, cycle_type);
     RenderMode {
         cycle_type,
+        rgb_dither: ((other_mode_h >> 6) & 3) as u8,
+        alpha_dither: ((other_mode_h >> 4) & 3) as u8,
+        key_enabled: other_mode_h & (1 << 8) != 0,
         cvg_dst: ((other_mode_l >> 8) & 3) as u8,
         image_read: other_mode_l & IM_RD != 0,
         antialias: other_mode_l & AA_EN != 0,

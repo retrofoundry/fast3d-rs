@@ -532,6 +532,7 @@ impl Renderer {
     ///
     /// Disabled by default and on wasm. Apply returned patches before the next task; 16-bit pixels
     /// use native-endian words and 8-bit pixels use bytes. Guest reads occur only during processing.
+    /// Each task is interpreted once, then evaluated natively when supported or through compatibility.
     pub fn set_guest_writeback(&mut self, enabled: bool) {
         self.set_guest_writeback_with_encoding(enabled, FramebufferEncoding::Native);
     }
@@ -819,7 +820,6 @@ impl Renderer {
         let _process = self.inner.profiling.span("process_dl");
         let mut released = Ok(());
         if let Some(coherence) = &mut self.inner.coherence {
-            coherence.begin_task();
             if submission != Submission::RasterizePrefix {
                 released = coherence.release_changed(&mem);
             }
@@ -853,6 +853,7 @@ impl Renderer {
             observer,
             self.inner.profiling.clone(),
             bindings,
+            false,
         );
         drop(interpretation);
         self.inner.profiling.count("tasks", 1);
@@ -881,12 +882,37 @@ impl Renderer {
             return result.summary(false);
         }
 
+        if self.guest_writeback && !result.scene.unsupported_native_policy {
+            for mode in &mut result.scene.render_modes {
+                mode.alpha_dither = 3;
+            }
+        }
+        let workload = self
+            .guest_writeback
+            .then(|| crate::render::workload::Workload::new(&result.scene));
+        let retained_history = self.guest_writeback;
+        #[cfg(feature = "capture")]
+        let retained_history =
+            retained_history && self.inner.depth_reset_policy == DepthResetPolicy::Never;
+        let native = retained_history
+            && !result.scene.unsupported_native_policy
+            && result.termination == inspect::WalkTermination::End
+            && result.diags.is_empty()
+            && result.dropped_runs == 0
+            && workload
+                .as_ref()
+                .unwrap()
+                .check_strict_guest(&result.scene, self.inner.coherence.as_ref().unwrap())
+                .is_ok();
+
         if !result.commits_rdp() {
             released = Ok(());
         }
         if self.guest_writeback {
             released = released.and_then(|_| {
-                crate::render::workload::Workload::new(&result.scene)
+                workload
+                    .as_ref()
+                    .unwrap()
                     .check_writeback(&result.scene, &mem)
             });
             if let Err(error) = released {
@@ -903,19 +929,28 @@ impl Renderer {
                 return result.summary(false);
             }
         }
-        if submission == Submission::DiscardOnStop && result.commits_rdp() {
-            self.rdp = result.rdp.clone();
-            self.color_image_epoch = result.framebuffers.color_image_epoch;
+        if !native && self.guest_writeback {
+            result.scene.use_compatibility_policy();
         }
-
-        // Rasterize into the persistent store. A draw-nothing walk returns None and leaves
-        // `last_scanout_addr` UNCHANGED (spec §4 step 4). RA: clear policy from self.config.
+        if let Some(coherence) = &mut self.inner.coherence {
+            coherence.begin_task();
+        }
         let scanout = self.inner.render_into_store(
             &self.device,
             &self.queue,
             &result.scene,
             self.config.clear_policy,
         );
+        if native {
+            self.inner.profiling.count("tasks.guest.native", 1);
+        }
+        if !native && self.guest_writeback {
+            self.inner.profiling.count("tasks.guest.compatibility", 1);
+        }
+        if submission != Submission::RasterizePrefix && result.commits_rdp() {
+            self.rdp = result.rdp.clone();
+            self.color_image_epoch = result.framebuffers.color_image_epoch;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if self.guest_writeback && result.commits_rdp() {
             self.guest_writes

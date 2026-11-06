@@ -523,6 +523,7 @@ pub(crate) fn interpret_with_bindings<M: Rdram>(
         observer,
         profiling,
         bindings,
+        true,
     )
 }
 
@@ -537,11 +538,13 @@ pub(crate) fn interpret_borrowed<M: Rdram>(
     mut observer: Option<&mut dyn crate::inspect::WalkObserver>,
     profiling: crate::profiling::Recorder,
     bindings: &[(u64, crate::Microcode)],
+    retain_native_policy: bool,
 ) -> InterpResult {
     rdp.tmem_bank.profiling = profiling.clone();
     let mut gbi = crate::hle::gbi::Gbi::<M>::new(ucode, data_format);
     let mut rsp = crate::hle::rsp::Rsp::new(gbi.consts, gbi.data_format);
     rsp.set_initial_microcode(ucode);
+    rsp.retain_native_policy = retain_native_policy;
     rsp.profiling = profiling;
     rdp.color_changed = false;
     rdp.depth_changed = false;
@@ -2580,6 +2583,7 @@ mod coherence_tests {
             None,
             Default::default(),
             &[],
+            true,
         );
         assert_eq!(result.termination, WalkTermination::End);
         assert!(result

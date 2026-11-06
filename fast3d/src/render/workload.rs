@@ -31,7 +31,111 @@ pub(crate) struct Workload {
     pub targets: Vec<TargetWorkload>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UnsupportedGuestTask;
+
 impl Workload {
+    pub(crate) fn check_strict_guest(
+        &self,
+        scene: &Scene,
+        coherence: &super::framebuffers::coherence::Coherence,
+    ) -> Result<(), UnsupportedGuestTask> {
+        let [target] = self.targets.as_slice() else {
+            return Err(UnsupportedGuestTask);
+        };
+        let TargetId::Guest(address) = target.id else {
+            return Err(UnsupportedGuestTask);
+        };
+        if target.color_image.fmt != 0
+            || target.color_image.siz != 2
+            || address & 1 != 0
+            || target.depth_clear
+        {
+            return Err(UnsupportedGuestTask);
+        }
+        let (width, height) = target.logical_extent;
+        let mut known: Vec<std::ops::Range<u64>> = Vec::new();
+        for operation in &target.operations {
+            if operation.scissor.mode != 0 {
+                return Err(UnsupportedGuestTask);
+            }
+            let (rect, needs_memory) = match &operation.draw {
+                SceneOp::FillRect { rect, .. } => (
+                    [
+                        rect.ulx,
+                        rect.uly,
+                        rect.lrx.saturating_add(1),
+                        rect.lry.saturating_add(1),
+                    ],
+                    false,
+                ),
+                SceneOp::TexRect {
+                    rect,
+                    copy_mode: false,
+                    material_index,
+                    render_mode_index,
+                    fog_color,
+                    fb_source: None,
+                    ..
+                } => {
+                    let mode = scene.render_modes[*render_mode_index as usize];
+                    let material = &scene.materials[*material_index as usize];
+                    let uniform = super::CombinerUniform::from_run(material, &mode, *fog_color);
+                    let combiner = super::framebuffers::writeback::Combiner::new(&uniform, mode)
+                        .ok_or(UnsupportedGuestTask)?;
+                    let color = combiner.color([1.0; 4]).ok_or(UnsupportedGuestTask)?;
+                    if mode.rgb_dither != 0
+                        || mode.alpha_dither != 3
+                        || mode.key_enabled
+                        || mode.force_blend
+                        || mode.blender_mux != 0
+                        || color[3] != 1.0
+                        || color[..3].iter().any(|&c| c != 0.0 && c != 1.0)
+                        || [rect.ulx, rect.uly, rect.lrx, rect.lry]
+                            .iter()
+                            .any(|x| x & 3 != 0)
+                    {
+                        return Err(UnsupportedGuestTask);
+                    }
+                    (
+                        [rect.ulx / 4, rect.uly / 4, rect.lrx / 4, rect.lry / 4],
+                        mode.image_read && matches!(mode.cvg_dst, 1 | 3),
+                    )
+                }
+                _ => return Err(UnsupportedGuestTask),
+            };
+            let left = rect[0].max(operation.scissor.ulx).max(0) as u32;
+            let top = rect[1].max(operation.scissor.uly).max(0) as u32;
+            let right = rect[2].min(operation.scissor.lrx).max(0) as u32;
+            let bottom = rect[3].min(operation.scissor.lry).max(0) as u32;
+            for y in top..bottom.min(height) {
+                let start = address
+                    .checked_add((u64::from(y) * u64::from(width) + u64::from(left)) * 2)
+                    .ok_or(UnsupportedGuestTask)?;
+                let end = address
+                    .checked_add(
+                        (u64::from(y) * u64::from(width) + u64::from(right.min(width))) * 2,
+                    )
+                    .ok_or(UnsupportedGuestTask)?;
+                if start >= end {
+                    continue;
+                }
+                if needs_memory
+                    && !known
+                        .iter()
+                        .any(|range| range.start <= start && range.end >= end)
+                    && (start..end)
+                        .step_by(2)
+                        .any(|address| coherence.stored_coverage_code(address).is_none())
+                {
+                    return Err(UnsupportedGuestTask);
+                }
+                known.push(start..end);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn check_writeback(
         &self,
         scene: &Scene,
