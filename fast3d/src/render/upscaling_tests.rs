@@ -2522,6 +2522,9 @@ fn scaled_snapshot_storage_rejection_leaves_the_store_unpublished() {
     assert!(renderer.framebuffers.is_empty());
 }
 
+#[path = "scale_tests.rs"]
+mod scale_tests;
+
 fn rejected_native_projection() -> Built {
     let mut builder = DlBuilder::new();
     let viewport = builder.viewport(Vp {

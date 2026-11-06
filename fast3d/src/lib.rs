@@ -63,6 +63,14 @@ pub enum DepthResetPolicy {
     FrameBoundary,
 }
 
+/// Presentation scale requested for the next frame boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScalePolicy {
+    Fixed(u32),
+    /// Ceiling of content height / native crop height, capped at 4.
+    Auto,
+}
+
 /// Renderer configuration. All fields are `Copy`; the `Renderer` stores it by value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RendererConfig {
@@ -81,11 +89,15 @@ pub struct RendererConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigError {
     ResolutionMultiplier(u32),
+    ReductionFactor(u32),
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReductionFactor(value) => {
+                write!(f, "reduction factor must be nonzero, got {value}")
+            }
             Self::ResolutionMultiplier(value) => {
                 write!(f, "resolution_multiplier must be 1..=4, got {value}")
             }
@@ -266,6 +278,11 @@ pub struct Renderer {
     /// egui-wgpu GPU resources drop first. Default-disabled; a no-op under `present_to` when off.
     #[cfg(feature = "debug-ui")]
     debugger: crate::debug::Debugger,
+    scale_policy: ScalePolicy,
+    content_height: u32,
+    auto_reference: Option<u32>,
+    previous_reference: Option<u32>,
+    frame_admission_error: Option<Diagnostic>,
     config: RendererConfig, // RA: clear_policy read as self.config.clear_policy
     queue: wgpu::Queue,
     device: wgpu::Device,
@@ -316,6 +333,47 @@ impl Renderer {
 
     pub fn effective_resolution_multiplier(&self) -> u32 {
         self.inner.render_scale
+    }
+
+    /// Queue a policy for the next `begin_frame` or `begin_frame_with_vi`.
+    pub fn set_scale_policy(&mut self, policy: ScalePolicy) -> Result<(), ConfigError> {
+        if let ScalePolicy::Fixed(value) = policy {
+            if !(1..=4).contains(&value) {
+                return Err(ConfigError::ResolutionMultiplier(value));
+            }
+        }
+        self.mark_mutation();
+        self.scale_policy = policy;
+        Ok(())
+    }
+
+    pub fn requested_scale_policy(&self) -> ScalePolicy {
+        self.scale_policy
+    }
+
+    /// Content area excluding outer letterboxing and UI, supplied before the frame boundary.
+    pub fn set_output_content_height(&mut self, height: u32) {
+        self.mark_mutation();
+        self.content_height = height;
+    }
+
+    /// Reference used by the effective Auto frame; `None` for a fixed frame.
+    pub fn auto_reference_height(&self) -> Option<u32> {
+        self.auto_reference
+    }
+
+    /// Integer box reduction at presentation. Native dumps bypass it.
+    pub fn set_reduction_factor(&mut self, factor: u32) -> Result<(), ConfigError> {
+        if factor == 0 {
+            return Err(ConfigError::ReductionFactor(factor));
+        }
+        self.mark_mutation();
+        self.inner.reduction_factor = factor;
+        Ok(())
+    }
+
+    pub fn reduction_factor(&self) -> u32 {
+        self.inner.reduction_factor
     }
 
     #[cfg(feature = "profiling")]
@@ -371,6 +429,11 @@ impl Renderer {
             hook: None,
             #[cfg(feature = "debug-ui")]
             debugger: crate::debug::Debugger::new(),
+            scale_policy: ScalePolicy::Fixed(config.resolution_multiplier),
+            content_height: 0,
+            auto_reference: None,
+            previous_reference: None,
+            frame_admission_error: None,
             config,
             queue,
             device,
@@ -454,6 +517,11 @@ impl Renderer {
             hook: None,
             #[cfg(feature = "debug-ui")]
             debugger: crate::debug::Debugger::new(),
+            scale_policy: ScalePolicy::Fixed(config.resolution_multiplier),
+            content_height: 0,
+            auto_reference: None,
+            previous_reference: None,
+            frame_admission_error: None,
             config,
             queue,
             device,
@@ -554,6 +622,10 @@ impl Renderer {
         self.inner.dither_seed = dither_seed;
         self.surface_format = render_fmt;
         self.config = config;
+        self.scale_policy = ScalePolicy::Fixed(config.resolution_multiplier);
+        self.auto_reference = None;
+        self.previous_reference = None;
+        self.frame_admission_error = None;
         // The store was just dropped with the old `inner`; drop dangling scanout state too.
         self.last_scanout_addr = None;
         self.frame_scenes.clear();
@@ -858,6 +930,15 @@ impl Renderer {
         submission: Submission,
         bindings: &[(u64, Microcode)],
     ) -> DlSummary {
+        if let Some(mut diagnostic) = self.frame_admission_error {
+            diagnostic.at = entry;
+            diags.emit(diagnostic);
+            return DlSummary {
+                errors: 1,
+                termination: inspect::WalkTermination::Rejected,
+                ..Default::default()
+            };
+        }
         let _process = self.inner.profiling.span("process_dl");
         let mut released = Ok(());
         if let Some(coherence) = &mut self.inner.coherence {
@@ -1109,16 +1190,61 @@ impl Renderer {
         self.frame_scenes.clear();
         self.last_scanout_addr = None;
         self.last_backend_was_image = false;
+        self.previous_reference = None;
+        self.frame_admission_error = None;
     }
 
     /// Explicit frame boundary. Resets per-frame accumulation: the inner store's first-touch clear
     /// set (ClearPolicy::PerFrame) and the retained `frame_scenes`. Preserves guest RDP state
     /// and TMEM; advances the dither serial.
     pub fn begin_frame(&mut self) {
+        if let Err(diagnostic) = self.begin_frame_with_vi(None) {
+            log::warn!("frame scale admission failed: {diagnostic:?}");
+        }
+    }
+
+    /// Latch scale using the current native VI crop. Failure preserves the store and rejects
+    /// tasks until a subsequent frame boundary succeeds. Missing VI reuses the last reference.
+    pub fn begin_frame_with_vi(&mut self, vi: Option<ViRegisters>) -> Result<(), Diagnostic> {
         let _span = self.inner.profiling.span("begin_frame");
         self.mark_mutation();
+        let reference = if self.last_scanout_addr == Some(TargetId::Legacy) {
+            Some(self.inner.legacy_height())
+        } else {
+            vi.and_then(|vi| {
+                vi.scanout_height().map(|height| {
+                    self.scanout_source(Some(vi)).map_or(height, |source| {
+                        let retained = self
+                            .inner
+                            .scanout_images()
+                            .find(|(id, _, _)| *id == source.target)
+                            .unwrap()
+                            .2;
+                        let rows = source.rows.unwrap_or(0..retained);
+                        rows.end.min(retained).saturating_sub(rows.start)
+                    })
+                })
+            })
+            .filter(|height| *height > 0)
+            .map(|height| height.max(60))
+        };
+        let reference = reference.or(self.previous_reference).unwrap_or(240);
+        let scale = match self.scale_policy {
+            ScalePolicy::Fixed(scale) => scale,
+            ScalePolicy::Auto => self.content_height.div_ceil(reference).clamp(1, 4),
+        };
+        self.frame_admission_error = self
+            .inner
+            .change_scale(&self.device, &self.queue, scale)
+            .err();
+        if let Some(diagnostic) = self.frame_admission_error {
+            return Err(diagnostic);
+        }
+        self.previous_reference = Some(reference);
+        self.auto_reference = (self.scale_policy == ScalePolicy::Auto).then_some(reference);
         self.inner.begin_frame();
         self.frame_scenes.clear();
+        Ok(())
     }
 
     #[cfg(feature = "profiling")]

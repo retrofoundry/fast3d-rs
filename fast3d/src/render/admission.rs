@@ -99,6 +99,58 @@ struct Retained {
 }
 
 impl SceneRenderer {
+    fn attachment_textures(&self) -> impl Iterator<Item = &wgpu::Texture> {
+        self.framebuffers
+            .values()
+            .flat_map(|fb| {
+                std::iter::once(&fb.color).chain(fb.presentation.as_ref().map(|p| &p.texture))
+            })
+            .chain(self.depthbuffers.values().flat_map(|depth| {
+                std::iter::once(&depth.texture)
+                    .chain(depth.presentation.as_ref().map(|p| &p.texture))
+            }))
+            .chain(self.color_versions.values())
+            .chain(self.presentation_versions.values())
+    }
+
+    pub(super) fn preflight_scale(
+        &self,
+        scale: u32,
+        limits: &wgpu::Limits,
+    ) -> Result<(), Diagnostic> {
+        let mut plan = Admission {
+            limits,
+            budget: self.attachment_budget,
+            bytes: 0,
+            pc: 0,
+        };
+        for texture in self.attachment_textures() {
+            plan.charge(u64::from(texture.width()) * u64::from(texture.height()) * 4)?;
+        }
+        if scale > 1 {
+            for texture in self
+                .framebuffers
+                .values()
+                .map(|fb| &fb.color)
+                .chain(self.depthbuffers.values().map(|depth| &depth.texture))
+                .chain(self.color_versions.values())
+            {
+                let extent = (
+                    texture
+                        .width()
+                        .checked_mul(scale)
+                        .ok_or_else(|| plan.overflow())?,
+                    texture
+                        .height()
+                        .checked_mul(scale)
+                        .ok_or_else(|| plan.overflow())?,
+                );
+                plan.charge(plan.image(extent)?)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn preflight_inputs(
         &self,
         inputs: &mut RenderInputs<'_>,
@@ -110,19 +162,7 @@ impl SceneRenderer {
             bytes: 0,
             pc: 0,
         };
-        for texture in self
-            .framebuffers
-            .values()
-            .flat_map(|fb| {
-                std::iter::once(&fb.color).chain(fb.presentation.as_ref().map(|p| &p.texture))
-            })
-            .chain(self.depthbuffers.values().flat_map(|depth| {
-                std::iter::once(&depth.texture)
-                    .chain(depth.presentation.as_ref().map(|p| &p.texture))
-            }))
-            .chain(self.color_versions.values())
-            .chain(self.presentation_versions.values())
-        {
+        for texture in self.attachment_textures() {
             plan.charge(u64::from(texture.width()) * u64::from(texture.height()) * 4)?;
         }
         let mut colors: HashMap<_, _> = self
