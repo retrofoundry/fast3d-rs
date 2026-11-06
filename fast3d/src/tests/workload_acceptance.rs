@@ -456,8 +456,6 @@ fn decal_first_initializes_depth() {
                     BLUE
                 } else if in_rect(x, y, [144, 64, 240, 192]) {
                     GREEN
-                } else if in_rect(x, y, [32, 32, 112, 112]) {
-                    RED
                 } else {
                     BACKGROUND
                 }

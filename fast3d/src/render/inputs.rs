@@ -460,9 +460,10 @@ impl<'a> RenderInputs<'a> {
                                     let mode = &scene.render_modes[run.render_mode_index as usize];
                                     let mut uniform =
                                         CombinerUniform::from_run(mat, mode, run.fog_color);
-                                    uniform.primitive_depth[..2].copy_from_slice(&[
+                                    uniform.primitive_depth[..3].copy_from_slice(&[
                                         u32::from(mode.z_source_prim),
                                         u32::from(run.prim_depth.z),
+                                        u32::from(run.prim_depth.dz),
                                     ]);
                                     uniform.inv_tex_size = super::triangle_inv_tex_size(mat);
                                     uniform.inv_tex_size[3] = u32::from(run.unclipped_depth) as f32;
@@ -508,9 +509,10 @@ impl<'a> RenderInputs<'a> {
                                     };
                                     if !copy_mode {
                                         let mode = &scene.render_modes[*render_mode_index as usize];
-                                        uniform.primitive_depth[..2].copy_from_slice(&[
+                                        uniform.primitive_depth[..3].copy_from_slice(&[
                                             u32::from(mode.z_source_prim),
                                             u32::from(prim_depth.z),
+                                            u32::from(prim_depth.dz),
                                         ]);
                                     }
                                     let fb_source = fb_source
@@ -649,6 +651,12 @@ impl<'a> RenderInputs<'a> {
                             );
                             debug_assert!(w > 0 && h > 0);
                             uniform.frame = [frame[0], frame[1], w, h];
+                            uniform.native_scale = [
+                                w as f32 / target.logical_extent.0 as f32,
+                                h as f32 / target.logical_extent.1 as f32,
+                                0.0,
+                                0.0,
+                            ];
                             uniform.coverage_slot = slot as u32 + 1;
                             let bytes = bytemuck::bytes_of(&uniform);
                             inputs.uniforms[slot * 256..slot * 256 + bytes.len()]

@@ -43,3 +43,5 @@ python3 tools/fog-mirror/generate.py ORACLE_ARCHIVE fast3d/tests/fog-mirror
 
 The generator retains the original inputs and masks, computes modern predictions
 in Python, and compacts them. No renderer readback supplies an expected value.
+
+`fast3d/tests/fixtures/decal-depth-cases.json` preserves the 86-case NTSC decal sweep (258 columns, 130464 RGB bytes, zero failed columns).

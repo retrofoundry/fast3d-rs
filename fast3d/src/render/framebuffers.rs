@@ -38,10 +38,20 @@ pub(crate) struct DepthImage {
     pub(crate) texture: wgpu::Texture,
     pub(super) attach: wgpu::TextureView,
     pub(super) layout: ImageLayout,
+    pub(super) delta_view: wgpu::TextureView,
+    pub(super) delta_depth: Option<wgpu::TextureView>,
 }
 
 impl DepthImage {
     pub(super) fn new(device: &wgpu::Device, layout: ImageLayout, height: u32) -> Self {
+        Self::create(device, layout, height, true)
+    }
+
+    pub(super) fn snapshot(device: &wgpu::Device, layout: ImageLayout, height: u32) -> Self {
+        Self::create(device, layout, height, false)
+    }
+
+    fn create(device: &wgpu::Device, layout: ImageLayout, height: u32, writable: bool) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth-store"),
             size: wgpu::Extent3d {
@@ -59,16 +69,38 @@ impl DepthImage {
             view_formats: &[],
         });
         let attach = texture.create_view(&Default::default());
+        let mut descriptor = wgpu::TextureDescriptor {
+            label: Some("depth-delta"),
+            size: texture.size(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Uint,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+        let delta = device.create_texture(&descriptor);
+        let delta_view = delta.create_view(&Default::default());
+        descriptor.label = Some("depth-delta-test");
+        descriptor.format = DEPTH_FORMAT;
+        let delta_depth = writable.then(|| {
+            device
+                .create_texture(&descriptor)
+                .create_view(&Default::default())
+        });
         Self {
             texture,
             attach,
             layout,
+            delta_view,
+            delta_depth,
         }
     }
 }
 
 pub(super) struct DepthPipeline {
     fill: wgpu::RenderPipeline,
+    copy_attributes: wgpu::RenderPipeline,
     copy: wgpu::RenderPipeline,
     fill_layout: wgpu::BindGroupLayout,
     copy_layout: wgpu::BindGroupLayout,
@@ -97,16 +129,28 @@ impl DepthPipeline {
         });
         let copy_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("depth-copy"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
         });
         let import_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("depth-import"),
@@ -114,14 +158,14 @@ impl DepthPipeline {
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    sample_type: wgpu::TextureSampleType::Uint,
                     view_dimension: wgpu::TextureViewDimension::D2,
                     multisampled: false,
                 },
                 count: None,
             }],
         });
-        let make = |entry, group: &wgpu::BindGroupLayout| {
+        let make = |entry, attributes, group: &wgpu::BindGroupLayout| {
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(entry),
                 bind_group_layouts: &[Some(group)],
@@ -140,7 +184,15 @@ impl DepthPipeline {
                     module: &shader,
                     entry_point: Some(entry),
                     compilation_options: Default::default(),
-                    targets: &[],
+                    targets: if attributes {
+                        &[Some(wgpu::ColorTargetState {
+                            format: wgpu::TextureFormat::R8Uint,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::RED,
+                        })]
+                    } else {
+                        &[]
+                    },
                 }),
                 primitive: Default::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
@@ -156,9 +208,10 @@ impl DepthPipeline {
             })
         };
         Self {
-            fill: make("fill_depth", &fill_layout),
-            copy: make("copy_depth", &copy_layout),
-            import: make("import_depth", &import_layout),
+            fill: make("fill_depth", true, &fill_layout),
+            copy_attributes: make("copy_attributes", true, &copy_layout),
+            copy: make("copy_depth", false, &copy_layout),
+            import: make("import_depth", true, &import_layout),
             import_layout,
             fill_layout,
             copy_layout,
@@ -181,12 +234,32 @@ impl DepthPipeline {
                 resource: wgpu::BindingResource::TextureView(source),
             }],
         });
-        let mut pass = depth_pass(encoder, &target.attach, wgpu::LoadOp::Load);
+        let mut pass = attribute_pass(encoder, target, wgpu::LoadOp::Load, 0);
         pass.set_pipeline(&self.import);
         pass.set_bind_group(0, &group, &[]);
         for &(x, y, width) in spans {
             pass.set_scissor_rect(x, y, width, 1);
             pass.draw(0..3, 0..1);
+        }
+        drop(pass);
+        if let Some(&(x, y, width)) = spans.first() {
+            let (left, top, right, bottom) = spans.iter().fold(
+                (x, y, x + width, y + 1),
+                |(left, top, right, bottom), &(x, y, width)| {
+                    (
+                        left.min(x),
+                        top.min(y),
+                        right.max(x + width),
+                        bottom.max(y + 1),
+                    )
+                },
+            );
+            self.sync_delta_depth(
+                device,
+                encoder,
+                target,
+                (left, top, right - left, bottom - top),
+            );
         }
     }
 
@@ -200,15 +273,55 @@ impl DepthPipeline {
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("depth-copy"),
             layout: &self.copy_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&source.attach),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&source.attach),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&source.delta_view),
+                },
+            ],
         });
-        let mut pass = depth_pass(encoder, &target.attach, wgpu::LoadOp::Load);
-        pass.set_pipeline(&self.copy);
+        let mut pass = attribute_pass(encoder, target, wgpu::LoadOp::Load, 0);
+        pass.set_pipeline(&self.copy_attributes);
         pass.set_bind_group(0, &group, &[]);
         pass.set_scissor_rect(0, 0, source.texture.width(), source.texture.height());
+        pass.draw(0..3, 0..1);
+        drop(pass);
+    }
+
+    fn sync_delta_depth(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &DepthImage,
+        bounds: (u32, u32, u32, u32),
+    ) {
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("depth-delta-sync"),
+            layout: &self.copy_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&target.attach),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&target.delta_view),
+                },
+            ],
+        });
+        let mut pass = depth_pass(
+            encoder,
+            target.delta_depth.as_ref().unwrap(),
+            wgpu::LoadOp::Load,
+        );
+        pass.set_pipeline(&self.copy);
+        pass.set_bind_group(0, &group, &[]);
+        let (x, y, width, height) = bounds;
+        pass.set_scissor_rect(x, y, width, height);
         pass.draw(0..3, 0..1);
     }
 
@@ -227,12 +340,23 @@ impl DepthPipeline {
         }
         if bounds == (0, 0, target.texture.width(), target.texture.height())
             && word & 0xfffc_fffc == 0xfffc_fffc
+            && (word >> 16) & 3 == word & 3
         {
-            let _pass = depth_pass(
+            let packed = word & 0xffff;
+            let code = ((packed & 3) << 2) | (3 * (packed & 1));
+            let pass = attribute_pass(
                 encoder,
-                &target.attach,
+                target,
                 wgpu::LoadOp::Clear(262143.0 / 262144.0),
+                code,
             );
+            drop(pass);
+
+            drop(depth_pass(
+                encoder,
+                target.delta_depth.as_ref().unwrap(),
+                wgpu::LoadOp::Clear(262143.0 / 262144.0),
+            ));
             return;
         }
         let buffer = super::buffer_init(
@@ -253,12 +377,59 @@ impl DepthPipeline {
                 resource: buffer.as_entire_binding(),
             }],
         });
-        let mut pass = depth_pass(encoder, &target.attach, wgpu::LoadOp::Load);
+        let mut pass = attribute_pass(encoder, target, wgpu::LoadOp::Load, 0);
         pass.set_pipeline(&self.fill);
         pass.set_bind_group(0, &group, &[]);
         pass.set_scissor_rect(x, y, width, height);
         pass.draw(0..3, 0..1);
+        drop(pass);
+        self.sync_delta_depth(device, encoder, target, bounds);
     }
+}
+
+fn attribute_pass<'a>(
+    encoder: &'a mut wgpu::CommandEncoder,
+    target: &DepthImage,
+    load: wgpu::LoadOp<f32>,
+    delta: u32,
+) -> wgpu::RenderPass<'a> {
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("depth-attributes"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &target.delta_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: if matches!(load, wgpu::LoadOp::Clear(_)) {
+                    wgpu::LoadOp::Clear(wgpu::Color {
+                        r: f64::from(delta),
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.0,
+                    })
+                } else {
+                    wgpu::LoadOp::Load
+                },
+                store: wgpu::StoreOp::Store,
+            },
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &target.attach,
+            depth_ops: Some(wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    })
+}
+
+fn clear_image(encoder: &mut wgpu::CommandEncoder, target: &DepthImage) {
+    drop(attribute_pass(encoder, target, wgpu::LoadOp::Clear(1.0), 0));
+    clear_depth(encoder, target.delta_depth.as_ref().unwrap());
 }
 
 fn depth_pass<'a>(
@@ -339,23 +510,18 @@ impl SceneRenderer {
             &self.framebuffers[&TargetId::Legacy].attach,
             wgpu::LoadOp::Clear(color),
         );
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("capture-depth-contamination"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depthbuffers[&TargetId::Legacy].attach,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(depth),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
+        let target = &self.depthbuffers[&TargetId::Legacy];
+        drop(attribute_pass(
+            &mut encoder,
+            target,
+            wgpu::LoadOp::Clear(depth),
+            0,
+        ));
+        drop(depth_pass(
+            &mut encoder,
+            target.delta_depth.as_ref().unwrap(),
+            wgpu::LoadOp::Clear(depth),
+        ));
         queue.submit([encoder.finish()]);
     }
 
@@ -458,7 +624,7 @@ impl SceneRenderer {
         let initialize = first && policy == ClearPolicy::PerFrame;
         if compatible && old.unwrap().texture.height() >= height {
             if initialize {
-                clear_depth(encoder, &old.unwrap().attach);
+                clear_image(encoder, old.unwrap());
             }
             return;
         }
@@ -468,9 +634,9 @@ impl SceneRenderer {
         let resources = self.profiling.span("resources");
         let new = DepthImage::new(device, layout, height);
         self.profiling
-            .texture("depth", u64::from(layout.width) * u64::from(height) * 4, 0);
+            .texture("depth", u64::from(layout.width) * u64::from(height) * 9, 0);
         drop(resources);
-        clear_depth(encoder, &new.attach);
+        clear_image(encoder, &new);
         if compatible && !initialize {
             let old = &self.depthbuffers[&id];
             self.profiling.count(
@@ -478,6 +644,12 @@ impl SceneRenderer {
                 u64::from(old.texture.width()) * u64::from(old.texture.height()) * 4,
             );
             self.depth_pipeline.copy(device, encoder, old, &new);
+            self.depth_pipeline.sync_delta_depth(
+                device,
+                encoder,
+                &new,
+                (0, 0, old.texture.width(), old.texture.height()),
+            );
         }
         self.depthbuffers.insert(id, new);
     }
@@ -503,7 +675,7 @@ fn pack_depth(depth: f32) -> u16 {
         .unwrap();
     let base = 0x40000 - (0x40000 >> exponent);
     let mantissa = (z - base) >> (6 - exponent.min(6));
-    // Exact slope dz is not retained by Depth32Float; guest write-back uses dz = 0.
+    // Guest write-back does not serialize the presentation dz plane; it uses dz = 0.
     ((exponent << 13) | (mantissa << 2)) as u16
 }
 
@@ -546,3 +718,241 @@ mod writeback_tests {
 }
 
 pub(crate) mod copies;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod delta_tests {
+    use super::*;
+
+    fn read(device: &wgpu::Device, queue: &wgpu::Queue, image: &DepthImage) -> Vec<u8> {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                r#"
+@group(0) @binding(0) var codes: texture_2d<u32>;
+@group(0) @binding(1) var depth: texture_depth_2d;
+@group(0) @binding(2) var companion: texture_depth_2d;
+@vertex fn vs(@builtin(vertex_index) i:u32) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(f32((i<<1u)&2u)*2.0-1.0, 1.0-f32(i&2u)*2.0, 0.0,1.0);
+}
+@fragment fn fs(@builtin(position) p:vec4<f32>) -> @location(0) vec4<f32> {
+    let c=vec2<i32>(p.xy);
+    return vec4<f32>(f32(textureLoad(codes,c,0).r)/255.0, 0.0,
+        select(0.0,1.0,textureLoad(depth,c,0)==textureLoad(companion,c,0)),1.0);
+}
+"#
+                .into(),
+            ),
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &[Some(wgpu::TextureFormat::Rgba8Unorm.into())],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&image.delta_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&image.attach),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(
+                        image.delta_depth.as_ref().unwrap(),
+                    ),
+                },
+            ],
+        });
+        crate::tests::common::pixels_from_render(
+            device,
+            queue,
+            image.texture.width(),
+            image.texture.height(),
+            wgpu::TextureFormat::Rgba8Unorm,
+            |view| {
+                let mut encoder = device.create_command_encoder(&Default::default());
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.draw(0..3, 0..1);
+                drop(pass);
+                queue.submit([encoder.finish()]);
+            },
+        )
+    }
+
+    #[test]
+    fn authored_fill_growth_snapshot_clear_and_visible_only_import() {
+        let (device, queue, _) = super::super::headless_device();
+        let mut renderer =
+            SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 2, false);
+        let layout = ImageLayout {
+            width: 64,
+            fmt: 0,
+            siz: 2,
+        };
+        let id = TargetId::Guest(0x10000);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer.ensure_depth(
+            &device,
+            &mut encoder,
+            ImageRequest {
+                id,
+                layout,
+                height: 2,
+                pc: 0,
+            },
+            ClearPolicy::Persist,
+        );
+        renderer.depth_pipeline.fill(
+            &device,
+            &mut encoder,
+            &renderer.depthbuffers[&id],
+            0x60016002,
+            (0, 0, 64, 2),
+            &renderer.profiling,
+        );
+        renderer.ensure_depth(
+            &device,
+            &mut encoder,
+            ImageRequest {
+                id,
+                layout,
+                height: 4,
+                pc: 0,
+            },
+            ClearPolicy::Persist,
+        );
+        let image = &renderer.depthbuffers[&id];
+        let snapshot = DepthImage::new(&device, layout, 4);
+        renderer
+            .depth_pipeline
+            .copy(&device, &mut encoder, image, &snapshot);
+        renderer
+            .depth_pipeline
+            .sync_delta_depth(&device, &mut encoder, &snapshot, (0, 0, 64, 4));
+        queue.submit([encoder.finish()]);
+        for image in [image, &snapshot] {
+            let pixels = read(&device, &queue, image);
+            for y in 0..4 {
+                for x in 0usize..64 {
+                    let code = if y >= 2 {
+                        0
+                    } else if x.is_multiple_of(2) {
+                        7
+                    } else {
+                        8
+                    };
+                    assert_eq!(&pixels[(y * 64 + x) * 4..][..4], &[code, 0, 255, 255]);
+                }
+            }
+        }
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer.depth_pipeline.fill(
+            &device,
+            &mut encoder,
+            &snapshot,
+            0xffffffff,
+            (0, 0, 64, 4),
+            &renderer.profiling,
+        );
+        queue.submit([encoder.finish()]);
+        assert!(read(&device, &queue, &snapshot)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [15, 0, 255, 255]));
+        let source = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Uint,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            source.as_image_copy(),
+            bytemuck::cast_slice(&[0x6001u32; 256]),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(256),
+                rows_per_image: None,
+            },
+            source.size(),
+        );
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer.depth_pipeline.import(
+            &device,
+            &mut encoder,
+            &source.create_view(&Default::default()),
+            &snapshot,
+            &[(4, 1, 8)],
+        );
+        queue.submit([encoder.finish()]);
+        let pixels = read(&device, &queue, &snapshot);
+        assert_eq!(&pixels[(64 + 4) * 4..][..4], &[4, 0, 255, 255]);
+        assert_eq!(&pixels[(64 + 3) * 4..][..4], &[15, 0, 255, 255]);
+        let readonly = DepthImage::snapshot(&device, layout, 4);
+        assert!(readonly.delta_depth.is_none());
+        let mut encoder = device.create_command_encoder(&Default::default());
+        clear_image(&mut encoder, &snapshot);
+        queue.submit([encoder.finish()]);
+        assert!(read(&device, &queue, &snapshot)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [0, 0, 255, 255]));
+        #[cfg(feature = "capture")]
+        {
+            renderer.prime_legacy_attachments(&device, &queue, wgpu::Color::BLACK, 0.0);
+            let legacy = &renderer.depthbuffers[&TargetId::Legacy];
+            assert!(read(&device, &queue, legacy)
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [0, 0, 255, 255]));
+        }
+    }
+}

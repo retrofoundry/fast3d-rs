@@ -6,6 +6,7 @@ mod texrect_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tmem_sampling_tests;
 
+mod decal;
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;
 mod replacement_resources;
@@ -203,10 +204,11 @@ pub struct CombinerUniform {
     pub coverage_slot: u32, // draw slot + 1, written to the guest write-back coverage target
     pub fill_word: u32,     // FillRect's raw fill-color register
     pub fill_siz: u32,      // FillRect color-image siz + 1; 0 for other draws
-    /// Primitive depth select and Z; `[3]` selects blend-color-only output.
+    /// Primitive depth source, Z and raw dz; `[3]` selects blend-color-only output.
     pub primitive_depth: [u32; 4],
+    pub native_scale: [f32; 4],
 }
-const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 208);
+const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 224);
 
 impl CombinerUniform {
     fn alpha_flags(rm: &crate::hle::RenderMode) -> u32 {
@@ -311,6 +313,7 @@ impl CombinerUniform {
                 0,
                 u32::from(rm.blend_class == crate::hle::BlendClass::BlendColor),
             ],
+            native_scale: [1.0; 4],
         }
     }
 
@@ -401,6 +404,7 @@ impl CombinerUniform {
             fill_word: color_raw,
             fill_siz: u32::from(siz) + 1,
             primitive_depth: [0; 4],
+            native_scale: [1.0; 4],
         }
     }
 
@@ -440,6 +444,7 @@ impl CombinerUniform {
             fill_word: 0,
             fill_siz: 0,
             primitive_depth: [0; 4],
+            native_scale: [1.0; 4],
         }
     }
 }
@@ -450,7 +455,7 @@ mod tests {
 
     #[test]
     fn tile_sampling_uniform_and_shaders_fit_webgpu() {
-        assert_eq!(std::mem::size_of::<CombinerUniform>(), 208);
+        assert_eq!(std::mem::size_of::<CombinerUniform>(), 224);
         assert_eq!(std::mem::size_of::<TileSamplingArray>(), 960);
         let limits = wgpu::Limits::default();
         assert!(
@@ -1022,16 +1027,28 @@ impl TexturedPipeline {
         // the decal pipeline layout; the decal pass binds the prior depth pass's output here.
         let group2_depth_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("textured-group2-depth-bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1925,6 +1942,7 @@ pub struct SceneRenderer {
     pub(crate) coherence: Option<framebuffers::coherence::Coherence>,
     coverage: Option<framebuffers::coherence::Coverage>,
     depth_pipeline: DepthPipeline,
+    delta_pipeline: framebuffers::coherence::Coverage,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     pub(crate) dropped_runs: u32,
     #[cfg(feature = "capture")]
@@ -2148,6 +2166,7 @@ impl SceneRenderer {
             coherence: None,
             coverage: None,
             depth_pipeline: DepthPipeline::new(device),
+            delta_pipeline: framebuffers::coherence::Coverage::delta(device),
             diagnostics: Vec::new(),
             dropped_runs: 0,
             #[cfg(feature = "capture")]
@@ -2210,7 +2229,7 @@ impl SceneRenderer {
         slot: u32,
         rect_idx: u32,
         any_depth: bool,
-        coverage_pipeline: Option<&wgpu::RenderPipeline>,
+        pipeline_override: Option<&wgpu::RenderPipeline>,
     ) {
         let opt_fb_bg: Option<wgpu::BindGroup> = if let inputs::DrawInputs::Rectangle {
             fb_source: Some(descriptor),
@@ -2296,7 +2315,7 @@ impl SceneRenderer {
                 mode.fallback_class,
             )
         };
-        pass.set_pipeline(coverage_pipeline.unwrap_or(&pipeline[0]));
+        pass.set_pipeline(pipeline_override.unwrap_or(&pipeline[0]));
         if let Some(rv) = rect_vbuf {
             pass.set_vertex_buffer(0, rv.slice(..));
         }

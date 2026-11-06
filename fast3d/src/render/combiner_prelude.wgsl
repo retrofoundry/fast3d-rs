@@ -15,6 +15,7 @@ struct VsOut {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) uv:    vec2<f32>,
+    @location(2) @interpolate(linear) unclamped_z: f32,
 };
 
 struct DepthOutput {
@@ -36,6 +37,7 @@ override depth_clip_control: bool = false;
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
     out.clip_position = in.position;
+    out.unclamped_z = in.position.z / in.position.w;
     if !depth_clip_control && combiner.inv_tex_size.w != 0.0 && in.position.w > 0.0 {
         // Without depth-clip control, vertex clamping approximates depth across crossing triangles.
         // Vertices behind the eye keep their depth so near clipping still removes them.
@@ -83,6 +85,7 @@ struct Combiner {
     fill_word:       u32,       // FillRect's raw fill-color register
     fill_siz:        u32,       // FillRect color-image siz + 1; 0 for other draws
     primitive_depth: vec4<u32>,
+    native_scale: vec4<f32>,
 };
 
 @group(0) @binding(0) var tex0:  texture_2d<f32>;
@@ -817,4 +820,51 @@ fn blend_framebuffer(rgb: vec3<f32>, combiner_alpha: f32, shade_alpha: f32) -> F
     }
     let denom = max(a + b, 1.0 / 255.0);
     return FramebufferBlend(blend_color(p, rgb), vec2<f32>(a, b) / denom);
+}
+
+fn triangle_delta(slopes: vec2<f32>) -> u32 {
+    let high = vec2<u32>(vec2<i32>(floor(slopes))) & vec2<u32>(0xffffu);
+    let magnitude = select(high, (~high) & vec2<u32>(0x7fffu), (high & vec2<u32>(0x8000u)) != vec2<u32>(0u));
+    let sum = magnitude.x + magnitude.y;
+    if sum >= 16384u { return 32768u; }
+    if sum == 0u { return 1u; }
+    if sum == 1u { return 3u; }
+    return 1u << (32u - countLeadingZeros(sum));
+}
+
+fn incoming_delta(in: VsOut) -> u32 {
+    let slopes = vec2<f32>(dpdx(in.unclamped_z), dpdy(in.unclamped_z)) * combiner.native_scale.xy * 32768.0;
+    if combiner.primitive_depth.x != 0u { return combiner.primitive_depth.z; }
+    return triangle_delta(slopes);
+}
+
+fn delta_code(delta: u32) -> u32 {
+    return select(0u, 8u, (delta & 0xff00u) != 0u) |
+           select(0u, 4u, (delta & 0xf0f0u) != 0u) |
+           select(0u, 2u, (delta & 0xccccu) != 0u) |
+           select(0u, 1u, (delta & 0xaaaau) != 0u);
+}
+
+@group(2) @binding(0) var decal_depth: texture_depth_2d;
+@group(2) @binding(1) var decal_delta: texture_2d<u32>;
+
+fn decal_test(in: VsOut) {
+    let incoming = incoming_delta(in);
+    let coord = vec2<i32>(in.clip_position.xy);
+    let stored = textureLoad(decal_depth, coord, 0) * 262144.0;
+    if stored >= 262143.0 { discard; }
+    var z_precision = 3u;
+    if stored < 131072.0 { z_precision = 0u; }
+    else if stored < 196608.0 { z_precision = 1u; }
+    else if stored < 229376.0 { z_precision = 2u; }
+    var memory = 1u << textureLoad(decal_delta, coord, 0).r;
+    var coplanar = false;
+    if z_precision < 3u {
+        if memory == 32768u { coplanar = true; memory = 65535u; }
+        else { memory = max(2u * memory, 16u >> z_precision); }
+    }
+    let combined = incoming | memory;
+    let window = f32(8u << (31u - countLeadingZeros(combined)));
+    let z = fragment_depth(in.clip_position.z) * 262144.0;
+    if !coplanar && abs(z - stored) > window { discard; }
 }

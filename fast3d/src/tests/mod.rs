@@ -21,6 +21,8 @@ mod coverage_fixtures;
 #[path = "../../tests/common/coverage_semantics.rs"]
 mod coverage_semantics;
 mod culling;
+#[cfg(not(target_arch = "wasm32"))]
+mod decal_depth;
 mod decode;
 mod depth_persistence;
 mod dl_plumbing;

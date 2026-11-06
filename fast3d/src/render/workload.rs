@@ -878,6 +878,17 @@ impl SceneRenderer {
                 continue;
             }
             let upload = self.upload_draws(device, target);
+            let delta_pipelines: Vec<_> = target
+                .operations
+                .iter()
+                .map(|op| {
+                    op.writes_depth().then(|| {
+                        self.delta_pipeline
+                            .pipeline(device, &self.textured_fb, &op.draw, true)
+                            .clone()
+                    })
+                })
+                .collect();
             let material_bgs: Vec<_> = self
                 .material_bindings
                 .iter()
@@ -887,12 +898,111 @@ impl SceneRenderer {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("workload-depth"),
                     layout: self.textured_fb.depth_bind_group_layout(),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&depth.attach),
-                    }],
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&depth.attach),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&depth.delta_view),
+                        },
+                    ],
                 })
             });
+            let replay_depth = |renderer: &Self,
+                                encoder: &mut wgpu::CommandEncoder,
+                                range: std::ops::Range<usize>,
+                                source_valid: &[bool],
+                                depth_bg: Option<&wgpu::BindGroup>| {
+                if !range.clone().any(|slot| {
+                    let op = &target.operations[slot];
+                    source_valid[slot]
+                        && op.writes_depth()
+                        && op.scissor.2 != 0
+                        && op.scissor.3 != 0
+                }) {
+                    return;
+                }
+                renderer.profiling.count("depth_delta.passes", 1);
+                let depth = depth.unwrap();
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("depth-delta"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &depth.delta_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth.delta_depth.as_ref().unwrap(),
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_viewport(0.0, 0.0, w as f32, h as f32, 0.0, 1.0);
+                if let Some(index) = &buffers.indices {
+                    pass.set_index_buffer(index.slice(..), wgpu::IndexFormat::Uint32);
+                }
+                if let Some(bg) = depth_bg {
+                    pass.set_bind_group(2, bg, &[]);
+                }
+                for (slot, operation) in target
+                    .operations
+                    .iter()
+                    .enumerate()
+                    .take(range.end)
+                    .skip(range.start)
+                {
+                    let (x, y, width, height) = operation.scissor;
+                    if !source_valid[slot] || !operation.writes_depth() || width == 0 || height == 0
+                    {
+                        continue;
+                    }
+                    let pipeline = delta_pipelines[slot].as_ref().unwrap();
+                    pass.set_scissor_rect(x, y, width, height);
+                    match &operation.draw {
+                        DrawInputs::Tris {
+                            material_index,
+                            index_start,
+                            index_count,
+                            ..
+                        } => {
+                            pass.set_pipeline(pipeline);
+                            if let Some(vertices) = buffers.vertices.get(&target.logical_extent) {
+                                pass.set_vertex_buffer(0, vertices.slice(..));
+                            }
+                            pass.set_bind_group(0, material_bgs[*material_index as usize], &[]);
+                            pass.set_bind_group(1, &upload.uniforms, &[(slot * 256) as u32]);
+                            pass.draw_indexed(*index_start..*index_start + *index_count, 0, 0..1);
+                        }
+                        DrawInputs::Rectangle { .. } => renderer.draw_rect_op(
+                            &mut pass,
+                            device,
+                            &operation.draw,
+                            &material_bgs,
+                            upload.rectangles.as_ref(),
+                            Some(&upload.uniforms),
+                            slot as u32,
+                            target.rect_indices[slot],
+                            any_depth,
+                            Some(pipeline),
+                        ),
+                        _ => unreachable!(),
+                    }
+                }
+            };
+            let mut delta_start = 0;
+            let mut delta_snapshot_bg = None;
             let mut start = 0;
             #[cfg(not(target_arch = "wasm32"))]
             let mut ownership_start = 0;
@@ -901,7 +1011,7 @@ impl SceneRenderer {
             while start < target.operations.len() {
                 if let DrawInputs::FramebufferCopy(copy) = &target.operations[start].draw {
                     #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(coherence) = &mut self.coherence {
+                    if self.coherence.is_some() {
                         use super::framebuffers::coherence::Writer;
                         let color = match target.id {
                             TargetId::Guest(address) => Some(Writer {
@@ -953,23 +1063,38 @@ impl SceneRenderer {
                             _ => None,
                         });
                         if color.is_some_and(touches) || depth_writer.is_some_and(touches) {
-                            coherence.snapshot(
-                                device,
-                                &mut encoder,
-                                coverage_texture.as_ref().unwrap(),
-                                color.map(|writer| (writer, &self.framebuffers[&target.id].color)),
-                                depth_writer.map(|writer| {
-                                    (writer, &self.depthbuffers[&depth_id.unwrap()].texture)
-                                }),
-                                target.coverage_draws(
+                            if depth_writer.is_some() {
+                                replay_depth(
+                                    self,
+                                    &mut encoder,
+                                    delta_start..start,
                                     &source_valid,
-                                    start,
-                                    inputs.rsp.as_ref().map_or(&[], |rsp| rsp.indices),
-                                ),
-                                buffers.vertices.get(&target.logical_extent),
-                                target.output_extent.1,
-                                ownership_start,
-                            );
+                                    delta_snapshot_bg.as_ref(),
+                                );
+                                delta_start = start;
+                                delta_snapshot_bg = None;
+                            }
+                            if let Some(coherence) = &mut self.coherence {
+                                coherence.snapshot(
+                                    device,
+                                    &mut encoder,
+                                    coverage_texture.as_ref().unwrap(),
+                                    color.map(|writer| {
+                                        (writer, &self.framebuffers[&target.id].color)
+                                    }),
+                                    depth_writer.map(|writer| {
+                                        (writer, &self.depthbuffers[&depth_id.unwrap()].texture)
+                                    }),
+                                    target.coverage_draws(
+                                        &source_valid,
+                                        start,
+                                        inputs.rsp.as_ref().map_or(&[], |rsp| rsp.indices),
+                                    ),
+                                    buffers.vertices.get(&target.logical_extent),
+                                    target.output_extent.1,
+                                    ownership_start,
+                                );
+                            }
                             ownership_start = start + 1;
                         }
                         let writer = Writer {
@@ -977,10 +1102,14 @@ impl SceneRenderer {
                             layout: copy.source.layout,
                             depth: false,
                         };
-                        if coherence.pending_overlaps(writer, copy.source.height) {
+                        if self.coherence.as_ref().is_some_and(|coherence| {
+                            coherence.pending_overlaps(writer, copy.source.height)
+                        }) {
                             queue.submit([encoder.finish()]);
                             self.profiling.count("submissions", 1);
-                            coherence.resolve(device);
+                            if let Some(coherence) = &mut self.coherence {
+                                coherence.resolve(device);
+                            }
                             encoder =
                                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                                     label: Some("framebuffer-load"),
@@ -1035,9 +1164,20 @@ impl SceneRenderer {
                 let writes_depth = target.operations[start..end]
                     .iter()
                     .any(OperationInputs::writes_depth);
+                if read_depth {
+                    replay_depth(
+                        self,
+                        &mut encoder,
+                        delta_start..start,
+                        &source_valid,
+                        delta_snapshot_bg.as_ref(),
+                    );
+                    delta_start = start;
+                    delta_snapshot_bg = None;
+                }
                 let decal_snapshot = (read_depth && writes_depth).then(|| {
                     let snapshot =
-                        super::framebuffers::DepthImage::new(device, depth_layout, height);
+                        super::framebuffers::DepthImage::snapshot(device, depth_layout, height);
                     self.depth_pipeline
                         .copy(device, &mut encoder, depth.unwrap(), &snapshot);
                     snapshot
@@ -1046,10 +1186,16 @@ impl SceneRenderer {
                     device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("decal-depth-snapshot"),
                         layout: self.textured_fb.depth_bind_group_layout(),
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&snapshot.attach),
-                        }],
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&snapshot.attach),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&snapshot.delta_view),
+                            },
+                        ],
                     })
                 });
                 let depth_bg = snapshot_bg.as_ref().or(depth_bg.as_ref());
@@ -1237,8 +1383,19 @@ impl SceneRenderer {
                         }
                     }
                 }
+                drop(pass);
+                if snapshot_bg.is_some() {
+                    delta_snapshot_bg = snapshot_bg;
+                }
                 start = end;
             }
+            replay_depth(
+                self,
+                &mut encoder,
+                delta_start..target.operations.len(),
+                &source_valid,
+                delta_snapshot_bg.as_ref(),
+            );
             if let TargetId::Guest(address) = target.id {
                 if target.operations.iter().any(|op| {
                     !matches!(

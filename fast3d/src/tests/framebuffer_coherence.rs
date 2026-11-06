@@ -2577,7 +2577,10 @@ mod gpu {
                                 dl.extend([
                                     combine(3, 3),
                                     gdp_set_prim_color(0, 0, 0xff0000ff),
-                                    gdp_set_prim_depth(z | high, 0xabcd),
+                                    gdp_set_prim_depth(
+                                        z | high,
+                                        if decal && !passes { 1 } else { 0xabcd },
+                                    ),
                                 ]);
                                 match kind {
                                     0 | 4 => dl.extend([
