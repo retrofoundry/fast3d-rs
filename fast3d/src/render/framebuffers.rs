@@ -41,12 +41,12 @@ pub(crate) struct DepthImage {
 }
 
 impl DepthImage {
-    pub(super) fn new(device: &wgpu::Device, layout: ImageLayout, height: u32) -> Self {
+    pub(super) fn new(device: &wgpu::Device, layout: ImageLayout, allocation: (u32, u32)) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth-store"),
             size: wgpu::Extent3d {
-                width: layout.width,
-                height,
+                width: allocation.0,
+                height: allocation.1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -320,7 +320,7 @@ impl SceneRenderer {
                 height: self.fb_h,
                 pc: 0,
             },
-            self.fb_h,
+            (self.fb_w, self.fb_h),
             ClearPolicy::Persist,
         );
         self.ensure_depth(
@@ -332,6 +332,7 @@ impl SceneRenderer {
                 height: self.fb_h,
                 pc: 0,
             },
+            (self.fb_w, self.fb_h),
             ClearPolicy::Persist,
         );
         super::workload::clear_color(
@@ -364,7 +365,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         request: ImageRequest,
-        attachment_height: u32,
+        allocation: (u32, u32),
         policy: ClearPolicy,
     ) {
         let ImageRequest {
@@ -384,7 +385,7 @@ impl SceneRenderer {
         } else {
             height
         };
-        if compatible && old.unwrap().color.height() >= attachment_height {
+        if compatible && old.unwrap().color.height() >= allocation.1 {
             let old = self.framebuffers.get_mut(&id).unwrap();
             if old.height != height {
                 old.height = height;
@@ -420,7 +421,7 @@ impl SceneRenderer {
             }
             self.reinterpretation(id, false, pc);
         }
-        let new = self.make_fb(device, layout, attachment_height, height);
+        let new = self.make_fb(device, layout, allocation, height);
         super::workload::clear_color(encoder, &new.attach, wgpu::LoadOp::Clear(CLEAR_COLOR));
         if compatible && !initialize {
             let old = &self.framebuffers[&id];
@@ -442,6 +443,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         request: ImageRequest,
+        allocation: (u32, u32),
         policy: ClearPolicy,
     ) {
         let ImageRequest {
@@ -453,10 +455,12 @@ impl SceneRenderer {
         let first = self.depth_first_touch.insert(id);
         let old = self.depthbuffers.get(&id);
         let compatible = old.is_some_and(|old| {
-            old.layout == layout && (id != TargetId::Legacy || old.texture.height() == height)
+            old.layout == layout
+                && (id != TargetId::Legacy
+                    || old.texture.height() / (old.texture.width() / layout.width) == height)
         });
         let initialize = first && policy == ClearPolicy::PerFrame;
-        if compatible && old.unwrap().texture.height() >= height {
+        if compatible && old.unwrap().texture.height() >= allocation.1 {
             if initialize {
                 clear_depth(encoder, &old.unwrap().attach);
             }
@@ -466,9 +470,12 @@ impl SceneRenderer {
             self.reinterpretation(id, true, pc);
         }
         let resources = self.profiling.span("resources");
-        let new = DepthImage::new(device, layout, height);
-        self.profiling
-            .texture("depth", u64::from(layout.width) * u64::from(height) * 4, 0);
+        let new = DepthImage::new(device, layout, allocation);
+        self.profiling.texture(
+            "depth",
+            u64::from(allocation.0) * u64::from(allocation.1) * 4,
+            0,
+        );
         drop(resources);
         clear_depth(encoder, &new.attach);
         if compatible && !initialize {

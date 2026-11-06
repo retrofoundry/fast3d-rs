@@ -1048,8 +1048,13 @@ mod tests {
             color_image: Default::default(),
             depth_image: None,
             pc: 0,
-            logical_extent: (1, 1),
-            output_extent: (1, 1),
+            extents: crate::render::extents::TargetExtents::new(
+                crate::render::workload::TargetId::Guest(0x100),
+                (1, 1),
+                (1, 1),
+                1,
+            )
+            .unwrap(),
             any_depth: false,
             depth_clear: false,
             operations: vec![
@@ -1074,6 +1079,7 @@ mod tests {
                     draw: DrawInputs::Rejected,
                 },
             ],
+            logical_scissors: vec![],
             uniforms: Vec::new(),
             rectangles: Vec::new().into(),
             rect_indices: Vec::new(),
