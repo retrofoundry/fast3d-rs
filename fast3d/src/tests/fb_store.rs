@@ -12,13 +12,25 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 #[test]
 fn scanout_reuses_ntsc_extent_across_frames() {
     let (device, queue, dual) = headless_device();
-    let mut renderer = SceneRenderer::new(&device, FORMAT, 64, 240, dual);
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 193, 132, dual);
     let address = 0x10_0000_u64;
     let green =
         common::dl_2d_fill_rect_with_scissor_height(address, 0x07c1_07c1, 0, 0, 64, 240, 240);
     let bottom =
         common::dl_2d_fill_rect_with_scissor_height(address, 0xf801_f801, 0, 237, 64, 240, 240);
     renderer.render_into_store(&device, &queue, &green, ClearPolicy::Persist);
+    let (id, layout, native_height) = renderer.scanout_images().next().unwrap();
+    assert_eq!(id, TargetId::Guest(address));
+    assert_eq!((layout.width, native_height), (64, 240));
+    assert_eq!(
+        renderer
+            .target_descriptors
+            .get(address, false)
+            .unwrap()
+            .range()
+            .unwrap(),
+        address..address + 64 * 240 * 2
+    );
     let height = crate::ViRegisters {
         v_start: 0x0025_01ff,
         y_scale: 1024,
@@ -62,7 +74,7 @@ fn scanout_reuses_ntsc_extent_across_frames() {
 #[test]
 fn scanout_rows_leave_retained_pixels_available() {
     let (device, queue, dual) = headless_device();
-    let mut renderer = SceneRenderer::new(&device, FORMAT, 64, 64, dual);
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 193, 132, dual);
     let address = 0x10_0000_u64;
     renderer.render_into_store(
         &device,
@@ -92,6 +104,13 @@ fn scanout_rows_leave_retained_pixels_available() {
         profiling.drain();
         renderer.begin_frame();
         renderer.render_into_store(&device, &queue, &shorter, ClearPolicy::Persist);
+        let (_, layout, retained_height) = renderer.scanout_images().next().unwrap();
+        assert_eq!((layout.width, retained_height), (64, 64));
+        let descriptor = renderer.target_descriptors.get(address, false).unwrap();
+        assert_eq!(descriptor.range().unwrap(), address..address + 64 * 64 * 2);
+        let counters = profiling.snapshot().counters;
+        assert_eq!(counters.get("target.64x32.output64x32"), Some(&1));
+        assert_eq!(counters.get("texture.framebuffer.creations"), None);
         let output_height = height.unwrap_or(64);
         let pixels =
             common::pixels_from_render(&device, &queue, 64, output_height, FORMAT, |view| {

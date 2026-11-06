@@ -164,12 +164,16 @@ impl DecodePipeline {
         request: &EncodedTextureRequest,
         profiling: &Recorder,
         staging: Option<DecodeStaging>,
-        framebuffer: Option<(Vec<u8>, bool)>,
+        framebuffer: Option<(Vec<u8>, bool, u32, u32)>,
     ) -> DecodeJob {
         let EncodedInput::Tmem(bank) = request.input();
         let mut input = Cow::Borrowed(&bank[..]);
         let mut params = DecodeParams::new(request);
-        if let Some((bytes, materialize)) = framebuffer {
+        if let Some((bytes, materialize, scale, metadata)) = framebuffer {
+            params.words[3][0] = metadata;
+            params.words[3][3] = scale;
+            params.words[0][0] *= scale;
+            params.words[0][1] *= scale;
             input = Cow::Owned(bytes);
             params.words[3][1] = 1024;
             params.words[3][2] = u32::from(materialize);
@@ -207,7 +211,7 @@ impl DecodePipeline {
         profiling.count("tmem.decode_uniform_upload_calls", 1);
         profiling.count("tmem.decode_input_upload_bytes", input.len() as u64);
         profiling.count("tmem.decode_uniform_upload_bytes", PARAM_BYTES);
-        let extent = request.recipe().allocation_extent();
+        let extent = [params.words[0][0], params.words[0][1]];
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("texture-decode-output"),
             size: wgpu::Extent3d {

@@ -99,6 +99,31 @@ pub struct FramebufferTexture {
 }
 
 impl FramebufferTexture {
+    pub(crate) fn image_route(&self) -> bool {
+        let recipe = self.encoded.recipe();
+        if self.materialize
+            || recipe.representation as u32 != 0
+            || !matches!((recipe.fmt, recipe.siz, recipe.tlut), (0 | 3, 2, 0 | 1))
+        {
+            return false;
+        }
+        (0..recipe.output[1]).all(|y| {
+            (0..recipe.output[0]).all(|x| {
+                let relative = (y & 255) * u32::from(recipe.line) * 8 + x * 2;
+                let address = |byte| {
+                    ((u32::from(recipe.base) * 8 + ((relative + byte) ^ ((y & 1) * 4))) & 4095)
+                        as usize
+                };
+                let hi = self.tags.bytes[address(0)];
+                let lo = self.tags.bytes[address(1)];
+                hi.copy != 0
+                    && hi.copy == lo.copy
+                    && hi.pointer & 1 == 0
+                    && lo.pointer == hi.pointer + 1
+            })
+        })
+    }
+
     pub(crate) fn new(encoded: super::texture_request::EncodedTextureRequest, tags: Tags) -> Self {
         let recipe = encoded.recipe();
         let exact_format = matches!(

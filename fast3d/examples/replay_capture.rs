@@ -1,6 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use fast3d::capture::{Fixture, ReplayOutput, Sequence, SequenceOutput};
+    use fast3d::capture::{
+        Fixture, ReplayOptions, ReplayOutput, ReplaySource, Sequence, SequenceOutput,
+    };
     use fast3d::DepthResetPolicy;
     use std::fmt::Write;
     use std::io::BufWriter;
@@ -9,7 +11,7 @@ mod native {
     type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
     pub fn run() -> Result<()> {
-        let args: Vec<_> = std::env::args_os().skip(1).collect();
+        let mut args: Vec<_> = std::env::args_os().skip(1).collect();
         if args.first().is_some_and(|arg| arg == "--pack") {
             if args.len() < 5 {
                 return Err("usage: replay_capture --pack <sequence.f3dcap> <warmup-count> <serials-comma-separated> <frame.f3dcap>...".into());
@@ -30,8 +32,35 @@ mod native {
             std::fs::write(&args[1], sequence.to_bytes()?)?;
             return Ok(());
         }
+        let mut options = ReplayOptions::default();
+        let mut index = 0;
+        while index < args.len() {
+            if args[index] == "--scale" || args[index] == "--source" {
+                let flag = args.remove(index);
+                if index == args.len() {
+                    return Err("missing option value".into());
+                }
+                let value = args.remove(index);
+                let value = value.to_str().ok_or("invalid option value")?;
+                if flag == "--scale" {
+                    let scale = value.parse()?;
+                    if !(1..=4).contains(&scale) {
+                        return Err("--scale must be 1..=4".into());
+                    }
+                    options.resolution_multiplier = Some(scale);
+                } else {
+                    options.source = match value {
+                        "native" => ReplaySource::Native,
+                        "presentation" => ReplaySource::Presentation,
+                        _ => return Err("--source must be native or presentation".into()),
+                    };
+                }
+            } else {
+                index += 1;
+            }
+        }
         if !(2..=3).contains(&args.len()) {
-            return Err("usage: replay_capture <capture.f3dcap> <output-prefix> [persist|cimg|task|frame|all]".into());
+            return Err("usage: replay_capture <capture.f3dcap> <output-prefix> [persist|cimg|task|frame|all] [--scale 1|2|3|4] [--source native|presentation]".into());
         }
         let bytes = std::fs::read(&args[0])?;
         let prefix = PathBuf::from(&args[1]);
@@ -39,9 +68,9 @@ mod native {
             if args.len() != 2 {
                 return Err("depth controls require a reset-rooted sequence".into());
             }
-            let output = pollster::block_on(fixture.replay_headless())?;
+            let output = pollster::block_on(fixture.replay_headless_with_options(options))?;
             write_image(&prefix, &output)?;
-            std::fs::write(named(&prefix, ".log"), format!("adapter: {:?}\nframe: {:?}\nprovenance: {:?}\nsummaries: {:?}\ndiagnostics: {:?}\ncommands: {:#?}\n", output.adapter_info, fixture.frame, fixture.provenance, output.summaries, output.diagnostics, output.commands))?;
+            std::fs::write(named(&prefix, ".log"), format!("adapter: {:?}\nscale/source/extent: {}x {:?} {}x{}\nframe: {:?}\nprovenance: {:?}\nsummaries: {:?}\ndiagnostics: {:?}\ncommands: {:#?}\n", output.adapter_info, output.effective_resolution_multiplier, output.source, output.width, output.height, fixture.frame, fixture.provenance, output.summaries, output.diagnostics, output.commands))?;
             return Ok(());
         }
         let sequence = Sequence::from_bytes(&bytes)?;
@@ -84,8 +113,12 @@ mod native {
             if mode != "all" && mode != name {
                 continue;
             }
-            let mut output =
-                pollster::block_on(sequence.replay(device.clone(), queue.clone(), policy))?;
+            let mut output = pollster::block_on(sequence.replay_with_options(
+                device.clone(),
+                queue.clone(),
+                policy,
+                options,
+            ))?;
             output.adapter_info = Some(adapter_info.clone());
             write_sequence(&prefix, name, &sequence, &output)?;
             if let Some(baseline) = &baseline {
@@ -123,7 +156,14 @@ mod native {
             output.height,
             &output.rgba8,
         )?;
-        eprintln!("{}: {}x{}", prefix.display(), output.width, output.height);
+        eprintln!(
+            "{}: {}x{}, {}x {:?}",
+            prefix.display(),
+            output.width,
+            output.height,
+            output.effective_resolution_multiplier,
+            output.source
+        );
         Ok(())
     }
 
@@ -185,9 +225,13 @@ mod native {
             write_image(&image_prefix, &presentation.output)?;
             writeln!(
                 log,
-                "serial {} RGBA8 fnv1a64 {:016x}",
+                "serial {} RGBA8 fnv1a64 {:016x}, {}x {:?}, {}x{}",
                 presentation.serial,
-                hash(&presentation.output.rgba8)
+                hash(&presentation.output.rgba8),
+                presentation.output.effective_resolution_multiplier,
+                presentation.output.source,
+                presentation.output.width,
+                presentation.output.height
             )?;
         }
         std::fs::write(named(prefix, &format!("-{name}.log")), log)?;

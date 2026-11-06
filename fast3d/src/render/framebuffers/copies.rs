@@ -12,12 +12,51 @@ use crate::profiling::Recorder;
 
 #[derive(Default)]
 pub(crate) struct Copies {
-    snapshots: HashMap<usize, (Weak<FramebufferCopy>, wgpu::Buffer)>,
-    requests: HashMap<usize, wgpu::TextureView>,
+    snapshots: HashMap<usize, Snapshot>,
+    requests: HashMap<(usize, bool), (wgpu::TextureView, u32)>,
     pending: HashMap<usize, Vec<PendingDecode>>,
     order: HashMap<usize, usize>,
     pipeline: Option<DecodePipeline>,
     failed: HashMap<usize, crate::DiagKind>,
+}
+
+struct Snapshot {
+    owner: Weak<FramebufferCopy>,
+    native: wgpu::Buffer,
+    image: Option<SnapshotImage>,
+}
+
+struct SnapshotImage {
+    buffer: wgpu::Buffer,
+    source_scale: u32,
+    spans: Vec<ImageSpan>,
+}
+
+pub(crate) struct ImageSpan {
+    pub width: u32,
+    pub offset: u64,
+    pub stride: u32,
+}
+
+pub(crate) fn image_layout(copy: &FramebufferCopy, scale: u32) -> Option<(Vec<ImageSpan>, u64)> {
+    let mut size = 0u64;
+    let mut spans = Vec::new();
+    for span in &copy.spans {
+        let stride = span
+            .width
+            .checked_mul(scale)?
+            .checked_mul(4)?
+            .checked_add(255)?
+            / 256
+            * 256;
+        spans.push(ImageSpan {
+            width: span.width,
+            offset: size,
+            stride,
+        });
+        size = size.checked_add(u64::from(stride) * u64::from(scale))?;
+    }
+    Some((spans, size))
 }
 
 struct PendingDecode {
@@ -30,13 +69,23 @@ pub(crate) fn key(copy: &Arc<FramebufferCopy>) -> usize {
 }
 
 impl Copies {
+    pub(crate) fn source_scale(&self, copy: &Arc<FramebufferCopy>, current: u32) -> u32 {
+        self.snapshots.get(&key(copy)).map_or(current, |snapshot| {
+            snapshot
+                .image
+                .as_ref()
+                .map_or(1, |image| image.source_scale)
+        })
+    }
+
     pub fn begin(
         &mut self,
         device: &wgpu::Device,
         copies: impl Iterator<Item = Arc<FramebufferCopy>>,
+        scale: u32,
     ) {
         self.snapshots
-            .retain(|_, (copy, _)| copy.strong_count() != 0);
+            .retain(|_, snapshot| snapshot.owner.strong_count() != 0);
         self.failed
             .retain(|key, _| self.snapshots.contains_key(key));
         self.requests.clear();
@@ -52,7 +101,27 @@ impl Copies {
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
-            self.snapshots.insert(key, (Arc::downgrade(&copy), buffer));
+            let image = (scale > 1).then(|| {
+                let (spans, size) = image_layout(&copy, scale).unwrap();
+                SnapshotImage {
+                    buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("framebuffer-image-copy"),
+                        size,
+                        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                        mapped_at_creation: false,
+                    }),
+                    source_scale: scale,
+                    spans,
+                }
+            });
+            self.snapshots.insert(
+                key,
+                Snapshot {
+                    owner: Arc::downgrade(&copy),
+                    native: buffer,
+                    image,
+                },
+            );
         }
     }
 
@@ -62,14 +131,37 @@ impl Copies {
         queue: &wgpu::Queue,
         request: &Arc<FramebufferTexture>,
         profiling: &Recorder,
-    ) -> wgpu::TextureView {
-        let id = Arc::as_ptr(request) as usize;
+        presentation: bool,
+    ) -> (wgpu::TextureView, u32) {
+        let enhanced = presentation && request.image_route();
+        let id = (Arc::as_ptr(request) as usize, enhanced);
         if let Some(view) = self.requests.get(&id) {
             return view.clone();
         }
         let EncodedInput::Tmem(bank) = request.encoded.input();
         let mut bytes = bank.to_vec();
         bytes.resize(4096 + 4096 * 4, 0);
+        let scale = if enhanced {
+            request
+                .tags
+                .bytes
+                .iter()
+                .filter(|tag| tag.copy != 0)
+                .filter_map(|tag| {
+                    self.snapshots[&key(&request.tags.copies[usize::from(tag.copy) - 1])]
+                        .image
+                        .as_ref()
+                })
+                .map(|image| image.source_scale)
+                .max()
+                .unwrap_or(1)
+        } else {
+            1
+        };
+        let metadata = if scale > 1 { bytes.len() / 4 } else { 0 };
+        if scale > 1 {
+            bytes.resize(bytes.len() + 4096 * 8, 0);
+        }
         let mut offsets = HashMap::new();
         let mut sources = Vec::new();
         let mut after = 0;
@@ -79,14 +171,49 @@ impl Copies {
                 let key = key(copy);
                 after = after.max(self.order.get(&key).copied().unwrap_or(0));
                 let offset = bytes.len() as u64;
-                bytes.resize(bytes.len() + copy.size as usize, 0);
-                sources.push((self.snapshots[&key].1.clone(), offset));
+                let snapshot = &self.snapshots[&key];
+                let source = if scale > 1 {
+                    snapshot
+                        .image
+                        .as_ref()
+                        .map(|image| &image.buffer)
+                        .unwrap_or(&snapshot.native)
+                } else {
+                    &snapshot.native
+                };
+                bytes.resize(bytes.len() + source.size() as usize, 0);
+                sources.push((source.clone(), offset));
                 (offset / 4) as u32
             });
         }
         for (index, tag) in request.tags.bytes.iter().enumerate() {
             if tag.copy != 0 {
-                let pointer = offsets[&tag.copy] * 2 + tag.pointer + 1;
+                let copy = &request.tags.copies[usize::from(tag.copy) - 1];
+                let image = self.snapshots[&key(copy)]
+                    .image
+                    .as_ref()
+                    .filter(|_| scale > 1);
+                let pointer = if let Some(image) = image {
+                    let pixel = tag.pointer / 2;
+                    let span_index = copy
+                        .spans
+                        .iter()
+                        .position(|span| {
+                            (span.buffer_offset / 4..span.buffer_offset / 4 + span.width)
+                                .contains(&pixel)
+                        })
+                        .unwrap();
+                    let span = &image.spans[span_index];
+                    let x = pixel - copy.spans[span_index].buffer_offset / 4;
+                    let meta = (metadata + index * 2) * 4;
+                    bytes[meta..meta + 4].copy_from_slice(&(span.stride / 4).to_le_bytes());
+                    bytes[meta + 4..meta + 8].copy_from_slice(&image.source_scale.to_le_bytes());
+                    (offsets[&tag.copy] + (span.offset / 4) as u32 + x * image.source_scale) * 2
+                        + (tag.pointer & 1)
+                        + 1
+                } else {
+                    offsets[&tag.copy] * 2 + tag.pointer + 1
+                };
                 bytes[4096 + index * 4..4100 + index * 4].copy_from_slice(&pointer.to_le_bytes());
             }
         }
@@ -99,15 +226,15 @@ impl Copies {
             &request.encoded,
             profiling,
             None,
-            Some((bytes, request.materialize)),
+            Some((bytes, request.materialize, scale, metadata as u32)),
         );
         let view = job.view.clone();
         self.pending
             .entry(after)
             .or_default()
             .push(PendingDecode { job, sources });
-        self.requests.insert(id, view.clone());
-        view
+        self.requests.insert(id, (view.clone(), scale));
+        (view, scale)
     }
 
     pub(in crate::render) fn failure(
@@ -147,14 +274,16 @@ impl Copies {
         copy: &Arc<FramebufferCopy>,
         targets: &HashMap<super::super::workload::TargetId, super::Framebuffer>,
         versions: &HashMap<super::coherence::Writer, wgpu::Texture>,
+        presentation_versions: &HashMap<super::coherence::Writer, wgpu::Texture>,
         owners: Option<&super::coherence::Ownership>,
         profiling: &Recorder,
     ) {
         use super::super::workload::TargetId;
         use super::coherence::Writer;
         let key = key(copy);
-        let buffer = &self.snapshots[&key].1;
-        for span in &copy.spans {
+        let snapshot = &self.snapshots[&key];
+        let buffer = &snapshot.native;
+        for (span_index, span) in copy.spans.iter().enumerate() {
             let start = copy.source.address
                 + u64::from(span.origin[1] * copy.source.layout.width + span.origin[0]) * 2;
             let mut x = 0;
@@ -239,6 +368,43 @@ impl Copies {
                         depth_or_array_layers: 1,
                     },
                 );
+                if let Some(image) = &snapshot.image {
+                    let texture = targets
+                        .get(&TargetId::Guest(writer.address))
+                        .filter(|target| {
+                            target.layout == writer.layout && origin.y < target.color.height()
+                        })
+                        .and_then(|target| target.presentation.as_ref().map(|image| &image.texture))
+                        .or_else(|| presentation_versions.get(&writer))
+                        .unwrap();
+                    let q = image.source_scale;
+                    let image_span = &image.spans[span_index];
+                    encoder.copy_texture_to_buffer(
+                        wgpu::TexelCopyTextureInfo {
+                            texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: origin.x * q,
+                                y: origin.y * q,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyBufferInfo {
+                            buffer: &image.buffer,
+                            layout: wgpu::TexelCopyBufferLayout {
+                                offset: image_span.offset + u64::from(x * q * 4),
+                                bytes_per_row: Some(image_span.stride),
+                                rows_per_image: None,
+                            },
+                        },
+                        wgpu::Extent3d {
+                            width: width * q,
+                            height: q,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
                 profiling.count("framebuffer.copy_bytes", u64::from(width) * 4);
                 x += width;
             }

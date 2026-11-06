@@ -89,17 +89,30 @@ pub(super) struct TargetInputs {
     pub color_image: crate::scene::ColorImage,
     pub depth_image: Option<u64>,
     pub pc: u64,
-    pub logical_extent: (u32, u32),
-    pub output_extent: (u32, u32),
+    pub extents: super::extents::TargetExtents,
     pub any_depth: bool,
     pub depth_clear: bool,
     pub operations: Vec<OperationInputs>,
+    pub logical_scissors: Vec<crate::scene::Scissor>,
     pub uniforms: Vec<u8>,
     pub rectangles: BufferData<OutVertex>,
     pub rect_indices: Vec<u32>,
 }
 
 impl TargetInputs {
+    pub(super) fn presentation_scissor(&self, slot: usize) -> (u32, u32, u32, u32) {
+        let scissor = super::workload::output_scissor(
+            self.logical_scissors[slot],
+            self.extents.logical,
+            self.extents.presentation,
+        );
+        super::clamp_scissor(
+            &scissor,
+            self.extents.presentation.0,
+            self.extents.presentation.1,
+        )
+    }
+
     pub(super) fn coverage_draws(
         &self,
         source_valid: &[bool],
@@ -168,10 +181,10 @@ impl TargetInputs {
         let vertices = &self.rectangles[start..start + 6];
         let xs = vertices
             .iter()
-            .map(|v| (v.position[0] + 1.0) * 0.5 * self.output_extent.0 as f32);
+            .map(|v| (v.position[0] + 1.0) * 0.5 * self.extents.native.0 as f32);
         let ys = vertices
             .iter()
-            .map(|v| (1.0 - v.position[1]) * 0.5 * self.output_extent.1 as f32);
+            .map(|v| (1.0 - v.position[1]) * 0.5 * self.extents.native.1 as f32);
         let left = (xs.clone().fold(f32::INFINITY, f32::min).floor().max(0.0) as u32).max(x);
         let top = (ys.clone().fold(f32::INFINITY, f32::min).floor().max(0.0) as u32).max(y);
         let right = (xs.fold(0.0, f32::max).ceil() as u32).min(x + width);
@@ -191,19 +204,19 @@ impl TargetInputs {
         if !self.valid {
             return Ok(false);
         }
-        if self.id == TargetId::Legacy && self.output_extent != self.logical_extent {
+        if self.id == TargetId::Legacy && self.extents.native != self.extents.logical {
             if let Some(address) = self.depth_image {
                 return Err(crate::Diagnostic {
                     at: self.pc,
                     kind: crate::DiagKind::UnsupportedLegacyDepthExtent {
                         address,
-                        canvas: self.output_extent,
-                        depth: self.logical_extent,
+                        canvas: self.extents.native,
+                        depth: self.extents.logical,
                     },
                 });
             }
         }
-        let (width, height) = self.output_extent;
+        let (width, height) = self.extents.native;
         if let TargetId::Guest(address) = self.id {
             if !self.depth_clear {
                 let _ = descriptors.record(
@@ -301,7 +314,7 @@ impl<'a> RenderInputs<'a> {
     #[cfg(any(test, feature = "profiling"))]
     pub(crate) fn profile_targets(&self, recorder: &crate::profiling::Recorder) {
         for target in &self.targets {
-            recorder.target(target.logical_extent, target.output_extent);
+            recorder.target(target.extents.logical, target.extents.presentation);
         }
     }
 
@@ -387,10 +400,14 @@ impl<'a> RenderInputs<'a> {
                 .targets
                 .iter()
                 .map(|target| {
-                    let (w, h) = match target.id {
-                        TargetId::Legacy => legacy_extent,
-                        TargetId::Guest(_) => target.logical_extent,
-                    };
+                    let extents = super::extents::TargetExtents::new(
+                        target.id,
+                        target.logical_extent,
+                        legacy_extent,
+                        1,
+                    )
+                    .expect("nonzero target extents at scale 1");
+                    let (native_w, native_h) = extents.native;
                     let any_depth = target.uses_depth(scene);
                     let mut valid = true;
                     let pc = target.operations.first().and_then(|op| op.pc).unwrap_or(0);
@@ -398,11 +415,11 @@ impl<'a> RenderInputs<'a> {
                         if let Err(kind) = descriptors.record(
                             address,
                             super::framebuffers::ImageLayout {
-                                width: w,
+                                width: native_w,
                                 fmt: 0,
                                 siz: 2,
                             },
-                            h,
+                            native_h,
                             true,
                         ) {
                             diagnostics.push(crate::Diagnostic { at: pc, kind });
@@ -411,12 +428,13 @@ impl<'a> RenderInputs<'a> {
                     }
                     if let TargetId::Guest(address) = target.id {
                         let layout = super::framebuffers::ImageLayout {
-                            width: w,
+                            width: native_w,
                             fmt: target.color_image.fmt,
                             siz: target.color_image.siz,
                         };
                         if !target.depth_clear {
-                            if let Err(kind) = descriptors.record(address, layout, h, false) {
+                            if let Err(kind) = descriptors.record(address, layout, native_h, false)
+                            {
                                 diagnostics.push(crate::Diagnostic { at: pc, kind });
                                 valid = false;
                             }
@@ -429,11 +447,15 @@ impl<'a> RenderInputs<'a> {
                         color_image: target.color_image,
                         depth_image: target.depth_image,
                         pc: target.operations.first().and_then(|op| op.pc).unwrap_or(0),
-                        logical_extent: target.logical_extent,
-                        output_extent: (w, h),
+                        extents,
                         any_depth,
                         depth_clear: target.depth_clear,
                         operations: Vec::new(),
+                        logical_scissors: target
+                            .operations
+                            .iter()
+                            .map(|operation| operation.presentation_scissor)
+                            .collect(),
                         uniforms: vec![0; target.operations.len() * 256],
                         rectangles: Vec::new().into(),
                         rect_indices: Vec::new(),
@@ -527,13 +549,17 @@ impl<'a> RenderInputs<'a> {
                                         None => super::triangle_inv_tex_size(mat),
                                     };
                                     uniform.inv_tex_size[2] = 1.0;
+                                    let (ds, dt) = super::texrect_steps((*dsdx, *dtdy), *copy_mode);
+                                    uniform.raster[2] = u32::from(
+                                        ds.unsigned_abs() == 1024 && dt.unsigned_abs() == 1024,
+                                    );
                                     inputs.rectangles.extend_from_slice(&super::texrect_quad(
                                         rect,
                                         (*uls, *ult),
                                         (*dsdx, *dtdy),
                                         *flip,
                                         *copy_mode,
-                                        target.logical_extent,
+                                        extents.logical,
                                     ));
                                     (
                                         DrawInputs::Rectangle {
@@ -556,33 +582,34 @@ impl<'a> RenderInputs<'a> {
                                     rect, color_raw, ..
                                 } => {
                                     if target.depth_clear {
-                                        let scissor = crate::scene::Scissor {
-                                            ulx: operation.scissor.ulx.max(rect.ulx),
-                                            uly: operation.scissor.uly.max(rect.uly),
-                                            lrx: operation
-                                                .scissor
-                                                .lrx
-                                                .min(rect.lrx.saturating_add(1)),
-                                            lry: operation
-                                                .scissor
-                                                .lry
-                                                .min(rect.lry.saturating_add(1)),
-                                            mode: operation.scissor.mode,
+                                        let intersect = |scissor: crate::scene::Scissor| {
+                                            crate::scene::Scissor {
+                                                ulx: scissor.ulx.max(rect.ulx),
+                                                uly: scissor.uly.max(rect.uly),
+                                                lrx: scissor.lrx.min(rect.lrx.saturating_add(1)),
+                                                lry: scissor.lry.min(rect.lry.saturating_add(1)),
+                                                mode: scissor.mode,
+                                            }
                                         };
+                                        let scissor = intersect(operation.scissor);
+                                        inputs.logical_scissors[slot] =
+                                            intersect(operation.presentation_scissor);
                                         inputs.operations.push(OperationInputs {
                                             literal_fill: Some(*color_raw),
                                             coverage_mode: None,
                                             coverage_rect: None,
                                             pc: operation.pc.unwrap_or(0),
-                                            scissor: super::clamp_scissor(&scissor, w, h),
+                                            scissor: super::clamp_scissor(
+                                                &scissor, native_w, native_h,
+                                            ),
                                             draw: DrawInputs::DepthFill { word: *color_raw },
                                         });
                                         continue;
                                     }
                                     inputs.rectangles.extend_from_slice(&super::rect_quad(
                                         rect,
-                                        w,
-                                        h,
+                                        native_w,
+                                        native_h,
                                         [1.0; 4],
                                         [[0.0; 2]; 4],
                                     ));
@@ -647,16 +674,16 @@ impl<'a> RenderInputs<'a> {
                                 uniform.is_rect != 0,
                                 !matches!(operation.draw, SceneOp::Tris(_))
                             );
-                            debug_assert!(w > 0 && h > 0);
-                            uniform.frame = [frame[0], frame[1], w, h];
+                            debug_assert!(native_w > 0 && native_h > 0);
+                            uniform.frame = [frame[0], frame[1], native_w, native_h];
                             uniform.coverage_slot = slot as u32 + 1;
                             let bytes = bytemuck::bytes_of(&uniform);
                             inputs.uniforms[slot * 256..slot * 256 + bytes.len()]
                                 .copy_from_slice(bytes);
                             let scissor = super::workload::output_scissor(
                                 operation.scissor,
-                                target.logical_extent,
-                                (w, h),
+                                extents.logical,
+                                extents.native,
                             );
                             let (literal_fill, coverage_mode, coverage_rect) = match &operation.draw
                             {
@@ -713,7 +740,7 @@ impl<'a> RenderInputs<'a> {
                                 coverage_mode,
                                 coverage_rect,
                                 pc: operation.pc.unwrap_or(0),
-                                scissor: super::clamp_scissor(&scissor, w, h),
+                                scissor: super::clamp_scissor(&scissor, native_w, native_h),
                                 draw,
                             });
                         }
@@ -829,6 +856,7 @@ mod tests {
     fn coverage_target_extent_and_draw_kind() {
         let mut seen = [false; 3];
         for name in [
+            "flat-color--white1",
             "high-poly--empty-texture",
             "hud-over-3d",
             "fill-texrect",
@@ -852,10 +880,27 @@ mod tests {
             for extent in [(96, 64), (193, 132)] {
                 let inputs = RenderInputs::new(&scene, extent, [17, 29]).unwrap();
                 for target in &inputs.targets {
-                    let (w, h) = match target.id {
-                        TargetId::Legacy => extent,
-                        TargetId::Guest(_) => target.logical_extent,
-                    };
+                    let (w, h) = target.extents.presentation;
+                    let (native_w, native_h) = target.extents.native;
+                    match target.id {
+                        TargetId::Legacy => {
+                            assert_eq!(target.extents.logical, (320, 240));
+                            assert_eq!((w, h), extent);
+                        }
+                        TargetId::Guest(_) => {
+                            assert_eq!((native_w, native_h), target.extents.logical);
+                            assert_eq!((w, h), (native_w, native_h));
+                        }
+                    }
+                    let mut descriptors = Default::default();
+                    assert_eq!(target.record_descriptors(&mut descriptors), Ok(true));
+                    if let TargetId::Guest(address) = target.id {
+                        if !target.depth_clear {
+                            let descriptor = descriptors.get(address, false).unwrap();
+                            assert_eq!(descriptor.layout.width, native_w);
+                            assert_eq!(descriptor.height, native_h);
+                        }
+                    }
                     for (slot, operation) in target.operations.iter().enumerate() {
                         let uniform: CombinerUniform = bytemuck::pod_read_unaligned(
                             &target.uniforms
@@ -883,5 +928,40 @@ mod tests {
             }
         }
         assert_eq!(seen, [true; 3]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn guest_descriptors_and_write_bounds_use_native_extent() {
+        let address = 0x10_0000;
+        let mut scene = crate::tests::common::dl_2d_fill_rect_with_scissor_height(
+            address,
+            0xf801_f801,
+            0,
+            0,
+            16,
+            22,
+            132,
+        );
+        scene.framebuffer_pairs[0].color_image.width = 193;
+        scene.framebuffer_pairs[0].depth_image = Some(0x20_0000);
+        let mut inputs = RenderInputs::new(&scene, (640, 480), [17, 29]).unwrap();
+        let target = &mut inputs.targets[0];
+        target.extents =
+            super::super::extents::TargetExtents::new(target.id, (193, 132), (640, 480), 3)
+                .unwrap();
+        let mut descriptors = Default::default();
+        assert_eq!(target.record_descriptors(&mut descriptors), Ok(true));
+        let descriptor = descriptors.get(address, false).unwrap();
+        assert_eq!(descriptor.layout.width, 193);
+        assert_eq!(descriptor.height, 132);
+        assert_eq!(
+            descriptor.range().unwrap(),
+            address..address + 193 * 132 * 2
+        );
+        let depth = descriptors.get(0x20_0000, true).unwrap();
+        assert_eq!(depth.layout.width, 193);
+        assert_eq!(depth.range().unwrap(), 0x20_0000..0x20_0000 + 193 * 132 * 2);
+        assert_eq!(target.write_bounds(0), (0, 0, 18, 24));
     }
 }

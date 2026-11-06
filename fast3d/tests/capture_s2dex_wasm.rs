@@ -81,7 +81,7 @@ fn capture_v2_s2dex_host_replays_on_wasm32() {
         ],
     }];
     let encoded = fixture.to_bytes().unwrap();
-    assert_eq!(&encoded[8..12], &2u32.to_le_bytes());
+    assert_eq!(&encoded[8..12], &3u32.to_le_bytes());
     let fixture = Fixture::from_bytes(&encoded).unwrap();
     let task = &fixture.tasks[0];
     assert_eq!(task.source.memory.obj_bg_abi, ObjBgAbi::Host64);

@@ -52,18 +52,20 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let format = params.recipe.y;
     let size = params.recipe.z;
     let tlut = params.addressing.z;
-    var y = id.y;
+    let scale = max(params.input.w, 1u);
+    let native = id.xy / scale;
+    var y = native.y;
     var lane = 0u;
     if params.addressing.w != 0u {
         y = id.y % params.addressing.w;
         lane = id.y / params.addressing.w;
     }
-    var parity = id.x & 1u;
+    var parity = native.x & 1u;
     var odd_swap = (y & 1u) * 4u;
-    let column = select((id.x << min(size, 2u)) >> 1u, id.x, format == 1u && tlut >= 2u);
+    let column = select((native.x << min(size, 2u)) >> 1u, native.x, format == 1u && tlut >= 2u);
     var relative = (y & 255u) * params.addressing.x + column;
     if representation == 1u {
-        relative = id.x;
+        relative = native.x;
         parity = y & 1u;
         odd_swap = (y >> 1u) * 4u;
     }
@@ -72,7 +74,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let address1 = (params.recipe.w + ((relative + 1u) ^ odd_swap)) & mask;
     let pointer = framebuffer_pointer(address0);
     if params.input.z == 0u && tlut < 2u && size == 2u && pointer != 0u && ((pointer - 1u) & 1u) == 0u && framebuffer_pointer(address1) == pointer + 1u {
-        let color = framebuffer_color(pointer);
+        var image_pointer = pointer;
+        if params.input.x != 0u {
+            let stride = encoded[params.input.x + address0 * 2u];
+            let source_scale = max(encoded[params.input.x + address0 * 2u + 1u], 1u);
+            let sub = (id.xy % vec2<u32>(scale)) * source_scale / scale;
+            image_pointer += (sub.y * stride + sub.x) * 2u;
+        }
+        let color = framebuffer_color(image_pointer);
         if format == 0u {
             textureStore(output, vec2<i32>(id.xy), color);
             return;

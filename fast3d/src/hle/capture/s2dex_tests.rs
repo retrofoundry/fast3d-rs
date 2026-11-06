@@ -127,7 +127,7 @@ fn capture_v2_s2dex_replays_after_source_drop() {
         (fixture, live, steps, pixels)
     };
     let bytes = fixture.to_bytes().unwrap();
-    assert_eq!(&bytes[8..12], &2u32.to_le_bytes());
+    assert_eq!(&bytes[8..12], &3u32.to_le_bytes());
     let fixture = Fixture::from_bytes(&bytes).unwrap();
     let task = &fixture.tasks[0];
     assert_eq!(task.source.memory.obj_bg_abi, ObjBgAbi::Host64);
@@ -215,7 +215,7 @@ fn capture_v1_fixture_remains_readable() {
     assert_eq!(fixture.tasks[0].source.memory.obj_bg_abi, ObjBgAbi::Host64);
     let expected = fixture.tasks[0].interpret(Default::default()).unwrap();
     let encoded = fixture.to_bytes().unwrap();
-    assert_eq!(&encoded[8..12], &2u32.to_le_bytes());
+    assert_eq!(&encoded[8..12], &3u32.to_le_bytes());
     assert_eq!(
         Fixture::from_bytes(&encoded).unwrap().tasks[0]
             .interpret(Default::default())

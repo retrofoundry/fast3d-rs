@@ -10,7 +10,8 @@ fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
 
 @fragment
 fn fill_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
-    let pixel = u32(position.y) * fill.y + u32(position.x);
+    let native = vec2<u32>(position.xy) / fill.z;
+    let pixel = native.y * fill.y + native.x;
     let packed = select(fill.x >> 16u, fill.x & 0xffffu, (pixel & 1u) != 0u);
     let exponent = packed >> 13u;
     let mantissa = (packed & 0x1ffcu) >> 2u;
@@ -28,4 +29,11 @@ fn copy_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f3
 @fragment
 fn import_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
     return textureLoad(imported, vec2<i32>(position.xy), 0).r;
+}
+
+@group(0) @binding(3) var<uniform> scale: vec4<u32>;
+
+@fragment
+fn expand_depth(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
+    return textureLoad(source, vec2<i32>(vec2<u32>(position.xy) / scale.x), 0);
 }

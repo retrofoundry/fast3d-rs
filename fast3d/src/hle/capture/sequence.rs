@@ -1,3 +1,6 @@
+use super::ReplayOptions;
+#[cfg(feature = "profiling")]
+use super::ReplaySource;
 use super::{
     invalid, CaptureError, CaptureFrame, Fixture, Provenance, ReplayOutput, Result, Sequence,
     TaskCommand,
@@ -159,6 +162,18 @@ impl Sequence {
         queue: wgpu::Queue,
         depth_reset: DepthResetPolicy,
     ) -> Result<SequenceOutput> {
+        self.replay_with_options(device, queue, depth_reset, ReplayOptions::default())
+            .await
+    }
+
+    pub async fn replay_with_options(
+        &self,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        depth_reset: DepthResetPolicy,
+        options: ReplayOptions,
+    ) -> Result<SequenceOutput> {
+        options.validate()?;
         self.validate()?;
         for frame in &self.frames {
             frame.check_device(&device)?;
@@ -169,7 +184,9 @@ impl Sequence {
             wgpu::ErrorFilter::Validation,
         ]
         .map(|filter| device.push_error_scope(filter));
-        let result = self.replay_checked(device, queue, depth_reset).await;
+        let result = self
+            .replay_checked(device, queue, depth_reset, options)
+            .await;
         for scope in scopes.into_iter().rev() {
             if let Some(error) = scope.pop().await {
                 return Err(CaptureError::Gpu(error.to_string()));
@@ -183,8 +200,10 @@ impl Sequence {
         device: wgpu::Device,
         queue: wgpu::Queue,
         depth_reset: DepthResetPolicy,
+        options: ReplayOptions,
     ) -> Result<SequenceOutput> {
-        let mut renderer = self.frames[0].renderer(device, queue, ClearPolicy::Persist);
+        let mut renderer =
+            self.frames[0].renderer_with_options(device, queue, ClearPolicy::Persist, options);
         renderer.set_depth_reset_policy(depth_reset);
         let mut output = SequenceOutput {
             presentations: Vec::new(),
@@ -192,18 +211,23 @@ impl Sequence {
             adapter_info: None,
         };
         for fixture in &self.frames {
-            let frame = fixture.render_sequence_frame(&mut renderer).await?;
+            let selected = self
+                .presentations
+                .binary_search(&fixture.frame.serial)
+                .is_ok();
+            let source = if selected {
+                options.source
+            } else {
+                super::ReplaySource::Native
+            };
+            let frame = fixture.render_sequence_frame(&mut renderer, source).await?;
             output.frames.push(FrameLog {
                 serial: fixture.frame.serial,
                 summaries: frame.summaries.clone(),
                 diagnostics: frame.diagnostics.clone(),
                 commands: frame.commands.clone(),
             });
-            if self
-                .presentations
-                .binary_search(&fixture.frame.serial)
-                .is_ok()
-            {
+            if selected {
                 output.presentations.push(Presentation {
                     serial: fixture.frame.serial,
                     output: frame,
@@ -214,9 +238,21 @@ impl Sequence {
     }
 
     pub async fn replay_headless(&self, depth_reset: DepthResetPolicy) -> Result<SequenceOutput> {
+        self.replay_headless_with_options(depth_reset, ReplayOptions::default())
+            .await
+    }
+
+    pub async fn replay_headless_with_options(
+        &self,
+        depth_reset: DepthResetPolicy,
+        options: ReplayOptions,
+    ) -> Result<SequenceOutput> {
+        options.validate()?;
         self.validate()?;
         let (device, queue, adapter_info) = self.frames[0].headless_device().await?;
-        let mut output = self.replay(device, queue, depth_reset).await?;
+        let mut output = self
+            .replay_with_options(device, queue, depth_reset, options)
+            .await?;
         output.adapter_info = Some(adapter_info);
         Ok(output)
     }
@@ -371,7 +407,7 @@ impl Sequence {
                 diagnostics.push(task_diags);
                 adapter_ms += now_ms() - start;
             }
-            renderer.present_to(
+            renderer.present_native_to(
                 &super::replay::PresentationHardware(fixture.frame.vi),
                 &view,
             );
@@ -396,6 +432,8 @@ impl Sequence {
                 serial: fixture.frame.serial,
                 observed: fixture.frame.serial > u64::from(self.warmup_frames),
                 output: ReplayOutput {
+                    effective_resolution_multiplier: renderer.effective_resolution_multiplier(),
+                    source: ReplaySource::Native,
                     width: first.width,
                     height: first.height,
                     rgba8,
@@ -459,7 +497,9 @@ impl Sequence {
         for fixture in &self.frames {
             frame_ready(
                 fixture.frame.serial,
-                fixture.render_sequence_frame(&mut renderer).await?,
+                fixture
+                    .render_sequence_frame(&mut renderer, ReplaySource::Native)
+                    .await?,
             );
         }
         Ok(())

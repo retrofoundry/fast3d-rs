@@ -22,7 +22,7 @@ fn sequence_container_preserves_original_serials_and_versioned_payloads() {
     assert_eq!(Sequence::from_bytes(&bytes).unwrap(), sequence);
     assert!(Fixture::from_bytes(&bytes).is_err());
     for frame in &sequence.frames {
-        assert_eq!(&frame.to_bytes().unwrap()[8..12], &2u32.to_le_bytes());
+        assert_eq!(&frame.to_bytes().unwrap()[8..12], &3u32.to_le_bytes());
         assert_eq!(
             Fixture::from_bytes(&frame.to_bytes().unwrap()).unwrap(),
             *frame
