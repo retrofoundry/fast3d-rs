@@ -1,9 +1,21 @@
 use super::{
-    extents::TargetExtents, framebuffers::ImageLayout, inputs::RenderInputs, workload::TargetId,
+    extents::TargetExtents,
+    framebuffers::{ImageLayout, DEPTH_BYTES_PER_PIXEL},
+    inputs::RenderInputs,
+    workload::TargetId,
     SceneRenderer,
 };
 use crate::{diag::ResourceAdmission, DiagKind, Diagnostic};
 use std::collections::{HashMap, HashSet};
+
+fn texture_bytes(texture: &wgpu::Texture) -> u64 {
+    let pixel_bytes = if texture.format() == wgpu::TextureFormat::R8Uint {
+        1
+    } else {
+        4
+    };
+    u64::from(texture.width()) * u64::from(texture.height()) * pixel_bytes
+}
 
 struct Admission<'a> {
     limits: &'a wgpu::Limits,
@@ -132,12 +144,7 @@ impl SceneRenderer {
             pc: 0,
         };
         for texture in self.attachment_textures() {
-            let pixel_bytes = if texture.format() == wgpu::TextureFormat::R8Uint {
-                1
-            } else {
-                4
-            };
-            plan.charge(u64::from(texture.width()) * u64::from(texture.height()) * pixel_bytes)?;
+            plan.charge(texture_bytes(texture))?;
         }
         if scale > 1 {
             for texture in self
@@ -159,7 +166,7 @@ impl SceneRenderer {
                 );
                 let bytes = plan.image(extent)?;
                 plan.charge(if texture.format() == super::DEPTH_FORMAT {
-                    bytes / 4 * 9
+                    bytes / 4 * DEPTH_BYTES_PER_PIXEL
                 } else {
                     bytes
                 })?;
@@ -173,6 +180,7 @@ impl SceneRenderer {
         inputs: &mut RenderInputs<'_>,
         limits: &wgpu::Limits,
         strict: bool,
+        clear_policy: crate::ClearPolicy,
     ) -> Result<(), Diagnostic> {
         let mut plan = Admission {
             limits,
@@ -181,12 +189,7 @@ impl SceneRenderer {
             pc: 0,
         };
         for texture in self.attachment_textures() {
-            let pixel_bytes = if texture.format() == wgpu::TextureFormat::R8Uint {
-                1
-            } else {
-                4
-            };
-            plan.charge(u64::from(texture.width()) * u64::from(texture.height()) * pixel_bytes)?;
+            plan.charge(texture_bytes(texture))?;
         }
         if strict {
             let target = &inputs.targets[0];
@@ -197,10 +200,14 @@ impl SceneRenderer {
                     plan.charge(plan.image((texture.width(), texture.height()))?)?;
                 }
             }
-            if let Some(depth) = target.depth_id().and_then(|id| self.depthbuffers.get(&id)) {
+            if let Some(depth) = inputs
+                .strict_depth_id(self, clear_policy)
+                .and_then(|id| self.depthbuffers.get(&id))
+            {
                 for image in std::iter::once(depth).chain(depth.presentation.as_deref()) {
                     plan.charge(
-                        plan.image((image.texture.width(), image.texture.height()))? / 4 * 9,
+                        plan.image((image.texture.width(), image.texture.height()))? / 4
+                            * DEPTH_BYTES_PER_PIXEL,
                     )?;
                 }
             }
@@ -396,8 +403,8 @@ impl SceneRenderer {
             }
             if let Some(id) = depth_id {
                 if old_depth.is_none_or(|old| old.allocation_height < height) {
-                    plan.charge(native_bytes / 4 * 9)?;
-                    plan.charge(scaled_bytes / 4 * 9)?;
+                    plan.charge(native_bytes / 4 * DEPTH_BYTES_PER_PIXEL)?;
+                    plan.charge(scaled_bytes / 4 * DEPTH_BYTES_PER_PIXEL)?;
                 }
                 depths.insert(
                     id,

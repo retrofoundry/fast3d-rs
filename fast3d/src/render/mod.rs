@@ -1996,7 +1996,11 @@ impl SceneRenderer {
             "gpu_depth_bytes",
             self.depthbuffers
                 .values()
-                .map(|f| u64::from(f.texture.width()) * u64::from(f.texture.height()) * 4)
+                .map(|f| {
+                    u64::from(f.texture.width())
+                        * u64::from(f.texture.height())
+                        * framebuffers::DEPTH_BYTES_PER_PIXEL
+                })
                 .sum(),
         );
         self.profiling.gauge(
@@ -2012,7 +2016,11 @@ impl SceneRenderer {
             self.depthbuffers
                 .values()
                 .filter_map(|d| d.presentation.as_ref())
-                .map(|p| u64::from(p.texture.width()) * u64::from(p.texture.height()) * 4)
+                .map(|p| {
+                    u64::from(p.texture.width())
+                        * u64::from(p.texture.height())
+                        * framebuffers::DEPTH_BYTES_PER_PIXEL
+                })
                 .sum(),
         );
     }

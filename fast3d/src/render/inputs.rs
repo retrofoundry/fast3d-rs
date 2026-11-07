@@ -318,9 +318,47 @@ impl OperationInputs {
 }
 
 impl<'a> RenderInputs<'a> {
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn strict_depth_id(&self) -> Option<TargetId> {
-        self.targets.first().and_then(TargetInputs::depth_id)
+    pub(crate) fn strict_depth_id(
+        &self,
+        renderer: &super::SceneRenderer,
+        clear_policy: crate::ClearPolicy,
+    ) -> Option<TargetId> {
+        let target = self.targets.first()?;
+        let id = target.depth_id()?;
+        let old = renderer.depthbuffers.get(&id)?;
+        let (width, height) = target.extents.native;
+        if old.layout
+            != (super::framebuffers::ImageLayout {
+                width,
+                fmt: 0,
+                siz: 2,
+            })
+            || old.texture.height() < height
+            || (id == TargetId::Legacy && old.texture.height() != height)
+            || renderer.framebuffers.get(&target.id).is_some_and(|fb| {
+                fb.layout.width == width
+                    && fb.layout.fmt == target.color_image.fmt
+                    && fb.layout.siz == target.color_image.siz
+                    && fb.color.height() > old.texture.height()
+            })
+        {
+            return None;
+        }
+        let imports = renderer.coherence.as_ref().is_some_and(|coherence| {
+            if let TargetId::Guest(address) = id {
+                let end = address + u64::from(width) * u64::from(old.texture.height()) * 2;
+                coherence.imports.iter().any(|patch| {
+                    patch.address < end && patch.address + patch.bytes.len() as u64 > address
+                })
+            } else {
+                false
+            }
+        });
+        (target.operations.iter().any(OperationInputs::writes_depth)
+            || (clear_policy == crate::ClearPolicy::PerFrame
+                && !renderer.depth_first_touch.contains(&id))
+            || imports)
+            .then_some(id)
     }
 
     #[cfg(any(test, feature = "profiling"))]

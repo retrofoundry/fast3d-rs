@@ -565,7 +565,7 @@ impl SceneRenderer {
     ) -> Option<TargetId> {
         self.diagnostics.clear();
         self.dropped_runs = 0;
-        let inputs = match self.prepare_inputs(device, scene, false) {
+        let inputs = match self.prepare_inputs(device, scene, false, clear_policy) {
             Ok(Some(inputs)) => inputs,
             Ok(None) => return None,
             Err(diagnostic) => {
@@ -581,6 +581,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         scene: &'a Scene,
         strict: bool,
+        clear_policy: ClearPolicy,
     ) -> Result<Option<RenderInputs<'a>>, crate::Diagnostic> {
         let _preparation = self.profiling.span("render_inputs");
         let Some(mut inputs) = RenderInputs::with_targets(
@@ -591,7 +592,7 @@ impl SceneRenderer {
         ) else {
             return Ok(None);
         };
-        self.preflight_inputs(&mut inputs, &device.limits(), strict)?;
+        self.preflight_inputs(&mut inputs, &device.limits(), strict, clear_policy)?;
         Ok(Some(inputs))
     }
 

@@ -1055,10 +1055,12 @@ impl Renderer {
             result.scene.use_compatibility_policy();
             self.inner.coherence.as_mut().unwrap().begin_task();
         }
-        let prepared = match self
-            .inner
-            .prepare_inputs(&self.device, &result.scene, native)
-        {
+        let prepared = match self.inner.prepare_inputs(
+            &self.device,
+            &result.scene,
+            native,
+            self.config.clear_policy,
+        ) {
             Ok(inputs) => inputs,
             Err(diagnostic) => {
                 diags.emit(diagnostic);
@@ -1072,7 +1074,7 @@ impl Renderer {
             let target = workload.as_ref().unwrap().targets[0].id;
             let depth = prepared
                 .as_ref()
-                .and_then(render::inputs::RenderInputs::strict_depth_id);
+                .and_then(|inputs| inputs.strict_depth_id(&self.inner, self.config.clear_policy));
             self.inner
                 .stage_strict_task(&self.device, &self.queue, target, depth)
         });

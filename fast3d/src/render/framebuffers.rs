@@ -8,6 +8,8 @@ pub(super) mod writeback;
 use super::{workload::TargetId, SceneRenderer, CLEAR_COLOR, DEPTH_FORMAT};
 use crate::{ClearPolicy, DiagKind, Diagnostic};
 
+pub(super) const DEPTH_BYTES_PER_PIXEL: u64 = 9;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ImageLayout {
     pub width: u32,
@@ -315,24 +317,8 @@ impl DepthPipeline {
             pass.draw(0..3, 0..1);
         }
         drop(pass);
-        if let Some(&(x, y, width)) = spans.first() {
-            let (left, top, right, bottom) = spans.iter().fold(
-                (x, y, x + width, y + 1),
-                |(left, top, right, bottom), &(x, y, width)| {
-                    (
-                        left.min(x),
-                        top.min(y),
-                        right.max(x + width),
-                        bottom.max(y + 1),
-                    )
-                },
-            );
-            self.sync_delta_depth(
-                device,
-                encoder,
-                target,
-                (left, top, right - left, bottom - top),
-            );
+        if let Some((left, top, width, height)) = span_bounds(spans) {
+            self.sync_delta_depth(device, encoder, target, (left, top, width, height));
         }
     }
 
@@ -383,28 +369,12 @@ impl DepthPipeline {
             pass.draw(0..3, 0..1);
         }
         drop(pass);
-        if let Some(&(x, y, width)) = spans.first() {
-            let (left, top, right, bottom) = spans.iter().fold(
-                (x, y, x + width, y + 1),
-                |(left, top, right, bottom), &(x, y, width)| {
-                    (
-                        left.min(x),
-                        top.min(y),
-                        right.max(x + width),
-                        bottom.max(y + 1),
-                    )
-                },
-            );
+        if let Some((left, top, width, height)) = span_bounds(spans) {
             self.sync_delta_depth(
                 device,
                 encoder,
                 target,
-                (
-                    left * scale,
-                    top * scale,
-                    (right - left) * scale,
-                    (bottom - top) * scale,
-                ),
+                (left * scale, top * scale, width * scale, height * scale),
             );
         }
     }
@@ -492,13 +462,12 @@ impl DepthPipeline {
         {
             let packed = word & 0xffff;
             let code = ((packed & 3) << 2) | (3 * (packed & 1));
-            let pass = attribute_pass(
+            drop(attribute_pass(
                 encoder,
                 target,
                 wgpu::LoadOp::Clear(262143.0 / 262144.0),
                 code,
-            );
-            drop(pass);
+            ));
 
             drop(depth_pass(
                 encoder,
@@ -842,13 +811,13 @@ impl SceneRenderer {
             )));
             self.profiling.texture(
                 "presentation_depth",
-                u64::from(scaled.0) * u64::from(scaled.1) * 9,
+                u64::from(scaled.0) * u64::from(scaled.1) * DEPTH_BYTES_PER_PIXEL,
                 0,
             );
         }
         self.profiling.texture(
             "depth",
-            u64::from(allocation.0) * u64::from(allocation.1) * 9,
+            u64::from(allocation.0) * u64::from(allocation.1) * DEPTH_BYTES_PER_PIXEL,
             0,
         );
         drop(resources);
@@ -895,6 +864,22 @@ impl SceneRenderer {
     }
 }
 
+fn span_bounds(spans: &[(u32, u32, u32)]) -> Option<(u32, u32, u32, u32)> {
+    let &(x, y, width) = spans.first()?;
+    let (left, top, right, bottom) = spans.iter().fold(
+        (x, y, x + width, y + 1),
+        |(left, top, right, bottom), &(x, y, width)| {
+            (
+                left.min(x),
+                top.min(y),
+                right.max(x + width),
+                bottom.max(y + 1),
+            )
+        },
+    );
+    Some((left, top, right - left, bottom - top))
+}
+
 fn pack_depth(depth: f32) -> u16 {
     let z = ((depth * 262144.0) as u32).min(0x3ffff);
     let exponent = (0..8u32)
@@ -903,7 +888,7 @@ fn pack_depth(depth: f32) -> u16 {
         .unwrap();
     let base = 0x40000 - (0x40000 >> exponent);
     let mantissa = (z - base) >> (6 - exponent.min(6));
-    // Guest write-back does not serialize the presentation dz plane; it uses dz = 0.
+    // Guest write-back does not serialize the native dz plane; it uses dz = 0.
     ((exponent << 13) | (mantissa << 2)) as u16
 }
 
@@ -948,10 +933,14 @@ mod writeback_tests {
 pub(crate) mod copies;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
-mod delta_tests {
+pub(super) mod delta_tests {
     use super::*;
 
-    fn read(device: &wgpu::Device, queue: &wgpu::Queue, image: &DepthImage) -> Vec<u8> {
+    pub(in crate::render) fn read(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image: &DepthImage,
+    ) -> Vec<u8> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(
