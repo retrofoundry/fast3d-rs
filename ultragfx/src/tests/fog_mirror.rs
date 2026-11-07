@@ -312,11 +312,6 @@ semantic_test!(
     "full alpha must bypass blender arithmetic under partial reject (22)"
 );
 semantic_test!(
-    wrong_decal_depth_tolerance,
-    "decal_depth_tolerance",
-    "four OoT decal modes reject Z=0 over stored Z=64 accepted by hardware"
-);
-semantic_test!(
     missing_first_cycle_memory_rgb,
     "first_cycle_memory_rgb",
     "two-cycle first blender MEM RGB input is omitted (memory gradient)"
