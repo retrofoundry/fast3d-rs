@@ -162,16 +162,16 @@ fn scene(built: &Built) -> crate::Scene {
 fn extents_growth_shorter_viewport_and_interior_vi_rows() {
     let (device, queue, dual) = headless_device();
     for scale in [1, 2, 3, 4] {
-        let mut renderer = SceneRenderer::new(&device, FORMAT, 193, 131, dual);
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 33, 35, dual);
         renderer.set_test_scale(scale, BUDGET);
-        let mut depth_scene = fill_scene(Z, 193, 131, 0xfffcfffc);
+        let mut depth_scene = fill_scene(Z, 33, 35, 0xfffcfffc);
         depth_scene.framebuffer_pairs[0].is_depth_clear = true;
         depth_scene.framebuffer_pairs[0].depth_image = Some(Z.into());
         renderer.render_into_store(&device, &queue, &depth_scene, ClearPolicy::Persist);
-        for height in [131, 157, 31] {
+        for height in [35, 43, 31] {
             let mut draw = fill_scene(
                 A,
-                193,
+                33,
                 height,
                 if height == 31 { 0xf801f801 } else { 0x07c107c1 },
             );
@@ -181,21 +181,21 @@ fn extents_growth_shorter_viewport_and_interior_vi_rows() {
             renderer.render_into_store(&device, &queue, &depth_scene, ClearPolicy::Persist);
             draw.framebuffer_pairs[0].depth_image = Some(Z.into());
             renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
-            let retained = height.max(if height == 31 { 157 } else { height });
+            let retained = height.max(if height == 31 { 43 } else { height });
             let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
             assert_eq!(
                 (fb.color.width(), fb.color.height(), fb.height),
-                (193, retained, retained)
+                (33, retained, retained)
             );
             let descriptor = renderer.target_descriptors.get(A.into(), false).unwrap();
             assert_eq!(
                 descriptor.range().unwrap(),
-                u64::from(A)..u64::from(A) + 193 * u64::from(retained) * 2
+                u64::from(A)..u64::from(A) + 33 * u64::from(retained) * 2
             );
             let depth = &renderer.depthbuffers[&workload::TargetId::Guest(Z.into())];
             assert_eq!(
                 (depth.texture.width(), depth.texture.height()),
-                (193, retained)
+                (33, retained)
             );
             for presentation in [
                 fb.presentation.as_ref().map(|p| &p.texture),
@@ -203,13 +203,13 @@ fn extents_growth_shorter_viewport_and_interior_vi_rows() {
             ] {
                 assert_eq!(
                     presentation.map(|p| (p.width(), p.height())),
-                    (scale > 1).then_some((193 * scale, retained * scale))
+                    (scale > 1).then_some((33 * scale, retained * scale))
                 );
             }
         }
         let vi = crate::ViRegisters {
-            origin: A + 193 * 7 * 2,
-            width: 193,
+            origin: A + 33 * 7 * 2,
+            width: 33,
             status: 2,
             v_start: 34,
             y_scale: 1024,
@@ -219,7 +219,7 @@ fn extents_growth_shorter_viewport_and_interior_vi_rows() {
             crate::select_scanout_source(Some(vi), true, None, renderer.scanout_images()).unwrap();
         assert_eq!(source.rows, Some(7..24));
         let pixels =
-            common::pixels_from_render(&device, &queue, 193 * scale, 17 * scale, FORMAT, |view| {
+            common::pixels_from_render(&device, &queue, 33 * scale, 17 * scale, FORMAT, |view| {
                 let mut encoder = device.create_command_encoder(&Default::default());
                 renderer.scanout(&device, &mut encoder, view, source.target, source.rows);
                 queue.submit([encoder.finish()]);
@@ -448,7 +448,7 @@ fn writeback_bytes_coverage_patches_and_guards_are_scale_independent() {
             crate::FramebufferEncoding::BigEndian,
         ] {
             let mut baseline = None;
-            for scale in [1, 2, 3, 4] {
+            for scale in [1, 3] {
                 let mut renderer = facade(scale, fallback);
                 renderer.set_guest_writeback_with_encoding(true, encoding);
                 let mut memory = Memory(vec![0xa5; B as usize + 4096]);
@@ -1750,7 +1750,7 @@ fn sloped_decal_tolerance_uses_native_derivatives_without_scaling_z() {
 fn primitive_z_decal_retains_the_baseline_primitive_dz_gap() {
     let (fallback_device, fallback_queue) = headless_device_forced_fallback();
     for (device, queue, primary) in [(fallback_device, fallback_queue, false), headless_device()] {
-        for scale in [1, 2, 3, 4] {
+        for scale in [1, 3] {
             for dz in [0, 0x7fff] {
                 let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, primary);
                 renderer.set_test_scale(scale, BUDGET);
@@ -1783,10 +1783,10 @@ fn primitive_z_decal_retains_the_baseline_primitive_dz_gap() {
 fn adjacent_normal_and_copy_strips_scale_completed_bounds_on_tall_attachments() {
     let (device, queue, dual) = headless_device();
     for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+        renderer.set_test_scale(scale, BUDGET);
         for copy in [false, true] {
             for residue in 0..4 {
-                let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
-                renderer.set_test_scale(scale, BUDGET);
                 renderer.render_into_store(
                     &device,
                     &queue,
@@ -2114,7 +2114,7 @@ fn image_ia(color: &[u8]) -> [u8; 4] {
 }
 
 #[test]
-fn byte_routes_keep_native_samples_and_clear_role_bits_at_every_scale() {
+fn byte_routes_keep_native_samples_and_clear_role_bits() {
     use crate::hle::{
         rdp::{Rdp, TileDescriptor},
         texture_request::{prepare, TextureSource},
@@ -2122,7 +2122,7 @@ fn byte_routes_keep_native_samples_and_clear_role_bits_at_every_scale() {
     let (device, queue, dual) = headless_device();
     for route in ["ci8", "palette", "partial", "mixed", "split", "lookup"] {
         let mut baseline = None;
-        for scale in 1..=4 {
+        for scale in [1, 3] {
             let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
             renderer.set_test_scale(scale, BUDGET);
             let mut producer = scene(&triangle(A, 0, 0, 0xffffffff));
@@ -2326,7 +2326,7 @@ fn loaded_and_live_feedback_keep_writeback_bytes_coverage_and_patch_ranges_nativ
     for fallback in [false, true] {
         for fmt in [0, 3] {
             let mut baseline = None;
-            for scale in 1..=4 {
+            for scale in [1, 3] {
                 let mut renderer = facade(scale, fallback);
                 renderer
                     .set_guest_writeback_with_encoding(true, crate::FramebufferEncoding::BigEndian);

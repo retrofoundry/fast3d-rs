@@ -152,6 +152,17 @@ class CaptureFailures(unittest.TestCase):
         self.assertIn("hle::capture::replay::sequence_tests::replay_options_cover_the_prefix_and_selected_crop", commands[0])
         self.assertIn("upscaling", commands[1])
 
+    def test_windows_repeats_only_upscaling_smoke_tests_outside_all_features(self):
+        path = self.checkout / "ultragfx/src/render/upscaling_tests.rs"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        for config in ["default", "debug-ui"]:
+            with self.subTest(config=config):
+                command = ci.test_commands(self.checkout, config, "Windows")[0]
+                self.assertNotIn("render::upscaling_tests::", command)
+                self.assertIn("render::upscaling_tests::triangle_half_target_pixel_offset_uses_draw_height_after_retained_growth", command)
+                self.assertIn("render::upscaling_tests::native_stream_is_identical_and_presentation_has_new_samples_without_writeback", command)
+
     def test_dependency_artifacts_are_authenticated(self):
         def runner(command, **kwargs):
             return subprocess.CompletedProcess(command, 0, stdout="")

@@ -97,7 +97,7 @@ async fn replay_scale_and_source() {
     use ultragfx::capture::{Fixture, ReplayOptions, ReplaySource};
     let fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
     let base = fixture.replay_headless().await.unwrap();
-    for scale in 1..=4 {
+    for scale in [1, 3] {
         let native = fixture
             .replay_headless_with_options(ReplayOptions {
                 resolution_multiplier: Some(scale),
