@@ -3,7 +3,7 @@ from pathlib import Path
 
 from readbacks import artifact_file, authenticate_rows, file_hash, json_hash
 
-SOURCE = "fast3d/tests/texture_residency/replacements.rs"
+SOURCE = "ultragfx/tests/texture_residency/replacements.rs"
 INVENTORY = "tools/tmem/replacement-inventory.json"
 
 

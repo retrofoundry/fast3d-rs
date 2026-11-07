@@ -1,4 +1,4 @@
-use fast3d::{capture::ReplayOutput, Hardware, Rdram, RdramImage};
+use ultragfx::{capture::ReplayOutput, Hardware, Rdram, RdramImage};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -63,7 +63,7 @@ pub fn output_record(serial: u64, output: &ReplayOutput) -> Value {
 }
 
 pub async fn read_pixels(
-    renderer: &fast3d::Renderer,
+    renderer: &ultragfx::Renderer,
     texture: &wgpu::Texture,
 ) -> Result<Vec<u8>, String> {
     let row = texture.width() * 4;
@@ -120,16 +120,16 @@ pub fn sequence_input(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>
     if input != "authored" {
         return Ok(std::fs::read(input)?);
     }
-    let fixture = fast3d::capture::Fixture::from_bytes(include_bytes!(
-        "../../fast3d/tests/fixtures/host64-fill.f3dcap"
+    let fixture = ultragfx::capture::Fixture::from_bytes(include_bytes!(
+        "../../ultragfx/tests/fixtures/host64-fill.f3dcap"
     ))?;
-    let sequence = fast3d::capture::Sequence {
+    let sequence = ultragfx::capture::Sequence {
         frames: (1..=6)
             .map(|serial| {
                 let mut frame = fixture.clone();
                 frame.frame.serial = serial;
                 frame.frame.dither_seed = 0;
-                frame.frame.config.clear_policy = fast3d::ClearPolicy::Persist;
+                frame.frame.config.clear_policy = ultragfx::ClearPolicy::Persist;
                 frame
             })
             .collect(),
@@ -146,9 +146,9 @@ mod tests {
     #[test]
     fn authored_sequence_matches_parent_declarations() {
         let sequence =
-            fast3d::capture::Sequence::from_bytes(&sequence_input("authored").unwrap()).unwrap();
-        let original = fast3d::capture::Fixture::from_bytes(include_bytes!(
-            "../../fast3d/tests/fixtures/host64-fill.f3dcap"
+            ultragfx::capture::Sequence::from_bytes(&sequence_input("authored").unwrap()).unwrap();
+        let original = ultragfx::capture::Fixture::from_bytes(include_bytes!(
+            "../../ultragfx/tests/fixtures/host64-fill.f3dcap"
         ))
         .unwrap();
         assert_eq!(sequence.frames.len(), 6);
@@ -159,7 +159,7 @@ mod tests {
             assert_eq!(fixture.frame.dither_seed, 0);
             assert_eq!(
                 fixture.frame.config.clear_policy,
-                fast3d::ClearPolicy::Persist
+                ultragfx::ClearPolicy::Persist
             );
             assert_eq!((fixture.frame.width, fixture.frame.height), (64, 48));
             assert_eq!(fixture.tasks, original.tasks);

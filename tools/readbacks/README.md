@@ -14,7 +14,7 @@ executes the 73 IDs in `tools/tmem/gpu-decode-warp.json` in each configuration,
 requiring 219 supplemental rows. The profile is fixed by the target OS in Rust and
 validated against the recorded runtime OS by the artifact loader. An artifact cannot
 choose a smaller profile. Both inventories retain the same input and expected bytes.
-A checkout containing `fast3d/tests/texture_decode_gpu.rs` requires the supplement. The
+A checkout containing `ultragfx/tests/texture_decode_gpu.rs` requires the supplement. The
 base harness overlay carries the inventory and authenticator but does not add the
 new GPU test or production decoder, so a base without that test requires zero
 supplemental rows. The original 171 configuration rows remain the exact-base
@@ -44,7 +44,7 @@ build settings, binary hashes and logs, and are saved after each configuration.
 All required raw exports are retained. Candidate and bootstrap base still run on
 the same runner and use the same comparison policy.
 
-`FAST3D_GPU_DECODE_OUTPUT` writes into each configuration's `gpu-decode` directory.
+`ULTRAGFX_GPU_DECODE_OUTPUT` writes into each configuration's `gpu-decode` directory.
 The supplement hashes the actual encoded input, expected CPU/literal output, GPU
 output and exporter metadata. Its loader checks every GPU byte against the saved
 expected bytes and requires compute-role and adapter provenance. The main manifest
@@ -55,9 +55,9 @@ configurations retain their authenticated rows and missing-row report, with the
 comparison still marked incomplete.
 
 Texture replacement readbacks are a third supplement, `replacement-manifest.json`.
-A checkout containing `fast3d/tests/texture_residency/replacements.rs` requires
+A checkout containing `ultragfx/tests/texture_residency/replacements.rs` requires
 all 25 rows of `tools/tmem/replacement-inventory.json` under all-features, written
-through `FAST3D_REPLACEMENT_OUTPUT` into that configuration's `replacements`
+through `ULTRAGFX_REPLACEMENT_OUTPUT` into that configuration's `replacements`
 directory. Each row keeps its RGBA output with expected, before and change-mask
 bytes. The loader checks those three against the frozen inventory hashes, requires
 the output to equal the expected bytes, and recomputes the mask. A copy of the
@@ -71,7 +71,7 @@ row, configuration, input, literal or output file fails the gate. Windows captur
 must report a CPU DX12 adapter, static DXC and one test thread.
 
 Golden filenames use the Rust test name. In particular, the three multi-material
-tests have distinct files. `FAST3D_GOLDEN_OUTPUT` and `FAST3D_DECODE_OUTPUT` point to
+tests have distinct files. `ULTRAGFX_GOLDEN_OUTPUT` and `ULTRAGFX_DECODE_OUTPUT` point to
 separate directories inside each feature configuration. Writers refuse to replace
 an existing row. Final rows record the actual adapter and requested device features;
 T1 decode rows record `cpu-oracle` and retain independently derived expected bytes.
@@ -118,7 +118,7 @@ Run the CPU checks from the repository's devenv shell:
 
 ```sh
 python3 -m unittest discover -s tools/readbacks -v
-cargo test -p fast3d --lib readback_export
+cargo test -p ultragfx --lib readback_export
 ```
 
 To download two explicitly selected runs and compare them, use the authenticated

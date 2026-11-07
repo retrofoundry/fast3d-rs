@@ -3,7 +3,7 @@
 Run both presentation paths with:
 
 ```sh
-cargo test -p fast3d --lib tests::fog_mirror::
+cargo test -p ultragfx --lib tests::fog_mirror::
 ```
 
 The 93 cases cover 40 blender inputs, 25 raw game modes, 24 constant-W
@@ -32,13 +32,13 @@ shade wrap/clamp are outside this adapter: wrap/clamp planes are split into byte
 vertices, with XY rounded to 1/128 pixel.
 
 Ignored tests name the remaining semantic failures and compare hardware exactly.
-Enable them explicitly to reproduce those failures. `FAST3D_FOG_OUTPUT` optionally
+Enable them explicitly to reproduce those failures. `ULTRAGFX_FOG_OUTPUT` optionally
 exports the exercised 320×240 RGBA8 images into `dual/` and `fallback/`.
 
 To regenerate from an archived `rdp-oracle` case/run tree, without console access:
 
 ```sh
-python3 tools/fog-mirror/generate.py ORACLE_ARCHIVE fast3d/tests/fog-mirror
+python3 tools/fog-mirror/generate.py ORACLE_ARCHIVE ultragfx/tests/fog-mirror
 ```
 
 The generator retains the original inputs and masks, computes modern predictions

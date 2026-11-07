@@ -1,4 +1,4 @@
-use fast3d::profiling::{now_ms, Request};
+use ultragfx::profiling::{now_ms, Request};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -336,7 +336,7 @@ pub fn benchmark(
     repeats: usize,
 ) -> CostRow {
     assert!(!requests.is_empty());
-    let (resolution_ms, event_ms) = fast3d::profiling::clock_probe();
+    let (resolution_ms, event_ms) = ultragfx::profiling::clock_probe();
     assert!(
         resolution_ms.is_finite(),
         "clock resolution could not be measured"
@@ -630,7 +630,7 @@ mod tests {
     fn cache_preflight_accounts_for_hit_and_miss_work() {
         assert_eq!(digest(b""), 0xcbf29ce484222325);
         assert_eq!(digest(b"a"), 0xaf63dc4c8601ec8c);
-        let request = fast3d::profiling::authored_requests().remove(0);
+        let request = ultragfx::profiling::authored_requests().remove(0);
         let mut sim = Simulator::new(1024 * 1024, 2);
         let frame = trace_frame(&mut sim, 1, false, &[request.clone(), request.clone()]);
         let row = frame.classes.values().next().unwrap();

@@ -3,7 +3,7 @@
 Run from the repository root with one or more capture sequences or fixtures:
 
 ```sh
-cargo run -p fast3d --release --features capture,profiling \
+cargo run -p ultragfx --release --features capture,profiling \
   --example tmem16_census -- \
   /Users/ci/hub/scratch/fast3d/tmem16-census/runs/run-name \
   /path/to/capture.f3dcap /path/to/fixture.f3dcap

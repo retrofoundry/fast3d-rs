@@ -107,13 +107,13 @@ Run observed-case preflight for both routes too. `--kind sequence --capture PATH
 The following are hardware tests, not passing skips:
 
 ```sh
-cargo test --offline -p fast3d --features capture,profiling --test profiling_capture -- --nocapture
-cargo test --offline -p fast3d --features profiling --lib upload_counts_include_all_texture_roles -- --nocapture
-cargo test --offline -p fast3d --features profiling --lib buffer_init_counts_bytes -- --nocapture
+cargo test --offline -p ultragfx --features capture,profiling --test profiling_capture -- --nocapture
+cargo test --offline -p ultragfx --features profiling --lib upload_counts_include_all_texture_roles -- --nocapture
+cargo test --offline -p ultragfx --features profiling --lib buffer_init_counts_bytes -- --nocapture
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
 export WASM_BINDGEN_TEST_TIMEOUT=300
-export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
-cargo test --offline -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test browser_sm64_fixture_replay --test capture_facade --test capture_memory_wasm --test profiling_capture -- --nocapture
+export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/ultragfx/webdriver.json"
+cargo test --offline -p ultragfx --features capture,profiling --target wasm32-unknown-unknown --test browser_sm64_fixture_replay --test capture_facade --test capture_memory_wasm --test profiling_capture -- --nocapture
 ```
 
 The authored upload test requires exactly one upload for each of lod0/lod1/lod2/texture1/detail, four bytes each, no extra level-zero alias upload, and zero further uploads for an unchanged material. The three-byte buffer initializer must count one creation, three uploaded bytes and four requested capacity bytes. Any mismatch refutes operation accounting. Keep the existing Metal, Windows DX12/static-DXC, dual-source/fallback and pinned IMAGE oracle matrix from the direction; WARP is correctness evidence only.

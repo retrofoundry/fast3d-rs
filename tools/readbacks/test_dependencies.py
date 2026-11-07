@@ -8,7 +8,7 @@ from ci import test_dependency_graph
 class TestDependencyCompatibility(unittest.TestCase):
     def graph(self):
         return {"resolve": {"nodes": [{
-            "id": "path+file:///parent/fast3d#1.0.0", "features": ["profiling", "capture"],
+            "id": "path+file:///parent/ultragfx#1.0.0", "features": ["profiling", "capture"],
             "deps": [{"name": "xxh3", "pkg": "registry+crates.io#twox-hash@2.1.2",
                       "dep_kinds": [{"kind": "dev", "target": None}]}],
         }]}}

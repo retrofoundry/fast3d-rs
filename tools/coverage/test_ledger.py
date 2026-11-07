@@ -21,7 +21,7 @@ class GoldenLedger(unittest.TestCase):
         prediction = {"file": mask.name, **mask_file(mask, [False, True, False], 3)}
         self.frozen = self.root / "ledger.json"
         self.frozen.write_text(json.dumps({"goldens": [{
-            "file": "fast3d/goldens/sample.bin", "width": 3, "height": 1,
+            "file": "ultragfx/goldens/sample.bin", "width": 3, "height": 1,
             "before_file": self.before.name, "before_sha256": sha(self.before),
             "prediction": prediction,
             "predicted_values": {"file": self.values.name, "sha256": sha(self.values), "channel_tolerance": 2},

@@ -1,6 +1,6 @@
 # Texture replacements
 
-`fast3d::replacement` provides an immutable, in-memory registration provider.
+`ultragfx::replacement` provides an immutable, in-memory registration provider.
 Renderers start with replacements disabled. Install a snapshot with
 `Renderer::set_replacement_provider(Some(Arc::new(provider)))`, then call
 `begin_frame`. A queued update, including removal with `None`, takes effect at
@@ -153,7 +153,7 @@ against an unchanged reference checkout:
 
 ```sh
 python3 tools/tmem/verify_rt64_v5.py --reference /path/to/rt64-reference --output /new/evidence/directory
-cargo test -p fast3d --test rt64_v5
+cargo test -p ultragfx --test rt64_v5
 ```
 
 `rt64-v5-fixtures.json` also freezes IDs and streams for admitted requests in
@@ -168,14 +168,14 @@ filesystem/archive importers and HD sampling parity with rt64 are not implemente
 CPU checks (the residency filters do not obtain a device):
 
 ```sh
-cargo test -p fast3d --features capture,profiling --lib replacement
-cargo test -p fast3d --test rt64_v5 -- --nocapture
-cargo test -p fast3d --features capture,profiling --test texture_residency -- replacement_fixture_targets replacement_literal_inventory replacement_scaled_expectations replacement_shared_fixture replacement_narrow_requests replacement_framebuffer_sources replacement_s2b_tlut_fixture
+cargo test -p ultragfx --features capture,profiling --lib replacement
+cargo test -p ultragfx --test rt64_v5 -- --nocapture
+cargo test -p ultragfx --features capture,profiling --test texture_residency -- replacement_fixture_targets replacement_literal_inventory replacement_scaled_expectations replacement_shared_fixture replacement_narrow_requests replacement_framebuffer_sources replacement_s2b_tlut_fixture
 python3 -m unittest discover -s tools/readbacks -p 'test_*.py'
 python3 -m unittest discover -s tools/tmem -p 'test_*.py'
 ```
 
-For current fixture inputs, set `FAST3D_V5_FIXTURE_INPUTS` while running
+For current fixture inputs, set `ULTRAGFX_V5_FIXTURE_INPUTS` while running
 `replacement_shared_fixture_v5_inputs`, then pass that JSON to the executable
 produced by `verify_rt64_v5.py`. Compare `name`, `stream`, and `xxh3_64` for every
 row. The original 82-vector verifier checks span lists as well.

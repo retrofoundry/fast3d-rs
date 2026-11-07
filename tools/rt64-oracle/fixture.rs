@@ -156,8 +156,8 @@ pub(super) fn write(
     filename: &str,
     provenance: Provenance,
 ) {
-    let Some(output_dir) = std::env::var_os("FAST3D_WRITE_FIXTURES") else {
-        eprintln!("FAST3D_WRITE_FIXTURES is not set; skipping {filename}");
+    let Some(output_dir) = std::env::var_os("ULTRAGFX_WRITE_FIXTURES") else {
+        eprintln!("ULTRAGFX_WRITE_FIXTURES is not set; skipping {filename}");
         return;
     };
     let fixture = make(bytes, scene_entry, width, height, provenance);

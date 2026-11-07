@@ -1,8 +1,8 @@
 # Fast3dV1 preimage freeze
 
-This format freezes Fast3dV1 preimages and XXH3 vectors at fast3d
+This format freezes Fast3dV1 preimages and XXH3 vectors at ultragfx
 `bb0fea399793eb2aeb1ae93d5972763b9761da98`. The serializer lives in
-`fast3d/tests/common/tmem_preimage.rs` and serializes explicitly supplied selected
+`ultragfx/tests/common/tmem_preimage.rs` and serializes explicitly supplied selected
 bytes. It contains no footprint discovery, HLE validation, decoder or runtime
 cache. Production uses compute decoding. Unaffected Tile/Lookup streams remain byte-identical to
 this freeze. Recipe fields and the semantic flags byte distinguish corrected
@@ -173,8 +173,8 @@ rechecking; the Rust serializer is never used to regenerate expected hashes.
 Run from the repository's devenv shell:
 
 ```sh
-cargo test --offline -p fast3d --test tmem_preimage
-cargo test --offline -p fast3d --target wasm32-unknown-unknown --test tmem_preimage --no-run
+cargo test --offline -p ultragfx --test tmem_preimage
+cargo test --offline -p ultragfx --target wasm32-unknown-unknown --test tmem_preimage --no-run
 ```
 
 The wasm target uses `wasm_bindgen_test` and requires no adapter or GPU.

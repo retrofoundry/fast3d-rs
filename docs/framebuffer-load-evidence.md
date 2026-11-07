@@ -4,14 +4,14 @@ These fixtures issue real framebuffer loads and check ordered GPU snapshots. Loa
 the unquantised RGBA8 target, following David's 2026-09-12 rt64 decision.
 The saved n64.toys `offscreen-then-sample.n64` and its `.bin` golden are unchanged.
 
-`fast3d/src/tests/framebuffer_load_evidence.rs` builds four IMAGE fixtures:
+`ultragfx/src/tests/framebuffer_load_evidence.rs` builds four IMAGE fixtures:
 
 | Fixture | Consumer and source |
 | --- | --- |
 | `fbload-offset-rect` | One-cycle TexRect; interior SETTIMG and nonzero LoadTile bounds |
 | `fbload-offset-triangle` | The same load, consumed by pairs of textured triangles |
 | `fbload-exact-rect` | One-cycle TexRect; producer-base SETTIMG and zero LoadTile origin |
-| `fbload-shortcut-rect` | Existing load-free, exact-base copy-mode convenience; fast3d only |
+| `fbload-shortcut-rect` | Existing load-free, exact-base copy-mode convenience; ultragfx only |
 
 The first three render all consumers without diagnostics or dropped draws. Both
 consumer groups sample the load-time snapshot, including the group after the
@@ -94,7 +94,7 @@ texels. A pointer to the live producer would fail this test.
 
 Every consumer patch is 16×16. First-group columns start at `x=40,56,72,88`;
 second-group columns at `x=136,152,168,184`. Rows start at `y=40,56`. The shaded
-RGB8 column above gives fast3d's required color of every pixel. The loaded RGB8
+RGB8 column above gives ultragfx's required color of every pixel. The loaded RGB8
 column is the quantised hardware reference; the lower, grid-exact row agrees with both. The triangle variant
 draws each patch as two triangles with identical ST at all vertices; there are
 no sloped outer edges. TexRects use constant `s=column+0.5,t=row+0.5`; vertex ST
@@ -110,7 +110,7 @@ fills `[232,264)×[40,72)`. Everything else is black. Bounds are half-open.
 bytes are 255 placeholders, excluded from the rt64 gate: rt64 writes internal
 coverage into final RGBA32 alpha. The RGB alpha panels remain exact. The RGBA32
 output avoids another RGB16 quantization that could hide an unquantized copy.
-No threshold above zero is allowed for the grid-exact rows and the alpha panels. rt64 returns the unquantised render target on the non-grid upper rows, which is the convention fast3d follows, so those rows are compared against fast3d, not rt64.
+No threshold above zero is allowed for the grid-exact rows and the alpha panels. rt64 returns the unquantised render target on the non-grid upper rows, which is the convention ultragfx follows, so those rows are compared against ultragfx, not rt64.
 
 The shortcut uses copy mode because today's one-cycle load-free path rejects
 `NoTextureLoaded`. Its first group sees the shaded RGB8 column; its second sees
@@ -125,11 +125,11 @@ no hardware-load semantics from this comparison.
 Use tools already on PATH from this worktree. The writer requires no GPU:
 
 ```sh
-export FAST3D_WRITE_FIXTURES=/tmp/fast3d-f0
-cargo test -p fast3d --features capture --lib f0_
-cargo test -p fast3d --features capture --lib write_rt64_framebuffer_load_evidence -- --ignored
-cargo test -p fast3d --features capture --test framebuffer_load_evidence -- --nocapture
-cargo test -p fast3d --lib exact_base_fb_alias_keeps_compatibility_pixels
+export ULTRAGFX_WRITE_FIXTURES=/tmp/fast3d-f0
+cargo test -p ultragfx --features capture --lib f0_
+cargo test -p ultragfx --features capture --lib write_rt64_framebuffer_load_evidence -- --ignored
+cargo test -p ultragfx --features capture --test framebuffer_load_evidence -- --nocapture
+cargo test -p ultragfx --lib exact_base_fb_alias_keeps_compatibility_pixels
 ```
 
 The writer directly emits `.f3dcap`, `.rdram`, `.json`, `.expected.rgba8` and
@@ -137,7 +137,7 @@ The writer directly emits `.f3dcap`, `.rdram`, `.json`, `.expected.rgba8` and
 normal termination and final target. It preserves the same big-endian commands
 in both exports, with zero-filled gaps in the 8 MiB RDRAM. The ordinary
 `export_capture_rdram` accepts these supported command streams.
-The shortcut gets only a capture and fast3d expectation, never an rt64 export.
+The shortcut gets only a capture and ultragfx expectation, never an rt64 export.
 Checked-in captures must decode to the same fixtures the writer builds.
 
 Run pinned rt64 `43373749dac9bbc1b653e6a02aed40a9e1783bed` in the Metal session
@@ -147,13 +147,13 @@ using the harness built from `tools/rt64-oracle/README.md`:
 set -e
 for scene in fbload-offset-rect fbload-offset-triangle fbload-exact-rect; do
   /tmp/rt64-oracle-build/rt64-oracle \
-    "$FAST3D_WRITE_FIXTURES/$scene.rdram" "$FAST3D_WRITE_FIXTURES/$scene.json" \
-    "$FAST3D_WRITE_FIXTURES/$scene-rt64"
-  cargo run -p fast3d --example compare_rgba8 -- \
-    "$FAST3D_WRITE_FIXTURES/$scene.expected.rgba8" \
-    "$FAST3D_WRITE_FIXTURES/$scene-rt64.rgba8" \
+    "$ULTRAGFX_WRITE_FIXTURES/$scene.rdram" "$ULTRAGFX_WRITE_FIXTURES/$scene.json" \
+    "$ULTRAGFX_WRITE_FIXTURES/$scene-rt64"
+  cargo run -p ultragfx --example compare_rgba8 -- \
+    "$ULTRAGFX_WRITE_FIXTURES/$scene.expected.rgba8" \
+    "$ULTRAGFX_WRITE_FIXTURES/$scene-rt64.rgba8" \
     320 240 --ignore-alpha --threshold 0 --max-diff-pixels 0 \
-    --diff-mask "$FAST3D_WRITE_FIXTURES/$scene-rt64-diff.png"
+    --diff-mask "$ULTRAGFX_WRITE_FIXTURES/$scene-rt64-diff.png"
 done
 ```
 
@@ -162,14 +162,14 @@ For browser execution, set `CHROMEDRIVER` to the installed matching driver:
 ```sh
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
 export WASM_BINDGEN_TEST_TIMEOUT=300
-export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
-cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown \
+export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/ultragfx/webdriver.json"
+cargo test -p ultragfx --features capture,profiling --target wasm32-unknown-unknown \
   --test browser_sm64_fixture_replay --test capture_facade \
   --test capture_memory_wasm --test profiling_capture \
   --test framebuffer_load_evidence -- --nocapture
 ```
 
-The native/browser test asserts successful loads, exact fast3d pixels and shortcut
+The native/browser test asserts successful loads, exact ultragfx pixels and shortcut
 pixels under both clear policies. Preserve the existing Metal/DX12 and fallback matrix.
 
 ## GPU load path
@@ -204,7 +204,7 @@ the encoded-TMEM CPU oracle trace. Counters distinguish exact and materialised r
 the census records their mode and marks decoded texels unavailable on the CPU.
 Coherent capture keeps its existing admission rules.
 
-`fast3d/src/tests/framebuffer_loads.rs` adds reload, later-task, 320-wide interior,
+`ultragfx/src/tests/framebuffer_loads.rs` adds reload, later-task, 320-wide interior,
 six-row save/restore, IA16, CI8 byte pairing and GPU TLUT tests. The TLUT test loads
 two interior rows and checks source stride and replicated TMEM halfwords. The IA16 RGB/alpha
 pairs for the four grid colors are `(33,150)`, `(132,108)`, `(222,105)`, `(8,85)`;

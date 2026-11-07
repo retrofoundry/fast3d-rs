@@ -17,7 +17,7 @@ Scanout uses the VI row count from origin when an IMAGE VI selects a stored
 framebuffer. Without VI, it uses the selected target's retained logical height,
 so a final pair with a smaller scissor does not crop the display.
 
-`fast3d/tests/common/coverage_semantics.rs` uses literal quarter-pixel vertices,
+`ultragfx/tests/common/coverage_semantics.rs` uses literal quarter-pixel vertices,
 signed integer edge equations and full-frame expectations. It imports no
 production raster, viewport or sampling helpers. A separate fixed-point span
 walker encodes RDP edge words and calculates all eight coverage bits on the
@@ -84,16 +84,16 @@ interpolated scalar output permits one UNORM rounding step at covered pixels.
 Run CPU checks without an adapter:
 
 ```sh
-cargo test -p fast3d --test coverage_arithmetic
-cargo test -p fast3d --features capture --lib coverage_encoded_coordinates_and_commands
-cargo test -p fast3d --features capture --lib coverage_fixture_bytes_match_builders
+cargo test -p ultragfx --test coverage_arithmetic
+cargo test -p ultragfx --features capture --lib coverage_encoded_coordinates_and_commands
+cargo test -p ultragfx --features capture --lib coverage_fixture_bytes_match_builders
 python3 -m unittest discover -s tools/coverage -p 'test_*.py'
 ```
 
 Generate inputs and both expectations into a scratch directory:
 
 ```sh
-FAST3D_WRITE_FIXTURES=/tmp/coverage-fixtures cargo test -p fast3d --features capture \
+ULTRAGFX_WRITE_FIXTURES=/tmp/coverage-fixtures cargo test -p ultragfx --features capture \
   --lib write_rt64_coverage_fixtures -- --ignored
 ```
 
