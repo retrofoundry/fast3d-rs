@@ -747,7 +747,7 @@ fn checked_host_writeback_rejects_task_and_recovers() {
                     .as_ref()
                     .unwrap()
                     .owners
-                    .0
+                    .ranges
                     .is_empty());
                 assert!(renderer.frame_scenes.is_empty());
                 assert_eq!(renderer.rdp, rdp);

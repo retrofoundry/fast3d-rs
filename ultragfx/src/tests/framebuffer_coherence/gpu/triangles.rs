@@ -369,7 +369,7 @@ fn guest_route_gpu_triangle_culling_matches_w3_float_area_tie() {
             .native_fill_pixels(&r.device, &r.queue)
             .unwrap();
         assert_eq!(gpu[0], [0, 0, 0]);
-        assert!(r.inner.coherence.as_ref().unwrap().owners.0.is_empty());
+        assert!(r.inner.coherence.as_ref().unwrap().owners.ranges.is_empty());
     }
 }
 
@@ -438,7 +438,7 @@ fn guest_route_gpu_triangle_routes_unimplemented_inputs_atomically() {
         memory.0[..FB as usize].copy_from_slice(&task.rdram[..FB as usize]);
         assert_native_unavailable(&mut r, &memory, task.entry.into());
         assert!(r.take_guest_writes().is_empty());
-        assert!(r.inner.coherence.as_ref().unwrap().owners.0.is_empty());
+        assert!(r.inner.coherence.as_ref().unwrap().owners.ranges.is_empty());
         assert!(!r.inner.has_fb(u64::from(FB)));
         assert_eq!(r.rdp, state);
         let mut cpu = renderer(false);

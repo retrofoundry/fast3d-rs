@@ -1110,8 +1110,6 @@ fn render_mode_for_run(
     scene.unsupported_native_policy |=
         mode.rgb_dither != 0 || mode.alpha_dither != 3 || mode.key_enabled;
     if !rsp.retain_native_policy {
-        mode.rgb_dither = 0;
-        mode.alpha_dither = 0;
         mode.key_enabled = false;
     }
     mode

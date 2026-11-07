@@ -50,6 +50,7 @@ impl Writer {
         coverage: u8,
         pixel: usize,
         literal: Option<u32>,
+        rgb_dither: u8,
         encoding: FramebufferEncoding,
     ) -> [u8; 2] {
         if !self.supported() {
@@ -68,16 +69,35 @@ impl Writer {
             [rgba[(pixel % self.layout.width as usize) & 1], 0]
         } else {
             const MAGIC: [u8; 16] = [0, 6, 1, 7, 4, 2, 5, 3, 3, 5, 2, 4, 7, 1, 6, 0];
+            const BAYER: [u8; 16] = [0, 4, 1, 5, 4, 0, 5, 1, 3, 7, 2, 6, 7, 3, 6, 2];
             let x = pixel % self.layout.width as usize;
             let y = pixel / self.layout.width as usize;
-            encoding.encode_u16(pack_color(rgba, coverage, MAGIC[(y & 3) * 4 + (x & 3)]))
+            let index = (y & 3) * 4 + (x & 3);
+            let threshold = match rgb_dither {
+                0 | 2 => MAGIC[index], // Noise has no reproducible guest RNG; use the magic pattern.
+                1 => BAYER[index],
+                _ => 7,
+            };
+            encoding.encode_u16(pack_color(rgba, coverage, threshold))
         }
     }
 }
 
 fn pack_color(rgba: [u8; 4], coverage: u8, dither: u8) -> u16 {
     debug_assert!(coverage <= 7);
-    let channel = |i: usize| u16::from(rgba[i].saturating_add(dither) >> 3);
+    let channel = |i: usize| {
+        let v = rgba[i];
+        let rounded = if (v & 7) > dither {
+            if v > 247 {
+                255
+            } else {
+                (v & 248) + 8
+            }
+        } else {
+            v
+        };
+        u16::from(rounded >> 3)
+    };
     (channel(0) << 11) | (channel(1) << 6) | (channel(2) << 1) | u16::from(coverage >> 2)
 }
 
@@ -382,9 +402,6 @@ pub(crate) struct OwnedRange {
     pub writer: Writer,
     pub generation: u64,
     pub bytes: Vec<u8>,
-    /// The guest changed these bytes after `writer` drew them: they are plain guest memory to
-    /// texture loads, kept here so the writer's views can import and restore them.
-    pub foreign: bool,
 }
 
 impl OwnedRange {
@@ -393,13 +410,16 @@ impl OwnedRange {
             writer,
             generation,
             bytes,
-            foreign: false,
         }
     }
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct Ownership(pub BTreeMap<u64, OwnedRange>);
+pub(crate) struct Ownership {
+    pub ranges: BTreeMap<u64, OwnedRange>,
+    /// Sorted, disjoint guest-edited byte ranges, independent of writer storage.
+    pub foreign: Vec<std::ops::Range<u64>>,
+}
 
 impl Ownership {
     pub fn write(&mut self, writer: Writer, generation: u64, address: u64, bytes: Vec<u8>) {
@@ -407,18 +427,33 @@ impl Ownership {
             return;
         }
         let end = address + bytes.len() as u64;
+        let first = self.foreign.partition_point(|range| range.end <= address);
+        let last = self.foreign.partition_point(|range| range.start < end);
+        if first < last {
+            let left = self.foreign[first].start;
+            let right = self.foreign[last - 1].end;
+            self.foreign.splice(
+                first..last,
+                [
+                    (left < address).then_some(left..address),
+                    (right > end).then_some(end..right),
+                ]
+                .into_iter()
+                .flatten(),
+            );
+        }
         let overlaps: Vec<_> = self
-            .0
+            .ranges
             .range(..end)
             .rev()
             .take_while(|(start, old)| **start + old.bytes.len() as u64 > address)
             .map(|(start, _)| *start)
             .collect();
         for start in overlaps {
-            let old = self.0.remove(&start).unwrap();
+            let old = self.ranges.remove(&start).unwrap();
             let old_end = start + old.bytes.len() as u64;
             if start < address {
-                self.0.insert(
+                self.ranges.insert(
                     start,
                     OwnedRange::new(
                         old.writer,
@@ -428,7 +463,7 @@ impl Ownership {
                 );
             }
             if old_end > end {
-                self.0.insert(
+                self.ranges.insert(
                     end,
                     OwnedRange::new(
                         old.writer,
@@ -440,55 +475,33 @@ impl Ownership {
         }
         let mut address = address;
         let mut bytes = bytes;
-        if let Some((&start, old)) = self.0.range(..address).next_back() {
+        if let Some((&start, old)) = self.ranges.range(..address).next_back() {
             if old.writer == writer
                 && old.generation == generation
                 && start + old.bytes.len() as u64 == address
             {
-                let mut previous = self.0.remove(&start).unwrap().bytes;
+                let mut previous = self.ranges.remove(&start).unwrap().bytes;
                 previous.extend(bytes);
                 bytes = previous;
                 address = start;
             }
         }
         if self
-            .0
+            .ranges
             .get(&end)
             .is_some_and(|next| next.writer == writer && next.generation == generation)
         {
-            bytes.extend(self.0.remove(&end).unwrap().bytes);
+            bytes.extend(self.ranges.remove(&end).unwrap().bytes);
         }
-        self.0
+        self.ranges
             .insert(address, OwnedRange::new(writer, generation, bytes));
-    }
-
-    /// Record guest `bytes` at `address`, inside one owned range, as foreign to its writer.
-    fn mark_foreign(&mut self, address: u64, bytes: Vec<u8>) {
-        let start = *self.0.range(..=address).next_back().unwrap().0;
-        let old = self.0.remove(&start).unwrap();
-        let end = address + bytes.len() as u64;
-        let part = |bytes: &[u8], foreign| OwnedRange {
-            foreign,
-            ..OwnedRange::new(old.writer, old.generation, bytes.to_vec())
-        };
-        if start < address {
-            self.0.insert(
-                start,
-                part(&old.bytes[..(address - start) as usize], old.foreign),
-            );
-        }
-        if start + (old.bytes.len() as u64) > end {
-            self.0
-                .insert(end, part(&old.bytes[(end - start) as usize..], old.foreign));
-        }
-        self.0.insert(address, part(&bytes, true));
     }
 
     /// Merge adjacent ranges one target wrote since `first_generation`; their write order is settled.
     fn coalesce(&mut self, first_generation: u64) {
         let mut merged = BTreeMap::new();
         let mut open: Option<(u64, OwnedRange)> = None;
-        for (address, range) in std::mem::take(&mut self.0) {
+        for (address, range) in std::mem::take(&mut self.ranges) {
             match &mut open {
                 Some((start, current))
                     if current.writer == range.writer
@@ -509,18 +522,46 @@ impl Ownership {
         if let Some((start, current)) = open {
             merged.insert(start, current);
         }
-        self.0 = merged;
+        self.ranges = merged;
+    }
+
+    pub fn rendered_ranges(&self) -> impl Iterator<Item = (u64, Writer, u64, &[u8])> {
+        self.ranges.iter().flat_map(|(&address, owned)| {
+            let end = address + owned.bytes.len() as u64;
+            let mut start = address;
+            let mut spans = Vec::new();
+            let first = self.foreign.partition_point(|range| range.end <= address);
+            for foreign in self.foreign[first..]
+                .iter()
+                .take_while(|range| range.start < end)
+            {
+                if start < foreign.start {
+                    spans.push(start..foreign.start);
+                }
+                start = foreign.end.min(end);
+            }
+            if start < end {
+                spans.push(start..end);
+            }
+            spans.into_iter().map(move |span| {
+                (
+                    span.start,
+                    owned.writer,
+                    owned.generation,
+                    &owned.bytes[(span.start - address) as usize..(span.end - address) as usize],
+                )
+            })
+        })
     }
 
     pub fn patches(&self, first_generation: u64) -> Vec<crate::GuestWrite> {
-        self.0
-            .iter()
-            .filter(|(_, range)| {
-                range.generation >= first_generation && range.writer.supported() && !range.foreign
+        self.rendered_ranges()
+            .filter(|(_, writer, generation, _)| {
+                *generation >= first_generation && writer.supported()
             })
-            .map(|(&address, range)| crate::GuestWrite {
+            .map(|(address, _, _, bytes)| crate::GuestWrite {
                 address,
-                bytes: range.bytes.clone(),
+                bytes: bytes.to_vec(),
             })
             .collect()
     }
@@ -578,7 +619,7 @@ mod tests {
             None,
         );
         assert!(matches!(output[0], super::super::writeback::Pixel::Keep));
-        assert_eq!(coherence.owners.0[&0].bytes, [0x12, 0x31]);
+        assert_eq!(coherence.owners.ranges[&0].bytes, [0x12, 0x31]);
         assert_eq!(coherence.stored_coverage_code(0), Some(7));
     }
 
@@ -697,7 +738,7 @@ mod tests {
         coherence.replay(writer, &[draw], (1, 0), &geometry, (&stamps, &[0; 4]), None);
         coherence.commit_pending(u64::MAX);
         assert_eq!(coherence.stored_coverage_code(0), None);
-        assert_eq!(coherence.owners.0[&0].bytes, [0x12, 0x31]);
+        assert_eq!(coherence.owners.ranges[&0].bytes, [0x12, 0x31]);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1026,10 +1067,15 @@ mod tests {
             queue.submit([encoder.finish()]);
             coherence.finish(&device)
         };
-        assert_eq!(
-            snapshot(&mut coherence, vec![full.clone()], 1)[0].bytes,
-            [0x44, 0x31]
-        );
+        for estimated_alpha in [0, 3, 255] {
+            upload(&color, &[64, 128, 192, estimated_alpha]);
+            assert_eq!(
+                snapshot(&mut coherence, vec![full.clone()], 1)[0].bytes,
+                [0x44, 0x31]
+            );
+            assert_eq!(coherence.stored_coverage_code(0x100), Some(7));
+        }
+        upload(&color, &[64, 128, 192, 0]);
         assert_eq!(
             snapshot(&mut coherence, vec![full.clone(), partial.clone()], 1)[0].bytes,
             [0x44, 0x30]
@@ -1039,7 +1085,7 @@ mod tests {
             [0x44, 0x31]
         );
         assert!(snapshot(&mut coherence, vec![partial], 0).is_empty());
-        assert_eq!(coherence.owners.0[&0x100].bytes, [0x44, 0x31]);
+        assert_eq!(coherence.owners.ranges[&0x100].bytes, [0x44, 0x31]);
         use crate::render::inputs::{DrawInputs, OperationInputs, TargetInputs};
         let mut target = TargetInputs {
             color_image_epoch: 0,
@@ -1213,6 +1259,7 @@ mod tests {
                 0,
                 0,
                 None,
+                3,
                 FramebufferEncoding::BigEndian
             ),
             [0x40, 0x00]
@@ -1320,42 +1367,31 @@ mod tests {
     }
 
     #[test]
-    fn rgba5551_matches_rt64_formula() {
-        for (rgba, dither, expected) in [
-            ([0, 0, 0, 0], 0, 0),
-            ([255, 255, 255, 255], 0, 0xffff),
-            ([7, 8, 15, 128], 0, 0x0042),
-            ([7, 8, 15, 4], 1, 0x0845),
-            ([128, 64, 32, 3], 0, 0x8208),
+    fn rgba16_threshold_words_match_ntsc() {
+        let writer = image(0, 128, 2, false);
+        let values: Vec<u8> = (0..16).chain(240..=255).collect();
+        for (selector, words) in [
+            (0, include_bytes!("../../tests/guest_bytes/magic.rgba16")),
+            (1, include_bytes!("../../tests/guest_bytes/bayer.rgba16")),
+            (2, include_bytes!("../../tests/guest_bytes/magic.rgba16")),
+            (3, include_bytes!("../../tests/guest_bytes/disable.rgba16")),
         ] {
-            assert_eq!(pack_color(rgba, rgba[3] & 7, dither), expected);
-        }
-    }
-
-    #[test]
-    fn rgba16_dither_follows_rt64_magic_square_by_row_and_column() {
-        let writer = image(0, 5, 2, false);
-        let dither = |x: usize, y: usize| {
-            (1..8u8)
-                .filter(|&threshold| {
-                    let word = writer.encode(
-                        [8 - threshold, 0, 0, 255],
+            for (pixel, bytes) in words.as_chunks::<2>().0.iter().enumerate() {
+                let v = values[(pixel % 128) / 4];
+                assert_eq!(
+                    writer.encode(
+                        [v, v, v, 255],
                         7,
-                        y * 5 + x,
+                        pixel,
                         None,
-                        FramebufferEncoding::Native,
-                    );
-                    u16::from_ne_bytes(word) >> 11 == 1
-                })
-                .count()
-        };
-        let pattern: Vec<Vec<_>> = (0..4)
-            .map(|y| (0..4).map(|x| dither(x, y)).collect())
-            .collect();
-        assert_eq!(
-            pattern,
-            [[0, 6, 1, 7], [4, 2, 5, 3], [3, 5, 2, 4], [7, 1, 6, 0]]
-        );
+                        selector,
+                        FramebufferEncoding::BigEndian
+                    ),
+                    *bytes,
+                    "selector {selector}, pixel {pixel}, value {v}",
+                );
+            }
+        }
     }
 
     #[test]
@@ -1371,11 +1407,25 @@ mod tests {
                 depth: false,
             };
             assert_eq!(
-                writer.encode([11, 27, 91, 255], 7, 0, None, FramebufferEncoding::Native),
+                writer.encode(
+                    [11, 27, 91, 255],
+                    7,
+                    0,
+                    None,
+                    0,
+                    FramebufferEncoding::Native
+                ),
                 [11, 0]
             );
             assert_eq!(
-                writer.encode([11, 27, 91, 255], 7, 1, None, FramebufferEncoding::Native),
+                writer.encode(
+                    [11, 27, 91, 255],
+                    7,
+                    1,
+                    None,
+                    0,
+                    FramebufferEncoding::Native
+                ),
                 [27, 0]
             );
         }
@@ -1385,14 +1435,134 @@ mod tests {
     fn literal_fill_preserves_words_and_parity() {
         let writer = image(0, 3, 2, false);
         assert_eq!(
-            writer.encode([0; 4], 0, 0, Some(0x1234_abcd), FramebufferEncoding::Native),
+            writer.encode(
+                [0; 4],
+                0,
+                0,
+                Some(0x1234_abcd),
+                0,
+                FramebufferEncoding::Native
+            ),
             0x1234u16.to_ne_bytes()
         );
         assert_eq!(
-            writer.encode([0; 4], 0, 3, Some(0x1234_abcd), FramebufferEncoding::Native),
+            writer.encode(
+                [0; 4],
+                0,
+                3,
+                Some(0x1234_abcd),
+                0,
+                FramebufferEncoding::Native
+            ),
             0xabcdu16.to_ne_bytes()
         );
     }
+    #[test]
+    fn coalescing_preserves_the_current_tasks_write_set() {
+        let writer = image(0, 4, 2, false);
+        let mut owners = Ownership::default();
+        owners.write(writer, 1, 0, vec![1, 2]);
+        owners.write(writer, 2, 2, vec![3, 4]);
+        owners.write(writer, 4, 4, vec![5, 6]);
+        owners.coalesce(4);
+        assert_eq!(owners.ranges.keys().copied().collect::<Vec<_>>(), [0, 2, 4]);
+        assert_eq!(
+            owners.patches(4),
+            [crate::GuestWrite {
+                address: 4,
+                bytes: vec![5, 6]
+            }]
+        );
+    }
+
+    #[test]
+    fn partial_writer_overlap_does_not_reclaim_foreign_tails() {
+        let mut owners = Ownership::default();
+        let writer = image(0, 4, 2, false);
+        owners.write(writer, 1, 0, vec![1, 2, 3, 4]);
+        owners.foreign.push(0..4);
+        let alias = image(1, 1, 1, false);
+        owners.write(alias, 2, 1, vec![20]);
+        assert_eq!(
+            owners.patches(0),
+            [crate::GuestWrite {
+                address: 1,
+                bytes: vec![20]
+            }]
+        );
+    }
+
+    #[test]
+    fn scattered_guest_edits_import_only_changed_bytes() {
+        let mut coherence = Coherence::default();
+        let writer = image(0, 4, 2, false);
+        coherence
+            .owners
+            .write(writer, 1, 0, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let bytes = [1, 20, 3, 40, 5, 6, 7, 80];
+        coherence
+            .release_changed(&crate::RdramImage::new(&bytes))
+            .unwrap();
+        assert_eq!(
+            coherence.imports,
+            [
+                crate::GuestWrite {
+                    address: 1,
+                    bytes: vec![20]
+                },
+                crate::GuestWrite {
+                    address: 3,
+                    bytes: vec![40]
+                },
+                crate::GuestWrite {
+                    address: 7,
+                    bytes: vec![80]
+                },
+            ]
+        );
+        assert_eq!(coherence.owners.ranges.len(), 1);
+        assert_eq!(coherence.owners.foreign, [1..2, 3..4, 7..8]);
+        assert_eq!(
+            coherence.owners.patches(0),
+            [
+                crate::GuestWrite {
+                    address: 0,
+                    bytes: vec![1]
+                },
+                crate::GuestWrite {
+                    address: 2,
+                    bytes: vec![3]
+                },
+                crate::GuestWrite {
+                    address: 4,
+                    bytes: vec![5, 6, 7]
+                },
+            ]
+        );
+        coherence.imports.clear();
+        coherence
+            .release_changed(&crate::RdramImage::new(&bytes))
+            .unwrap();
+        assert!(coherence.imports.is_empty());
+    }
+
+    #[test]
+    fn contiguous_guest_words_with_one_changed_byte_stay_coalesced() {
+        let mut coherence = Coherence::default();
+        let writer = image(0, 4, 2, false);
+        coherence
+            .owners
+            .write(writer, 1, 0, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let bytes = [1, 20, 3, 40, 5, 60, 7, 80];
+        coherence
+            .release_changed(&crate::RdramImage::new(&bytes))
+            .unwrap();
+        assert_eq!(coherence.owners.ranges.len(), 1);
+        assert_eq!(coherence.owners.ranges[&0].bytes, bytes);
+        assert_eq!(coherence.imports.len(), 4);
+        assert_eq!(coherence.owners.patches(0).len(), 4);
+    }
+
     #[test]
     fn foreign_bytes_are_compared_and_only_changed_pixels_imported() {
         let mut coherence = Coherence::default();
@@ -2090,6 +2260,7 @@ struct Snapshot {
     generation: u64,
     native_fills: Option<Vec<Option<super::native_fill::FillReadback>>>,
     native_triangles: Option<Readback>,
+    copy_words: BTreeMap<usize, Readback>,
 }
 
 struct PendingWrite {
@@ -2113,6 +2284,7 @@ pub(crate) struct Coherence {
     generation: u64,
     first_generation: u64,
     snapshots: Vec<Snapshot>,
+    copy_words: BTreeMap<usize, Readback>,
     pending: Vec<PendingWrite>,
     pub strict_fills: bool,
     #[cfg(test)]
@@ -2216,7 +2388,7 @@ impl Coherence {
                 (pixel..pixel + width as usize)
                     .flat_map(|p| {
                         writer
-                            .encode([0; 4], 0, p, Some(word), self.encoding)
+                            .encode([0; 4], 0, p, Some(word), 3, self.encoding)
                             .into_iter()
                             .take(writer.pixel_bytes())
                     })
@@ -2245,6 +2417,17 @@ impl Coherence {
                 bytes,
             });
         }
+    }
+
+    pub(in crate::render) fn snapshot_copy_words(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        slot: usize,
+    ) {
+        self.copy_words
+            .insert(slot, Readback::new(device, encoder, texture, 4));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2382,6 +2565,7 @@ impl Coherence {
             generation,
             native_fills,
             native_triangles,
+            copy_words: std::mem::take(&mut self.copy_words),
         });
     }
 
@@ -2462,18 +2646,23 @@ impl Coherence {
     }
 
     pub(crate) fn stored_coverage_code(&self, address: u64) -> Option<u8> {
-        let byte = |address| {
-            let (&start, range) = self.owners.0.range(..=address).next_back()?;
-            range.bytes.get((address - start) as usize).copied()
-        };
-        let word = self
-            .encoding
-            .decode_u16([byte(address)?, byte(address + 1)?]);
+        let word = self.guest_word(address)?;
         let hidden = *self
             .hidden
             .get(&(address / 4096))?
             .get((address % 4096) as usize / 2)?;
         (hidden != 255).then_some(((word & 1) as u8) * 4 + (hidden & 3))
+    }
+
+    pub(crate) fn guest_word(&self, address: u64) -> Option<u16> {
+        let byte = |address| {
+            let (&start, range) = self.owners.ranges.range(..=address).next_back()?;
+            range.bytes.get((address - start) as usize).copied()
+        };
+        Some(
+            self.encoding
+                .decode_u16([byte(address)?, byte(address + 1)?]),
+        )
     }
 
     fn invalidate_hidden(&mut self, address: u64, length: usize) {
@@ -2575,7 +2764,7 @@ impl Coherence {
         valid.resize(length * 2, false);
         valid.fill(false);
         let end = writer.address + bytes.len() as u64;
-        for (&address, range) in self.owners.0.range(..end) {
+        for (&address, range) in self.owners.ranges.range(..end) {
             let start = address.max(writer.address);
             let end = (address + range.bytes.len() as u64).min(end);
             if start >= end {
@@ -2811,6 +3000,11 @@ impl Coherence {
                     .map(|fill| fill.map(|readback| readback.read(device)))
                     .collect::<Vec<_>>()
             });
+            let copy_words: BTreeMap<_, _> = snapshot
+                .copy_words
+                .into_iter()
+                .map(|(slot, readback)| (slot, readback.read(device)))
+                .collect();
             let stamps = snapshot.coverage.read(device);
             let rgba16 = snapshot.color.as_ref().is_some_and(|(writer, _)| {
                 !writer.depth && (writer.layout.fmt, writer.layout.siz) == (0, 2)
@@ -2829,18 +3023,12 @@ impl Coherence {
                         .any(|draw| draw.combiner.is_some());
                 let coverage_enabled = rgba16
                     && channel == 0
-                    && stamps
-                        .as_chunks::<8>()
-                        .0
-                        .iter()
-                        .enumerate()
-                        .any(|(pixel, stamp)| {
-                            let slot = u32::from_ne_bytes(stamp[..4].try_into().unwrap());
-                            slot as usize > snapshot.first_draw
-                                && data[pixel * 4 + 3] & 4 == 0
-                                && snapshot.draws[slot as usize - 1].coverage_mode()
-                                    != CoverageMode::Unknown
-                        });
+                    && stamps.as_chunks::<8>().0.iter().any(|stamp| {
+                        let slot = u32::from_ne_bytes(stamp[..4].try_into().unwrap());
+                        slot as usize > snapshot.first_draw
+                            && snapshot.draws[slot as usize - 1].coverage_mode()
+                                != CoverageMode::Unknown
+                    });
                 let ResolveScratch {
                     geometry,
                     coverage,
@@ -2872,10 +3060,7 @@ impl Coherence {
                     needed.fill(false);
                     for (pixel, stamp) in stamps.as_chunks::<8>().0.iter().enumerate() {
                         let slot = u32::from_ne_bytes(stamp[..4].try_into().unwrap());
-                        if slot as usize > snapshot.first_draw
-                            && last_draw[pixel] <= slot
-                            && data[pixel * 4 + 3] & 4 == 0
-                        {
+                        if slot as usize > snapshot.first_draw && last_draw[pixel] <= slot {
                             let draw = &snapshot.draws[slot as usize - 1];
                             if draw.coverage_mode() != CoverageMode::Unknown
                                 && !geometry.admitted[slot as usize - 1]
@@ -2984,6 +3169,18 @@ impl Coherence {
                             let mut rgba: [u8; 4] =
                                 data[pixel * 4..pixel * 4 + 4].try_into().unwrap();
                             let draw = &snapshot.draws[slot as usize - 1];
+                            if channel == 0 {
+                                if let Some(words) = copy_words.get(&(slot as usize - 1)) {
+                                    let color = words[pixel * 4..pixel * 4 + 4].try_into().unwrap();
+                                    if rgba16 {
+                                        stored.push(255);
+                                    }
+                                    return writer
+                                        .encode(color, color[3] & 7, pixel, None, 3, self.encoding)
+                                        .into_iter()
+                                        .take(writer.pixel_bytes());
+                                }
+                            }
                             if draw.literal.is_some() {
                                 if let Some(fills) = &native_fills {
                                     let (word, coverage) = fills
@@ -3033,6 +3230,13 @@ impl Coherence {
                                     coverage,
                                     pixel,
                                     if writer.depth { None } else { draw.literal },
+                                    draw.mode.map_or(3, |mode| {
+                                        if mode.cycle_type >= 2 {
+                                            3
+                                        } else {
+                                            mode.rgb_dither
+                                        }
+                                    }),
                                     self.encoding,
                                 )
                                 .into_iter()
@@ -3072,18 +3276,19 @@ impl Coherence {
 }
 
 impl Coherence {
-    /// Mark owned bytes the guest has changed since ultragfx wrote them as foreign, and queue them as
-    /// imports for the targets that cover them.
+    /// Mark guest-edited bytes as foreign and queue them for import into their writer's views.
     pub fn release_changed(
         &mut self,
         memory: &impl crate::Rdram,
     ) -> Result<(), crate::MemoryError> {
         let mut changed = Vec::new();
-        for (&address, owned) in &self.owners.0 {
+        let mut updates = Vec::new();
+        for (&address, owned) in &self.owners.ranges {
             if !owned.writer.supported() {
                 continue;
             }
             let bytes = crate::hle::interp::read_bytes_exact(memory, address, owned.bytes.len())?;
+            let before = changed.len();
             let mut start = 0;
             while start < bytes.len() {
                 if bytes[start] == owned.bytes[start] {
@@ -3100,10 +3305,31 @@ impl Coherence {
                 });
                 start = end;
             }
+            if changed.len() != before {
+                updates.push((address, bytes.into_owned()));
+            }
         }
         for patch in &changed {
             self.invalidate_hidden(patch.address, patch.bytes.len());
-            self.owners.mark_foreign(patch.address, patch.bytes.clone());
+            self.owners
+                .foreign
+                .push(patch.address..patch.address + patch.bytes.len() as u64);
+        }
+        if !changed.is_empty() {
+            self.owners
+                .foreign
+                .sort_unstable_by_key(|range| range.start);
+            self.owners.foreign.dedup_by(|next, previous| {
+                if next.start <= previous.end {
+                    previous.end = previous.end.max(next.end);
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        for (address, bytes) in updates {
+            self.owners.ranges.get_mut(&address).unwrap().bytes = bytes;
         }
         self.imports.extend(changed);
         self.imported = !self.imports.is_empty();
@@ -3125,7 +3351,7 @@ impl Coherence {
         let ranges: Vec<_> = if let Some(row) = restore_from {
             let first = writer.address + u64::from(row) * writer.layout.row_bytes().unwrap();
             self.owners
-                .0
+                .ranges
                 .iter()
                 .filter(|(_, range)| range.writer.supported())
                 .map(|(&address, range)| address.max(first)..address + range.bytes.len() as u64)
@@ -3146,21 +3372,20 @@ impl Coherence {
                 ..((end - writer.address) as usize).div_ceil(size)
             {
                 let address = writer.address + (pixel * size) as u64;
-                let bytes: Option<Vec<_>> = (address..address + size as u64)
-                    .map(|byte| {
-                        self.owners
-                            .0
-                            .range(..=byte)
-                            .next_back()
-                            .and_then(|(&start, range)| {
-                                range
-                                    .writer
-                                    .supported()
-                                    .then(|| range.bytes.get((byte - start) as usize).copied())
-                                    .flatten()
-                            })
-                    })
-                    .collect();
+                let bytes: Option<Vec<_>> =
+                    (address..address + size as u64)
+                        .map(|byte| {
+                            self.owners.ranges.range(..=byte).next_back().and_then(
+                                |(&start, range)| {
+                                    range
+                                        .writer
+                                        .supported()
+                                        .then(|| range.bytes.get((byte - start) as usize).copied())
+                                        .flatten()
+                                },
+                            )
+                        })
+                        .collect();
                 let Some(bytes) = bytes else {
                     continue;
                 };

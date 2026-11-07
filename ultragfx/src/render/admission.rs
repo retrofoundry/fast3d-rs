@@ -257,21 +257,22 @@ impl SceneRenderer {
                 }
                 let extent = request.encoded.recipe().allocation_extent();
                 plan.image((extent[0], extent[1]))?;
-                let mut input_bytes = 4096u64 + 4096 * 4;
+                let mut input_bytes = 4096u64 + 4096 * 8;
                 let mut tags = HashSet::new();
                 for tag in request.tags.bytes.iter().filter(|tag| tag.copy != 0) {
                     if tags.insert(tag.copy) {
                         input_bytes = input_bytes
-                            .checked_add(u64::from(
-                                request.tags.copies[usize::from(tag.copy) - 1].size,
-                            ))
+                            .checked_add(
+                                u64::from(request.tags.copies[usize::from(tag.copy) - 1].size)
+                                    * if self.coherence.is_some() { 2 } else { 1 },
+                            )
                             .ok_or_else(|| plan.overflow())?;
                     }
                 }
                 plan.buffer(input_bytes, true)?;
                 if self.render_scale > 1 && request.image_route() {
                     let mut scale = 1;
-                    let mut image_bytes = 4096u64 + 4096 * 12;
+                    let mut image_bytes = 4096u64 + 4096 * 16;
                     for tag in tags {
                         let copy = &request.tags.copies[usize::from(tag) - 1];
                         let q = self
@@ -285,8 +286,13 @@ impl SceneRenderer {
                         } else {
                             u64::from(copy.size)
                         };
+                        let guest_size = if self.coherence.is_some() {
+                            u64::from(copy.size)
+                        } else {
+                            0
+                        };
                         image_bytes = image_bytes
-                            .checked_add(size)
+                            .checked_add(size + guest_size)
                             .ok_or_else(|| plan.overflow())?;
                     }
                     plan.image((

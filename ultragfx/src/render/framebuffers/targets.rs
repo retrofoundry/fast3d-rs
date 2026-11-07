@@ -109,16 +109,15 @@ impl TargetDescriptors {
         self.writes.clear();
         self.drawn.clear();
         self.owned.clear();
-        for (&start, range) in owners.0.iter().filter(|(_, range)| !range.foreign) {
-            let writer = range.writer;
+        for (start, writer, generation, bytes) in owners.rendered_ranges() {
             self.owned.push((
-                start..start + range.bytes.len() as u64,
+                start..start + bytes.len() as u64,
                 (writer.address, writer.depth, writer.layout),
             ));
             self.writes
-                .entry((range.writer.address, range.writer.depth))
-                .and_modify(|generation| *generation = (*generation).max(range.generation))
-                .or_insert(range.generation);
+                .entry((writer.address, writer.depth))
+                .and_modify(|old| *old = (*old).max(generation))
+                .or_insert(generation);
         }
     }
 

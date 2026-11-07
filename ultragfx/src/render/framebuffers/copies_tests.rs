@@ -68,7 +68,7 @@ fn pixels(request: &Arc<FramebufferTexture>) -> Vec<[u8; 4]> {
     let (device, queue) = crate::render::headless_device_forced_fallback();
     let recorder = Recorder::new(crate::profiling::Mode::Counters);
     let mut copies = Copies::default();
-    copies.begin(&device, request.tags.copies.iter().cloned(), 1);
+    copies.begin(&device, request.tags.copies.iter().cloned(), 1, false);
     copies.texture(&device, &queue, request, &recorder, false);
     let output = copies
         .pending
@@ -122,6 +122,7 @@ fn pixels(request: &Arc<FramebufferTexture>) -> Vec<[u8; 4]> {
         )]);
         copies.copy(
             &mut encoder,
+            &queue,
             copy,
             &HashMap::new(),
             &versions,
