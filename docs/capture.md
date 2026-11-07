@@ -31,7 +31,7 @@ retained rows outside the crop. Source selection changes output only.
 
 ```sh
 devenv shell -- cargo run -p ultragfx --features capture --example replay_capture -- \
-  frame.f3dcap output --scale 3 --source presentation
+  frame.ugfxcap output --scale 3 --source presentation
 ```
 
 A single-frame fixture starts with default RDP registers, empty TMEM and no established color
@@ -87,7 +87,7 @@ Helix's selection indices start at zero and count graphics-task consumes, includ
 before gameplay. Whitespace around comma-separated indices is accepted; invalid or absent indices disable
 capture with a warning. A selected consume copies memory while the guest is blocked. After
 presentation, Helix names the file from the recorded renderer serial: selection `120` writes
-`frame-000121.f3dcap` when each consume begins one frame. Existing files are never overwritten.
+`frame-000121.ugfxcap` when each consume begins one frame. Existing files are never overwritten.
 Use a new directory for another run. `ULTRAGFX_CAPTURE_REVISION` and
 `ULTRAGFX_CAPTURE_SYMBOLS` optionally supply provenance; omitted values are marked unknown.
 The hook cannot discover decomp symbols from runtime pointers.
@@ -100,13 +100,13 @@ Replay a captured frame from the ultragfx worktree:
 
 ```sh
 devenv shell -- cargo run -p ultragfx --features capture --example replay_capture -- \
-  ../sm64-frames/frame-000121.f3dcap ../sm64-frame-121
+  ../sm64-frames/frame-000121.ugfxcap ../sm64-frame-121
 ```
 
 The example reports adapter information, task diagnostics and summaries, and writes a PNG
 and raw RGBA8 file. Failure to obtain an adapter, missing memory, or a clear-policy mismatch
 is an error. Review live images and independent semantic assertions before pinning any
-regression golden. `ultragfx/tests/fixtures/host64-fill.f3dcap` is a synthetic full-frame red fill,
+regression golden. `ultragfx/tests/fixtures/host64-fill.ugfxcap` is a synthetic full-frame red fill,
 with literal F3D commands and addresses above 4 GiB; it contains no game assets.
 
 Helix applies depth write-back during captured tasks before releasing the guest. Its live
@@ -151,9 +151,9 @@ Pack a complete, ordered set of frame payloads and replay all controls:
 
 ```sh
 cargo run -p ultragfx --features capture --example replay_capture -- \
-  --pack startup.f3dcap 120 121,122,123 captures/frame-*.f3dcap
+  --pack startup.ugfxcap 120 121,122,123 captures/frame-*.ugfxcap
 cargo run -p ultragfx --features capture --example replay_capture -- \
-  startup.f3dcap evidence/startup all
+  startup.ugfxcap evidence/startup all
 ```
 
 The output directory must already exist. The fourth packing argument lists selected renderer
@@ -183,12 +183,12 @@ absence result is claimed by these tests.
 
 ## Version-two sequence byte layout
 
-The version-two header uses `F3DCAP\0\0` and the same little-endian marker as version one.
+The version-two header uses `UGFXCAP\0` and the same little-endian marker as version one.
 All integer fields are little-endian and reserved fields must be zero.
 
 | Offset | Size | Field |
 | --- | --- | --- |
-| 0 | 8 | Magic `F3DCAP\0\0` |
+| 0 | 8 | Magic `UGFXCAP\0` |
 | 8 | 4 | Version, `2` |
 | 12 | 4 | Endian marker, `0x04030201` |
 | 16 | 8 | Total file length |
@@ -209,7 +209,7 @@ are synthetic and their provenance identifies the modelled decomp symbols. Water
 `dl_waterbox_rgba16_begin`'s `MODULATERGBA`: texture alpha times vertex alpha from
 `movtex_make_quad_vertex`. Environment alpha does not control this source path.
 
-The browser suite embeds five `.f3dcap` files: the high-address fill, an environment-alpha
+The browser suite embeds five `.ugfxcap` files: the high-address fill, an environment-alpha
 combiner selector, power-meter point filtering, castle TRILERP and transparent-Mario dither.
 Native and browser runs share semantic assertions; the browser dither check allows 450–575
 survivors among 1024 pixels with alpha 128/255. The native transparent-Mario test also checks
@@ -219,7 +219,7 @@ Regenerate the checked-in files from the workspace root. The ignored writer and 
 need no GPU; the writer records the synthetic command reads through the CPU interpreter.
 The drift test decodes each checked-in file and compares it with its builder, so files still
 at frame version 1 pass even though the writer emits version 2. The writer also rewrites
-`host64-fill.f3dcap`, which `capture_v1_fixture_remains_readable` reads as the version-1
+`host64-fill.ugfxcap`, which `capture_v1_fixture_remains_readable` reads as the version-1
 sample, so restore it afterwards. Cargo runs tests from the crate directory, so use an
 absolute output path:
 
@@ -227,7 +227,7 @@ absolute output path:
 ULTRAGFX_WRITE_FIXTURES="$PWD/ultragfx/tests/fixtures" \
   cargo test -p ultragfx --features capture --lib \
   write_browser_sm64_fixtures -- --ignored
-git checkout -- ultragfx/tests/fixtures/host64-fill.f3dcap
+git checkout -- ultragfx/tests/fixtures/host64-fill.ugfxcap
 cargo test -p ultragfx --features capture --lib browser_fixture_bytes_match_builders
 cargo test -p ultragfx --features capture --lib sm64_corpus_roundtrips_without_diagnostics
 ```
@@ -280,7 +280,7 @@ The 32-byte header is:
 
 | Offset | Size | Field |
 | --- | --- | --- |
-| 0 | 8 | Magic `F3DCAP\0\0` |
+| 0 | 8 | Magic `UGFXCAP\0` |
 | 8 | 4 | Version, `1` |
 | 12 | 4 | Endian marker, `0x04030201` (bytes `01 02 03 04`) |
 | 16 | 8 | Total file length |

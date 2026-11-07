@@ -23,7 +23,7 @@ def compare_bytes(row, a, b, r, expected):
     scene = row['scene']
     if not len(a) == len(b) == len(r) == row['rgba_bytes']:
         raise ValueError('missing or truncated RGBA row')
-    if hashlib.sha256(a).hexdigest() != row['fast3d_sha256']:
+    if hashlib.sha256(a).hexdigest() != row['ultragfx_sha256']:
         raise ValueError('parent RGBA differs from the frozen C2 anchor')
     if a != b:
         raise ValueError(f'{scene}: parent/candidate RGBA differs at threshold 0')

@@ -294,11 +294,11 @@ class TimingV4Tests(unittest.TestCase):
                 self.assertEqual(t1.native(SimpleNamespace(root=root, window=window,
                     cpu_floor_ms=.01, elapsed_floor_ms=.01)), 0)
             self.assertIn('driver-checks', events[0])
-            self.assertEqual(events[1][1:3], ['sequence', str(root/'captures/demo1-dense.f3dcap')])
+            self.assertEqual(events[1][1:3], ['sequence', str(root/'captures/demo1-dense.ugfxcap')])
             self.assertEqual(events[1][3:], [str(window/'native-demo1-dense/warmup'), 'coarse'])
             plan = json.loads((window/'native-demo1-dense/attempts.json').read_text())
             self.assertEqual(plan['warmup'], {'full_prefix_runs':1, 'command':[
-                str(root/'bin/b1-perf'), 'sequence', str(root/'captures/demo1-dense.f3dcap'),
+                str(root/'bin/b1-perf'), 'sequence', str(root/'captures/demo1-dense.ugfxcap'),
                 str(window/'native-demo1-dense/warmup'), 'coarse']})
             self.assertEqual(events[2], 90)
             self.assertEqual(len(events[3:]), 10)

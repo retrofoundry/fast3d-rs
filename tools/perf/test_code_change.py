@@ -219,7 +219,7 @@ class CodeChangeTests(unittest.TestCase):
                 plan = json.loads((out/'attempts.json').read_text())
                 expected = [{'revision':label, 'full_prefix_runs':1, 'command':[
                     str(root/'bin'/('b1-perf-'+label)), 'sequence',
-                    str(root/'captures/demo1-dense.f3dcap'), str(out/('warmup-'+label)), 'coarse']}
+                    str(root/'captures/demo1-dense.ugfxcap'), str(out/('warmup-'+label)), 'coarse']}
                     for label in (['candidate','parent'] if reverse else ['parent','candidate'])]
                 self.assertEqual(plan['warmup'], expected)
                 self.assertEqual(events[2:4], [w['command'] for w in expected])

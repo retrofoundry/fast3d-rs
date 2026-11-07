@@ -6,7 +6,7 @@ use ultragfx::capture::{CaptureError, Fixture};
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 async fn checked_in_high_address_fixture_renders() {
-    let fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
+    let fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.ugfxcap")).unwrap();
     let output = fixture.replay_headless().await.unwrap();
     #[cfg(not(target_arch = "wasm32"))]
     eprintln!("capture replay adapter: {:?}", output.adapter_info);
@@ -40,7 +40,7 @@ async fn capture_checked_in_high_address_fixture_renders() {
 }
 
 async fn public_replay_rejects_missing_span() {
-    let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.ugfxcap")).unwrap();
     let entry = fixture.tasks[0].entry;
     fixture.tasks[0].spans.clear();
     let error = fixture.replay_headless().await.unwrap_err();
@@ -66,7 +66,7 @@ async fn capture_public_replay_rejects_missing_span() {
 }
 
 async fn public_replay_rejects_prior_framebuffer_dependence() {
-    let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.ugfxcap")).unwrap();
     let mut changed = false;
     for span in &mut fixture.tasks[0].spans {
         for command in span.bytes.as_chunks_mut::<16>().0.iter_mut() {

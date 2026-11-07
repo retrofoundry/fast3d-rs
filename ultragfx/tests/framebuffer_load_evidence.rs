@@ -52,15 +52,15 @@ fn f0_paired_claim_excludes_lost_bits_and_later_writes() {
     for x in [48, 64, 80, 96] {
         assert_ne!(
             semantics::oracle_expected(x, 48),
-            semantics::fast3d_expected(Case::ShortcutRect, x, 48)
+            semantics::ultragfx_expected(Case::ShortcutRect, x, 48)
         );
         assert_eq!(
             semantics::oracle_expected(x, 64),
-            semantics::fast3d_expected(Case::ShortcutRect, x, 64)
+            semantics::ultragfx_expected(Case::ShortcutRect, x, 64)
         );
         assert_ne!(
             semantics::oracle_expected(x + 96, 64),
-            semantics::fast3d_expected(Case::ShortcutRect, x + 96, 64)
+            semantics::ultragfx_expected(Case::ShortcutRect, x + 96, 64)
         );
     }
     assert_eq!(semantics::oracle_expected(48, 96), [255; 4]);
@@ -98,7 +98,7 @@ async fn replay() {
                 let (x, y) = (i as u32 % 320, i as u32 / 320);
                 assert_eq!(
                     *pixel,
-                    semantics::fast3d_expected(case, x, y),
+                    semantics::ultragfx_expected(case, x, y),
                     "{} ({x}, {y}), {policy:?}",
                     case.name()
                 );
@@ -129,7 +129,7 @@ fn f0_shortcut_samples_texture_coordinates() {
             let (x, y) = (i as u32 % 320, i as u32 / 320);
             assert_eq!(
                 *pixel,
-                semantics::fast3d_expected(Case::ShortcutRect, x, y),
+                semantics::ultragfx_expected(Case::ShortcutRect, x, y),
                 "({x}, {y})"
             );
         }

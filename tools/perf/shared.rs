@@ -121,7 +121,7 @@ pub fn sequence_input(input: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>
         return Ok(std::fs::read(input)?);
     }
     let fixture = ultragfx::capture::Fixture::from_bytes(include_bytes!(
-        "../../ultragfx/tests/fixtures/host64-fill.f3dcap"
+        "../../ultragfx/tests/fixtures/host64-fill.ugfxcap"
     ))?;
     let sequence = ultragfx::capture::Sequence {
         frames: (1..=6)
@@ -148,7 +148,7 @@ mod tests {
         let sequence =
             ultragfx::capture::Sequence::from_bytes(&sequence_input("authored").unwrap()).unwrap();
         let original = ultragfx::capture::Fixture::from_bytes(include_bytes!(
-            "../../ultragfx/tests/fixtures/host64-fill.f3dcap"
+            "../../ultragfx/tests/fixtures/host64-fill.ugfxcap"
         ))
         .unwrap();
         assert_eq!(sequence.frames.len(), 6);

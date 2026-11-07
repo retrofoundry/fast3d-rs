@@ -186,7 +186,7 @@ fn write_rt64_sm64_hud_us_copy_fixture() {
         0x2000,
         320,
         240,
-        "sm64-hud-us-copy.f3dcap",
+        "sm64-hud-us-copy.ugfxcap",
         provenance(false),
     );
 }
@@ -200,7 +200,7 @@ fn write_rt64_sm64_hud_eu_point_fixture() {
         0x2000,
         320,
         240,
-        "sm64-hud-eu-point.f3dcap",
+        "sm64-hud-eu-point.ugfxcap",
         provenance(true),
     );
 }

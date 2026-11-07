@@ -22,7 +22,7 @@ class T1Tests(unittest.TestCase):
         for attempt in plan['attempts']:
             self.assertEqual(attempt['command'][:3],
                              ['/relay with spaces/bin/b1-perf', 'sequence',
-                              '/relay with spaces/captures/demo1-dense.f3dcap'])
+                              '/relay with spaces/captures/demo1-dense.ugfxcap'])
             self.assertEqual(attempt['command'][4:], ['coarse'])
             self.assertEqual(attempt['expected_observed'], 120)
 

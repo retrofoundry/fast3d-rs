@@ -421,10 +421,10 @@ pub fn benchmark(
                         black_box(algorithm.digest(black_box(&keys[j])));
                     }
                     "hash_bank_only_control" => {
-                        black_box(algorithm.digest(black_box(&keys[j][45..4141])));
+                        black_box(algorithm.digest(black_box(&keys[j][47..4143])));
                     }
                     "hash_metadata_only_control" => {
-                        black_box(algorithm.digest(black_box(&keys[j][..45])));
+                        black_box(algorithm.digest(black_box(&keys[j][..47])));
                     }
                     "lookup" => {
                         black_box(map.get(black_box(&hashes[j])));

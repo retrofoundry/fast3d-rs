@@ -163,7 +163,7 @@ def compare_ledger(frozen, rendered, output):
 
 
 def archived_quad(archive, output):
-    names = ["f3dex2-quad-winding-fast3d", "f3dex2-quad-winding-rt64", "quad-as-tri2-rt64"]
+    names = ["f3dex2-quad-winding-ultragfx", "f3dex2-quad-winding-rt64", "quad-as-tri2-rt64"]
     a, b, tri2 = [(archive / f"{name}.rgba8").read_bytes() for name in names]
     assert len(a) == len(b) == len(tri2) == 320 * 240 * 4
     assert b == tri2

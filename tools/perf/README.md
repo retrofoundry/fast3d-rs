@@ -21,8 +21,8 @@ export B1_BIN="$B1_BUILD/target/release/b1-perf"
 
 ```sh
 for name in demo1-dense demo1 pinned demo2; do
-  "$B1_BIN" metadata "$B1_CAPTURES/$name.f3dcap" "$B1_OUT/$name"
-  "$B1_BIN" inspect "$B1_CAPTURES/$name.f3dcap" "$B1_OUT/$name"
+  "$B1_BIN" metadata "$B1_CAPTURES/$name.ugfxcap" "$B1_OUT/$name"
+  "$B1_BIN" inspect "$B1_CAPTURES/$name.ugfxcap" "$B1_OUT/$name"
 done
 "$B1_BIN" source-cpu "$B1_SCENE" "$B1_OUT/source"
 "$B1_BIN" preflight authored "$B1_OUT/authored-costs"
@@ -46,7 +46,7 @@ Each diagnostic directory contains every frame in `frames.jsonl`, ordered full e
 
 `metadata` writes `admission.json`, counting configurations and microcode/data/memory declarations across every frame and task. It can add metadata to an existing diagnostic directory without replacing frame records.
 
-Preflight compares FNV-1a 64 (`fnv1a64-v1`) with default-seed XXH3-64 (`xxh3-64-v1`, `twox-hash` 2.1.2, one-shot API, `std` and `xxhash3_64` features). The dependency belongs only to the standalone measurement driver. Native aarch64 dispatch can use NEON; wasm uses the crate’s scalar implementation. The ordered diagnostic simulator still uses FNV-1a. `hash-inputs.json` (browser: `hash_inputs`) checks every distinct canonical input across all classes for collisions under both hashes and equal-key output agreement. With no collisions, canonical equality, request order and payload sizes give both algorithms the same simulated hit/miss and eviction history. Matching-version trace files can then be reused with their original provenance; they are not new rendered or timed executions. Canonical bytes start with `fast3d-b1-bank-v3\0`, a one-byte representation, eight little-endian u16 descriptor fields, ten one-byte descriptor/TLUT fields, all 4096 bank bytes, with no reconstructed stream. This is 45 metadata bytes before bank input. It is a conservative measurement identity, not a replacement-pack identifier. Diagnostic read visitors measure distinct bytes and read operations at the existing decoder's reads; they do not implement a cache footprint. Traces require version 3 and have no linear representation or saved load provenance; old traces must be regenerated. Rejected requests never become simulated hits.
+Preflight compares FNV-1a 64 (`fnv1a64-v1`) with default-seed XXH3-64 (`xxh3-64-v1`, `twox-hash` 2.1.2, one-shot API, `std` and `xxhash3_64` features). The dependency belongs only to the standalone measurement driver. Native aarch64 dispatch can use NEON; wasm uses the crate’s scalar implementation. The ordered diagnostic simulator still uses FNV-1a. `hash-inputs.json` (browser: `hash_inputs`) checks every distinct canonical input across all classes for collisions under both hashes and equal-key output agreement. With no collisions, canonical equality, request order and payload sizes give both algorithms the same simulated hit/miss and eviction history. Matching-version trace files can then be reused with their original provenance; they are not new rendered or timed executions. Canonical bytes start with `ultragfx-b1-bank-v3\0`, a one-byte representation, eight little-endian u16 descriptor fields, ten one-byte descriptor/TLUT fields, all 4096 bank bytes, with no reconstructed stream. This is 47 metadata bytes before bank input. It is a conservative measurement identity, not a replacement-pack identifier. Diagnostic read visitors measure distinct bytes and read operations at the existing decoder's reads; they do not implement a cache footprint. Traces require version 3 and have no linear representation or saved load provenance; old traces must be regenerated. Rejected requests never become simulated hits.
 
 The cost unit is ns/request. `D` is decoder execution including its existing output allocation. `owned_copy` and `allocation_only` are separate probes; the model claims zero avoided ownership copies (`copy_multiplier_in_d=0`). Validation is measured separately, included in both end-to-end paths, and excluded from incremental `K`. `K` sums snapshot/metadata construction, hashing and map lookup. `snapshot` includes the unchanged canonical builder’s allocation, vector growth, metadata encoding and bank copies. `canonical_copy_control` allocates and copies an already-built key of the same size; the difference estimates construction overhead beyond that bulk copy. `snapshot_and_hash` directly measures their combined path. Bank-only and metadata-only hash probes are controls, not terms added to `K`. `H` sums distinct-buffer equality and Arc handoff. `M` measures insertion, retained ownership and eviction with owned inputs prepared outside its batch. Full hit and miss paths execute independently, and `baseline_total` calls the diagnostic CPU validity scan and direct format decode dispatch. After T4 this is an offline CPU oracle cost, not the production TMEM render path. The baseline/common decomposition residual is recorded too; it catches extra validation or dispatch work omitted by a component model. Their residual against the component model is reported; an unexplained residual beyond uncertainty leaves the boundary unresolved.
 
@@ -57,8 +57,8 @@ The miss probe churns a class-local cache holding half the rotating set. A one-i
 For actual native measurement, use `sequence` or `source`. Every invocation creates a fresh renderer. Counter-only, coarse and detailed runs are separate configurations; `trace` is diagnostic. Device/pipeline/output setup, replay adaptation, result serialization, readback and completion waits are separate from the CPU spans.
 
 ```sh
-"$B1_BIN" sequence "$B1_CAPTURES/demo1-dense.f3dcap" "$B1_OUT/native-dense-coarse" coarse
-"$B1_BIN" sequence "$B1_CAPTURES/demo2.f3dcap" "$B1_OUT/native-demo2-detailed" detailed
+"$B1_BIN" sequence "$B1_CAPTURES/demo1-dense.ugfxcap" "$B1_OUT/native-dense-coarse" coarse
+"$B1_BIN" sequence "$B1_CAPTURES/demo2.ugfxcap" "$B1_OUT/native-demo2-detailed" detailed
 "$B1_BIN" source "$B1_SCENE" "$B1_OUT/native-source-coarse" coarse
 ```
 
@@ -69,20 +69,25 @@ Use all four sequence inputs, plus the source on Metal and Chrome. The observed 
 Correctness runs retain every readback hash, summary and diagnostic. They are separate from timing:
 
 ```sh
-"$B1_BIN" ordinary "$B1_CAPTURES/demo2.f3dcap" "$B1_OUT/demo2-ordinary"
-"$B1_BIN" sequence "$B1_CAPTURES/demo2.f3dcap" "$B1_OUT/demo2-measured-correctness" trace --readback
+"$B1_BIN" ordinary "$B1_CAPTURES/demo2.ugfxcap" "$B1_OUT/demo2-ordinary"
+"$B1_BIN" sequence "$B1_CAPTURES/demo2.ugfxcap" "$B1_OUT/demo2-measured-correctness" trace --readback
 python3 tools/perf/report.py compare --input "$B1_OUT/demo2-ordinary/frames.jsonl" --other "$B1_OUT/demo2-measured-correctness/frames.jsonl" --out "$B1_OUT/demo2-mode-comparison.json"
 ```
 
 Repeat on all four captures. Missing frames, changed hashes/diagnostics/summaries, an admission failure or any dropped task refutes equivalence. A command-trace vector is absent by default in measurement mode. Native B2 pairs pass `--parent-compatible` to the candidate because the 509cf9b public replay reader always records selected commands. This matches the parent reader's work; trace collection remains outside summary formatting and cache-request diagnostics. Original replay remains the library default.
 
-The parent-compatible adapter uses public APIs already present at `509cf9b`. It streams all readbacks and requires `frame.dither_seed == 0` throughout each sequence: this adapter leaves the renderer's seed at its initial zero. Sequence validation requires all frames to share the same seed, so checking the first frame covers the sequence. A rejection reports the frame serial and declared seed. Build it separately; never patch the assembler's pin:
+The parent-compatible adapter uses public APIs already present at `509cf9b`. It streams all readbacks and requires `frame.dither_seed == 0` throughout each sequence: this adapter leaves the renderer's seed at its initial zero. Sequence validation requires all frames to share the same seed, so checking the first frame covers the sequence. A rejection reports the frame serial and declared seed.
+
+Historical parent checkouts must receive the project-identity rename before building.
+The driver requires the `ultragfx` crate and `UGFXCAP` framing, including embedded
+sequence frames. Use the renamed captures pinned by `CAPTURES` in `report.py`.
+Build the parent separately; never patch the assembler's pin:
 
 ```sh
 export B1_PARENT='/Volumes/DS Vault/hub/scratch/fast3d/b1-parent-build'
 python3 tools/perf/configure.py --baseline --library /Users/ci/hub/repos/fast3d-rs/fast3d --assembler "$B1_ASM" --out "$B1_PARENT"
 cargo build --offline --release --manifest-path "$B1_PARENT/Cargo.toml"
-"$B1_PARENT/target/release/b1-perf" sequence "$B1_CAPTURES/demo2.f3dcap" "$B1_OUT/demo2-parent"
+"$B1_PARENT/target/release/b1-perf" sequence "$B1_CAPTURES/demo2.ugfxcap" "$B1_OUT/demo2-parent"
 python3 tools/perf/report.py compare --input "$B1_OUT/demo2-parent/frames.jsonl" --other "$B1_OUT/demo2-measured-correctness/frames.jsonl" --out "$B1_OUT/demo2-parent-comparison.json"
 "$B1_PARENT/target/release/b1-perf" source "$B1_SCENE" "$B1_OUT/source-parent"
 "$B1_BIN" source "$B1_SCENE" "$B1_OUT/source-correctness" coarse --readback
@@ -133,7 +138,7 @@ Monitoring errors, missing data, within-phase gaps over 1.5 seconds, swap-out gr
 Set `B1_ATTESTATION`, `B1_RESERVED_START` and `B1_RESERVED_END` to the operator's actual statement and reserved UTC interval. Start calibration while the host is already resting, with enough time left in that interval for preflight, the command and postflight. Wrap a prebuilt native command as follows:
 
 ```sh
-python3 tools/perf/protocol.py --out "$B1_OUT/quiet/demo2-coarse-pair1-candidate" --attestation "${B1_ATTESTATION:?}" --scheduled-start "${B1_RESERVED_START:?}" --scheduled-end "${B1_RESERVED_END:?}" --pair demo2-coarse-1-attempt1 --revision candidate --workload demo2 --configuration coarse --allowed-idle WindowServer -- "$B1_BIN" sequence "$B1_CAPTURES/demo2.f3dcap" "$B1_OUT/timed/demo2-coarse-1-candidate" coarse
+python3 tools/perf/protocol.py --out "$B1_OUT/quiet/demo2-coarse-pair1-candidate" --attestation "${B1_ATTESTATION:?}" --scheduled-start "${B1_RESERVED_START:?}" --scheduled-end "${B1_RESERVED_END:?}" --pair demo2-coarse-1-attempt1 --revision candidate --workload demo2 --configuration coarse --allowed-idle WindowServer -- "$B1_BIN" sequence "$B1_CAPTURES/demo2.ugfxcap" "$B1_OUT/timed/demo2-coarse-1-candidate" coarse
 ```
 
 For a fresh ci4 dry run, first satisfy the obligations above, then run this from the worktree in a normal shell with access to `ps`, `top`, `vm_stat` and `pmset`:
@@ -174,7 +179,7 @@ Parent coarse spans time `begin_frame`, `process_dl` and presentation at their p
 
 Before settling or calibrating, the runner executes `test_native.py` on both prebuilt binaries. The test runs the six-frame authored sequence through coarse and counters and invokes the real summarizer. It requires four observed frames, positive coarse `cpu_ms`, complete elapsed intervals, no timed readbacks, and readback agreement with ordinary replay. Set both binary variables when running this test directly; without them, unittest discovery explicitly skips the hardware test. A missing GPU or failed assertion stops the batch. The runner then settles for 90 seconds, records all 100 protocol invocations, and summarizes only after the final postflight. It includes rejected invocations with missing summaries in `attempts.json`.
 
-`authored` is generated by the shared input builder for both binaries from `host64-fill.f3dcap`: six 64×48 HOST64 red-fill frames, serials 1–6, Persist, seed zero, two warmup frames and presentation serial 6. The original fixture declares seed 17; the builder explicitly sets zero for this regression without changing its display-list tasks. File inputs retain their recorded seeds. This exercises native replay, timing summaries and readback equivalence; it does not cover nonzero-seed replay or replace the four capture regressions. Parent counters mode checks frame completion and elapsed intervals; only the candidate exposes library counters.
+`authored` is generated by the shared input builder for both binaries from `host64-fill.ugfxcap`: six 64×48 HOST64 red-fill frames, serials 1–6, Persist, seed zero, two warmup frames and presentation serial 6. The original fixture declares seed 17; the builder explicitly sets zero for this regression without changing its display-list tasks. File inputs retain their recorded seeds. This exercises native replay, timing summaries and readback equivalence; it does not cover nonzero-seed replay or replace the four capture regressions. Parent counters mode checks frame completion and elapsed intervals; only the candidate exposes library counters.
 
 Rebuild both binaries after changing the shared builder, then run the hardware test from the repository root:
 

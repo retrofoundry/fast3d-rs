@@ -41,10 +41,10 @@ def code_change_status(metrics, admitted):
     return 'no regression resolved above U'
 
 CAPTURES = {
-    'demo1-dense': {'frames':1519,'warmup':1399,'observed':[1400,1519],'route':'demo1','sha256':'2467ff249136182d2ad6a837f17f9dad4b405dfe45af10a5c8956dd3685328fa'},
-    'demo1': {'frames':1600,'warmup':1199,'observed':[1200,1600],'route':'demo1-control','sha256':'bec5477ac49dbc2d37fe5d20063e4795aecb63558ac63a865bc09c11c237643b'},
-    'pinned': {'frames':1419,'warmup':1399,'observed':[1400,1419],'route':'demo1-control','sha256':'80d169162416b01385184fc49ea6a6cade17e5fe51045ec02b73796fb75b8572'},
-    'demo2': {'frames':2719,'warmup':2599,'observed':[2600,2719],'route':'demo2','sha256':'bec7c92cd3c87b8a25367d5439e572d7851009460309263560a302f5bc5c9c09','bytes':573989192,'provenance':'second-route-provenance.md','scene':'stone masonry, grass, dirt slope and sky; second attract route of the same build'},
+    'demo1-dense': {'frames':1519,'warmup':1399,'observed':[1400,1519],'route':'demo1','sha256':'44f415aae07bc31729fdb25869d0aa9eb2fdf5d5c5ee26906bc0a9ffe6612029'},
+    'demo1': {'frames':1600,'warmup':1199,'observed':[1200,1600],'route':'demo1-control','sha256':'a7bb2a25d69f6b9faacbf69fa6174610d819106cf4fa73218b674e3b803480d3'},
+    'pinned': {'frames':1419,'warmup':1399,'observed':[1400,1419],'route':'demo1-control','sha256':'d9ee9339af27f3e76ea591cc39e76790e0f6eb09f25616c330fd5b59311f4db1'},
+    'demo2': {'frames':2719,'warmup':2599,'observed':[2600,2719],'route':'demo2','sha256':'d59214b05c0d414c3c01b4d268f1cd6d4b50d70dc99d1bac6c14fc7271121e25','bytes':573989192,'provenance':'second-route-provenance.md','scene':'stone masonry, grass, dirt slope and sky; second attract route of the same build'},
 }
 
 def rows(path):
@@ -132,7 +132,7 @@ def manifest(args):
             if path.is_file() and '__pycache__' not in name:
                 archive.write(path,name)
     source=json.loads((args.source_run/'input.json').read_text())
-    captures={name:{**data,'path':str(args.captures/(name+'.f3dcap')),'prefix_start':1} for name,data in CAPTURES.items()}
+    captures={name:{**data,'path':str(args.captures/(name+'.ugfxcap')),'prefix_start':1} for name,data in CAPTURES.items()}
     for name, item in captures.items():
         input_record=args.evidence/name/'input.json'
         item['cpu_admission']=str(input_record) if input_record.exists() else None
@@ -143,11 +143,11 @@ def manifest(args):
         runs.append(json.loads(run.read_text()))
     invalidate_pairs(runs)
     value={'stage':'B1 smoke; B2 quiet measurements pending','captures':captures,'source':source,
-           'revisions':{'fast3d':command(['git','rev-parse','HEAD'],root).strip(),'base':'509cf9b5abdfc76a64532cf87d78f20363fe254b','assembler':command(['git','rev-parse','HEAD'],args.assembler).strip(),'assembler_pin':'f19a9c34c763f64aace0b61c26b65dcb490415e5','sm64':'4a9dcf0d0a82a637b19b401f969639c9f4e0c83a','rt64':'43373749dac9bbc1b653e6a02aed40a9e1783bed'},
+           'revisions':{'ultragfx':command(['git','rev-parse','HEAD'],root).strip(),'base':'509cf9b5abdfc76a64532cf87d78f20363fe254b','assembler':command(['git','rev-parse','HEAD'],args.assembler).strip(),'assembler_pin':'f19a9c34c763f64aace0b61c26b65dcb490415e5','sm64':'4a9dcf0d0a82a637b19b401f969639c9f4e0c83a','rt64':'43373749dac9bbc1b653e6a02aed40a9e1783bed'},
            'build':{'profile':'release, debug=1','features':['capture','profiling'],'rustc':compiler,'cargo':command(['cargo','-V']),'dependencies':str(out/'dependencies.json'),'dependency_graph_sha256':sha(out/'dependencies.json'),'lock_sha256':sha(out/'Cargo.lock'),'local_diff_sha256':sha(out/'candidate.diff'),'untracked':str(out/'untracked.txt'),'candidate_source_archive':str(out/'candidate-source.zip'),'candidate_source_sha256':sha(out/'candidate-source.zip')},
            'host':{'os':host_probe(['sw_vers']),'uname':host_probe(['uname','-a']),'cpu':host_probe(['sysctl','-n','machdep.cpu.brand_string']),'logical_cpus':host_probe(['sysctl','-n','hw.logicalcpu'])},
            'clock':{'implementation':'Instant native; performance.now browser','calibration':'input/setup clock arrays are [resolution_ms, event_ms]; cost rows also name both fields in ns','units':'CPU-side elapsed ms; not GPU or OS thread CPU time'},
-           'preflight':{'budget_bytes':16*1024*1024,'policy':'LRU, no admission filter, canonical equality on digest match, two-frame conservative pins','hashes':sorted({r['hash_version'] for p in args.costs for r in rows(p)}),'trace_hash':'fnv1a64-v1','identity':'fast3d-b1-bank-v3, little-endian metadata + 4096 bank bytes','trace_live_reference_status':'upper bound: scene ownership not traced; pinning and bypass accounting cannot establish a production hit rate','cost_paths':[str(p) for p in args.costs]},
+           'preflight':{'budget_bytes':16*1024*1024,'policy':'LRU, no admission filter, canonical equality on digest match, two-frame conservative pins','hashes':sorted({r['hash_version'] for p in args.costs for r in rows(p)}),'trace_hash':'fnv1a64-v1','identity':'ultragfx-b1-bank-v3, little-endian metadata + 4096 bank bytes','trace_live_reference_status':'upper bound: scene ownership not traced; pinning and bypass accounting cannot establish a production hit rate','cost_paths':[str(p) for p in args.costs]},
            'quiet_protocol_version':VERSION,'quiet_policy':POLICY,'runs':runs,'pair_order':[{'pair':r.get('pair'),'revision':r.get('revision')} for r in runs],'spreads':{},
            'hardware_validation':'pending native Metal, Windows DX12/static-DXC, Chrome WebGPU, pinned IMAGE oracle',
            'second_route_provenance':'/Volumes/DS Vault/hub/scratch/fast3d/second-route-provenance.md'}

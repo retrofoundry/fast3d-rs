@@ -39,7 +39,7 @@ def run(args):
                         quiet = out/'quiet'/name
                         command = [str(getattr(args,revision)),
                                    'source' if workload=='source' else 'sequence',
-                                   str(args.scene if workload=='source' else args.captures/(workload+'.f3dcap')),
+                                   str(args.scene if workload=='source' else args.captures/(workload+'.ugfxcap')),
                                    str(timed),configuration]
                         if revision=='candidate' and workload!='source':
                             command.append('--parent-compatible')

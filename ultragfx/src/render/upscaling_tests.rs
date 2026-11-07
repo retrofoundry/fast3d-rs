@@ -1404,7 +1404,8 @@ fn replacement_source(
     };
     let input = EncodedInput::Tmem(std::sync::Arc::new([tag; 4096]));
     let target =
-        ReplacementTarget::new(recipe.clone(), input.clone(), TextureKeyScheme::Fast3dV1).unwrap();
+        ReplacementTarget::new(recipe.clone(), input.clone(), TextureKeyScheme::UltragfxV1)
+            .unwrap();
     let request = EncodedTextureRequest::from_test_parts(input, recipe);
     let pixels = (0..12 * scale)
         .flat_map(|y| (0..16 * scale).flat_map(move |x| [x as u8, y as u8, tag, 255]))

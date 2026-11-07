@@ -72,7 +72,7 @@ def main():
         const started = new Date().toISOString();
         let data;
         if (options.kind === 'source') data = await module.source(await (await fetch('/scene.n64')).text(),options.mode,options.readback,options.one_frame);
-        else if (options.kind === 'sequence') data = await module.sequence(new Uint8Array(await (await fetch('/capture.f3dcap')).arrayBuffer()),options.mode,options.readback,options.one_frame);
+        else if (options.kind === 'sequence') data = await module.sequence(new Uint8Array(await (await fetch('/capture.ugfxcap')).arrayBuffer()),options.mode,options.readback,options.one_frame);
         else data = module.preflight(options.cases ? await (await fetch('/cases.json')).text() : '');
         const result = JSON.parse(data);
         result.browser = navigator.userAgent;

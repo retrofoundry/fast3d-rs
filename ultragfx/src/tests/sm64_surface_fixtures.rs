@@ -437,23 +437,23 @@ fn write(surface: Surface, filename: &str) {
 #[test]
 #[ignore = "writes an RT64 oracle fixture to ULTRAGFX_WRITE_FIXTURES"]
 fn write_rt64_sm64_shadow_decal_fixture() {
-    write(Surface::Shadow, "sm64-shadow-decal.f3dcap");
+    write(Surface::Shadow, "sm64-shadow-decal.ugfxcap");
 }
 
 #[test]
 #[ignore = "writes an RT64 oracle fixture to ULTRAGFX_WRITE_FIXTURES"]
 fn write_rt64_sm64_water_translucency_fixture() {
-    write(Surface::Water, "sm64-water-translucency.f3dcap");
+    write(Surface::Water, "sm64-water-translucency.ugfxcap");
 }
 
 #[test]
 #[ignore = "writes an RT64 oracle fixture to ULTRAGFX_WRITE_FIXTURES"]
 fn write_rt64_sm64_cutout_foliage_fixture() {
-    write(Surface::Foliage, "sm64-cutout-foliage.f3dcap");
+    write(Surface::Foliage, "sm64-cutout-foliage.ugfxcap");
 }
 
 #[test]
 #[ignore = "writes an RT64 oracle fixture to ULTRAGFX_WRITE_FIXTURES"]
 fn write_rt64_triangle_pixel_corner_point_fixture() {
-    write(Surface::PointBands, "triangle-pixel-corner-point.f3dcap");
+    write(Surface::PointBands, "triangle-pixel-corner-point.ugfxcap");
 }

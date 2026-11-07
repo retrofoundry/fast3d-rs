@@ -7,7 +7,7 @@ pub(crate) mod rt64_v5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureKeyScheme {
-    Fast3dV1,
+    UltragfxV1,
     Rt64V5,
 }
 
@@ -64,11 +64,11 @@ impl ReplacementTarget {
         profiling: &Recorder,
     ) -> Option<Self> {
         match scheme {
-            TextureKeyScheme::Fast3dV1 => {
+            TextureKeyScheme::UltragfxV1 => {
                 let (key, witness) = request.identity_profiled(profiling);
                 Some(Self {
                     key: TextureKey {
-                        scheme: TextureKeyScheme::Fast3dV1,
+                        scheme: TextureKeyScheme::UltragfxV1,
                         xxh3_64: key.xxh3_64,
                     },
                     witness,
@@ -265,7 +265,7 @@ impl ReplacementProvider {
         mut target: impl FnMut(TextureKeyScheme) -> Option<ReplacementTarget>,
         profiling: &Recorder,
     ) -> (ReplacementTarget, Option<&ReplacementStatus>) {
-        let native = target(TextureKeyScheme::Fast3dV1).unwrap();
+        let native = target(TextureKeyScheme::UltragfxV1).unwrap();
         if let Some(status) = self.lookup(&native, profiling) {
             return (native, Some(status));
         }

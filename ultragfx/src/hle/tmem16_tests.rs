@@ -824,7 +824,7 @@ fn crystal_replacement_alias_keeps_stale_sampled_bytes() {
     let target = |request: &EncodedTextureRequest, scheme| {
         ReplacementTarget::new(request.recipe().clone(), request.input().clone(), scheme).unwrap()
     };
-    let native = target(request, TextureKeyScheme::Fast3dV1);
+    let native = target(request, TextureKeyScheme::UltragfxV1);
     let alias = target(request, TextureKeyScheme::Rt64V5);
     assert_eq!(native.witness(), request.witness());
     assert_eq!(
@@ -837,7 +837,7 @@ fn crystal_replacement_alias_keeps_stale_sampled_bytes() {
     rdp.tmem_bank.write_tile(&[0xa0; 8], 2, 0, 1, 1, 8, 1);
     let changed = prepare(&rdp, &rdp.tiles[0], 0, &Recorder::default()).unwrap();
     assert_ne!(
-        target(encoded(&changed.source), TextureKeyScheme::Fast3dV1),
+        target(encoded(&changed.source), TextureKeyScheme::UltragfxV1),
         native
     );
     assert_ne!(

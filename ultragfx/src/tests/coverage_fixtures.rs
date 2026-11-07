@@ -499,7 +499,7 @@ fn write_rt64_coverage_fixtures() {
             .unwrap();
         }
         for (suffix, bytes) in [
-            ("f3dcap", fixture(&case).to_bytes().unwrap()),
+            ("ugfxcap", fixture(&case).to_bytes().unwrap()),
             ("expected-a.rgba8", a),
             ("expected-b.rgba8", b),
             ("xor.rgba8", mask),
@@ -582,7 +582,7 @@ fn coverage_fixture_bytes_match_builders() {
     for case in cases() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures")
-            .join(format!("{}.f3dcap", case.name));
+            .join(format!("{}.ugfxcap", case.name));
         assert_eq!(
             crate::capture::Fixture::from_bytes(&std::fs::read(path).unwrap()).unwrap(),
             fixture(&case),

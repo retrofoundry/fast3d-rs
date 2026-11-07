@@ -29,7 +29,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send(args.scene.read_bytes(), 'text/plain')
         elif self.path == '/cases.json' and args.cases:
             self.send(args.cases.read_bytes(), 'application/json')
-        elif self.path == '/capture.f3dcap' and args.capture:
+        elif self.path == '/capture.ugfxcap' and args.capture:
             self.send(args.capture.read_bytes(), 'application/octet-stream')
         elif re.fullmatch(r'/pkg/[a-zA-Z0-9_.-]+', self.path):
             path = args.build / self.path[1:]

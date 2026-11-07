@@ -39,10 +39,10 @@ pub const REPLACEMENT: [u8; 4] = [203, 53, 107, 255];
 impl Case {
     pub fn fixture_bytes(self) -> &'static [u8] {
         match self {
-            Self::OffsetRect => include_bytes!("../fixtures/fbload-offset-rect.f3dcap"),
-            Self::OffsetTriangle => include_bytes!("../fixtures/fbload-offset-triangle.f3dcap"),
-            Self::ExactRect => include_bytes!("../fixtures/fbload-exact-rect.f3dcap"),
-            Self::ShortcutRect => include_bytes!("../fixtures/fbload-shortcut-rect.f3dcap"),
+            Self::OffsetRect => include_bytes!("../fixtures/fbload-offset-rect.ugfxcap"),
+            Self::OffsetTriangle => include_bytes!("../fixtures/fbload-offset-triangle.ugfxcap"),
+            Self::ExactRect => include_bytes!("../fixtures/fbload-exact-rect.ugfxcap"),
+            Self::ShortcutRect => include_bytes!("../fixtures/fbload-shortcut-rect.ugfxcap"),
         }
     }
 
@@ -64,7 +64,7 @@ pub fn oracle_expected(x: u32, y: u32) -> [u8; 4] {
     expected(x, y, UNPACKED, UNPACKED)
 }
 
-pub fn fast3d_expected(case: Case, x: u32, y: u32) -> [u8; 4] {
+pub fn ultragfx_expected(case: Case, x: u32, y: u32) -> [u8; 4] {
     if case == Case::ShortcutRect {
         if (88..120).contains(&y) {
             [0, 0, 0, 255]

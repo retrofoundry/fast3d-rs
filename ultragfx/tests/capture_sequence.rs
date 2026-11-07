@@ -3,7 +3,7 @@
 use ultragfx::capture::{Fixture, Sequence};
 
 fn sequence() -> Sequence {
-    let mut frame = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
+    let mut frame = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.ugfxcap")).unwrap();
     frame.frame.serial = 1;
     frame.frame.config.clear_policy = ultragfx::ClearPolicy::Persist;
     let mut second = frame.clone();
@@ -70,9 +70,9 @@ fn sequence_decoder_rejects_truncation_reserved_fields_and_trailing_bytes() {
 
 #[test]
 fn sequence_reads_legacy_v1_frame_payload() {
-    let mut frame = include_bytes!("fixtures/host64-fill.f3dcap").to_vec();
+    let mut frame = include_bytes!("fixtures/host64-fill.ugfxcap").to_vec();
     frame[32..40].copy_from_slice(&1u64.to_le_bytes());
-    let mut bytes = b"F3DCAP\0\0".to_vec();
+    let mut bytes = b"UGFXCAP\0".to_vec();
     bytes.extend(2u32.to_le_bytes());
     bytes.extend(0x04030201u32.to_le_bytes());
     bytes.extend((56 + frame.len() as u64).to_le_bytes());

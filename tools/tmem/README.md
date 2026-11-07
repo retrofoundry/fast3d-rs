@@ -4,7 +4,7 @@ Production rendering decodes owned TMEM requests with GPU compute and retains
 images by exact encoded identity. These tools freeze the byte contract and test
 lazy identity, ownership and validation boundaries. The CPU request decoder is a
 test oracle; explicit offline profiling helpers can also expand saved inputs.
-Fast3dV1 is specified in [fast3d-v1.md](fast3d-v1.md); the internal request boundary
+UltragfxV1 is specified in [ultragfx-v1.md](ultragfx-v1.md); the internal request boundary
 and counter definitions are in [owned-requests.md](owned-requests.md).
 The [replacement API](../../docs/texture-replacements.md) documents optional
 providers, v5 admission and scaled sampling. `rt64-v5-vectors.json` and

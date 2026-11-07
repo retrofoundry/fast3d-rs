@@ -59,7 +59,7 @@ fn reference_serialize(recipe: &DecodeRecipe, bank: &[u8; TMEM_BYTES]) -> Vec<u8
         }
     }
     let mut out = Vec::new();
-    out.extend_from_slice(b"fast3d-tmem-key\0");
+    out.extend_from_slice(b"ultragfx-tmem-key\0");
     out.extend_from_slice(&1u16.to_le_bytes());
     out.extend_from_slice(&[recipe.representation as u8, recipe.semantic_flags()]);
     for dimension in recipe.output.into_iter().chain(recipe.logical) {
@@ -153,8 +153,8 @@ fn zero_height_selects_no_physical_bytes_or_palette_entries() {
         };
         let bank = [255; TMEM_BYTES];
         let preimage = serialize(&recipe, &bank);
-        assert_eq!(preimage.len(), 56);
-        assert_eq!(&preimage[44..], &[0; 12]);
+        assert_eq!(preimage.len(), 58);
+        assert_eq!(&preimage[46..], &[0; 12]);
         assert_eq!(preimage, reference_serialize(&recipe, &bank));
     }
 }

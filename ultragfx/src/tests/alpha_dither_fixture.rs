@@ -206,7 +206,7 @@ fn write_rt64_sm64_transparent_mario_fixture() {
         0x400,
         320,
         240,
-        "sm64-transparent-mario.f3dcap",
+        "sm64-transparent-mario.ugfxcap",
         provenance(),
     );
 }

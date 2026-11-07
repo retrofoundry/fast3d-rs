@@ -8,7 +8,7 @@ class ExactAnchor(unittest.TestCase):
     def setUp(self):
         self.pixels = bytes([17, 43, 89, 211])
         self.row = {'scene': 'test', 'rgba_bytes': 4, 'channels': 'RGB',
-                    'fast3d_sha256': hashlib.sha256(self.pixels).hexdigest(),
+                    'ultragfx_sha256': hashlib.sha256(self.pixels).hexdigest(),
                     'rt64_sha256': hashlib.sha256(self.pixels).hexdigest()}
 
     def test_unchanged_anchor_passes(self):

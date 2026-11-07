@@ -7,7 +7,7 @@ source with sampling state at the renderer/capture boundary. Synthetic RGBA inpu
 retain their supplied bytes; framebuffer views retain their ordered descriptors.
 
 Renderer preparation sends supported TMEM requests to compute and reuses resident
-images by Fast3dV1 identity with exact witness equality. The request CPU decoder is
+images by UltragfxV1 identity with exact witness equality. The request CPU decoder is
 compiled for tests and offline profiling. Synthetic RGBA sources upload their supplied pixels.
 There is no runtime executor selector or CPU fallback for a TMEM request.
 
@@ -34,10 +34,10 @@ Material and capture admission compare the canonical recipe and sampled physical
 footprint, including stale bytes, initial zeros and used CI palette entries.
 Unrelated bank bytes and unused palette entries do not affect equality. This
 comparison does not initialize an identity or rely on a digest. Renderer
-residency compares the exact Fast3dV1 witness before sharing an image.
+residency compares the exact UltragfxV1 witness before sharing an image.
 
 The canonical recipe records representation, logical/output extents, format/size,
-base/line in 64-bit words and palette/TLUT interpretation. Fast3dV1 has version 1
+base/line in 64-bit words and palette/TLUT interpretation. UltragfxV1 has version 1
 and explicit little-endian fields. TLUT modes 2/3 keep the mode for every format and
 the palette selector for every 4-bit size. With TLUT disabled only CI keeps the mode
 and only CI4 the selector. CI8's bank selector is canonicalized away. The physical footprint builder selects encoded bytes without
@@ -59,7 +59,7 @@ All operation counters use the `tmem.` prefix:
 | --- | --- |
 | `requests`, `rejected_requests` | Interpreter texture-role requests and rejected requests |
 | `bank_cow_allocations`, `bank_cow_bytes` | Bank copies made by loads while prior storage is still owned |
-| `hashes_computed`, `bytes_hashed` | Hash executions and complete Fast3dV1 preimages fed to XXH3 |
+| `hashes_computed`, `bytes_hashed` | Hash executions and complete UltragfxV1 preimages fed to XXH3 |
 | `preimage_bytes_constructed` | Canonical bytes written on identity initialization |
 | `identity_memo_hits` | Accesses that reuse the request-local identity; includes binding checks and combined key/witness access for residency |
 | `footprint_span_bytes`, `palette_index_reads` | Physical range lengths before deduplication and CI palette-index reads for identities and comparisons |
@@ -80,8 +80,8 @@ empty or zero until the offline `Request::analyze` helper runs. The trace format
 requires `Request::version == 3`, removes `linear` and bank `sources`/`blocks`, and
 rejects older records. `Request::decode` replaces the reconstruction/executor APIs;
 offline validation returns a string error, not a rendering diagnostic.
-`Request::canonical()` uses the diagnostic `fast3d-b1-bank-v3` stream. Production
-Tile/Lookup Fast3dV1 keys retain their version and bytes. Retired linear vectors
+`Request::canonical()` uses the diagnostic `ultragfx-b1-bank-v3` stream. Production
+Tile/Lookup UltragfxV1 keys retain their version and bytes. Retired linear vectors
 remain historical serializer fixtures, not production recipes.
 
 `dispatch-expectations.json` freezes the exact T2 counts. Rust tests consume them
@@ -90,7 +90,7 @@ hashes or witnesses, including unchanged frames, new recipes, equal-byte reloads
 role aliases and three retained frames of the `tmem-layouts` display list. That
 last fixture issues 54 requests with 26 required bank copies and 27 sampled-footprint
 comparisons; all identity and memo counts remain zero. Explicit 1×1 I8 identity
-access hashes 59 bytes once, including when requested after the bank is gone.
+access hashes 61 bytes once, including when requested after the bank is gone.
 T4's dispatch/residency expectations are the separate `t4` section and
 [renderer contract](../../docs/texture-residency.md). The public facade retains
 a cloned prior RDP, so its three-frame reload gate counts 27 bank copies rather
@@ -101,6 +101,6 @@ controls under the frozen policy.
 Diagnostic version 3 uses the corrected angrylion decode semantics. `extent` is
 the extent of one plane; `decode()`/`analyze()` append four planes when used
 palette slots have differing lanes. GPU allocation and census PNG extents
-include every plane. Version 1/2 diagnostic requests are rejected. Fast3dV1
+include every plane. Version 1/2 diagnostic requests are rejected. UltragfxV1
 keys retain version 1 and distinguish only affected requests through recipe
 fields and semantic flags.

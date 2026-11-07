@@ -23,7 +23,7 @@ uses intensity, including the palette selector in CI4. A palette selector is
 retained for CI4 or any four-bit TLUT recipe; other recipes use zero. Non-CI
 recipes with TLUT disabled use mode zero.
 
-Fast3dV1 uses the version-1 recipe and exact sampled address/value witness.
+UltragfxV1 uses the version-1 recipe and exact sampled address/value witness.
 Set `palette_lanes` when a used TLUT slot has non-replicated halfwords; the
 constructor verifies that flag against the owned bank. Such images contain four
 stacked lane planes, with an allocation height four times `recipe.output[1]`.
@@ -56,12 +56,12 @@ including when their CPU placeholder bytes would match a registered target.
 
 ## Lookup and lifetime
 
-Lookup tries an exact Fast3dV1 target first. If absent, a provider containing v5
+Lookup tries an exact UltragfxV1 target first. If absent, a provider containing v5
 registrations can request an eligible exact Rt64V5 alias. If both schemes have an
-exact registration, Fast3dV1 wins. Within a scheme, the last exact registration
+exact registration, UltragfxV1 wins. Within a scheme, the last exact registration
 wins. Numeric equality alone never authorizes a replacement.
 
-An exact pending or invalid Fast3dV1 registration stops the search and uses the
+An exact pending or invalid UltragfxV1 registration stops the search and uses the
 native image. It does not fall through to v5. A missing registration also uses
 native output. Invalid images increment `replacement.invalid` and emit a warning
 with the provider revision and reason. Pending and no-match outcomes have their
@@ -76,7 +76,7 @@ equality includes TLUT mode and palette-plane selection; native witness equality
 checks every used lane when planes are required.
 Unrelated TMEM writes do not force another provider lookup or upload. The native
 target check preserves native-first precedence even for cached v5 misses. Native
-decoded residency always uses its original Fast3dV1 key and witness, including
+decoded residency always uses its original UltragfxV1 key and witness, including
 when replacements are enabled.
 
 The decision cache admits at most 256 entries and 8 MiB of charged payload.

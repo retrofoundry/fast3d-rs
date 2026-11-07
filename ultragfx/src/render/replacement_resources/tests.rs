@@ -57,14 +57,14 @@ fn frame_freeze_revision_and_removal() {
     frames.begin_frame();
     assert!(frames.active.is_none());
     assert!(stats.drain().counters.is_empty());
-    frames.queue(Some(provider(&a, TextureKeyScheme::Fast3dV1, ready(17))));
+    frames.queue(Some(provider(&a, TextureKeyScheme::UltragfxV1, ready(17))));
     assert!(frames.active.is_none());
     frames.begin_frame();
     assert_eq!(
         resolve(frames.active.as_mut().unwrap(), &a, &stats),
         Some((17, 1))
     );
-    frames.queue(Some(provider(&a, TextureKeyScheme::Fast3dV1, ready(91))));
+    frames.queue(Some(provider(&a, TextureKeyScheme::UltragfxV1, ready(91))));
     assert_eq!(
         resolve(frames.active.as_mut().unwrap(), &a, &stats),
         Some((17, 1))
@@ -130,7 +130,7 @@ fn eviction_reinsertion_and_full_palette_slot_invalidation() {
 fn oversized_and_zero_entry_decisions_bypass_without_losing_owned_pixels() {
     let a = request(1);
     let stats = Recorder::new(Mode::Counters);
-    let mut cache = Replacements::new(provider(&a, TextureKeyScheme::Fast3dV1, ready(17)));
+    let mut cache = Replacements::new(provider(&a, TextureKeyScheme::UltragfxV1, ready(17)));
     cache.entry_limit = 0;
     for _ in 0..2 {
         assert_eq!(resolve(&mut cache, &a, &stats), Some((17, 1)));
@@ -145,7 +145,7 @@ fn oversized_and_zero_entry_decisions_bypass_without_losing_owned_pixels() {
     let large = EncodedTextureRequest::from_owned_parts(a.input().clone(), recipe);
     let mut cache = Replacements::new(provider(
         &large,
-        TextureKeyScheme::Fast3dV1,
+        TextureKeyScheme::UltragfxV1,
         ReplacementStatus::Ready(ReplacementImage {
             extent: [2048, 1024],
             pixels: vec![71; 8 * 1024 * 1024].into(),
@@ -204,7 +204,7 @@ fn decisions_ignore_unreferenced_bytes_but_track_used_palette_slots() {
         EncodedInput::Tmem(Arc::new(bank)),
         a.recipe().clone(),
     );
-    for scheme in [TextureKeyScheme::Fast3dV1, TextureKeyScheme::Rt64V5] {
+    for scheme in [TextureKeyScheme::UltragfxV1, TextureKeyScheme::Rt64V5] {
         for status in [ready(71), ReplacementStatus::Pending] {
             let mut cache = Replacements::new(provider(&a, scheme, status.clone()));
             let stats = Recorder::new(Mode::Counters);
@@ -218,7 +218,7 @@ fn decisions_ignore_unreferenced_bytes_but_track_used_palette_slots() {
             assert!(!counts.contains_key("replacement.v5_hashes"));
             assert_eq!(
                 resolve(&mut cache, &used_slot, &stats),
-                if scheme == TextureKeyScheme::Fast3dV1 {
+                if scheme == TextureKeyScheme::UltragfxV1 {
                     expected
                 } else {
                     None
@@ -250,7 +250,7 @@ fn changed_input_checks_native_priority_after_a_cached_alias() {
                 status: ready(71),
             },
             ReplacementRegistration {
-                target: ReplacementTarget::for_request(&b, TextureKeyScheme::Fast3dV1, &stats)
+                target: ReplacementTarget::for_request(&b, TextureKeyScheme::UltragfxV1, &stats)
                     .unwrap(),
                 status: ready(99),
             },
@@ -280,17 +280,17 @@ fn display_list_reloads_reuse_replacement_decisions() {
     for (name, bytes, expected_requests) in [
         (
             "layouts",
-            include_bytes!("../../../tests/fixtures/tmem-layouts.f3dcap").as_slice(),
+            include_bytes!("../../../tests/fixtures/tmem-layouts.ugfxcap").as_slice(),
             18,
         ),
         (
             "roles",
-            include_bytes!("../../../tests/fixtures/tmem-roles-lifetime.f3dcap").as_slice(),
+            include_bytes!("../../../tests/fixtures/tmem-roles-lifetime.ugfxcap").as_slice(),
             9,
         ),
         (
             "palette",
-            include_bytes!("../../../tests/fixtures/tmem-tlut-mutation.f3dcap").as_slice(),
+            include_bytes!("../../../tests/fixtures/tmem-tlut-mutation.ugfxcap").as_slice(),
             5,
         ),
     ] {
@@ -320,7 +320,7 @@ fn display_list_reloads_reuse_replacement_decisions() {
                     .collect::<Vec<_>>(),
             );
         }
-        for scheme in [TextureKeyScheme::Fast3dV1, TextureKeyScheme::Rt64V5] {
+        for scheme in [TextureKeyScheme::UltragfxV1, TextureKeyScheme::Rt64V5] {
             let provider = Arc::new(ReplacementProvider::new(
                 1,
                 frames[0].iter().map(|request| ReplacementRegistration {
@@ -412,7 +412,7 @@ fn s2b_decisions_track_non_ci_tlut_modes_and_all_used_lanes() {
         let target = ReplacementTarget::new(
             a.recipe().clone(),
             a.input().clone(),
-            TextureKeyScheme::Fast3dV1,
+            TextureKeyScheme::UltragfxV1,
         )
         .unwrap();
         assert_eq!(target.extent(), [4, 8]);

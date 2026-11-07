@@ -196,11 +196,11 @@ fn write(ia16: bool, filename: &str) {
 #[test]
 #[ignore = "writes an RT64 oracle fixture to ULTRAGFX_WRITE_FIXTURES"]
 fn write_rt64_tlut_ci4_rgba16_banks_fixture() {
-    write(false, "tlut-ci4-rgba16-banks.f3dcap");
+    write(false, "tlut-ci4-rgba16-banks.ugfxcap");
 }
 
 #[test]
 #[ignore = "writes an RT64 oracle fixture to ULTRAGFX_WRITE_FIXTURES"]
 fn write_rt64_tlut_ci4_ia16_banks_fixture() {
-    write(true, "tlut-ci4-ia16-banks.f3dcap");
+    write(true, "tlut-ci4-ia16-banks.ugfxcap");
 }

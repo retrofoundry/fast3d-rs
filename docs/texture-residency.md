@@ -37,7 +37,7 @@ replicated slots retain the one-plane allocation and sampling path. Tagged
 palette lanes are replicated only when their source tags agree. Unknown tagged
 indices conservatively depend on the complete palette.
 
-One renderer owns the image cache for its device. Fast3dV1 selects a bucket;
+One renderer owns the image cache for its device. UltragfxV1 selects a bucket;
 exact canonical-witness equality authorizes every hit, including a repeated
 reference to the same request. The witness shares immutable storage with the
 request. The cache does not retain the request's whole bank. Sampling state and
@@ -88,7 +88,7 @@ threshold of 128. The high byte precedes the low byte. `byte_at` in
 TLUT indices, all four palette lanes, both RGBA32 banks and T wrapping. Ordinary
 writes replace only their destination tags; stale tags follow the current recipe.
 
-Both paths bypass Fast3dV1 identity and ordinary residency. `Copies` caches decoded
+Both paths bypass UltragfxV1 identity and ordinary residency. `Copies` caches decoded
 views by the immutable request's `Arc` identity for one submission, clearing that
 map at `begin`. Copy buffers use the copy's `Arc` identity and remain alive while
 TMEM or a retained request references the snapshot. Decode jobs wait for the last
@@ -104,7 +104,7 @@ row spans in a 4096-bit set, splits odd-row partial words and wrapped ranges,
 and mirrors RGBA32's selected low-bank bytes into the high bank. Lookup selects
 its complete physical bank directly. Every TLUT-enabled format scans encoded
 indices for palette selection; packed 4-bit indices exclude an unused final low
-nibble. The serializer emits sorted address/byte pairs in Fast3dV1 framing, with
+nibble. The serializer emits sorted address/byte pairs in UltragfxV1 framing, with
 semantic flags for corrected CI-off and tall-T decoding and four-plane output.
 Unaffected streams remain byte-identical to the frozen vectors. Material and capture admission compare those same sampled
 bytes directly without constructing identities. Unrelated inherited bytes do
@@ -116,7 +116,7 @@ values within each recorder interval.
 
 | Name under `tmem.` | Meaning |
 | --- | --- |
-| `hashes_computed`, `bytes_hashed` | Request-local hash executions and complete Fast3dV1 bytes fed to XXH3 |
+| `hashes_computed`, `bytes_hashed` | Request-local hash executions and complete UltragfxV1 bytes fed to XXH3 |
 | `preimage_bytes_constructed` | Canonical bytes written on identity initialization, counted separately from hashing |
 | `identity_memo_hits` | Accesses reusing an initialized request identity, including binding checks; a residency resolution accesses key and witness together |
 | `footprint_span_bytes` | Physical range lengths visited by identity or comparison before wrap/overlap deduplication, including both RGBA32 banks; excludes palette selection |
@@ -150,4 +150,4 @@ must be recorded for the candidate revision before merge.
 Optional exact-witness replacement snapshots are described in
 [texture-replacements.md](texture-replacements.md). Both framebuffer source modes
 bypass replacement lookup and alias construction; native decoded residency keeps
-its original Fast3dV1 keys.
+its original UltragfxV1 keys.

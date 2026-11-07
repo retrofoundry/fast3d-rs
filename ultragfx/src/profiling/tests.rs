@@ -21,7 +21,7 @@ fn decode_counters_distinguish_tile_lookup() {
         (toy.reachable_bytes, toy.output.len(), toy.bank.bytes.len()),
         (2048, 4096, 4096)
     );
-    assert_eq!(toy.canonical().len(), 4096 + 45);
+    assert_eq!(toy.canonical().len(), 4096 + 47);
     let lookup = cases
         .iter()
         .find(|r| r.representation == Representation::Lookup && r.tile.fmt == 0 && r.tile.siz == 2)
@@ -159,7 +159,7 @@ fn diagnostic_gpu_input_rejects_incomplete_banks_and_invalid_extents() {
 #[test]
 fn profiling_preserves_interpreter_summary_and_capture_bytes() {
     use crate::Hardware;
-    let bytes = include_bytes!("../../tests/fixtures/host64-fill.f3dcap");
+    let bytes = include_bytes!("../../tests/fixtures/host64-fill.ugfxcap");
     let fixture = crate::capture::Fixture::from_bytes(bytes).unwrap();
     let encoded = fixture.to_bytes().unwrap();
     let task = &fixture.tasks[0];

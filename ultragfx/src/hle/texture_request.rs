@@ -15,7 +15,7 @@ use crate::{profiling::Recorder, DiagKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureKeyScheme {
-    Fast3dV1,
+    UltragfxV1,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -38,7 +38,7 @@ pub struct DecodeRecipe {
     pub logical: [u32; 2],
     pub fmt: u8,
     pub siz: u8,
-    /// TMEM base and stride in 64-bit words, as serialized by Fast3dV1.
+    /// TMEM base and stride in 64-bit words, as serialized by UltragfxV1.
     pub base: u16,
     pub line: u16,
     pub palette: u8,
@@ -172,7 +172,7 @@ impl EncodedTextureRequest {
             profiling.count("tmem.bytes_hashed", witness.len() as u64);
             TextureIdentity {
                 key: TextureKey {
-                    scheme: TextureKeyScheme::Fast3dV1,
+                    scheme: TextureKeyScheme::UltragfxV1,
                     xxh3_64: twox_hash::XxHash3_64::oneshot(&witness),
                 },
                 witness: witness.into(),

@@ -16,9 +16,9 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 fn fixture(name: &str) -> Fixture {
     Fixture::from_bytes(match name {
-        "tmem-layouts" => include_bytes!("fixtures/tmem-layouts.f3dcap"),
-        "tmem-tlut-mutation" => include_bytes!("fixtures/tmem-tlut-mutation.f3dcap"),
-        "tmem-roles-lifetime" => include_bytes!("fixtures/tmem-roles-lifetime.f3dcap"),
+        "tmem-layouts" => include_bytes!("fixtures/tmem-layouts.ugfxcap"),
+        "tmem-tlut-mutation" => include_bytes!("fixtures/tmem-tlut-mutation.ugfxcap"),
+        "tmem-roles-lifetime" => include_bytes!("fixtures/tmem-roles-lifetime.ugfxcap"),
         _ => panic!("unknown fixture {name}"),
     })
     .unwrap()
@@ -390,16 +390,16 @@ fn fixture_identity_census_matches_frozen_dispatch_counts() {
             "tmem-layouts",
             9,
             vec![
-                344, 344, 632, 632, 128, 128, 200, 200, 128, 128, 200, 200, 344, 344, 152, 152,
-                224, 224,
+                346, 346, 634, 634, 130, 130, 202, 202, 130, 130, 202, 202, 346, 346, 154, 154,
+                226, 226,
             ],
         ),
         (
             "tmem-roles-lifetime",
             4,
-            vec![152, 152, 101, 101, 101, 86, 86, 86, 68],
+            vec![154, 154, 103, 103, 103, 88, 88, 88, 70],
         ),
-        ("tmem-tlut-mutation", 3, vec![158; 5]),
+        ("tmem-tlut-mutation", 3, vec![160; 5]),
     ] {
         let identities: Vec<_> = requests(&fixture(name))
             .iter()
@@ -881,10 +881,10 @@ async fn realistic_reloads() {
         );
         for (name, expected) in [
             ("tmem.hashes_computed", 18),
-            ("tmem.bytes_hashed", 4704),
+            ("tmem.bytes_hashed", 4740),
             ("tmem.witness_comparisons", if frame == 0 { 9 } else { 18 }),
             ("tmem.encoded_comparisons", 9),
-            ("tmem.bytes_compared", if frame == 0 { 2968 } else { 5320 }),
+            ("tmem.bytes_compared", if frame == 0 { 2986 } else { 5356 }),
             ("tmem.bank_cow_allocations", 9),
             ("tmem.bank_cow_bytes", 36864),
         ] {
@@ -892,7 +892,7 @@ async fn realistic_reloads() {
         }
         assert_eq!(profile.gauges["tmem.resident_entries"], 9);
         assert_eq!(profile.gauges["tmem.resident_gpu_bytes"], 1728);
-        assert_eq!(profile.gauges["tmem.resident_cpu_bytes"], 2352);
+        assert_eq!(profile.gauges["tmem.resident_cpu_bytes"], 2370);
         semantics::assert_pixels("tmem-layouts", &harness.pixels().await);
         #[cfg(not(target_arch = "wasm32"))]
         export_snapshot(

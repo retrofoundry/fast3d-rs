@@ -10,11 +10,11 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 fn bytes(case: Case) -> &'static [u8] {
     match case {
-        Case::Host64Fill => include_bytes!("fixtures/host64-fill.f3dcap"),
-        Case::CombinerSelector => include_bytes!("fixtures/combiner-env-alpha.f3dcap"),
-        Case::PowerMeterPoint => include_bytes!("fixtures/sm64-power-meter-point.f3dcap"),
-        Case::CastleTrilerp => include_bytes!("fixtures/sm64-castle-trilerp.f3dcap"),
-        Case::TransparentMario => include_bytes!("fixtures/sm64-transparent-mario.f3dcap"),
+        Case::Host64Fill => include_bytes!("fixtures/host64-fill.ugfxcap"),
+        Case::CombinerSelector => include_bytes!("fixtures/combiner-env-alpha.ugfxcap"),
+        Case::PowerMeterPoint => include_bytes!("fixtures/sm64-power-meter-point.ugfxcap"),
+        Case::CastleTrilerp => include_bytes!("fixtures/sm64-castle-trilerp.ugfxcap"),
+        Case::TransparentMario => include_bytes!("fixtures/sm64-transparent-mario.ugfxcap"),
     }
 }
 
@@ -94,7 +94,7 @@ async fn replay_ordered_workload() {
         ultragfx::ClearPolicy::Persist,
     ] {
         let mut fixture =
-            Fixture::from_bytes(include_bytes!("fixtures/workload-interleaving.f3dcap")).unwrap();
+            Fixture::from_bytes(include_bytes!("fixtures/workload-interleaving.ugfxcap")).unwrap();
         fixture.frame.config.clear_policy = policy;
         let output = fixture
             .replay_headless()
@@ -139,7 +139,7 @@ async fn replay_shared_depth() {
         ultragfx::ClearPolicy::Persist,
     ] {
         let mut fixture =
-            Fixture::from_bytes(include_bytes!("fixtures/shared-depth.f3dcap")).unwrap();
+            Fixture::from_bytes(include_bytes!("fixtures/shared-depth.ugfxcap")).unwrap();
         fixture.frame.config.clear_policy = policy;
         let output = fixture
             .replay_headless()
