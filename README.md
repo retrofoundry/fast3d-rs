@@ -1,9 +1,9 @@
-# fast3d
+# ultragfx
 
 **A standalone N64 HLE + wgpu renderer** — hand it a display list from N64 memory and it
 draws the frame.
 
-fast3d walks N64 display lists through a high-level emulation of the RCP and rasterizes them
+ultragfx walks N64 display lists through a high-level emulation of the RCP and rasterizes them
 with wgpu, so the same renderer runs natively and on the web (WebGPU/wasm).
 
 Texture preparation uses GPU decode with renderer-owned residency. See
@@ -15,18 +15,18 @@ or proved Rt64V5 aliases; they are disabled by default.
 
 ```toml
 [dependencies]
-fast3d = "1.0"
+ultragfx = "1.0"
 ```
 
 Implement `Hardware` to expose N64 memory, then drive the frame loop:
 
 ```rust
 // once
-let mut renderer = fast3d::Renderer::new(window, width, height, config).await?;
+let mut renderer = ultragfx::Renderer::new(window, width, height, config).await?;
 
 // per frame
 renderer.begin_frame();
-renderer.process_dl(&hw, dl_entry, fast3d::Microcode::F3dex2, &mut diags);
+renderer.process_dl(&hw, dl_entry, ultragfx::Microcode::F3dex2, &mut diags);
 renderer.present(&hw)?;
 ```
 
@@ -54,8 +54,8 @@ Diagnostics stream through a `DiagSink` (`LogSink`, `NopSink`, or your own).
 `read_bytes(address, length)` returns exactly `length` bytes or an error;
 `in_bounds` is advisory and overflow-safe. Errors carry the requested `u64`
 address, byte length and a `MemoryErrorKind`, without a command PC or logging.
-`Command`, `RawVertex` and `Matrix` are exported from both `fast3d` and
-`fast3d::hardware`. They are decoded values, not guest layouts for casting.
+`Command`, `RawVertex` and `Matrix` are exported from both `ultragfx` and
+`ultragfx::hardware`. They are decoded values, not guest layouts for casting.
 `Command::w1` contains numeric low bits; address operands use `w1_addr`.
 `Matrix` is `[[f32; 4]; 4]`.
 
@@ -83,12 +83,12 @@ remain visible. No source memory is read during presentation.
 implements `Rdram`. Replace native `Hardware` adapters with:
 
 ```rust
-renderer.set_data_format(fast3d::DataFormat::Fixed);
+renderer.set_data_format(ultragfx::DataFormat::Fixed);
 renderer.begin_frame();
-let ram = fast3d::HostRam::new(&[]);
+let ram = ultragfx::HostRam::new(&[]);
 // SAFETY: the submitting guest is blocked; every reachable input stays valid until return.
 let summary = unsafe {
-    renderer.process_dl_host(ram, entry, fast3d::Microcode::F3dex2, &mut diags)
+    renderer.process_dl_host(ram, entry, ultragfx::Microcode::F3dex2, &mut diags)
 };
 // The guest can resume here.
 renderer.present_last()?;
@@ -142,14 +142,14 @@ two-cycle draws with `UnsupportedTextureConversion`; enabling `G_CK_KEY` rejects
 them with `UnsupportedChromaKey`. Copy and fill draws never read these modes and
 are not rejected. The unwritten TEXTCONV default retains the library's
 existing rendering behaviour. All these diagnostics have Error severity and
-drop the draw before shader preparation. Selector enums live in `fast3d::diag`.
+drop the draw before shader preparation. Selector enums live in `ultragfx::diag`.
 
 ## Inspect a display list
 
 ```rust
 use std::ops::ControlFlow;
-use fast3d::{DataFormat, Microcode, RdramImage};
-use fast3d::inspect::{walk, WalkObserver, WalkStep, WalkTermination};
+use ultragfx::{DataFormat, Microcode, RdramImage};
+use ultragfx::inspect::{walk, WalkObserver, WalkStep, WalkTermination};
 
 struct Counter(u32);
 
@@ -191,10 +191,10 @@ and empty TMEM. Prefix rendering leaves live task registers unchanged, including
 
 ## Layout
 
-- `fast3d/` — the HLE interpreter, wgpu renderer, and `Renderer` facade.
+- `ultragfx/` — the HLE interpreter, wgpu renderer, and `Renderer` facade.
 - `n64-gbi/` — dependency leaf: GBI/RDP/RSP vocabulary, command encoders, libultra `gu` math,
   and the literal conformance vectors. No dependencies. Consumers that produce or inspect
-  display lists should depend on this directly rather than on `fast3d`.
+  display lists should depend on this directly rather than on `ultragfx`.
 
 ## Community
 

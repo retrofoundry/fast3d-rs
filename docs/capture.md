@@ -1,6 +1,6 @@
 # Display-list capture and replay
 
-Enable fast3d's opt-in `capture` feature. `CaptureFrame` records public renderer operations;
+Enable ultragfx's opt-in `capture` feature. `CaptureFrame` records public renderer operations;
 `RecordingHardware` intercepts all memory reads made by one task. The supplied `HostRam` and
 `RdramImage` readers report their layout and initial segment bases. A reader without capture
 metadata is rejected. Host-pointer recording retains `HostRam`'s unsafe lifetime contract: the
@@ -30,7 +30,7 @@ retained rows outside the crop. Source selection changes output only.
 `ReplayOutput` reports the effective multiplier, source and output dimensions.
 
 ```sh
-devenv shell -- cargo run -p fast3d --features capture --example replay_capture -- \
+devenv shell -- cargo run -p ultragfx --features capture --example replay_capture -- \
   frame.f3dcap output --scale 3 --source presentation
 ```
 
@@ -73,13 +73,13 @@ and the framebuffer pixel index.
 
 ## Capture from Helix
 
-Build Helix with this branch's fast3d and the `capture` dependency feature enabled. Set
-`FAST3D_CAPTURE_DIR` and `FAST3D_CAPTURE_FRAMES` when starting the game:
+Build Helix with this branch's ultragfx and the `capture` dependency feature enabled. Set
+`ULTRAGFX_CAPTURE_DIR` and `ULTRAGFX_CAPTURE_FRAMES` when starting the game:
 
 ```sh
-FAST3D_CAPTURE_DIR=../sm64-frames \
-FAST3D_CAPTURE_FRAMES=120,240,360 \
-FAST3D_CAPTURE_REVISION="$(git rev-parse HEAD)" \
+ULTRAGFX_CAPTURE_DIR=../sm64-frames \
+ULTRAGFX_CAPTURE_FRAMES=120,240,360 \
+ULTRAGFX_CAPTURE_REVISION="$(git rev-parse HEAD)" \
 ./build-cmake/sm64-us
 ```
 
@@ -88,25 +88,25 @@ before gameplay. Whitespace around comma-separated indices is accepted; invalid 
 capture with a warning. A selected consume copies memory while the guest is blocked. After
 presentation, Helix names the file from the recorded renderer serial: selection `120` writes
 `frame-000121.f3dcap` when each consume begins one frame. Existing files are never overwritten.
-Use a new directory for another run. `FAST3D_CAPTURE_REVISION` and
-`FAST3D_CAPTURE_SYMBOLS` optionally supply provenance; omitted values are marked unknown.
+Use a new directory for another run. `ULTRAGFX_CAPTURE_REVISION` and
+`ULTRAGFX_CAPTURE_SYMBOLS` optionally supply provenance; omitted values are marked unknown.
 The hook cannot discover decomp symbols from runtime pointers.
 
 An already running process must be relaunched to pick up the environment variables and the
 newly linked hook. sm64 statically links Helix, so rebuilding only the Rust library is
 insufficient: relink the game too.
 
-Replay a captured frame from the fast3d worktree:
+Replay a captured frame from the ultragfx worktree:
 
 ```sh
-devenv shell -- cargo run -p fast3d --features capture --example replay_capture -- \
+devenv shell -- cargo run -p ultragfx --features capture --example replay_capture -- \
   ../sm64-frames/frame-000121.f3dcap ../sm64-frame-121
 ```
 
 The example reports adapter information, task diagnostics and summaries, and writes a PNG
 and raw RGBA8 file. Failure to obtain an adapter, missing memory, or a clear-policy mismatch
 is an error. Review live images and independent semantic assertions before pinning any
-regression golden. `fast3d/tests/fixtures/host64-fill.f3dcap` is a synthetic full-frame red fill,
+regression golden. `ultragfx/tests/fixtures/host64-fill.f3dcap` is a synthetic full-frame red fill,
 with literal F3D commands and addresses above 4 GiB; it contains no game assets.
 
 Helix applies depth write-back during captured tasks before releasing the guest. Its live
@@ -150,9 +150,9 @@ diagnostic reset policy because single-frame metadata cannot preserve it.
 Pack a complete, ordered set of frame payloads and replay all controls:
 
 ```sh
-cargo run -p fast3d --features capture --example replay_capture -- \
+cargo run -p ultragfx --features capture --example replay_capture -- \
   --pack startup.f3dcap 120 121,122,123 captures/frame-*.f3dcap
-cargo run -p fast3d --features capture --example replay_capture -- \
+cargo run -p ultragfx --features capture --example replay_capture -- \
   startup.f3dcap evidence/startup all
 ```
 
@@ -224,19 +224,19 @@ sample, so restore it afterwards. Cargo runs tests from the crate directory, so 
 absolute output path:
 
 ```sh
-FAST3D_WRITE_FIXTURES="$PWD/fast3d/tests/fixtures" \
-  cargo test -p fast3d --features capture --lib \
+ULTRAGFX_WRITE_FIXTURES="$PWD/ultragfx/tests/fixtures" \
+  cargo test -p ultragfx --features capture --lib \
   write_browser_sm64_fixtures -- --ignored
-git checkout -- fast3d/tests/fixtures/host64-fill.f3dcap
-cargo test -p fast3d --features capture --lib browser_fixture_bytes_match_builders
-cargo test -p fast3d --features capture --lib sm64_corpus_roundtrips_without_diagnostics
+git checkout -- ultragfx/tests/fixtures/host64-fill.f3dcap
+cargo test -p ultragfx --features capture --lib browser_fixture_bytes_match_builders
+cargo test -p ultragfx --features capture --lib sm64_corpus_roundtrips_without_diagnostics
 ```
 
 The GPU gate round-trips every sm64 fixture through the public headless facade and compares
 its output with explicit-device replay on the same adapter:
 
 ```sh
-cargo test -p fast3d --features capture --lib sm64_corpus_public_facade -- --nocapture
+cargo test -p ultragfx --features capture --lib sm64_corpus_public_facade -- --nocapture
 ```
 
 CI runs Chrome on `macos-latest`, using Metal WebGPU, with the runner image's own Google Chrome
@@ -244,24 +244,24 @@ and the ChromeDriver at `$CHROMEWEBDRIVER`. A Chrome for Testing download does n
 there: its child processes cannot reach the browser's Mach rendezvous port and the network
 service crash-loops before the page loads. Locally, put a matching Chrome and ChromeDriver on
 PATH (or set `CHROMEDRIVER` to the driver's absolute path); set `goog:chromeOptions.binary`
-in `fast3d/webdriver.json` only if Chrome is installed outside its usual location.
+in `ultragfx/webdriver.json` only if Chrome is installed outside its usual location.
 The crate's [WebDriver configuration](https://wasm-bindgen.github.io/wasm-bindgen/wasm-bindgen-test/browsers.html#configuring-headless-browser-capabilities)
 enables headless Chrome and WebGPU with Metal. The checked-in arguments omit
 `--no-sandbox`; wasm-bindgen-test-runner appends it internally.
 
-`fast3d/Cargo.toml` pins `wasm-bindgen-test` exactly, which fixes the `wasm-bindgen` version
+`ultragfx/Cargo.toml` pins `wasm-bindgen-test` exactly, which fixes the `wasm-bindgen` version
 the runner must match (the repository does not track `Cargo.lock`). Install that runner, then
 use the same test command and environment as CI:
 
 ```sh
-version=$(cargo tree -p fast3d --target wasm32-unknown-unknown --features capture -e normal,dev --prefix none \
+version=$(cargo tree -p ultragfx --target wasm32-unknown-unknown --features capture -e normal,dev --prefix none \
   | awk '$1 == "wasm-bindgen" {print substr($2, 2); exit}')
 cargo install --locked wasm-bindgen-cli --version "$version"
 export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner
 export WASM_BINDGEN_TEST_TIMEOUT=300
 export CHROMEDRIVER="${CHROMEDRIVER:-$(command -v chromedriver)}"
-export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/fast3d/webdriver.json"
-cargo test -p fast3d --features capture --target wasm32-unknown-unknown \
+export WASM_BINDGEN_TEST_WEBDRIVER_JSON="$PWD/ultragfx/webdriver.json"
+cargo test -p ultragfx --features capture --target wasm32-unknown-unknown \
   --test browser_sm64_fixture_replay --test capture_facade \
   --test capture_memory_wasm --test capture_s2dex_wasm -- --nocapture
 ```

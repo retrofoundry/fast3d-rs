@@ -1,9 +1,3 @@
-use fast3d::{
-    capture::{Fixture, ReplayHardware, Sequence},
-    inspect::WalkTermination,
-    profiling::{CensusAttempt, CpuInterpreter, Mode, Recorder},
-    Hardware,
-};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -11,6 +5,12 @@ use std::{
     fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+};
+use ultragfx::{
+    capture::{Fixture, ReplayHardware, Sequence},
+    inspect::WalkTermination,
+    profiling::{CensusAttempt, CpuInterpreter, Mode, Recorder},
+    Hardware,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;

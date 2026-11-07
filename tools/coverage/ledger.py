@@ -68,7 +68,7 @@ def ledger(repo, predictions, output):
     output.mkdir(parents=True, exist_ok=True)
     (output / "before").mkdir(exist_ok=True)
     rows = []
-    for path in sorted((repo / "fast3d/goldens").glob("*.bin")):
+    for path in sorted((repo / "ultragfx/goldens").glob("*.bin")):
         name = path.stem
         size = 96 if path.stat().st_size == 96 * 96 * 4 else 64
         assert path.stat().st_size == size * size * 4
@@ -111,8 +111,8 @@ def ledger(repo, predictions, output):
             rows[-1]["admission_prediction"] = {"file": admission.name, **mask_file(admission, [i % size == 32 for i in range(size * size)], size)}
     assert len(rows) == 27
     assert sum(r["prediction"]["pixels"] > 0 for r in rows) == 8
-    source_paths = ["fast3d/src/tests/scene_builders.rs", "fast3d/src/tests/fixtures.rs", "fast3d/src/tests/goldens.rs", "fast3d/src/tests/dl_builder.rs",
-                    "fast3d/src/tests/scene_builders/framebuffers.rs", "fast3d/src/tests/scene_builders/lighting.rs"]
+    source_paths = ["ultragfx/src/tests/scene_builders.rs", "ultragfx/src/tests/fixtures.rs", "ultragfx/src/tests/goldens.rs", "ultragfx/src/tests/dl_builder.rs",
+                    "ultragfx/src/tests/scene_builders/framebuffers.rs", "ultragfx/src/tests/scene_builders/lighting.rs"]
     sources = {name: sha(repo / name) for name in source_paths}
     (output / "golden-ledger.json").write_text(json.dumps({"input_builders": sources, "goldens": rows}, indent=2) + "\n")
     return rows

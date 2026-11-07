@@ -31,7 +31,7 @@ def token_processes(pids, token):
                             capture_output=True, text=True, timeout=5)
     if result.returncode not in (0, 1) or result.stderr.strip():
         raise RuntimeError(f'cannot inspect browser ownership: {result.stderr}')
-    marker = 'FAST3D_BROWSER_RUN_ID='+token
+    marker = 'ULTRAGFX_BROWSER_RUN_ID='+token
     return {int(line.split(maxsplit=1)[0]) for line in result.stdout.splitlines()
             if marker in line.split()}
 
@@ -57,7 +57,7 @@ class BrowserProcesses:
     def start(self, args, **kwargs):
         with self.lock:
             child = subprocess.Popen(args, start_new_session=True,
-                                     env={**os.environ, 'FAST3D_BROWSER_RUN_ID':self.token}, **kwargs)
+                                     env={**os.environ, 'ULTRAGFX_BROWSER_RUN_ID':self.token}, **kwargs)
             self.children.append(child)
         return child
 

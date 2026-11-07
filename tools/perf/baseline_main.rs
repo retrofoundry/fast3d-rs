@@ -46,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     match mode.as_str() {
         "sequence" => pollster::block_on(b1_perf::sequence_with_options(
-            &fast3d::capture::Sequence::from_bytes(&b1_perf::sequence_input(input)?)?,
+            &ultragfx::capture::Sequence::from_bytes(&b1_perf::sequence_input(input)?)?,
             options,
             &mut emit,
         ))?,

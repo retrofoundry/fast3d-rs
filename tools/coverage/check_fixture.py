@@ -87,7 +87,7 @@ if __name__ == "__main__":
     parser.add_argument("scene")
     parser.add_argument("rgba8", type=Path)
     parser.add_argument("--rt64", action="store_true")
-    parser.add_argument("--parent", action="store_true", help="check archived fast3d output against A")
+    parser.add_argument("--parent", action="store_true", help="check archived ultragfx output against A")
     parser.add_argument("--allow-rt64-f3d-quirk", action="store_true",
                         help="require the pinned 4337374 F3D omission and exact RGB everywhere else")
     args = parser.parse_args()

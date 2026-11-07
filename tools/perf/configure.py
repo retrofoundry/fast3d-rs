@@ -11,7 +11,7 @@ parser.add_argument('--baseline', action='store_true')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[2]
 out = args.out.resolve()
-library = args.library.resolve() if args.library else root / 'fast3d'
+library = args.library.resolve() if args.library else root / 'ultragfx'
 lib_file = 'baseline.rs' if args.baseline else 'driver.rs'
 main_file = 'baseline_main.rs' if args.baseline else 'main.rs'
 features = '["capture"]' if args.baseline else '["capture", "profiling"]'
@@ -30,7 +30,7 @@ crate-type = ["rlib", "cdylib"]
 name = "b1-perf"
 path = {quote(root / 'tools/perf' / main_file)}
 [dependencies]
-fast3d = {{ path = {quote(library)}, features = {features} }}
+ultragfx = {{ path = {quote(library)}, features = {features} }}
 n64-toys-asm = {{ path = {quote(args.assembler.resolve() / 'crates/asm')} }}
 wgpu = "29.0"
 serde = {{ version = "1", features = ["derive"] }}

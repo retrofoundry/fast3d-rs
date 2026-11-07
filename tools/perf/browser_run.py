@@ -12,7 +12,7 @@ def main():
     parser=argparse.ArgumentParser()
     for name in ['build','scene','out','chromedriver']:
         parser.add_argument('--'+name,type=Path,required=True)
-    parser.add_argument('--webdriver',type=Path,default=Path(__file__).resolve().parents[2]/'fast3d/webdriver.json')
+    parser.add_argument('--webdriver',type=Path,default=Path(__file__).resolve().parents[2]/'ultragfx/webdriver.json')
     parser.add_argument('--mode',choices=['counters','coarse','detailed','trace'],default='coarse')
     parser.add_argument('--kind',choices=['source','preflight','sequence'],default='source')
     parser.add_argument('--readback',action='store_true')

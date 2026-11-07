@@ -18,7 +18,7 @@ class BrowserProcessTests(unittest.TestCase):
             out = Path(directory)
             profile = out/'chrome-profile'
             child_file = out/'child.json'
-            child = "import json,os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print(json.dumps(dict(pid=os.getpid(),token=os.environ.get('FAST3D_BROWSER_RUN_ID'))),flush=True); time.sleep(60)"
+            child = "import json,os,signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print(json.dumps(dict(pid=os.getpid(),token=os.environ.get('ULTRAGFX_BROWSER_RUN_ID'))),flush=True); time.sleep(60)"
             parent = "import json,subprocess,sys; from pathlib import Path; p=subprocess.Popen([sys.executable,'-c',sys.argv[1]],start_new_session=True,stdout=subprocess.PIPE,text=True); Path(sys.argv[3]).write_text(p.stdout.readline());"
             unrelated = subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)',str(profile)+'-backup'])
             tree = None
