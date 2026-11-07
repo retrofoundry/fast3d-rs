@@ -25,7 +25,8 @@ are provenance, not GPU-alpha assertions. RGBA16 comparisons reduce GPU RGB with
 Precision cases assert saved, independently calculated modern RGB as well as the
 hardware bound. The modern model uses float fog weights, no patterned RDP dither,
 current-pixel timing and affine interpolation at integer XY. Game blending permits
-one RGB8 rounding unit; thin triangles permit one unit for byte-vertex adaptation.
+one RGB8 rounding unit; interpolation permits one unit because GPUs round attribute
+interpolation differently, and thin triangles also for byte-vertex adaptation.
 Thin cases check the selected edge samples, including covered pixels. The game
 masks select full interiors, not partial-coverage edges. Varying W and raw nine-bit
 shade wrap/clamp are outside this adapter: wrap/clamp planes are split into byte
