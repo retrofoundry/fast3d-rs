@@ -513,3 +513,57 @@ fn large_box_preserves_constant_unorm_bytes() {
     });
     assert_eq!(pixels, [224, 240, 160, 255]);
 }
+
+#[test]
+fn decal_history_survives_fixed_and_auto_boundaries() {
+    for fallback in [false, true] {
+        let mut renderer = facade(1, fallback);
+        let mut draw = decal_scene(true, 0);
+        let SceneOp::Tris(base) = &mut draw.framebuffer_pairs[0].ops[0] else {
+            unreachable!()
+        };
+        base.prim_depth.dz = 32;
+        let query = draw.framebuffer_pairs[0].ops.pop().unwrap();
+        renderer.inner.render_into_store(
+            &renderer.device,
+            &renderer.queue,
+            &draw,
+            ClearPolicy::Persist,
+        );
+        draw.framebuffer_pairs[0].ops = vec![query];
+        for (policy, hint, scale, color) in [
+            (ScalePolicy::Fixed(2), 0, 2, [0, 255, 0, 255]),
+            (ScalePolicy::Auto, 240, 4, [0, 0, 255, 255]),
+            (ScalePolicy::Fixed(1), 0, 1, [255, 255, 0, 255]),
+        ] {
+            renderer.set_scale_policy(policy).unwrap();
+            renderer.set_output_content_height(hint);
+            renderer
+                .begin_frame_with_vi(Some(crate::ViRegisters {
+                    origin: A,
+                    width: 32,
+                    status: 2,
+                    v_start: 48,
+                    y_scale: 1024,
+                    ..Default::default()
+                }))
+                .unwrap();
+            assert_eq!(renderer.effective_resolution_multiplier(), scale);
+            draw.materials[1].prim = color;
+            renderer.inner.render_into_store(
+                &renderer.device,
+                &renderer.queue,
+                &draw,
+                ClearPolicy::Persist,
+            );
+            let fb = &renderer.inner.framebuffers[&workload::TargetId::Guest(A.into())];
+            for (texture, factor) in std::iter::once((&fb.color, 1))
+                .chain(fb.presentation.as_ref().map(|p| (&p.texture, scale)))
+            {
+                let pixels = read_texture(&renderer.device, &renderer.queue, texture);
+                let offset = ((3 * factor * texture.width() + 3 * factor) * 4) as usize;
+                assert_eq!(&pixels[offset..offset + 4], color, "{policy:?}, {fallback}");
+            }
+        }
+    }
+}

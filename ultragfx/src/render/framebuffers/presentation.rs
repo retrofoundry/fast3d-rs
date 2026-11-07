@@ -194,7 +194,10 @@ impl super::super::SceneRenderer {
             depth.presentation = (scale > 1).then(|| {
                 let target = super::DepthImage::new(
                     device,
-                    depth.layout,
+                    super::ImageLayout {
+                        width: depth.layout.width * scale,
+                        ..depth.layout
+                    },
                     (
                         depth.texture.width() * scale,
                         depth.texture.height() * scale,
@@ -206,8 +209,8 @@ impl super::super::SceneRenderer {
                 self.depth_pipeline.expand(
                     device,
                     &mut encoder,
-                    &depth.attach,
-                    &target.attach,
+                    depth,
+                    &target,
                     scale,
                     &spans,
                     &self.profiling,

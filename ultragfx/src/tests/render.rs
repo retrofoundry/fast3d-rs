@@ -1,3 +1,7 @@
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "decal_depth.rs"]
+mod decal_depth;
+
 use crate::render::{
     decode_rgba16, headless_device, CombinerUniform, OutVertex, RspProcessParams,
     RspProcessPipeline, TexturedPipeline, CLEAR_COLOR, DEPTH_FORMAT,
@@ -259,6 +263,7 @@ fn render_and_read_center_channel(
         fill_word: 0,
         fill_siz: 0,
         primitive_depth: [0; 4],
+        native_scale: [1.0; 4],
         alpha_threshold: 0.0,
         prim: [1.0, 1.0, 1.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],
@@ -580,6 +585,7 @@ fn renders_red_triangle_center_and_clear_corner() {
         fill_word: 0,
         fill_siz: 0,
         primitive_depth: [0; 4],
+        native_scale: [1.0; 4],
         alpha_threshold: 0.0,
         prim: [1.0, 1.0, 1.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],
@@ -795,6 +801,7 @@ fn depth_test_hides_the_farther_triangle() {
         fill_word: 0,
         fill_siz: 0,
         primitive_depth: [0; 4],
+        native_scale: [1.0; 4],
         alpha_threshold: 0.0,
         prim: [1.0, 1.0, 1.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],
@@ -1482,6 +1489,7 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
         fill_word: 0,
         fill_siz: 0,
         primitive_depth: [0; 4],
+        native_scale: [1.0; 4],
         alpha_threshold: 0.0,
         prim: [1.0, 1.0, 1.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],
@@ -3722,6 +3730,7 @@ fn render_two_texture_center(
         fill_word: 0,
         fill_siz: 0,
         primitive_depth: [0; 4],
+        native_scale: [1.0; 4],
         alpha_threshold: 0.0,
         prim,
         env: [0.0, 0.0, 0.0, 1.0],
@@ -4165,6 +4174,7 @@ fn render_lod_center(
         fill_word: 0,
         fill_siz: 0,
         primitive_depth: [0; 4],
+        native_scale: [1.0; 4],
         alpha_threshold: 0.0,
         prim: [0.0, 0.0, 0.0, 1.0],
         env: [0.0, 0.0, 0.0, 1.0],

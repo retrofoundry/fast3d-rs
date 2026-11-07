@@ -1,9 +1,21 @@
 use super::{
-    extents::TargetExtents, framebuffers::ImageLayout, inputs::RenderInputs, workload::TargetId,
+    extents::TargetExtents,
+    framebuffers::{ImageLayout, DEPTH_BYTES_PER_PIXEL},
+    inputs::RenderInputs,
+    workload::TargetId,
     SceneRenderer,
 };
 use crate::{diag::ResourceAdmission, DiagKind, Diagnostic};
 use std::collections::{HashMap, HashSet};
+
+fn texture_bytes(texture: &wgpu::Texture) -> u64 {
+    let pixel_bytes = if texture.format() == wgpu::TextureFormat::R8Uint {
+        1
+    } else {
+        4
+    };
+    u64::from(texture.width()) * u64::from(texture.height()) * pixel_bytes
+}
 
 struct Admission<'a> {
     limits: &'a wgpu::Limits,
@@ -106,8 +118,15 @@ impl SceneRenderer {
                 std::iter::once(&fb.color).chain(fb.presentation.as_ref().map(|p| &p.texture))
             })
             .chain(self.depthbuffers.values().flat_map(|depth| {
-                std::iter::once(&depth.texture)
-                    .chain(depth.presentation.as_ref().map(|p| &p.texture))
+                std::iter::once(depth)
+                    .chain(depth.presentation.as_deref())
+                    .flat_map(|image| {
+                        [
+                            &image.texture,
+                            image.delta_view.texture(),
+                            image.delta_depth.as_ref().unwrap().texture(),
+                        ]
+                    })
             }))
             .chain(self.color_versions.values())
             .chain(self.presentation_versions.values())
@@ -125,7 +144,7 @@ impl SceneRenderer {
             pc: 0,
         };
         for texture in self.attachment_textures() {
-            plan.charge(u64::from(texture.width()) * u64::from(texture.height()) * 4)?;
+            plan.charge(texture_bytes(texture))?;
         }
         if scale > 1 {
             for texture in self
@@ -145,7 +164,12 @@ impl SceneRenderer {
                         .checked_mul(scale)
                         .ok_or_else(|| plan.overflow())?,
                 );
-                plan.charge(plan.image(extent)?)?;
+                let bytes = plan.image(extent)?;
+                plan.charge(if texture.format() == super::DEPTH_FORMAT {
+                    bytes / 4 * DEPTH_BYTES_PER_PIXEL
+                } else {
+                    bytes
+                })?;
             }
         }
         Ok(())
@@ -155,6 +179,8 @@ impl SceneRenderer {
         &self,
         inputs: &mut RenderInputs<'_>,
         limits: &wgpu::Limits,
+        strict: bool,
+        clear_policy: crate::ClearPolicy,
     ) -> Result<(), Diagnostic> {
         let mut plan = Admission {
             limits,
@@ -163,7 +189,28 @@ impl SceneRenderer {
             pc: 0,
         };
         for texture in self.attachment_textures() {
-            plan.charge(u64::from(texture.width()) * u64::from(texture.height()) * 4)?;
+            plan.charge(texture_bytes(texture))?;
+        }
+        if strict {
+            let target = &inputs.targets[0];
+            if let Some(fb) = self.framebuffers.get(&target.id) {
+                for texture in
+                    std::iter::once(&fb.color).chain(fb.presentation.as_ref().map(|p| &p.texture))
+                {
+                    plan.charge(plan.image((texture.width(), texture.height()))?)?;
+                }
+            }
+            if let Some(depth) = inputs
+                .strict_depth_id(self, clear_policy)
+                .and_then(|id| self.depthbuffers.get(&id))
+            {
+                for image in std::iter::once(depth).chain(depth.presentation.as_deref()) {
+                    plan.charge(
+                        plan.image((image.texture.width(), image.texture.height()))? / 4
+                            * DEPTH_BYTES_PER_PIXEL,
+                    )?;
+                }
+            }
         }
         let mut colors: HashMap<_, _> = self
             .framebuffers
@@ -310,11 +357,7 @@ impl SceneRenderer {
                 fmt: 0,
                 siz: 2,
             };
-            let depth_id = target
-                .depth_image
-                .filter(|_| target.any_depth)
-                .map(TargetId::Guest)
-                .or_else(|| target.any_depth.then_some(TargetId::Legacy));
+            let depth_id = target.depth_id();
             let compatible = |old: &Retained, id, layout| {
                 old.layout == layout && (id != TargetId::Legacy || old.height == native.1)
             };
@@ -360,8 +403,8 @@ impl SceneRenderer {
             }
             if let Some(id) = depth_id {
                 if old_depth.is_none_or(|old| old.allocation_height < height) {
-                    plan.charge(native_bytes)?;
-                    plan.charge(scaled_bytes)?;
+                    plan.charge(native_bytes / 4 * DEPTH_BYTES_PER_PIXEL)?;
+                    plan.charge(scaled_bytes / 4 * DEPTH_BYTES_PER_PIXEL)?;
                 }
                 depths.insert(
                     id,

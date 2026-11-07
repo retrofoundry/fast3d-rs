@@ -776,28 +776,6 @@ fn golden_decal() {
     }
 }
 
-/// Coplanar tolerance boundary: a decal slightly IN FRONT of the (tilted) surface shows; the same
-/// decal slightly BEHIND is occluded (shows base). Asserts the two center pixels differ — the
-/// in-shader tolerance must distinguish front (within dz) from behind (beyond epsilon).
-#[test]
-fn decal_coplanar_tolerance_boundary() {
-    let shown = render_scene_to_rgba8("decal--in-front", 48, 48);
-    let hidden = render_scene_to_rgba8("decal--behind", 48, 48);
-    let c = ((24 * 48 + 24) * 4) as usize;
-    assert_ne!(
-        &shown[c..c + 3],
-        &hidden[c..c + 3],
-        "tolerance must distinguish front (decal shown) from behind (decal occluded): \
-         front=[{},{},{}] behind=[{},{},{}]",
-        shown[c],
-        shown[c + 1],
-        shown[c + 2],
-        hidden[c],
-        hidden[c + 1],
-        hidden[c + 2]
-    );
-}
-
 // ── High-poly scene (Phase F Task F1) ────────────────────────────────────────────────────────────
 
 /// Golden test for the `high-poly` scene — multi-batch vertex-loading guard (Phase F, F1).

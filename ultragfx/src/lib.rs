@@ -1055,7 +1055,12 @@ impl Renderer {
             result.scene.use_compatibility_policy();
             self.inner.coherence.as_mut().unwrap().begin_task();
         }
-        let prepared = match self.inner.prepare_inputs(&self.device, &result.scene) {
+        let prepared = match self.inner.prepare_inputs(
+            &self.device,
+            &result.scene,
+            native,
+            self.config.clear_policy,
+        ) {
             Ok(inputs) => inputs,
             Err(diagnostic) => {
                 diags.emit(diagnostic);
@@ -1067,8 +1072,11 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         let staged = native.then(|| {
             let target = workload.as_ref().unwrap().targets[0].id;
+            let depth = prepared
+                .as_ref()
+                .and_then(|inputs| inputs.strict_depth_id(&self.inner, self.config.clear_policy));
             self.inner
-                .stage_strict_task(&self.device, &self.queue, target)
+                .stage_strict_task(&self.device, &self.queue, target, depth)
         });
         if let Some(coherence) = &mut self.inner.coherence {
             coherence.strict_fills = native;

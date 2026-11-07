@@ -744,7 +744,7 @@ fn preflight_checks_storage_bindings() {
     limits.max_storage_buffer_binding_size = 16;
     assert!(matches!(
         renderer
-            .preflight_inputs(&mut inputs, &limits)
+            .preflight_inputs(&mut inputs, &limits, false, ClearPolicy::Persist)
             .unwrap_err()
             .kind,
         crate::DiagKind::ResourceAdmission {
@@ -848,7 +848,7 @@ fn legacy_scissor_uses_existing_arithmetic_at_the_presentation_viewport() {
         ..Default::default()
     };
     renderer
-        .preflight_inputs(&mut inputs, &device.limits())
+        .preflight_inputs(&mut inputs, &device.limits(), false, ClearPolicy::Persist)
         .unwrap();
     assert_eq!(
         inputs.targets[0].presentation_scissor(0),
@@ -996,7 +996,12 @@ fn fractional_scissors_ceil_each_boundary_before_scaling() {
                     draw.framebuffer_pairs[0].size_extent = (9, 7);
                     let mut inputs = inputs::RenderInputs::new(&draw, (9, 7), [0; 2]).unwrap();
                     renderer
-                        .preflight_inputs(&mut inputs, &device.limits())
+                        .preflight_inputs(
+                            &mut inputs,
+                            &device.limits(),
+                            false,
+                            ClearPolicy::Persist,
+                        )
                         .unwrap();
                     let l = raw.map(|v| v.div_ceil(4));
                     assert_eq!(
@@ -1195,7 +1200,7 @@ fn raw_only_scissor_change_keeps_triangle_operations_and_retained_rdp_state() {
     renderer.set_test_scale(3, BUDGET);
     let mut inputs = inputs;
     renderer
-        .preflight_inputs(&mut inputs, &device.limits())
+        .preflight_inputs(&mut inputs, &device.limits(), false, ClearPolicy::Persist)
         .unwrap();
     assert_eq!(inputs.targets[0].presentation_scissor(0), (0, 0, 96, 72));
     assert_eq!(inputs.targets[0].presentation_scissor(1), (3, 0, 93, 72));
@@ -1747,7 +1752,7 @@ fn sloped_decal_tolerance_uses_native_derivatives_without_scaling_z() {
 }
 
 #[test]
-fn primitive_z_decal_retains_the_baseline_primitive_dz_gap() {
+fn primitive_z_decal_uses_raw_dz_at_every_scale() {
     let (fallback_device, fallback_queue) = headless_device_forced_fallback();
     for (device, queue, primary) in [(fallback_device, fallback_queue, false), headless_device()] {
         for scale in [1, 3] {
@@ -1769,7 +1774,11 @@ fn primitive_z_decal_retains_the_baseline_primitive_dz_gap() {
                         for x in 3 * factor..12 * factor {
                             assert_eq!(
                                 &bytes[((y * 32 * factor + x) * 4) as usize..][..4],
-                                [255, 0, 0, 255]
+                                if dz == 0 {
+                                    [255, 0, 0, 255]
+                                } else {
+                                    [0, 255, 0, 255]
+                                }
                             );
                         }
                     }
@@ -2549,7 +2558,9 @@ fn scaled_snapshot_storage_rejection_leaves_the_store_unpublished() {
     let mut limits = device.limits();
     limits.max_storage_buffer_binding_size = 4096 + 4096 * 4 + 8 * 256;
     let descriptors = renderer.target_descriptors.clone();
-    let error = renderer.preflight_inputs(&mut inputs, &limits).unwrap_err();
+    let error = renderer
+        .preflight_inputs(&mut inputs, &limits, false, ClearPolicy::Persist)
+        .unwrap_err();
     assert!(matches!(
         error.kind,
         crate::DiagKind::ResourceAdmission {
@@ -2695,12 +2706,15 @@ fn strict_failure_restores_scaled_attachments_before_same_interpretation_fallbac
             .is_ok());
         let prepared = renderer
             .inner
-            .prepare_inputs(&renderer.device, &interpreted)
+            .prepare_inputs(&renderer.device, &interpreted, true, ClearPolicy::Persist)
             .unwrap()
             .unwrap();
-        let staged = renderer
-            .inner
-            .stage_strict_task(&renderer.device, &renderer.queue, color_id);
+        let staged = renderer.inner.stage_strict_task(
+            &renderer.device,
+            &renderer.queue,
+            color_id,
+            Some(depth_id),
+        );
         assert_eq!(
             presentation(&renderer),
             before.0,
@@ -2870,7 +2884,7 @@ fn strict_layout_failure_restores_presentation_versions_before_fallback_admissio
         );
         assert!(summary.renderable && diagnostics.is_empty());
         apply(&mut renderer, &mut memory);
-        renderer.inner.attachment_budget = 16 * 32 * 4 * (1 + u64::from(scale * scale))
+        renderer.inner.attachment_budget = 2 * 16 * 32 * 4 * (1 + u64::from(scale * scale))
             + 32 * 32 * 4 * (1 + u64::from(scale * scale));
         let (summary, diagnostics) =
             submit(&mut renderer, &mut memory, &rejected_native_projection());
@@ -2894,4 +2908,254 @@ fn strict_layout_failure_restores_presentation_versions_before_fallback_admissio
         assert_eq!(&pixels[..4], &[255; 4]);
         assert_eq!(fb.layout.width, 32);
     }
+}
+
+#[test]
+fn presentation_only_scissor_depth_writer_feeds_decal() {
+    let (fallback_device, fallback_queue) = headless_device_forced_fallback();
+    for (device, queue, dual) in [(fallback_device, fallback_queue, false), headless_device()] {
+        for scale in [2, 4] {
+            let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+            renderer.set_test_scale(scale, BUDGET);
+            let mut draw = decal_scene(true, 0);
+            let SceneOp::Tris(seed) = &mut draw.framebuffer_pairs[0].ops[0] else {
+                unreachable!()
+            };
+            seed.prim_depth.dz = 32;
+            let query = draw.framebuffer_pairs[0].ops.pop().unwrap();
+            let mut inputs = renderer
+                .prepare_inputs(&device, &draw, false, ClearPolicy::Persist)
+                .unwrap()
+                .unwrap();
+            inputs.targets[0].operations[0].scissor = (0, 0, 0, 1);
+            inputs.targets[0].logical_scissors[0] = Scissor {
+                lrx: 1,
+                lry: 1,
+                ..Default::default()
+            };
+            renderer.render_prepared(&device, &queue, &inputs, ClearPolicy::Persist);
+            draw.framebuffer_pairs[0].ops = vec![query];
+            renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+            let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
+            let image = &fb.presentation.as_ref().unwrap().texture;
+            let pixels = read_texture(&device, &queue, image);
+            let offset = ((image.width() + 1) * 4) as usize;
+            assert_eq!(
+                &pixels[offset..offset + 4],
+                [0, 255, 0, 255],
+                "{scale}x, {dual}"
+            );
+        }
+    }
+}
+
+#[test]
+fn strict_admission_reserves_staging_with_growth() {
+    let (device, queue, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+    renderer.set_test_scale(4, BUDGET);
+    renderer.coherence = Some(Default::default());
+    let draw = decal_scene(true, 0);
+    renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+    let retained = 32 * 24 * 13 * 17;
+    for grow in [false, true] {
+        let mut draw = draw.clone();
+        if grow {
+            draw.framebuffer_pairs[0].size_extent.1 = 48;
+            draw.framebuffer_pairs[0].active_scissor.lry = 48;
+        }
+        renderer.attachment_budget = if grow { retained * 3 } else { retained * 3 / 2 };
+        assert!(renderer
+            .prepare_inputs(&device, &draw, false, ClearPolicy::Persist)
+            .is_ok());
+        assert!(
+            matches!(
+                renderer.prepare_inputs(&device, &draw, true, ClearPolicy::Persist),
+                Err(crate::Diagnostic {
+                    kind: crate::DiagKind::ResourceAdmission {
+                        reason: crate::diag::ResourceAdmission::AttachmentBudget,
+                        ..
+                    },
+                    ..
+                })
+            ),
+            "grow {grow}"
+        );
+    }
+}
+
+#[test]
+fn strict_z_test_only_retains_depth_without_staging() {
+    let (device, queue, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+    renderer.set_test_scale(2, BUDGET);
+    renderer.coherence = Some(Default::default());
+    let mut draw = decal_scene(true, 0);
+    renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+    for mode in &mut draw.render_modes {
+        mode.z_write = false;
+    }
+    let prepared = renderer
+        .prepare_inputs(&device, &draw, true, ClearPolicy::Persist)
+        .unwrap()
+        .unwrap();
+    let id = workload::TargetId::Guest(Z.into());
+    let original = renderer.depthbuffers[&id].clone();
+    let staged = renderer.stage_strict_task(
+        &device,
+        &queue,
+        workload::TargetId::Guest(A.into()),
+        prepared.strict_depth_id(&renderer, ClearPolicy::Persist),
+    );
+    let depth = &renderer.depthbuffers[&id];
+    assert_eq!(depth.texture, original.texture);
+    assert_eq!(depth.delta_view, original.delta_view);
+    assert_eq!(depth.delta_depth, original.delta_depth);
+    assert_eq!(
+        depth.presentation.as_ref().unwrap().texture,
+        original.presentation.as_ref().unwrap().texture
+    );
+    renderer.discard_strict_task(staged);
+    renderer.attachment_budget = 32 * 24 * (13 + 4) * 5;
+    assert!(renderer
+        .prepare_inputs(&device, &draw, true, ClearPolicy::Persist)
+        .is_ok());
+}
+
+#[test]
+fn depth_byte_gauges_include_delta_and_companion() {
+    let (device, queue, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+    renderer.set_test_scale(2, BUDGET);
+    let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+    renderer.profiling = recorder.clone();
+    renderer.render_into_store(&device, &queue, &decal_scene(true, 0), ClearPolicy::Persist);
+    renderer.profile_resident_resources();
+    let snapshot = recorder.snapshot();
+    assert_eq!(snapshot.gauges["gpu_depth_bytes"], 6912);
+    assert_eq!(snapshot.gauges["gpu_presentation_depth_bytes"], 27648);
+}
+
+#[test]
+fn strict_depth_mutations_stage_and_restore_every_plane() {
+    let (device, queue, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+    renderer.set_test_scale(2, BUDGET);
+    renderer.coherence = Some(Default::default());
+    let mut seed = decal_scene(true, 32);
+    let SceneOp::Tris(run) = &mut seed.framebuffer_pairs[0].ops[0] else {
+        unreachable!()
+    };
+    run.prim_depth.dz = 32;
+    renderer.render_into_store(&device, &queue, &seed, ClearPolicy::Persist);
+    let id = workload::TargetId::Guest(Z.into());
+    let pixels = |r: &SceneRenderer| {
+        let depth = &r.depthbuffers[&id];
+        std::iter::once(depth)
+            .chain(depth.presentation.as_deref())
+            .flat_map(|image| {
+                [
+                    read_texture(&device, &queue, &image.texture),
+                    framebuffers::delta_tests::read(&device, &queue, image),
+                ]
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = pixels(&renderer);
+    let draw = scene(&triangle(A, Z, 0x2000, 0xffffffff));
+    let prepared = renderer
+        .prepare_inputs(&device, &draw, true, ClearPolicy::Persist)
+        .unwrap()
+        .unwrap();
+    let selected = prepared.strict_depth_id(&renderer, ClearPolicy::Persist);
+    assert_eq!(selected, Some(id));
+    let staged = renderer.stage_strict_task(
+        &device,
+        &queue,
+        workload::TargetId::Guest(A.into()),
+        selected,
+    );
+    assert_eq!(pixels(&renderer), before);
+    renderer.render_prepared(&device, &queue, &prepared, ClearPolicy::Persist);
+    for (after, before) in pixels(&renderer).iter().zip(&before) {
+        assert_ne!(after, before);
+    }
+    renderer.discard_strict_task(staged);
+    assert_eq!(pixels(&renderer), before);
+}
+
+#[test]
+fn strict_depth_selection_covers_clear_import_and_replacement() {
+    let (device, queue, dual) = headless_device();
+    let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
+    renderer.set_test_scale(2, BUDGET);
+    renderer.coherence = Some(Default::default());
+    let mut draw = decal_scene(true, 0);
+    renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
+    for mode in &mut draw.render_modes {
+        mode.z_write = false;
+    }
+    let prepared = renderer
+        .prepare_inputs(&device, &draw, true, ClearPolicy::Persist)
+        .unwrap()
+        .unwrap();
+    let id = workload::TargetId::Guest(Z.into());
+    assert_eq!(
+        prepared.strict_depth_id(&renderer, ClearPolicy::PerFrame),
+        None
+    );
+    renderer.depth_first_touch.remove(&id);
+    assert_eq!(
+        prepared.strict_depth_id(&renderer, ClearPolicy::PerFrame),
+        Some(id)
+    );
+    renderer.depth_first_touch.insert(id);
+    renderer
+        .coherence
+        .as_mut()
+        .unwrap()
+        .imports
+        .push(crate::GuestWrite {
+            address: A.into(),
+            bytes: vec![0; 2],
+        });
+    assert_eq!(
+        prepared.strict_depth_id(&renderer, ClearPolicy::Persist),
+        None
+    );
+    renderer
+        .coherence
+        .as_mut()
+        .unwrap()
+        .imports
+        .push(crate::GuestWrite {
+            address: Z.into(),
+            bytes: vec![0; 2],
+        });
+    assert_eq!(
+        prepared.strict_depth_id(&renderer, ClearPolicy::Persist),
+        Some(id)
+    );
+    draw.framebuffer_pairs[0].size_extent.1 = 48;
+    draw.framebuffer_pairs[0].active_scissor.lry = 48;
+    for mode in &mut draw.render_modes {
+        mode.z_write = true;
+    }
+    let prepared = renderer
+        .prepare_inputs(&device, &draw, true, ClearPolicy::PerFrame)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        prepared.strict_depth_id(&renderer, ClearPolicy::PerFrame),
+        None
+    );
+    draw.framebuffer_pairs[0].color_image.width = 16;
+    let prepared = renderer
+        .prepare_inputs(&device, &draw, true, ClearPolicy::PerFrame)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        prepared.strict_depth_id(&renderer, ClearPolicy::PerFrame),
+        None
+    );
 }

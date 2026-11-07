@@ -100,6 +100,13 @@ pub(super) struct TargetInputs {
 }
 
 impl TargetInputs {
+    pub(crate) fn depth_id(&self) -> Option<TargetId> {
+        self.depth_image
+            .filter(|_| self.any_depth)
+            .map(TargetId::Guest)
+            .or_else(|| self.any_depth.then_some(TargetId::Legacy))
+    }
+
     pub(super) fn presentation_scissor(&self, slot: usize) -> (u32, u32, u32, u32) {
         let scissor = super::workload::output_scissor(
             self.logical_scissors[slot],
@@ -311,6 +318,49 @@ impl OperationInputs {
 }
 
 impl<'a> RenderInputs<'a> {
+    pub(crate) fn strict_depth_id(
+        &self,
+        renderer: &super::SceneRenderer,
+        clear_policy: crate::ClearPolicy,
+    ) -> Option<TargetId> {
+        let target = self.targets.first()?;
+        let id = target.depth_id()?;
+        let old = renderer.depthbuffers.get(&id)?;
+        let (width, height) = target.extents.native;
+        if old.layout
+            != (super::framebuffers::ImageLayout {
+                width,
+                fmt: 0,
+                siz: 2,
+            })
+            || old.texture.height() < height
+            || (id == TargetId::Legacy && old.texture.height() != height)
+            || renderer.framebuffers.get(&target.id).is_some_and(|fb| {
+                fb.layout.width == width
+                    && fb.layout.fmt == target.color_image.fmt
+                    && fb.layout.siz == target.color_image.siz
+                    && fb.color.height() > old.texture.height()
+            })
+        {
+            return None;
+        }
+        let imports = renderer.coherence.as_ref().is_some_and(|coherence| {
+            if let TargetId::Guest(address) = id {
+                let end = address + u64::from(width) * u64::from(old.texture.height()) * 2;
+                coherence.imports.iter().any(|patch| {
+                    patch.address < end && patch.address + patch.bytes.len() as u64 > address
+                })
+            } else {
+                false
+            }
+        });
+        (target.operations.iter().any(OperationInputs::writes_depth)
+            || (clear_policy == crate::ClearPolicy::PerFrame
+                && !renderer.depth_first_touch.contains(&id))
+            || imports)
+            .then_some(id)
+    }
+
     #[cfg(any(test, feature = "profiling"))]
     pub(crate) fn profile_targets(&self, recorder: &crate::profiling::Recorder) {
         for target in &self.targets {
@@ -482,9 +532,10 @@ impl<'a> RenderInputs<'a> {
                                     let mode = &scene.render_modes[run.render_mode_index as usize];
                                     let mut uniform =
                                         CombinerUniform::from_run(mat, mode, run.fog_color);
-                                    uniform.primitive_depth[..2].copy_from_slice(&[
+                                    uniform.primitive_depth[..3].copy_from_slice(&[
                                         u32::from(mode.z_source_prim),
                                         u32::from(run.prim_depth.z),
+                                        u32::from(run.prim_depth.dz),
                                     ]);
                                     uniform.inv_tex_size = super::triangle_inv_tex_size(mat);
                                     uniform.inv_tex_size[3] = u32::from(run.unclipped_depth) as f32;
@@ -530,9 +581,10 @@ impl<'a> RenderInputs<'a> {
                                     };
                                     if !copy_mode {
                                         let mode = &scene.render_modes[*render_mode_index as usize];
-                                        uniform.primitive_depth[..2].copy_from_slice(&[
+                                        uniform.primitive_depth[..3].copy_from_slice(&[
                                             u32::from(mode.z_source_prim),
                                             u32::from(prim_depth.z),
+                                            u32::from(prim_depth.dz),
                                         ]);
                                     }
                                     let fb_source = fb_source
@@ -676,6 +728,12 @@ impl<'a> RenderInputs<'a> {
                             );
                             debug_assert!(native_w > 0 && native_h > 0);
                             uniform.frame = [frame[0], frame[1], native_w, native_h];
+                            uniform.native_scale = [
+                                native_w as f32 / extents.logical.0 as f32,
+                                native_h as f32 / extents.logical.1 as f32,
+                                0.0,
+                                0.0,
+                            ];
                             uniform.coverage_slot = slot as u32 + 1;
                             let bytes = bytemuck::bytes_of(&uniform);
                             inputs.uniforms[slot * 256..slot * 256 + bytes.len()]

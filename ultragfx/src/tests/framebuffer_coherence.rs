@@ -583,9 +583,14 @@ mod gpu {
                 .check_strict_guest(&result.scene, r.inner.coherence.as_ref().unwrap())
                 .is_ok()
         {
-            let staged = r
-                .inner
-                .stage_strict_task(&r.device, &r.queue, workload.targets[0].id);
+            let staged = r.inner.stage_strict_task(
+                &r.device,
+                &r.queue,
+                workload.targets[0].id,
+                workload.targets[0]
+                    .depth_image
+                    .map(crate::render::workload::TargetId::Guest),
+            );
             r.inner.coherence.as_mut().unwrap().strict_fills = true;
             r.inner
                 .render_into_store(&r.device, &r.queue, &result.scene, r.config.clear_policy);
@@ -1015,6 +1020,9 @@ mod gpu {
                         &r.device,
                         &r.queue,
                         crate::render::workload::TargetId::Guest(FB.into()),
+                        interpreted.scene.framebuffer_pairs[0]
+                            .depth_image
+                            .map(crate::render::workload::TargetId::Guest),
                     );
                     r.inner.coherence.as_mut().unwrap().strict_fills = true;
                     r.inner.render_into_store(
@@ -2577,7 +2585,10 @@ mod gpu {
                                 dl.extend([
                                     combine(3, 3),
                                     gdp_set_prim_color(0, 0, 0xff0000ff),
-                                    gdp_set_prim_depth(z | high, 0xabcd),
+                                    gdp_set_prim_depth(
+                                        z | high,
+                                        if decal && !passes { 1 } else { 0xabcd },
+                                    ),
                                 ]);
                                 match kind {
                                     0 | 4 => dl.extend([

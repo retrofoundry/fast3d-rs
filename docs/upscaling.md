@@ -86,5 +86,6 @@ lookup images and requests that reconstruct bytes use native samples for the
 entire request. Native and writer-ID draws always bind native sources.
 
 The attachment budget covers retained native and presentation colour, shared
-depth, versions and allocation growth. Snapshot and decode buffers are checked
-separately against device limits. Admission never reduces a target's scale.
+depth at 9 bytes per pixel (Z, dz and companion depth), versions, allocation growth
+and strict-task staging reservations. Snapshot and decode buffers are checked
+separately against device limits; admission never reduces a target's scale.

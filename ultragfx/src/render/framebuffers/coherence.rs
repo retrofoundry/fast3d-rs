@@ -1223,8 +1223,8 @@ mod tests {
             .release_changed(&crate::RdramImage::new(&[0x40, 0x00]))
             .unwrap();
         assert_eq!(
-            f32::from_ne_bytes(coherence.import_pixels(writer, 1, None)[&0]),
-            0.75
+            u32::from_ne_bytes(coherence.import_pixels(writer, 1, None)[&0]),
+            0x4000
         );
     }
 
@@ -1485,8 +1485,8 @@ mod tests {
             .release_changed(&crate::RdramImage::new(&0x4000u16.to_ne_bytes()))
             .unwrap();
         assert_eq!(
-            f32::from_ne_bytes(coherence.import_pixels(writer, 1, None)[&0]),
-            196608.0 / 262144.0
+            u32::from_ne_bytes(coherence.import_pixels(writer, 1, None)[&0]),
+            0x4000
         );
     }
 
@@ -1572,7 +1572,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn reconfigure_keeps_coverage_pipelines_warm() {
+    fn reconfigure_keeps_coverage_and_delta_pipelines_warm() {
         let (device, queue, _) = crate::render::headless_device();
         let config = crate::RendererConfig {
             clear_policy: crate::ClearPolicy::Persist,
@@ -1595,12 +1595,20 @@ mod tests {
         r.set_guest_writeback(true);
         let warmed = r.inner.coverage.as_ref().map(|c| c.pipelines.len());
         assert!(warmed.is_some_and(|count| count > 0));
+        let delta_warmed = r.inner.delta_pipeline.pipelines.len();
+        let unclipped = r
+            .device
+            .features()
+            .contains(wgpu::Features::DEPTH_CLIP_CONTROL);
+        assert_eq!(delta_warmed, if unclipped { 16 } else { 8 });
         r.reconfigure(config);
         assert_eq!(r.inner.coverage.as_ref().map(|c| c.pipelines.len()), warmed);
+        assert_eq!(r.inner.delta_pipeline.pipelines.len(), delta_warmed);
     }
 }
 
 pub(crate) struct Coverage {
+    delta: bool,
     shader: wgpu::ShaderModule,
     pipelines:
         std::collections::HashMap<(bool, bool, bool, bool, bool, bool), wgpu::RenderPipeline>,
@@ -1627,8 +1635,17 @@ fn coverage_shader(prelude: &str) -> String {
 }
 
 impl Coverage {
+    pub(in crate::render) fn delta(device: &wgpu::Device) -> Self {
+        Self {
+            delta: true,
+            shader: super::super::decal::shader(device),
+            pipelines: Default::default(),
+        }
+    }
+
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
+            delta: false,
             shader: device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("guest-coverage"),
                 source: wgpu::ShaderSource::Wgsl(
@@ -1688,7 +1705,10 @@ impl Coverage {
         for bits in 0..64u8 {
             let flag = |bit: u8| bits & (1 << bit) != 0;
             // A depth-writing decal always has a depth attachment; no draw reaches the other case.
-            if (flag(5) && !unclipped) || (flag(3) && flag(2) && !flag(4)) {
+            if (flag(5) && !unclipped)
+                || (flag(3) && flag(2) && !flag(4))
+                || (self.delta && (!flag(2) || !flag(4)))
+            {
                 continue;
             }
             self.pipeline_for(
@@ -1706,6 +1726,12 @@ impl Coverage {
         key: (bool, bool, bool, bool, bool, bool),
     ) -> &wgpu::RenderPipeline {
         let (cull, test, write, decal, any_depth, unclipped_depth) = key;
+        let delta = self.delta;
+        let label = if delta {
+            "depth-delta"
+        } else {
+            "guest-coverage"
+        };
         self.pipelines.entry(key).or_insert_with(|| {
             let mut groups = vec![
                 Some(textured.bind_group_layout()),
@@ -1715,12 +1741,12 @@ impl Coverage {
                 groups.push(Some(textured.depth_bind_group_layout()));
             }
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("guest-coverage"),
+                label: Some(label),
                 bind_group_layouts: &groups,
                 immediate_size: 0,
             });
             let descriptor = wgpu::RenderPipelineDescriptor {
-                label: Some("guest-coverage"),
+                label: Some(label),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &self.shader,
@@ -1730,16 +1756,28 @@ impl Coverage {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &self.shader,
-                    entry_point: Some(match (decal, write, any_depth) {
-                        (true, true, _) => "fs_decal_depth",
-                        (true, false, _) => "fs_decal",
-                        (false, _, true) => "fs_depth",
-                        _ => "fs_main",
+                    entry_point: Some(if delta {
+                        if decal {
+                            "fs_delta_decal"
+                        } else {
+                            "fs_delta"
+                        }
+                    } else {
+                        match (decal, write, any_depth) {
+                            (true, true, _) => "fs_decal_depth",
+                            (true, false, _) => "fs_decal",
+                            (false, _, true) => "fs_depth",
+                            _ => "fs_main",
+                        }
                     }),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rg32Uint,
+                        format: if delta {
+                            wgpu::TextureFormat::R8Uint
+                        } else {
+                            wgpu::TextureFormat::Rg32Uint
+                        },
                         blend: None,
-                        write_mask: if write {
+                        write_mask: if write && !delta {
                             wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN
                         } else {
                             wgpu::ColorWrites::RED
@@ -1754,7 +1792,7 @@ impl Coverage {
                 depth_stencil: (any_depth && (!decal || write)).then_some(
                     wgpu::DepthStencilState {
                         format: super::super::DEPTH_FORMAT,
-                        depth_write_enabled: Some(false),
+                        depth_write_enabled: Some(delta),
                         depth_compare: Some(if test && !decal {
                             wgpu::CompareFunction::Less
                         } else {
@@ -3131,7 +3169,7 @@ impl Coherence {
                 } else {
                     let word = self.encoding.decode_u16(bytes.try_into().unwrap());
                     if writer.depth {
-                        unpack_depth(word).to_ne_bytes()
+                        u32::from(word).to_ne_bytes()
                     } else {
                         let channel = |shift: u32| {
                             let value = ((word >> shift) & 31u16) as u8;
@@ -3152,18 +3190,13 @@ impl Coherence {
     }
 }
 
-fn unpack_depth(word: u16) -> f32 {
-    let exponent = u32::from(word >> 13);
-    let mantissa = u32::from((word & 0x1ffc) >> 2);
-    let fixed = (mantissa << (6 - exponent.min(6))) + 0x40000 - (0x40000 >> exponent);
-    fixed as f32 / 262144.0
-}
-
 impl super::super::SceneRenderer {
     pub(crate) fn warm_coverage(&mut self, device: &wgpu::Device) {
         self.coverage
             .get_or_insert_with(|| Coverage::new(device))
             .warm(device, &self.textured_fb);
+
+        self.delta_pipeline.warm(device, &self.textured_fb);
     }
 
     pub(crate) fn import_existing(&self, device: &wgpu::Device, queue: &wgpu::Queue) {
@@ -3261,7 +3294,7 @@ impl super::super::SceneRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R32Float,
+                format: wgpu::TextureFormat::R32Uint,
                 usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
@@ -3325,18 +3358,18 @@ impl super::super::SceneRenderer {
                 .map(|p| &p.attach)
         };
         if let Some(presentation) = presentation {
-            let source = texture.create_view(&Default::default());
             if writer.depth {
                 self.depth_pipeline.expand(
                     device,
                     encoder,
-                    &source,
-                    presentation,
+                    &self.depthbuffers[&id],
+                    self.depthbuffers[&id].presentation.as_deref().unwrap(),
                     self.render_scale,
                     &spans,
                     &self.profiling,
                 );
             } else {
+                let source = texture.create_view(&Default::default());
                 self.presentation_transfers
                     .get_or_init(|| super::presentation::Transfers::new(device))
                     .import(

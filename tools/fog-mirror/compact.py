@@ -65,7 +65,7 @@ def compact(source, destination):
         case['spans'] = spans(indices)
         case['samples'] = len(indices)
         case['region'] = 'edge' if thin else 'interior'
-        case['modern_tolerance'] = int(case['group'] == 'modes' or thin)
+        case['modern_tolerance'] = int(case['group'] in ('modes', 'interp'))
         case['hardware_tolerance'] = 0
         if modern:
             number = int(name[4:6]) if case['group'] == 'matrix' else None
