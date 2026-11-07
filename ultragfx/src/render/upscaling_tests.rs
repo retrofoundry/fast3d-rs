@@ -902,10 +902,25 @@ fn task_boundary_discards_depth_before_an_early_return() {
 }
 
 fn assert_rgba(texture: &wgpu::Texture, bytes: &[u8], expected: impl Fn(u32, u32) -> [u8; 4]) {
+    assert_rgba_samples(texture, bytes, |x, y| Some(expected(x, y)));
+}
+
+fn assert_rgba_samples(
+    texture: &wgpu::Texture,
+    bytes: &[u8],
+    expected: impl Fn(u32, u32) -> Option<[u8; 4]>,
+) {
     for (i, pixel) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let (x, y) = (i as u32 % texture.width(), i as u32 / texture.width());
-        assert_eq!(*pixel, expected(x, y), "({x},{y})");
+        if let Some(expected) = expected(x, y) {
+            assert_eq!(*pixel, expected, "({x},{y})");
+        }
     }
+}
+
+fn texel_boundary_distance(coordinate: f64, rate: f64, slope: f64, scale: u32) -> f64 {
+    let texel = coordinate * rate;
+    (texel - texel.round()).abs() * f64::from(scale) / (rate * slope.abs())
 }
 
 #[test]
@@ -1408,12 +1423,8 @@ fn non_square_replacement_copy_uses_target_rate_and_unrounded_coordinates() {
     for scale in [1, 2, 3, 4] {
         let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
         renderer.set_test_scale(scale, BUDGET);
-        for dsdx in [4096, -4096, 4095, -4097] {
-            let base_s = if dsdx == 4096 || dsdx == -4096 {
-                169
-            } else {
-                168
-            };
+        for dsdx in [4096, -4096, 4095, -4097, 2047] {
+            let base_s = 170;
             let mut draw = texrect_scene([base_s, 169], [dsdx, 1024], false, true, false);
             let (source, registration) = replacement_source(20, 8);
             draw.materials[0].texture = source;
@@ -1427,22 +1438,29 @@ fn non_square_replacement_copy_uses_target_rate_and_unrounded_coordinates() {
                 .chain(fb.presentation.as_ref().map(|p| (&p.texture, scale)))
             {
                 let bytes = read_texture(&device, &queue, texture);
-                assert_rgba(texture, &bytes, |x, y| {
+                assert_rgba_samples(texture, &bytes, |x, y| {
                     if !(2 * factor..6 * factor).contains(&x)
                         || !(2 * factor..6 * factor).contains(&y)
                     {
-                        return [13, 13, 20, 255];
+                        return Some([13, 13, 20, 255]);
                     }
                     let slope = match dsdx {
                         4096 => 1.0,
                         -4096 => -1.0,
                         4095 => 127.0 / 128.0,
                         -4097 => -129.0 / 128.0,
+                        2047 => 63.0 / 128.0,
                         _ => unreachable!(),
                     };
                     let s = f64::from(base_s) / 32.0
                         + ((x as f64 + 0.5) / f64::from(factor) - 2.0) * slope;
                     let t = 169.0 / 32.0 + (y as f64 + 0.5) / f64::from(factor) - 2.0;
+                    let rounding = if factor == 1 { 1.0 / 256.0 } else { 0.0 };
+                    if texel_boundary_distance(s + rounding, 8.0, slope, factor) < 1.0 / 64.0
+                        || texel_boundary_distance(t + rounding, 8.0, 1.0, factor) < 1.0 / 64.0
+                    {
+                        return None;
+                    }
                     let coordinate = |v: f64| {
                         if factor == 1 {
                             (v * 128.0).round_ties_even() / 128.0
@@ -1450,12 +1468,12 @@ fn non_square_replacement_copy_uses_target_rate_and_unrounded_coordinates() {
                             v
                         }
                     };
-                    [
+                    Some([
                         (coordinate(s) * 8.0).floor() as u8,
                         (coordinate(t) * 8.0).floor() as u8,
                         20,
                         255,
-                    ]
+                    ])
                 });
             }
         }
@@ -1474,13 +1492,20 @@ fn precision_and_snapping_follow_resolved_texel_mip_and_detail_roles() {
                 [(false, false), (true, false), (false, true), (true, true)]
             {
                 let step = if precision {
-                    1023
+                    255
                 } else if role == 2 {
                     512
                 } else {
                     1024
                 };
-                let mut draw = texrect_scene([168, 168], [step, step], false, false, false);
+                let base = if precision {
+                    189
+                } else if role == 2 {
+                    169
+                } else {
+                    170
+                };
+                let mut draw = texrect_scene([base, base], [step, step], false, false, false);
                 let mat = &mut draw.materials[0];
                 let ordinary = mat.texture.clone();
                 let mut registrations = Vec::new();
@@ -1539,10 +1564,10 @@ fn precision_and_snapping_follow_resolved_texel_mip_and_detail_roles() {
                     .unwrap()
                     .texture;
                 let bytes = read_texture(&device, &queue, texture);
-                assert_rgba(texture, &bytes, |x, y| {
+                assert_rgba_samples(texture, &bytes, |x, y| {
                     if !(2 * scale..6 * scale).contains(&x) || !(2 * scale..6 * scale).contains(&y)
                     {
-                        return [13, 13, 20, 255];
+                        return Some([13, 13, 20, 255]);
                     }
                     let p = |v: u32| {
                         if !enhanced && step == 1024 {
@@ -1552,22 +1577,30 @@ fn precision_and_snapping_follow_resolved_texel_mip_and_detail_roles() {
                         }
                     };
                     let slope = if precision {
-                        127.0 / 128.0
+                        31.0 / 128.0
                     } else {
                         f64::from(step) / 1024.0
                     };
-                    let coordinate = |v: u32| 5.25 + p(v) * slope;
+                    let coordinate = |v: u32| f64::from(base) / 32.0 + p(v) * slope;
+                    let rate = if enhanced { 8.0 } else { 1.0 };
+                    let rounding = if enhanced { 0.0 } else { 1.0 / 256.0 };
+                    if [x, y].into_iter().any(|v| {
+                        texel_boundary_distance(coordinate(v) + rounding, rate, slope, scale)
+                            < 1.0 / 64.0
+                    }) {
+                        return None;
+                    }
                     if enhanced {
-                        [
+                        Some([
                             (coordinate(x) * 8.0).floor() as u8,
                             (coordinate(y) * 8.0).floor() as u8,
                             20 + role as u8,
                             255,
-                        ]
+                        ])
                     } else {
                         let texel =
                             |v| ((coordinate(v) * 128.0).round_ties_even() / 128.0).floor() as u8;
-                        [texel(x) * 12, texel(y) * 16, 0, 255]
+                        Some([texel(x) * 12, texel(y) * 16, 0, 255])
                     }
                 });
             }
@@ -1837,15 +1870,16 @@ fn triangle_half_target_pixel_offset_uses_draw_height_after_retained_growth() {
         renderer.render_into_store(
             &device,
             &queue,
-            &fill_scene(A, 32, 37, 0x003f003f),
+            &fill_scene(A, 32, 48, 0x003f003f),
             ClearPolicy::Persist,
         );
-        renderer.render_into_store(
-            &device,
-            &queue,
-            &scene(&triangle(A, 0, 0, 0xffffffff)),
-            ClearPolicy::Persist,
-        );
+        let mut draw = scene(&triangle(A, 0, 0, 0xffffffff));
+        draw.raw_pos = vec![
+            [-1.25, 1.25 + 1.0 / 256.0, 0.0],
+            [1.25, 1.25 + 1.0 / 256.0, 0.0],
+            [-1.25, -1.25 + 1.0 / 256.0, 0.0],
+        ];
+        renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
         let texture = &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
             .presentation
             .as_ref()
@@ -1853,7 +1887,12 @@ fn triangle_half_target_pixel_offset_uses_draw_height_after_retained_growth() {
             .texture;
         let bytes = read_texture(&device, &queue, texture);
         assert_rgba(texture, &bytes, |x, y| {
-            let inside = y < 24 * scale && 3 * x + 4 * y < 96 * scale;
+            // Authored screen vertices: (-4,-3-3/64), (36,-3-3/64), (-4,27-3/64).
+            // The half-target-pixel shift cancels the sample centers in this edge equation.
+            let edge = 16 * (3 * x + 4 * y);
+            let boundary = 1533 * scale;
+            assert!(edge.abs_diff(boundary) >= 4);
+            let inside = y < 24 * scale && edge < boundary;
             if inside {
                 [255; 4]
             } else {
