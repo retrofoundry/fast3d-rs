@@ -102,8 +102,9 @@ class CaptureFailures(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, stdout="")
             executions.append(command)
             if "--lib" in command:
-                self.assertEqual(command[command.index("--") + 1:], [
-                    "tests::goldens::", "tests::tmem_witnesses::", "render::texture_decode::gpu_tests::",
+                selected = [
+                    "tests::goldens::", "tests::tmem_witnesses::",
+                    "render::texture_decode::gpu_tests::",
                     "tests::framebuffer_coherence::gpu::guest_route_",
                     "tests::framebuffer_coherence::gpu::triangles::guest_route_gpu_triangle",
                     "tests::framebuffer_coherence::gpu::triangles::batches::guest_route_gpu_batch",
@@ -111,7 +112,10 @@ class CaptureFailures(unittest.TestCase):
                     "tests::framebuffer_coherence::gpu::compatibility_literal_fill_then_invalid_projection_matches_67345dc",
                     "hle::capture::tests::legacy_scales_are_ignored_and_v3_preserves_effective_scale",
                     "hle::capture::replay::state_tests::captures_record_the_effective_fixed_scale",
-                    "hle::capture::replay::sequence_tests::replay_options_cover_the_prefix_and_selected_crop"])
+                    "hle::capture::replay::sequence_tests::replay_options_cover_the_prefix_and_selected_crop"]
+                if "--features" not in command and "--all-features" not in command:
+                    selected.extend(["tests::fog::", "tests::fog_mirror::"])
+                self.assertEqual(command[command.index("--") + 1:], selected)
                 return subprocess.CompletedProcess(command, 101)
             for name in ["tmem_fixture_replay", "texture_decode_gpu", "texture_residency", "texture_residency_pressure"]:
                 self.assertIn(name, command)

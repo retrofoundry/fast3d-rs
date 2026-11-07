@@ -27,8 +27,10 @@ literals exercise both nibble parities, odd-row swapping, split-bank wrap, zero
 line and the four wrapped lookup planes. CPU tests enforce the coverage and check
 every selected expected output against the CPU oracle. The full inventory is unchanged.
 
-Windows runs the `tests::goldens`, `tests::tmem_witnesses` and native compute library
-modules in each configuration. All-features also runs `tmem_fixture_replay` and the
+Windows runs `tests::goldens`, `tests::tmem_witnesses` and native compute library
+modules in each configuration. The feature-independent `tests::fog` and
+`tests::fog_mirror` suites run once under default to limit repeated WARP shader
+compilation. All-features also runs `tmem_fixture_replay` and the
 tested checkout's `texture_decode_gpu`, `texture_residency`,
 `texture_residency_pressure` and `rt64_v5` integration targets. Metal still runs
 the complete workspace suites. This limits repeated WARP shader compilation while

@@ -46,6 +46,8 @@ def test_commands(checkout, config, system):
     commands[0].extend(["hle::capture::tests::legacy_scales_are_ignored_and_v3_preserves_effective_scale",
                         "hle::capture::replay::state_tests::captures_record_the_effective_fixed_scale",
                         "hle::capture::replay::sequence_tests::replay_options_cover_the_prefix_and_selected_crop"])
+    if config == "default":
+        commands[0].extend(["tests::fog::", "tests::fog_mirror::"])
     if config == "all-features":
         targets = ["--test", "tmem_fixture_replay"]
         for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure", "rt64_v5", "upscaling"]:
