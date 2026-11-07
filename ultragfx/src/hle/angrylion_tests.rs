@@ -216,7 +216,7 @@ fn angrylion_requests_keep_nonci_tlut_and_all_used_palette_lanes() {
     let witness = request.witness();
     for address in 2048u16..2056 {
         assert!(
-            witness[48..witness.len() - 8]
+            witness[50..witness.len() - 8]
                 .as_chunks::<3>()
                 .0
                 .iter()

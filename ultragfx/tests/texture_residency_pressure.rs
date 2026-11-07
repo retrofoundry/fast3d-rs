@@ -79,7 +79,7 @@ async fn pressure() {
             "{name}"
         );
         assert_eq!(
-            snapshots[name].gauges["tmem.in_flight_cpu_bytes"], 118,
+            snapshots[name].gauges["tmem.in_flight_cpu_bytes"], 122,
             "{name}"
         );
         assert_eq!(

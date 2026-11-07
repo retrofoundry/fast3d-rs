@@ -125,15 +125,15 @@ no hardware-load semantics from this comparison.
 Use tools already on PATH from this worktree. The writer requires no GPU:
 
 ```sh
-export ULTRAGFX_WRITE_FIXTURES=/tmp/fast3d-f0
+export ULTRAGFX_WRITE_FIXTURES=/tmp/ultragfx-f0
 cargo test -p ultragfx --features capture --lib f0_
 cargo test -p ultragfx --features capture --lib write_rt64_framebuffer_load_evidence -- --ignored
 cargo test -p ultragfx --features capture --test framebuffer_load_evidence -- --nocapture
 cargo test -p ultragfx --lib exact_base_fb_alias_keeps_compatibility_pixels
 ```
 
-The writer directly emits `.f3dcap`, `.rdram`, `.json`, `.expected.rgba8` and
-`.fast3d-expected.rgba8` for each real load. It first asserts successful loads,
+The writer directly emits `.ugfxcap`, `.rdram`, `.json`, `.expected.rgba8` and
+`.ultragfx-expected.rgba8` for each real load. It first asserts successful loads,
 normal termination and final target. It preserves the same big-endian commands
 in both exports, with zero-filled gaps in the 8 MiB RDRAM. The ordinary
 `export_capture_rdram` accepts these supported command streams.

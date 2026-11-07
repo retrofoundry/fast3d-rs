@@ -1,7 +1,7 @@
 use super::*;
 use crate::{ClearPolicy, RendererConfig};
 
-const MAGIC: &[u8; 8] = b"F3DCAP\0\0";
+const MAGIC: &[u8; 8] = b"UGFXCAP\0";
 const VERSION: u32 = 3;
 const LITTLE_ENDIAN: u32 = 0x0403_0201;
 

@@ -44,7 +44,7 @@ def row_manifest():
             capture = CAPTURES.get(workload)
             if backend == 'native':
                 argv = ['{bundle}/bin/b1-perf', 'sequence' if capture else 'source',
-                        '{bundle}/captures/'+workload+'.f3dcap' if capture else '{bundle}/source/chrome-icosphere.n64',
+                        '{bundle}/captures/'+workload+'.ugfxcap' if capture else '{bundle}/source/chrome-icosphere.n64',
                         '{fresh-output}', '{configuration}']
             else:
                 argv = ['{python}', '{repo}/tools/perf/browser_run.py', '--build', '{bb0fea3-browser-build}',
@@ -52,7 +52,7 @@ def row_manifest():
                         '--webdriver', '{repo}/ultragfx/webdriver.json', '--mode', '{configuration}',
                         '--kind', 'sequence' if capture else 'source']
                 if capture:
-                    argv += ['--capture', '{captures}/'+workload+'.f3dcap']
+                    argv += ['--capture', '{captures}/'+workload+'.ugfxcap']
             result.append({
                 'id': f'{backend}.{workload}', 'backend': backend, 'workload': workload,
                 'role': 'control' if workload in ['demo1', 'pinned'] else 'primary',
@@ -92,7 +92,7 @@ def native_plan(root, out, version=V4, code_change=None):
                 'quiet_run': str(out/'quiet'/name/'run.json'),
                 'summary': str(timed/'summary.json'), 'expected_observed': 120,
                 'command': [str(root/'bin'/('b1-perf-'+revision if code_change is not None else 'b1-perf')), 'sequence',
-                            str(root/'captures/demo1-dense.f3dcap'), str(timed), 'coarse'],
+                            str(root/'captures/demo1-dense.ugfxcap'), str(timed), 'coarse'],
             })
     plan = {'production_sha': PARENT, 'same_binary_for_both_labels': True,
             'policy': version, 'backend': 'native', 'workload': 'demo1-dense', 'configuration': 'coarse',
@@ -275,7 +275,7 @@ def freeze(args):
                     'build': verify_build(root/'provenance', root/'bin/b1-perf', PARENT)}
         binaries = ['bin/b1-perf']
     for name, expected in CAPTURES.items():
-        if sha(root/'captures'/(name+'.f3dcap')) != expected['sha256']:
+        if sha(root/'captures'/(name+'.ugfxcap')) != expected['sha256']:
             raise ValueError(f'capture hash mismatch: {name}')
     required = [*binaries, 'source/chrome-icosphere.n64', 'source/input.json',
                 'python/bin/python3', *['scripts/'+name for name in SCRIPTS]]
@@ -537,7 +537,7 @@ def native(args):
         label = entry['revision'] if change else ''
         if label not in warmups:
             warmups[label] = {'full_prefix_runs': 1, 'command': [entry['command'][0], 'sequence',
-                str(root/'captures/demo1-dense.f3dcap'), str(out/('warmup-'+label if label else 'warmup')), 'coarse']}
+                str(root/'captures/demo1-dense.ugfxcap'), str(out/('warmup-'+label if label else 'warmup')), 'coarse']}
             if change:
                 warmups[label]['revision'] = label
     plan['warmup'] = list(warmups.values()) if change else warmups['']

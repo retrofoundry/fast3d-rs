@@ -95,7 +95,7 @@ async fn public_effective_scale() {
 #[cfg(feature = "capture")]
 async fn replay_scale_and_source() {
     use ultragfx::capture::{Fixture, ReplayOptions, ReplaySource};
-    let fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
+    let fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.ugfxcap")).unwrap();
     let base = fixture.replay_headless().await.unwrap();
     for scale in [1, 3] {
         let native = fixture

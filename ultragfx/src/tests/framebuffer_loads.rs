@@ -263,7 +263,7 @@ fn framebuffer_load_snapshot_survives_overwrite_and_reload() {
             let expected = if (232..236).contains(&x) && (88..90).contains(&y) {
                 REPLACEMENT
             } else {
-                semantics::fast3d_expected(case, x, y)
+                semantics::ultragfx_expected(case, x, y)
             };
             assert_eq!(*pixel, expected, "{case:?} ({x}, {y})");
         }

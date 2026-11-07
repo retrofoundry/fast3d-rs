@@ -9,9 +9,9 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 fn bytes(name: &str) -> &'static [u8] {
     match name {
-        "tmem-layouts" => include_bytes!("fixtures/tmem-layouts.f3dcap"),
-        "tmem-tlut-mutation" => include_bytes!("fixtures/tmem-tlut-mutation.f3dcap"),
-        "tmem-roles-lifetime" => include_bytes!("fixtures/tmem-roles-lifetime.f3dcap"),
+        "tmem-layouts" => include_bytes!("fixtures/tmem-layouts.ugfxcap"),
+        "tmem-tlut-mutation" => include_bytes!("fixtures/tmem-tlut-mutation.ugfxcap"),
+        "tmem-roles-lifetime" => include_bytes!("fixtures/tmem-roles-lifetime.ugfxcap"),
         _ => panic!("unregistered fixture {name}"),
     }
 }

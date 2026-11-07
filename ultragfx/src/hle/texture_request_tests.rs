@@ -310,7 +310,7 @@ fn memory_accounting_does_not_force_identity_and_counts_shared_bank_once() {
     for source in [&first.source, &first.source, &second.source] {
         memory.include(source);
     }
-    assert_eq!(memory.payload_bytes, TMEM_BYTES + 59);
+    assert_eq!(memory.payload_bytes, TMEM_BYTES + 61);
     assert_eq!(
         memory.overhead_bytes,
         before_identity_overhead + 2 * std::mem::size_of::<usize>()
@@ -332,8 +332,8 @@ fn footprints_match_existing_read_visitors_without_using_pixels_to_build_keys() 
         let request = request(&binding);
         assert_eq!(request.decode(), trace.output, "{}", trace.class());
         let witness = request.witness();
-        let physical = u32::from_le_bytes(witness[44..48].try_into().unwrap()) as usize;
-        let linear_offset = 48 + physical * 3;
+        let physical = u32::from_le_bytes(witness[46..50].try_into().unwrap()) as usize;
+        let linear_offset = 50 + physical * 3;
         let linear = u32::from_le_bytes(
             witness[linear_offset..linear_offset + 4]
                 .try_into()
@@ -404,7 +404,7 @@ fn unset_physical_extents_decode_one_texel() {
 fn image_roles_share_one_bank_with_level_zero_aliases_and_no_identity() {
     use crate::Hardware;
     let fixture = crate::capture::Fixture::from_bytes(include_bytes!(
-        "../../tests/fixtures/tmem-roles-lifetime.f3dcap"
+        "../../tests/fixtures/tmem-roles-lifetime.ugfxcap"
     ))
     .unwrap();
     let task = &fixture.tasks[0];
@@ -497,7 +497,7 @@ fn late_identity_retains_the_palette_from_its_draw() {
 fn display_list_reloads_banks_between_draws_and_frames_without_identity_work() {
     use crate::Hardware;
     let fixture = crate::capture::Fixture::from_bytes(include_bytes!(
-        "../../tests/fixtures/tmem-layouts.f3dcap"
+        "../../tests/fixtures/tmem-layouts.ugfxcap"
     ))
     .unwrap();
     let task = &fixture.tasks[0];
@@ -585,8 +585,8 @@ fn construction_and_identity_memo_work_are_counted_separately() {
     let request = request(&binding);
     request.key_profiled(&profiler);
     let first = profiler.drain();
-    assert_eq!(count(&first, "preimage_bytes_constructed"), 59);
-    assert_eq!(count(&first, "bytes_hashed"), 59);
+    assert_eq!(count(&first, "preimage_bytes_constructed"), 61);
+    assert_eq!(count(&first, "bytes_hashed"), 61);
     assert_eq!(count(&first, "identity_memo_hits"), 0);
     request.key_profiled(&profiler);
     let repeat = profiler.drain();
@@ -850,9 +850,9 @@ fn angrylion_encoding_flags_separate_old_meanings_of_the_same_bank() {
     tile.fmt = 2;
     let off = prepare(&rdp, &tile, 0, &profiling).unwrap();
     let witness = request(&off).witness();
-    assert_eq!(witness[19], 1);
+    assert_eq!(witness[21], 1);
     let mut old = witness.to_vec();
-    old[19] = 0;
+    old[21] = 0;
     assert_ne!(
         request(&off).key().xxh3_64,
         twox_hash::XxHash3_64::oneshot(&old)
@@ -861,10 +861,10 @@ fn angrylion_encoding_flags_separate_old_meanings_of_the_same_bank() {
     tile.fmt = 4;
     tile.height = 257;
     let tall = prepare(&rdp, &tile, 0, &profiling).unwrap();
-    assert_eq!(request(&tall).witness()[19], 4);
+    assert_eq!(request(&tall).witness()[21], 4);
     tile.line = 2;
     let already_wrapped = prepare(&rdp, &tile, 0, &profiling).unwrap();
-    assert_eq!(request(&already_wrapped).witness()[19], 0);
+    assert_eq!(request(&already_wrapped).witness()[21], 0);
 
     let original = request(&off);
     let mut recipe = original.recipe().clone();
@@ -873,6 +873,6 @@ fn angrylion_encoding_flags_separate_old_meanings_of_the_same_bank() {
     recipe.palette_lanes = true;
     let four = EncodedTextureRequest::from_test_parts(original.input().clone(), recipe);
     assert_ne!(one.key(), four.key());
-    assert_eq!(one.witness()[19], 0);
-    assert_eq!(four.witness()[19], 2);
+    assert_eq!(one.witness()[21], 0);
+    assert_eq!(four.witness()[21], 2);
 }

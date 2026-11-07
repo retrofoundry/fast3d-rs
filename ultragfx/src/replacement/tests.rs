@@ -33,7 +33,7 @@ fn provider_collisions_b_first_recipe_and_tlut_stay_separate() {
     let mut recipe = a.recipe().clone();
     recipe.line = 2;
     let d = EncodedTextureRequest::from_owned_parts(a.input().clone(), recipe);
-    for scheme in [TextureKeyScheme::Fast3dV1, TextureKeyScheme::Rt64V5] {
+    for scheme in [TextureKeyScheme::UltragfxV1, TextureKeyScheme::Rt64V5] {
         let provider = ReplacementProvider::new(
             7,
             [ReplacementRegistration {
@@ -66,7 +66,7 @@ fn native_pending_and_invalid_stop_precedence_without_v5_work() {
                 ReplacementRegistration {
                     target: ReplacementTarget::for_request(
                         &a,
-                        TextureKeyScheme::Fast3dV1,
+                        TextureKeyScheme::UltragfxV1,
                         &Recorder::default(),
                     )
                     .unwrap(),
@@ -86,7 +86,7 @@ fn native_pending_and_invalid_stop_precedence_without_v5_work() {
         let stats = Recorder::new(Mode::Counters);
         let (target, status) = provider.resolve(&a, true, &stats);
         assert!(status.is_some());
-        assert_eq!(target.key.scheme, TextureKeyScheme::Fast3dV1);
+        assert_eq!(target.key.scheme, TextureKeyScheme::UltragfxV1);
         let snapshot = stats.drain();
         assert_eq!(
             snapshot.counters.get("replacement.provider_calls"),
@@ -117,7 +117,7 @@ fn v5_lookup_is_lazy_and_namespaced() {
     assert_eq!(counts["replacement.v5_hashes"], 1);
     assert_eq!(counts["replacement.v5_bytes_hashed"], 28);
     let mut fake = target;
-    fake.key.scheme = TextureKeyScheme::Fast3dV1;
+    fake.key.scheme = TextureKeyScheme::UltragfxV1;
     assert!(provider.lookup(&fake, &Recorder::default()).is_none());
     let empty = ReplacementProvider::new(1, []);
     empty.resolve(&a, true, &stats);
@@ -128,7 +128,7 @@ fn v5_lookup_is_lazy_and_namespaced() {
 fn replacement_extent_length_colour_and_overflow_checks() {
     let a = request(1, 2);
     let mut target =
-        ReplacementTarget::for_request(&a, TextureKeyScheme::Fast3dV1, &Recorder::default())
+        ReplacementTarget::for_request(&a, TextureKeyScheme::UltragfxV1, &Recorder::default())
             .unwrap();
     let image = |extent, n, format| ReplacementImage {
         extent,
@@ -240,7 +240,7 @@ fn s2b_native_targets_accept_every_decoded_format_and_palette_lanes() {
                 let target = ReplacementTarget::new(
                     request.recipe().clone(),
                     request.input().clone(),
-                    TextureKeyScheme::Fast3dV1,
+                    TextureKeyScheme::UltragfxV1,
                 )
                 .unwrap();
                 assert_eq!(target.witness(), request.witness());

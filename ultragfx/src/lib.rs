@@ -467,7 +467,7 @@ impl Renderer {
             & (wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::DEPTH_CLIP_CONTROL);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("fast3d-device"),
+                label: Some("ultragfx-device"),
                 required_features,
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::default(),

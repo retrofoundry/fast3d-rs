@@ -682,7 +682,7 @@ fn write_rt64_shared_depth_fixture() {
     let directory = std::path::Path::new(&directory);
     std::fs::create_dir_all(directory).unwrap();
     std::fs::write(
-        directory.join("shared-depth.f3dcap"),
+        directory.join("shared-depth.ugfxcap"),
         shared_depth_fixture().to_bytes().unwrap(),
     )
     .unwrap();
@@ -711,7 +711,7 @@ fn shared_depth_fixture_pixels() {
     assert_eq!(
         fixture,
         crate::capture::Fixture::from_bytes(include_bytes!(
-            "../../tests/fixtures/shared-depth.f3dcap"
+            "../../tests/fixtures/shared-depth.ugfxcap"
         ))
         .unwrap()
     );

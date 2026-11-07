@@ -3,7 +3,7 @@ use crate::hle::texture_request::TextureKeyScheme;
 
 fn key(n: u64) -> TextureKey {
     TextureKey {
-        scheme: TextureKeyScheme::Fast3dV1,
+        scheme: TextureKeyScheme::UltragfxV1,
         xxh3_64: n,
     }
 }

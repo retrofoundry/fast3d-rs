@@ -331,7 +331,7 @@ fn write_rt64_jrb_mixed_fog_fixture() {
         scene_entry,
         320,
         240,
-        "jrb-mixed-fog.f3dcap",
+        "jrb-mixed-fog.ugfxcap",
         jrb_provenance(),
     );
 }

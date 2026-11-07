@@ -21,7 +21,7 @@ No renderer or interpreter behavior changed. The small public capture helper is
 needed because examples cannot access the crate-private CPU interpreter. The C++
 project is not a Cargo workspace member and has no CI build hook.
 
-All Rust commands below ran through `XDG_CACHE_HOME=/tmp/fast3d-oracle-cache devenv shell --`.
+All Rust commands below ran through `XDG_CACHE_HOME=/tmp/ultragfx-oracle-cache devenv shell --`.
 The initial plain `devenv shell` failed before Cargo started because the default
 Nix SQLite cache was outside the writable sandbox. Moving the cache to `/tmp`
 resolved it; no toolchain installation or repository configuration change was needed.
@@ -37,9 +37,9 @@ resolved it; no toolchain installation or repository configuration change was ne
 | `cargo test -p ultragfx --features capture --examples` | 6 passed: 4 exporter tests and 2 comparison tests. |
 | Mario state and fog CPU tests | 6 passed; original command-derived states preserved. |
 | Wrapper identity matrix regression | Passed after adding the missing projection load; failed before it. |
-| `ULTRAGFX_WRITE_FIXTURES=/tmp/fast3d-oracle cargo test -p ultragfx --features 'capture' --lib write_rt64_ -- --ignored` | 2 passed; both captures written and decoded back. |
+| `ULTRAGFX_WRITE_FIXTURES=/tmp/ultragfx-oracle cargo test -p ultragfx --features 'capture' --lib write_rt64_ -- --ignored` | 2 passed; both captures written and decoded back. |
 | Export both generated fixtures | Passed. Independent JSON/size check: each one F3D task, 8 MiB image, RGBA16 320x240 at `0x00100000`. |
-| Export `ultragfx/tests/fixtures/host64-fill.f3dcap` | Correctly rejected with explicit HOST64/IMAGE error, exit 1. |
+| Export `ultragfx/tests/fixtures/host64-fill.ugfxcap` | Correctly rejected with explicit HOST64/IMAGE error, exit 1. |
 | Compare hand-checked 3x2 RGBA8 inputs | Max 255, RGBA maxima `[9,10,255,11]`, 3 differing pixels, bounds `(0,0)..(2,1)`. |
 | Same comparison, `--max-diff-pixels 2` / `3` | Correctly returned exit 1 / 0, respectively. Both wrote masks. |
 | Same comparison, wrong dimensions 2x2 | Correctly rejected 24-byte files where 16 bytes were required, exit 1. |

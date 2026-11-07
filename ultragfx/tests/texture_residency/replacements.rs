@@ -126,7 +126,7 @@ async fn lifecycle() {
     let blue = expected_color([8, 40, 232], 3, 3);
     let red = expected_color([224, 16, 32], 3, 3);
     let request = requests(&fixture).remove(0);
-    let target = target(&request, TextureKeyScheme::Fast3dV1).unwrap();
+    let target = target(&request, TextureKeyScheme::UltragfxV1).unwrap();
     let mut harness = Harness::new(&fixture).await;
     let scope = harness
         .renderer
@@ -152,7 +152,7 @@ async fn lifecycle() {
         ),
         (
             "replacement-identity",
-            Some(identity_provider(&fixture, TextureKeyScheme::Fast3dV1)),
+            Some(identity_provider(&fixture, TextureKeyScheme::UltragfxV1)),
             &native,
         ),
         (
@@ -278,7 +278,7 @@ async fn identity_roles_and_aliases() {
     for (name, scheme, id) in [
         (
             "tmem-layouts",
-            TextureKeyScheme::Fast3dV1,
+            TextureKeyScheme::UltragfxV1,
             "replacement-formats",
         ),
         (
@@ -288,12 +288,12 @@ async fn identity_roles_and_aliases() {
         ),
         (
             "tmem-roles-lifetime",
-            TextureKeyScheme::Fast3dV1,
+            TextureKeyScheme::UltragfxV1,
             "replacement-roles",
         ),
         (
             "tmem-tlut-mutation",
-            TextureKeyScheme::Fast3dV1,
+            TextureKeyScheme::UltragfxV1,
             "replacement-palette-banks",
         ),
     ] {
@@ -338,7 +338,7 @@ async fn identity_roles_and_aliases() {
             .renderer
             .set_replacement_provider(Some(identity_provider(
                 &fixture,
-                TextureKeyScheme::Fast3dV1,
+                TextureKeyScheme::UltragfxV1,
             )));
         harness.renderer.begin_frame();
         harness.process(&fixture, None);
@@ -508,7 +508,7 @@ async fn scale_mapping() {
     ] {
         let fixture = scaled_fixture(RecipeCase::NarrowI8, filter, mirror);
         let request = requests(&fixture).remove(0);
-        let target = target(&request, TextureKeyScheme::Fast3dV1).unwrap();
+        let target = target(&request, TextureKeyScheme::UltragfxV1).unwrap();
         let mut harness = Harness::new(&fixture).await;
         harness.renderer.begin_frame();
         harness.process(&fixture, None);
@@ -559,7 +559,7 @@ async fn scaled_tlut_point() {
     replace_commands(&mut fixture, list);
     let request = requests(&fixture).remove(0);
     assert_eq!((request.tile.fmt, request.tlut), (2, 2));
-    let target = target(&request, TextureKeyScheme::Fast3dV1).unwrap();
+    let target = target(&request, TextureKeyScheme::UltragfxV1).unwrap();
     let mut harness = Harness::new(&fixture).await;
     harness
         .renderer
@@ -603,7 +603,7 @@ fn replacement_fixture_targets_are_proved_before_rendering() {
         assert_eq!(request.extent, [3, 3]);
         assert_eq!(request.decode().unwrap(), vec![61; 36]);
         assert_eq!(request.representation, Representation::Tile);
-        assert!(target(&request, TextureKeyScheme::Fast3dV1).is_ok());
+        assert!(target(&request, TextureKeyScheme::UltragfxV1).is_ok());
         assert!(target(&request, TextureKeyScheme::Rt64V5).is_ok());
         let expected = scaled_expected(filter, mirror);
         let before = scale_native();
@@ -716,7 +716,7 @@ async fn targeted_roles() {
             .into_iter()
             .find(|request| request.role == role)
             .unwrap();
-        let target = target(&request, TextureKeyScheme::Fast3dV1).unwrap();
+        let target = target(&request, TextureKeyScheme::UltragfxV1).unwrap();
         let extent = target.extent();
         let provider = Arc::new(ReplacementProvider::new(
             1,
@@ -810,7 +810,7 @@ fn replacement_narrow_requests_include_stale_and_initial_bytes() {
             request.decode().unwrap(),
             expected_recipe_decode(recipe, false)
         );
-        for scheme in [TextureKeyScheme::Fast3dV1, TextureKeyScheme::Rt64V5] {
+        for scheme in [TextureKeyScheme::UltragfxV1, TextureKeyScheme::Rt64V5] {
             assert!(target(&request, scheme).is_ok());
         }
     }
@@ -818,9 +818,9 @@ fn replacement_narrow_requests_include_stale_and_initial_bytes() {
 
 fn framebuffer_fixture(materialized: bool, shortcut: bool) -> Fixture {
     let mut fixture = Fixture::from_bytes(if shortcut {
-        include_bytes!("../fixtures/fbload-shortcut-rect.f3dcap")
+        include_bytes!("../fixtures/fbload-shortcut-rect.ugfxcap")
     } else {
-        include_bytes!("../fixtures/fbload-exact-rect.f3dcap")
+        include_bytes!("../fixtures/fbload-exact-rect.ugfxcap")
     })
     .unwrap();
     if materialized {
@@ -892,7 +892,7 @@ async fn framebuffer_exclusion() {
                 tlut: 0,
                 palette_lanes: false,
             };
-            for scheme in [TextureKeyScheme::Fast3dV1, TextureKeyScheme::Rt64V5] {
+            for scheme in [TextureKeyScheme::UltragfxV1, TextureKeyScheme::Rt64V5] {
                 if let Ok(target) = ReplacementTarget::new(
                     recipe.clone(),
                     EncodedInput::Tmem(Arc::new(attempt.bank.as_slice().try_into().unwrap())),
@@ -1004,7 +1004,7 @@ fn replacement_s2b_tlut_fixture_decodes_literal_planes() {
             }
         }
         assert_eq!(
-            target(&request, TextureKeyScheme::Fast3dV1)
+            target(&request, TextureKeyScheme::UltragfxV1)
                 .unwrap()
                 .extent(),
             [3, if lanes { 12 } else { 3 }]
@@ -1025,7 +1025,7 @@ async fn s2b_tlut_identity() {
             .renderer
             .set_replacement_provider(Some(identity_provider(
                 &fixture,
-                TextureKeyScheme::Fast3dV1,
+                TextureKeyScheme::UltragfxV1,
             )));
         for warm in [false, true] {
             harness.renderer.begin_frame();

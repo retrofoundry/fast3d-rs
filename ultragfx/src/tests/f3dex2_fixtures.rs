@@ -379,7 +379,7 @@ fn write(case: Case) {
         std::env::var_os("ULTRAGFX_WRITE_FIXTURES").expect("set ULTRAGFX_WRITE_FIXTURES");
     std::fs::create_dir_all(&output_dir).unwrap();
     std::fs::write(
-        std::path::Path::new(&output_dir).join(format!("{}.f3dcap", case.name())),
+        std::path::Path::new(&output_dir).join(format!("{}.ugfxcap", case.name())),
         fixture(case).to_bytes().unwrap(),
     )
     .unwrap();

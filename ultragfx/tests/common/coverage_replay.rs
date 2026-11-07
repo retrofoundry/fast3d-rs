@@ -6,155 +6,155 @@ pub async fn replay() {
     let captures: &[(&str, &[u8])] = &[
         (
             "coverage-slopes-f3d",
-            include_bytes!("../fixtures/coverage-slopes-f3d.f3dcap"),
+            include_bytes!("../fixtures/coverage-slopes-f3d.ugfxcap"),
         ),
         (
             "coverage-slopes-f3dex2",
-            include_bytes!("../fixtures/coverage-slopes-f3dex2.f3dcap"),
+            include_bytes!("../fixtures/coverage-slopes-f3dex2.ugfxcap"),
         ),
         (
             "coverage-ties-f3d",
-            include_bytes!("../fixtures/coverage-ties-f3d.f3dcap"),
+            include_bytes!("../fixtures/coverage-ties-f3d.ugfxcap"),
         ),
         (
             "coverage-ties-f3dex2",
-            include_bytes!("../fixtures/coverage-ties-f3dex2.f3dcap"),
+            include_bytes!("../fixtures/coverage-ties-f3dex2.ugfxcap"),
         ),
         (
             "coverage-ties-aa",
-            include_bytes!("../fixtures/coverage-ties-aa.f3dcap"),
+            include_bytes!("../fixtures/coverage-ties-aa.ugfxcap"),
         ),
         (
             "coverage-subpixel-x",
-            include_bytes!("../fixtures/coverage-subpixel-x.f3dcap"),
+            include_bytes!("../fixtures/coverage-subpixel-x.ugfxcap"),
         ),
         (
             "coverage-subpixel-y",
-            include_bytes!("../fixtures/coverage-subpixel-y.f3dcap"),
+            include_bytes!("../fixtures/coverage-subpixel-y.ugfxcap"),
         ),
         (
             "coverage-subpixel-xy",
-            include_bytes!("../fixtures/coverage-subpixel-xy.f3dcap"),
+            include_bytes!("../fixtures/coverage-subpixel-xy.ugfxcap"),
         ),
         (
             "coverage-subpixel-half",
-            include_bytes!("../fixtures/coverage-subpixel-half.f3dcap"),
+            include_bytes!("../fixtures/coverage-subpixel-half.ugfxcap"),
         ),
         (
             "coverage-subpixel-yx",
-            include_bytes!("../fixtures/coverage-subpixel-yx.f3dcap"),
+            include_bytes!("../fixtures/coverage-subpixel-yx.ugfxcap"),
         ),
         (
             "coverage-subpixel-f3d",
-            include_bytes!("../fixtures/coverage-subpixel-f3d.f3dcap"),
+            include_bytes!("../fixtures/coverage-subpixel-f3d.ugfxcap"),
         ),
         (
             "coverage-extent-192x128",
-            include_bytes!("../fixtures/coverage-extent-192x128.f3dcap"),
+            include_bytes!("../fixtures/coverage-extent-192x128.ugfxcap"),
         ),
         (
             "coverage-extent-193x132",
-            include_bytes!("../fixtures/coverage-extent-193x132.f3dcap"),
+            include_bytes!("../fixtures/coverage-extent-193x132.ugfxcap"),
         ),
         (
             "coverage-retained-height",
-            include_bytes!("../fixtures/coverage-retained-height.f3dcap"),
+            include_bytes!("../fixtures/coverage-retained-height.ugfxcap"),
         ),
         (
             "coverage-cull-back",
-            include_bytes!("../fixtures/coverage-cull-back.f3dcap"),
+            include_bytes!("../fixtures/coverage-cull-back.ugfxcap"),
         ),
         (
             "coverage-cull-back-f3d",
-            include_bytes!("../fixtures/coverage-cull-back-f3d.f3dcap"),
+            include_bytes!("../fixtures/coverage-cull-back-f3d.ugfxcap"),
         ),
         (
             "coverage-cull-front",
-            include_bytes!("../fixtures/coverage-cull-front.f3dcap"),
+            include_bytes!("../fixtures/coverage-cull-front.ugfxcap"),
         ),
         (
             "coverage-cull-front-f3d",
-            include_bytes!("../fixtures/coverage-cull-front-f3d.f3dcap"),
+            include_bytes!("../fixtures/coverage-cull-front-f3d.ugfxcap"),
         ),
         (
             "coverage-shared-0-0",
-            include_bytes!("../fixtures/coverage-shared-0-0.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-0-0.ugfxcap"),
         ),
         (
             "coverage-shared-0-1",
-            include_bytes!("../fixtures/coverage-shared-0-1.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-0-1.ugfxcap"),
         ),
         (
             "coverage-shared-1-0",
-            include_bytes!("../fixtures/coverage-shared-1-0.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-1-0.ugfxcap"),
         ),
         (
             "coverage-shared-1-1",
-            include_bytes!("../fixtures/coverage-shared-1-1.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-1-1.ugfxcap"),
         ),
         (
             "coverage-clip-scissor",
-            include_bytes!("../fixtures/coverage-clip-scissor.f3dcap"),
+            include_bytes!("../fixtures/coverage-clip-scissor.ugfxcap"),
         ),
         (
             "coverage-near-plane",
-            include_bytes!("../fixtures/coverage-near-plane.f3dcap"),
+            include_bytes!("../fixtures/coverage-near-plane.ugfxcap"),
         ),
         (
             "coverage-uv-perspective",
-            include_bytes!("../fixtures/coverage-uv-perspective.f3dcap"),
+            include_bytes!("../fixtures/coverage-uv-perspective.ugfxcap"),
         ),
         (
             "coverage-uv-perspective-negative",
-            include_bytes!("../fixtures/coverage-uv-perspective-negative.f3dcap"),
+            include_bytes!("../fixtures/coverage-uv-perspective-negative.ugfxcap"),
         ),
         (
             "coverage-shade",
-            include_bytes!("../fixtures/coverage-shade.f3dcap"),
+            include_bytes!("../fixtures/coverage-shade.ugfxcap"),
         ),
         (
             "coverage-rect-controls",
-            include_bytes!("../fixtures/coverage-rect-controls.f3dcap"),
+            include_bytes!("../fixtures/coverage-rect-controls.ugfxcap"),
         ),
         (
             "coverage-lod-perspective",
-            include_bytes!("../fixtures/coverage-lod-perspective.f3dcap"),
+            include_bytes!("../fixtures/coverage-lod-perspective.ugfxcap"),
         ),
         (
             "coverage-alpha-threshold",
-            include_bytes!("../fixtures/coverage-alpha-threshold.f3dcap"),
+            include_bytes!("../fixtures/coverage-alpha-threshold.ugfxcap"),
         ),
         (
             "coverage-fog",
-            include_bytes!("../fixtures/coverage-fog.f3dcap"),
+            include_bytes!("../fixtures/coverage-fog.ugfxcap"),
         ),
         (
             "coverage-dither",
-            include_bytes!("../fixtures/coverage-dither.f3dcap"),
+            include_bytes!("../fixtures/coverage-dither.ugfxcap"),
         ),
         (
             "coverage-decal-depth",
-            include_bytes!("../fixtures/coverage-decal-depth.f3dcap"),
+            include_bytes!("../fixtures/coverage-decal-depth.ugfxcap"),
         ),
         (
             "coverage-shared-0-0-alpha",
-            include_bytes!("../fixtures/coverage-shared-0-0-alpha.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-0-0-alpha.ugfxcap"),
         ),
         (
             "coverage-shared-0-1-alpha",
-            include_bytes!("../fixtures/coverage-shared-0-1-alpha.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-0-1-alpha.ugfxcap"),
         ),
         (
             "coverage-shared-1-0-alpha",
-            include_bytes!("../fixtures/coverage-shared-1-0-alpha.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-1-0-alpha.ugfxcap"),
         ),
         (
             "coverage-shared-1-1-alpha",
-            include_bytes!("../fixtures/coverage-shared-1-1-alpha.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-1-1-alpha.ugfxcap"),
         ),
         (
             "coverage-shared-uv",
-            include_bytes!("../fixtures/coverage-shared-uv.f3dcap"),
+            include_bytes!("../fixtures/coverage-shared-uv.ugfxcap"),
         ),
     ];
     let cases = semantics::cases();

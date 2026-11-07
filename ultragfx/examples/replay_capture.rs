@@ -14,7 +14,7 @@ mod native {
         let mut args: Vec<_> = std::env::args_os().skip(1).collect();
         if args.first().is_some_and(|arg| arg == "--pack") {
             if args.len() < 5 {
-                return Err("usage: replay_capture --pack <sequence.f3dcap> <warmup-count> <serials-comma-separated> <frame.f3dcap>...".into());
+                return Err("usage: replay_capture --pack <sequence.ugfxcap> <warmup-count> <serials-comma-separated> <frame.ugfxcap>...".into());
             }
             let sequence = Sequence {
                 frames: args[4..]
@@ -60,7 +60,7 @@ mod native {
             }
         }
         if !(2..=3).contains(&args.len()) {
-            return Err("usage: replay_capture <capture.f3dcap> <output-prefix> [persist|cimg|task|frame|all] [--scale 1|2|3|4] [--source native|presentation]".into());
+            return Err("usage: replay_capture <capture.ugfxcap> <output-prefix> [persist|cimg|task|frame|all] [--scale 1|2|3|4] [--source native|presentation]".into());
         }
         let bytes = std::fs::read(&args[0])?;
         let prefix = PathBuf::from(&args[1]);

@@ -108,7 +108,8 @@ impl<T: Clone> Replacements<T> {
             Vec::new()
         };
         let native =
-            ReplacementTarget::for_request(request, TextureKeyScheme::Fast3dV1, profiling).unwrap();
+            ReplacementTarget::for_request(request, TextureKeyScheme::UltragfxV1, profiling)
+                .unwrap();
         let cpu_bytes = input_bytes
             + native.witness().len()
             + alias_spans.capacity() * std::mem::size_of::<std::ops::Range<usize>>()
@@ -147,7 +148,8 @@ impl<T: Clone> Replacements<T> {
 impl<T> Decision<T> {
     fn matches_dependencies(&self, request: &EncodedTextureRequest, profiling: &Recorder) -> bool {
         let native =
-            ReplacementTarget::for_request(request, TextureKeyScheme::Fast3dV1, profiling).unwrap();
+            ReplacementTarget::for_request(request, TextureKeyScheme::UltragfxV1, profiling)
+                .unwrap();
         profiling.count("replacement.witness_comparisons", 1);
         profiling.count(
             "replacement.bytes_compared",

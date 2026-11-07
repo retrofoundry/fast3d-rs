@@ -49,7 +49,7 @@ fn capture_v2_s2dex_host_replays_on_wasm32() {
     .into_iter()
     .flat_map(|(a, b)| [a.to_le_bytes(), b.to_le_bytes()].concat())
     .collect();
-    let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.ugfxcap")).unwrap();
     fixture.frame.width = 8;
     fixture.frame.height = 8;
     fixture.tasks = vec![Task {

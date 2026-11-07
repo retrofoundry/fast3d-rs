@@ -9,7 +9,7 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn capture_high_addresses_resolve_on_this_platform() {
-    let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.ugfxcap")).unwrap();
     let task = &mut fixture.tasks[0];
     task.source.segments[7] = task.entry;
     let replay = ReplayHardware::new(task, None).unwrap();

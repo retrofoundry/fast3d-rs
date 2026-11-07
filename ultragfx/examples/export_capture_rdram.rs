@@ -95,7 +95,7 @@ mod native {
     pub fn run() -> Result<(), Box<dyn Error>> {
         let mut args = std::env::args_os().skip(1);
         let (Some(input), Some(prefix), None) = (args.next(), args.next(), args.next()) else {
-            return Err("usage: export_capture_rdram <capture.f3dcap> <output-prefix>".into());
+            return Err("usage: export_capture_rdram <capture.ugfxcap> <output-prefix>".into());
         };
         let fixture = Fixture::from_bytes(&std::fs::read(input)?)?;
         let (rdram, metadata) = export(&fixture)?;

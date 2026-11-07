@@ -82,8 +82,10 @@ fn draw_task() -> Task {
 }
 
 fn depth_sequence() -> Sequence {
-    let mut fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     fixture.frame.serial = 1;
     fixture.frame.width = 320;
     fixture.frame.height = 240;
@@ -408,8 +410,10 @@ fn sequence_depth_controls_distinguish_task_and_frame_boundaries() {
 
 #[test]
 fn v1_capture_still_replays() {
-    let fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     let (device, queue) = crate::render::headless_device_forced_fallback();
     let output = pollster::block_on(fixture.replay(device, queue)).unwrap();
     assert!(output
@@ -422,11 +426,12 @@ fn v1_capture_still_replays() {
 
 #[test]
 fn sequence_command_log_retains_repeated_high_address_fetches() {
-    let mut task =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap"))
-            .unwrap()
-            .tasks
-            .remove(0);
+    let mut task = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap()
+    .tasks
+    .remove(0);
     let child = task.entry;
     task.entry = 0x9000_0000_0000;
     task.spans.push(MemorySpan {
@@ -502,8 +507,10 @@ fn sequence_warmup_preserves_registers_and_presentation_serials() {
 
 #[test]
 fn single_frame_rejects_prior_rgba32_color_dependency() {
-    let mut fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     for span in &mut fixture.tasks[0].spans {
         for command in span.bytes.as_chunks_mut::<16>().0.iter_mut() {
             let mut w0 = u64::from_le_bytes(command[..8].try_into().unwrap());

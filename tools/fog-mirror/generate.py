@@ -149,7 +149,7 @@ def generate(root, destination):
                           source_dump_sha256=digest(path.with_suffix('.rdpdump').read_bytes()), triangles=len(triangles),
                           interiors=mask.count(1), edges=mask.count(2),
                           input_conversion='RGBA rounded to bytes; XY rounded to 1/128 pixel; out-of-range planes split at nine-bit clamp/wrap boundaries' if group in ('interp', 'timing') else 'exact byte RGBA; exact quarter-pixel XY'))
-    (destination / 'cases.json').write_text(json.dumps(dict(fast3d='8339189', rt64='43373749dac9bbc1b653e6a02aed40a9e1783bed', angrylion='9c8b9ed3e7d7f00dff8bc872ccdd3fba1a3673fc', parallel='1cecd042b2619bc505c12bfdc713808386f2b54d', cases=cases), separators=(',', ':')) + '\n')
+    (destination / 'cases.json').write_text(json.dumps(dict(ultragfx='8339189', rt64='43373749dac9bbc1b653e6a02aed40a9e1783bed', angrylion='9c8b9ed3e7d7f00dff8bc872ccdd3fba1a3673fc', parallel='1cecd042b2619bc505c12bfdc713808386f2b54d', cases=cases), separators=(',', ':')) + '\n')
     print(f'{len(cases)} cases, {sum(c["interiors"] for c in cases)} interior samples')
 
 

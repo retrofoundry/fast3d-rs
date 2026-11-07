@@ -24,8 +24,10 @@ fn task(commands: &[(u32, u32)], order: u32) -> Task {
 }
 
 fn fixture() -> Fixture {
-    let mut fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     fixture.tasks = vec![
         task(
             &[
@@ -775,8 +777,10 @@ fn capture_admission_compares_sampled_tmem_including_initial_zeros() {
 
 #[test]
 fn capture_writeback_requires_native_encoding_when_enabled() {
-    let fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     let (device, queue) = crate::render::headless_device_forced_fallback();
     let mut renderer = fixture.renderer(device, queue, ClearPolicy::Persist);
     for (enabled, encoding) in [

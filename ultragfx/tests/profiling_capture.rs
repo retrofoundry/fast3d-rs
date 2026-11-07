@@ -9,7 +9,7 @@ use ultragfx::{
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 fn sequence(frames: u64, warmup: u32) -> Sequence {
-    let fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.f3dcap")).unwrap();
+    let fixture = Fixture::from_bytes(include_bytes!("fixtures/host64-fill.ugfxcap")).unwrap();
     Sequence {
         frames: (1..=frames)
             .map(|serial| {
@@ -156,7 +156,7 @@ fn cache_preflight_matches_uncached_decode() {
         {
             assert_eq!(request.reachable_bytes, 2048);
             assert_eq!(request.output.len(), 4096);
-            assert_eq!(key.len(), 4141);
+            assert_eq!(key.len(), 4143);
         }
         if request.representation == Representation::Lookup {
             assert_eq!(request.extent, [4096, 4]);

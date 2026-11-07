@@ -546,7 +546,7 @@ fn workload_interleaving_fixture_pixels() {
     assert_eq!(
         fixture,
         crate::capture::Fixture::from_bytes(include_bytes!(
-            "../../tests/fixtures/workload-interleaving.f3dcap"
+            "../../tests/fixtures/workload-interleaving.ugfxcap"
         ))
         .unwrap()
     );
@@ -574,7 +574,7 @@ fn write_rt64_workload_interleaving_fixture() {
     let directory = std::path::Path::new(&directory);
     std::fs::create_dir_all(directory).unwrap();
     std::fs::write(
-        directory.join("workload-interleaving.f3dcap"),
+        directory.join("workload-interleaving.ugfxcap"),
         interleaving_fixture().to_bytes().unwrap(),
     )
     .unwrap();

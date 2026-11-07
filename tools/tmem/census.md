@@ -6,7 +6,7 @@ Run from the repository root with one or more capture sequences or fixtures:
 cargo run -p ultragfx --release --features capture,profiling \
   --example tmem16_census -- \
   /Users/ci/hub/scratch/fast3d/tmem16-census/runs/run-name \
-  /path/to/capture.f3dcap /path/to/fixture.f3dcap
+  /path/to/capture.ugfxcap /path/to/fixture.ugfxcap
 ```
 
 Each input gets a fresh interpreter. A sequence uses that interpreter for every
@@ -35,7 +35,7 @@ Each workload directory contains:
 - `identities/`: exact sampled witnesses. `sampled_ranges` stores each contiguous
   span as `[start_address, [bytes...]]`. Hashes choose file names; existing contents
   are compared byte for byte and collisions get a numeric suffix.
-- `witnesses/`: the encoded request's Fast3dV1 witness.
+- `witnesses/`: the encoded request's UltragfxV1 witness.
   Identities include this file reference, whose contents are deduplicated by exact
   equality with the same collision handling.
 - `textures/`: one descriptor per distinct witness, linked to its first attempt
@@ -64,7 +64,7 @@ descriptor, sampled bytes and exact witnesses to detect routing or content
 regressions. A formerly refused request becoming Tile/Lookup is newly admitted.
 `framebuffer_decode` is `exact` or `materialized` for accepted framebuffer requests.
 Both remain `unverified`, with `GPU framebuffer copies unavailable on CPU` as the
-decode error, an empty physical image and no Fast3dV1 witness. This is an unavailable
+decode error, an empty physical image and no UltragfxV1 witness. This is an unavailable
 CPU observation, not a renderer refusal. Profiling counts `framebuffer.exact_requests`
 and `framebuffer.materialized_requests`; neither enters the ordinary CPU trace.
 

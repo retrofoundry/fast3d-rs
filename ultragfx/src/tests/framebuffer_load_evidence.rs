@@ -519,11 +519,11 @@ fn write_rt64_framebuffer_load_evidence() {
         let bytes = fixture.to_bytes().unwrap();
         assert_eq!(Fixture::from_bytes(&bytes).unwrap(), fixture);
         let prefix = output.join(case.name());
-        std::fs::write(prefix.with_extension("f3dcap"), bytes).unwrap();
-        let fast3d: Vec<_> = (0..240)
-            .flat_map(|y| (0..320).flat_map(move |x| semantics::fast3d_expected(case, x, y)))
+        std::fs::write(prefix.with_extension("ugfxcap"), bytes).unwrap();
+        let ultragfx: Vec<_> = (0..240)
+            .flat_map(|y| (0..320).flat_map(move |x| semantics::ultragfx_expected(case, x, y)))
             .collect();
-        std::fs::write(prefix.with_extension("fast3d-expected.rgba8"), fast3d).unwrap();
+        std::fs::write(prefix.with_extension("ultragfx-expected.rgba8"), ultragfx).unwrap();
         if case != Case::ShortcutRect {
             assert!(fixture.final_color_image().is_ok());
             let mut rdram = built.rdram;

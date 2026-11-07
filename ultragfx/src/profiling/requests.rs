@@ -179,7 +179,7 @@ impl Request {
 
     /// Conservative diagnostic identity, with explicit little-endian metadata and bank bytes.
     pub fn canonical(&self) -> Vec<u8> {
-        let mut bytes = b"fast3d-b1-bank-v3\0".to_vec();
+        let mut bytes = b"ultragfx-b1-bank-v3\0".to_vec();
         bytes.push(self.representation as u8);
         let t = &self.tile;
         for value in [

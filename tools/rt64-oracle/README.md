@@ -16,7 +16,7 @@ Nothing here rebuilds or changes that checkout. Build output goes to `/tmp`.
 
 ```sh
 cd '/Volumes/DS Vault/hub/wt/fast3d-rs-rt64-oracle'
-export XDG_CACHE_HOME=/tmp/fast3d-oracle-cache
+export XDG_CACHE_HOME=/tmp/ultragfx-oracle-cache
 
 PATH="$HOME/hub/scratch/fast3d/xcrun-shim:$PATH" \
   devenv -O packages:pkgs "cmake ninja SDL2 zlib pkg-config" shell -- \
@@ -43,8 +43,8 @@ Generate the fixtures without a GPU. The tests are ignored by default and need
 `capture`.
 
 ```sh
-mkdir -p /tmp/fast3d-oracle
-ULTRAGFX_WRITE_FIXTURES=/tmp/fast3d-oracle \
+mkdir -p /tmp/ultragfx-oracle
+ULTRAGFX_WRITE_FIXTURES=/tmp/ultragfx-oracle \
   devenv shell -- cargo test -p ultragfx --features 'capture' --lib \
   write_rt64_ -- --ignored
 ```
@@ -144,27 +144,27 @@ for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point \
   f3dex2-quad-winding f3dex2-branchz-below f3dex2-branchz-above; do
   devenv shell -- cargo run -p ultragfx --features capture \
     --example export_capture_rdram -- \
-    "/tmp/fast3d-oracle/$scene.f3dcap" "/tmp/fast3d-oracle/$scene" || break
+    "/tmp/ultragfx-oracle/$scene.ugfxcap" "/tmp/ultragfx-oracle/$scene" || break
 
   /tmp/rt64-oracle-build/rt64-oracle \
-    "/tmp/fast3d-oracle/$scene.rdram" "/tmp/fast3d-oracle/$scene.json" \
-    "/tmp/fast3d-oracle/$scene-rt64" || break
+    "/tmp/ultragfx-oracle/$scene.rdram" "/tmp/ultragfx-oracle/$scene.json" \
+    "/tmp/ultragfx-oracle/$scene-rt64" || break
 
   devenv shell -- cargo run -p ultragfx --features capture \
     --example replay_capture -- \
-    "/tmp/fast3d-oracle/$scene.f3dcap" "/tmp/fast3d-oracle/$scene-fast3d" || break
+    "/tmp/ultragfx-oracle/$scene.ugfxcap" "/tmp/ultragfx-oracle/$scene-ultragfx" || break
 
   devenv shell -- cargo run -p ultragfx --example compare_rgba8 -- \
-    "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
-    320 240 --diff-mask "/tmp/fast3d-oracle/$scene-diff.png" || break
+    "/tmp/ultragfx-oracle/$scene-rt64.rgba8" "/tmp/ultragfx-oracle/$scene-ultragfx.rgba8" \
+    320 240 --diff-mask "/tmp/ultragfx-oracle/$scene-diff.png" || break
 done
 
 for scene in tlut-ci4-rgba16-banks tlut-ci4-ia16-banks \
   f3dex2-branchz-below f3dex2-branchz-above; do
   devenv shell -- cargo run -p ultragfx --example compare_rgba8 -- \
-    "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
+    "/tmp/ultragfx-oracle/$scene-rt64.rgba8" "/tmp/ultragfx-oracle/$scene-ultragfx.rgba8" \
     320 240 --threshold 7 --max-diff-pixels 0 \
-    --diff-mask "/tmp/fast3d-oracle/$scene-diff.png" || break
+    --diff-mask "/tmp/ultragfx-oracle/$scene-diff.png" || break
 done
 ```
 
@@ -248,9 +248,9 @@ that limit. Use this stricter gate for each scene after rendering both frames:
 
 ```sh
 devenv shell -- cargo run -p ultragfx --example compare_rgba8 -- \
-  "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
+  "/tmp/ultragfx-oracle/$scene-rt64.rgba8" "/tmp/ultragfx-oracle/$scene-ultragfx.rgba8" \
   320 240 --threshold 7 --max-diff-pixels 0 \
-  --diff-mask "/tmp/fast3d-oracle/$scene-diff.png"
+  --diff-mask "/tmp/ultragfx-oracle/$scene-diff.png"
 ```
 
 The filter implementation and authored probe expectations are not a measured oracle result.
@@ -265,7 +265,7 @@ On macOS rt64's own SDL window path hands plume an `SDL_Window*` where `CocoaWin
 `NSWindow*` and crashes in `objc_msgSend`; the harness creates the window itself and passes the
 Cocoa window plus the Metal layer through `core.window`, as the recomp frontends do.
 
-The library-contract PR 7 fixture `shared-depth.f3dcap` writes A/Z, B/Z, then
+The library-contract PR 7 fixture `shared-depth.ugfxcap` writes A/Z, B/Z, then
 A/Z, with Z at `0x200000` shared by A=`0x100000` and B=`0x300000`. Its final
 image has red at `[32,144) × [32,208)`, blue at `[144,176) × [32,208)`, and
 black elsewhere. The right region stays black because B wrote nearer depth.

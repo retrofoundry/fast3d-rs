@@ -1,7 +1,7 @@
 {
   "status": "T2 lazy-identity baselines remain frozen; T4 compute/residency expectations are executable hardware gates",
   "roles_fixture": {
-    "fixture": "tmem-roles-lifetime.f3dcap",
+    "fixture": "tmem-roles-lifetime.ugfxcap",
     "draw_roles": [
       [
         "r0",
@@ -242,7 +242,7 @@
         "snapshot_allocations": 0,
         "snapshot_bytes": 0,
         "hashes_computed": 1,
-        "bytes_hashed": 59,
+        "bytes_hashed": 61,
         "memo_hits": 0,
         "memo_misses": 0,
         "memo_evictions": 0,
@@ -398,12 +398,12 @@
       "requests": 54,
       "distinct_images": 9,
       "hashes_computed": 54,
-      "bytes_hashed": 14112,
+      "bytes_hashed": 14220,
       "witness_comparisons": 45,
-      "witness_bytes_compared": 11760,
+      "witness_bytes_compared": 11850,
       "encoded_comparisons": 27,
       "encoded_bytes_compared": 1848,
-      "bytes_compared": 13608,
+      "bytes_compared": 13698,
       "decode_dispatches": 9,
       "decode_compute_passes": 1,
       "decode_input_upload_bytes": 36864,
@@ -415,7 +415,7 @@
       "evictions": 0,
       "bypasses": 0,
       "resident_gpu_bytes": 1728,
-      "resident_cpu_bytes": 2352,
+      "resident_cpu_bytes": 2370,
       "snapshot_allocations": 0,
       "snapshot_bytes": 0,
       "cpu_decode_executions": 0,
@@ -424,7 +424,7 @@
       "moved_rdp_fixture_bank_cow_bytes": 106496,
       "public_facade_bank_cow_allocations": 27,
       "public_facade_bank_cow_bytes": 110592,
-      "preimage_bytes_constructed": 14112,
+      "preimage_bytes_constructed": 14220,
       "footprint_span_bytes": 5400,
       "palette_index_reads": 648
     },

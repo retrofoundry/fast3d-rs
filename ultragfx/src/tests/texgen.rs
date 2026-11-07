@@ -556,7 +556,7 @@ fn write_rt64_mario_metal_butt_fixture() {
         scene_entry,
         320,
         240,
-        "mario-metal-butt.f3dcap",
+        "mario-metal-butt.ugfxcap",
         metal_butt_provenance(),
     );
 }

@@ -253,7 +253,7 @@ fn write_rt64_filter_fixtures() {
         ("sm64-castle-trilerp", castle_fixture()),
     ] {
         std::fs::write(
-            dir.join(format!("{name}.f3dcap")),
+            dir.join(format!("{name}.ugfxcap")),
             fixture.to_bytes().unwrap(),
         )
         .unwrap();

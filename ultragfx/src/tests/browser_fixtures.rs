@@ -141,7 +141,7 @@ fn fixtures() -> Vec<(Case, Fixture)> {
                 Case::CombinerSelector => combiner_selector(),
                 _ => corpus
                     .iter()
-                    .find(|(name, _)| case.filename().strip_suffix(".f3dcap") == Some(name))
+                    .find(|(name, _)| case.filename().strip_suffix(".ugfxcap") == Some(name))
                     .unwrap()
                     .1
                     .clone(),

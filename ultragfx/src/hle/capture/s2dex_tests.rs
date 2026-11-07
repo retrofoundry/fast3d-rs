@@ -80,9 +80,10 @@ fn capture_v2_s2dex_replays_after_source_drop() {
         let live = walk(memory, entry, &bindings, &mut steps);
         assert!(live.diags.is_empty(), "{:?}", live.diags);
         assert_eq!(live.termination, WalkTermination::End);
-        let mut template =
-            Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap"))
-                .unwrap();
+        let mut template = Fixture::from_bytes(include_bytes!(
+            "../../../tests/fixtures/host64-fill.ugfxcap"
+        ))
+        .unwrap();
         template.frame.width = 64;
         template.frame.height = 32;
         let (device, queue) = crate::render::headless_device_forced_fallback();
@@ -207,7 +208,7 @@ fn capture_s2dex_missing_object_texture_or_tlut_span_fails() {
 
 #[test]
 fn capture_v1_fixture_remains_readable() {
-    let bytes = include_bytes!("../../../tests/fixtures/host64-fill.f3dcap");
+    let bytes = include_bytes!("../../../tests/fixtures/host64-fill.ugfxcap");
     assert_eq!(&bytes[8..12], &1u32.to_le_bytes());
     let fixture = Fixture::from_bytes(bytes).unwrap();
     assert!(fixture.tasks.iter().all(|task| task.bindings.is_empty()));
@@ -226,8 +227,10 @@ fn capture_v1_fixture_remains_readable() {
 
 #[test]
 fn capture_bindings_are_task_local() {
-    let mut fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     let base = fixture.tasks[0].clone();
     fixture.frame.serial = 1;
     fixture.tasks = [Microcode::S2dex2, Microcode::F3dex2]

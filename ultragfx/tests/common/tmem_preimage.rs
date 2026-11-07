@@ -102,7 +102,7 @@ pub fn serialize(witness: &Witness) -> Vec<u8> {
         2 => assert!(witness.physical.is_empty()),
         _ => panic!("unknown fixture representation"),
     }
-    let mut out = b"fast3d-tmem-key\0".to_vec();
+    let mut out = b"ultragfx-tmem-key\0".to_vec();
     out.extend_from_slice(&1u16.to_le_bytes());
     out.extend_from_slice(&[recipe.representation, 0]);
     for dimension in recipe.output.into_iter().chain(recipe.logical) {

@@ -18,11 +18,11 @@ pub const CASES: [Case; 5] = [
 impl Case {
     pub fn filename(self) -> &'static str {
         match self {
-            Self::Host64Fill => "host64-fill.f3dcap",
-            Self::CombinerSelector => "combiner-env-alpha.f3dcap",
-            Self::PowerMeterPoint => "sm64-power-meter-point.f3dcap",
-            Self::CastleTrilerp => "sm64-castle-trilerp.f3dcap",
-            Self::TransparentMario => "sm64-transparent-mario.f3dcap",
+            Self::Host64Fill => "host64-fill.ugfxcap",
+            Self::CombinerSelector => "combiner-env-alpha.ugfxcap",
+            Self::PowerMeterPoint => "sm64-power-meter-point.ugfxcap",
+            Self::CastleTrilerp => "sm64-castle-trilerp.ugfxcap",
+            Self::TransparentMario => "sm64-transparent-mario.ugfxcap",
         }
     }
 

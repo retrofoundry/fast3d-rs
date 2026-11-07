@@ -1,9 +1,9 @@
 {
   "pin": "43373749dac9bbc1b653e6a02aed40a9e1783bed",
   "fixtures": {
-    "tmem-layouts.f3dcap": "6f0d156da5f91a5f1b902a2b4c0718ca0518d02794044ea484a21f284af94540",
-    "tmem-tlut-mutation.f3dcap": "a746ce5bda182b9a24a55749181f4f0ec0cf6cc14591b8d713c4b7b46ad99c1c",
-    "tmem-roles-lifetime.f3dcap": "7dbd8e448a0397199ce92557edd9b129dafc22759516f1055358bcc6c54ab794"
+    "tmem-layouts.ugfxcap": "099b228c1427ab9a0273dedd625bb7400e6facdd65169c2fc63a396a78ae3688",
+    "tmem-tlut-mutation.ugfxcap": "5557a244b97908bc80911063951e79b0b7a01baab3ca4992f39c10208ee69015",
+    "tmem-roles-lifetime.ugfxcap": "40952e8935979ea1b0ebfa55239d7403fc0ef4b0ca8d56811f26eeb162c0632c"
   },
   "rows": [
     {

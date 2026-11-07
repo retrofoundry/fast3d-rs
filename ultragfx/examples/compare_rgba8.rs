@@ -335,7 +335,7 @@ mod native {
             fn new(width: u32, height: u32, left: &[[u8; 4]], right: &[[u8; 4]]) -> Self {
                 static NEXT: AtomicUsize = AtomicUsize::new(0);
                 let directory = std::env::temp_dir().join(format!(
-                    "fast3d-compare-{}-{}",
+                    "ultragfx-compare-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));

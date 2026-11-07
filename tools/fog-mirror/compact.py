@@ -104,7 +104,7 @@ def compact(source, destination):
             (destination / name).unlink(missing_ok=True)
     (destination / 'cases.json').write_text(json.dumps(dict(common_ops=common, cases=cases), separators=(',', ':')) + '\n')
     provenance = dict(generators={key: manifest[key] for key in ('generator_source_sha256', 'model_source_sha256')},
-                      revisions={key: manifest[key] for key in ('fast3d', 'rt64', 'angrylion', 'parallel')},
+                      revisions={key: manifest[key] for key in ('ultragfx', 'rt64', 'angrylion', 'parallel')},
                       input_conversion={group: next(c['input_conversion'] for c in manifest['cases'] if c['group'] == group)
                                         for group in ('matrix', 'modes', 'interp', 'timing')},
                       cases=provenance,

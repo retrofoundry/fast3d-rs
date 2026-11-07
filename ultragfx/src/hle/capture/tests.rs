@@ -483,8 +483,10 @@ fn fixture(task: Task) -> Fixture {
 
 #[test]
 fn capture_v2_non_task_roundtrips() {
-    let mut fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     fixture.provenance = Provenance::default();
     let mut bytes = fixture.to_bytes().unwrap();
     bytes[76..80].copy_from_slice(&2u32.to_le_bytes());
@@ -497,8 +499,10 @@ fn capture_v2_non_task_roundtrips() {
 
 #[test]
 fn capture_v2_non_binding_roundtrips() {
-    let mut fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let mut fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     fixture.provenance = Provenance::default();
     fixture.tasks[0].bindings = vec![(0x123456789abcdef0, Microcode::F3dex2)];
     let mut bytes = fixture.to_bytes().unwrap();
@@ -522,7 +526,7 @@ fn fixture_container_rejects_corruption() {
             .unwrap(),
     );
     let b = f.to_bytes().unwrap();
-    assert_eq!(&b[..16], b"F3DCAP\0\0\x03\0\0\0\x01\x02\x03\x04");
+    assert_eq!(&b[..16], b"UGFXCAP\0\x03\0\0\0\x01\x02\x03\x04");
     assert_eq!(Fixture::from_bytes(&b).unwrap(), f);
     for n in 0..b.len() {
         assert!(Fixture::from_bytes(&b[..n]).is_err(), "truncation at {n}");
@@ -968,8 +972,10 @@ mod host {
 
 #[test]
 fn capture_checked_in_high_address_fixture_walks() {
-    let fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     let task = &fixture.tasks[0];
     let replay = ReplayHardware::new(task, fixture.frame.vi).unwrap();
     assert_eq!(task.entry, 0x0000_0001_2345_6000);
@@ -1023,8 +1029,10 @@ fn capture_replayed_task_records_identical_spans() {
         .unwrap();
     assert_eq!(image_task.spans.len(), 2);
     drop(image);
-    let host_fixture =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let host_fixture = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     for mut task in [image_task, host_fixture.tasks[0].clone()] {
         task.source.segments[4] = task.entry;
         let replay = ReplayHardware::new(&task, None).unwrap();
@@ -1109,8 +1117,10 @@ fn capture_image_preserves_masking_endianness_and_typed_reads() {
 
 #[test]
 fn replay_adjacent_spans_are_one_address_interval() {
-    let mut f =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let mut f = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     let span = f.tasks[0].spans.remove(0);
     f.tasks[0].spans = vec![
         MemorySpan {
@@ -1131,8 +1141,10 @@ fn replay_adjacent_spans_are_one_address_interval() {
 
 #[test]
 fn replay_host_big_endian_uses_recorded_byte_order() {
-    let mut f =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let mut f = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     f.tasks[0].source.memory.byte_order = ByteOrder::Big;
     for word in f.tasks[0].spans[0].bytes.as_chunks_mut::<8>().0.iter_mut() {
         word.reverse();
@@ -1155,9 +1167,10 @@ fn capture_missing_span_near_address_limit_does_not_panic() {
         vec![0x01003006, u64::MAX - 20, 0xdf000000, 0],
         vec![0xfd10003f, u64::MAX, 0xf4004004, 0x07008008, 0xdf000000, 0],
     ] {
-        let mut f =
-            Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap"))
-                .unwrap();
+        let mut f = Fixture::from_bytes(include_bytes!(
+            "../../../tests/fixtures/host64-fill.ugfxcap"
+        ))
+        .unwrap();
         let task = &mut f.tasks[0];
         task.microcode = Microcode::F3dex2;
         task.spans[0].bytes = commands.iter().flat_map(|w| w.to_le_bytes()).collect();
@@ -1340,10 +1353,12 @@ fn recording_preserves_host_writeback_ranges() {
 
 #[test]
 fn legacy_scales_are_ignored_and_v3_preserves_effective_scale() {
-    let original =
-        Fixture::from_bytes(include_bytes!("../../../tests/fixtures/host64-fill.f3dcap")).unwrap();
+    let original = Fixture::from_bytes(include_bytes!(
+        "../../../tests/fixtures/host64-fill.ugfxcap"
+    ))
+    .unwrap();
     for version in [1u32, 2] {
-        let mut bytes = include_bytes!("../../../tests/fixtures/host64-fill.f3dcap").to_vec();
+        let mut bytes = include_bytes!("../../../tests/fixtures/host64-fill.ugfxcap").to_vec();
         assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 1);
         if version == 2 {
             let mut fixture = original.clone();

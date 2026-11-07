@@ -218,8 +218,8 @@ pub(super) fn serialize_profiled(
 ) -> Vec<u8> {
     let selected = select(recipe, bank, profiling);
     let physical_count = selected.count();
-    let mut out = Vec::with_capacity(56 + physical_count * 3);
-    out.extend_from_slice(b"fast3d-tmem-key\0");
+    let mut out = Vec::with_capacity(58 + physical_count * 3);
+    out.extend_from_slice(b"ultragfx-tmem-key\0");
     out.extend_from_slice(&1u16.to_le_bytes());
     out.extend_from_slice(&[recipe.representation as u8, recipe.semantic_flags()]);
     for dimension in recipe.output.into_iter().chain(recipe.logical) {

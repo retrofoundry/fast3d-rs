@@ -340,7 +340,7 @@ fn tmem_captures_keep_one_rgba32_target_layout() {
         let encoded = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures")
-                .join(format!("{name}.f3dcap")),
+                .join(format!("{name}.ugfxcap")),
         )
         .unwrap();
         let capture = crate::capture::Fixture::from_bytes(&encoded).unwrap();
@@ -380,7 +380,7 @@ fn write_tmem_fixtures() {
     std::fs::create_dir_all(&dir).unwrap();
     for name in semantics::FIXTURES {
         std::fs::write(
-            dir.join(format!("{name}.f3dcap")),
+            dir.join(format!("{name}.ugfxcap")),
             fixture(name).to_bytes().unwrap(),
         )
         .unwrap();

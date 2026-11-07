@@ -385,7 +385,7 @@ fn canonical_sdk_tlut_replicates_all_256_slots() {
 }
 
 #[test]
-fn reference_crashing_load_inputs_keep_fast3d_defined_behavior() {
+fn reference_crashing_load_inputs_keep_ultragfx_defined_behavior() {
     for opcode in [0xf0, 0xf3, 0xf4] {
         for (fmt, siz) in [(4, 0), (0, 3), (1, 2)] {
             let (rdp, _) = Load {
