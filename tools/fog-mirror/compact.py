@@ -18,8 +18,6 @@ def bug(case):
         return {16: 'memory_alpha_and_coverage', 17: 'memory_alpha_and_coverage',
                 18: 'memory_alpha_and_coverage', 20: 'color_on_coverage',
                 22: 'partial_reject'}.get(int(case['id'][4:6]))
-    if case['group'] == 'modes' and case['state']['othermode_l'] & 0xc00 == 0xc00:
-        return 'decal_depth_tolerance'
     return {'memory-previous-forward': 'first_cycle_memory_rgb',
             'coverage-previous-forward': 'memory_alpha_and_coverage'}.get(case['id'])
 
