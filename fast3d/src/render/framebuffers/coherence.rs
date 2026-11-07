@@ -1048,8 +1048,14 @@ mod tests {
             color_image: Default::default(),
             depth_image: None,
             pc: 0,
-            logical_extent: (1, 1),
-            output_extent: (1, 1),
+            logical_scissors: Vec::new(),
+            extents: crate::render::extents::TargetExtents::new(
+                crate::render::workload::TargetId::Guest(0x100),
+                (1, 1),
+                (1, 1),
+                1,
+            )
+            .unwrap(),
             any_depth: false,
             depth_clear: false,
             operations: vec![
@@ -3338,6 +3344,44 @@ impl super::super::SceneRenderer {
                 &self.depthbuffers[&id],
                 &spans,
             );
+        }
+        let presentation = if writer.depth {
+            self.depthbuffers[&id]
+                .presentation
+                .as_ref()
+                .map(|p| &p.attach)
+        } else {
+            self.framebuffers
+                .get(&id)
+                .filter(|target| target.layout == writer.layout)
+                .and_then(|target| target.presentation.as_ref())
+                .map(|p| &p.attach)
+        };
+        if let Some(presentation) = presentation {
+            if writer.depth {
+                self.depth_pipeline.expand(
+                    device,
+                    encoder,
+                    &self.depthbuffers[&id],
+                    self.depthbuffers[&id].presentation.as_deref().unwrap(),
+                    self.render_scale,
+                    &spans,
+                    &self.profiling,
+                );
+            } else {
+                let source = texture.create_view(&Default::default());
+                self.presentation_transfers
+                    .get_or_init(|| super::presentation::Transfers::new(device))
+                    .import(
+                        device,
+                        encoder,
+                        &source,
+                        presentation,
+                        self.render_scale,
+                        &spans,
+                        &self.profiling,
+                    );
+            }
         }
         self.profiling.count("import.pixels", pixels.len() as u64);
         true

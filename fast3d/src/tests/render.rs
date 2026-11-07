@@ -273,6 +273,7 @@ fn render_and_read_center_channel(
         inv_tex1_size: [1.0, 1.0, 0.0, 0.0],
         lod_params: [0.0, 1.0, 0.0, 1.0],
         inv_detail_size: [1.0, 1.0, 0.0, 0.0],
+        raster: [0; 4],
     };
 
     let pipeline = TexturedPipeline::new(device, format, DEPTH_FORMAT);
@@ -594,6 +595,7 @@ fn renders_red_triangle_center_and_clear_corner() {
         inv_tex1_size: [1.0, 1.0, 0.0, 0.0],
         lod_params: [0.0, 1.0, 0.0, 1.0],
         inv_detail_size: [1.0, 1.0, 0.0, 0.0],
+        raster: [0; 4],
     };
 
     // Use a 1x1 white texture as placeholder (tex_enable=0 so it doesn't matter)
@@ -809,6 +811,7 @@ fn depth_test_hides_the_farther_triangle() {
         inv_tex1_size: [1.0, 1.0, 0.0, 0.0],
         lod_params: [0.0, 1.0, 0.0, 1.0],
         inv_detail_size: [1.0, 1.0, 0.0, 0.0],
+        raster: [0; 4],
     };
     let pipeline = TexturedPipeline::new(&device, format, DEPTH_FORMAT);
     let (group0_bg, group1_bg) = make_bind_groups(
@@ -1496,6 +1499,7 @@ fn cull_back_mode_keeps_n64_front_drops_n64_back() {
         inv_tex1_size: [1.0, 1.0, 0.0, 0.0],
         lod_params: [0.0, 1.0, 0.0, 1.0],
         inv_detail_size: [1.0, 1.0, 0.0, 0.0],
+        raster: [0; 4],
     };
     let pipeline = TexturedPipeline::new(&device, format, DEPTH_FORMAT);
     let (group0_bg, group1_bg) = make_bind_groups(
@@ -3737,6 +3741,7 @@ fn render_two_texture_center(
         inv_tex1_size: [1.0, 1.0, 1.0, 0.0],
         lod_params: [0.0, 1.0, 0.0, 1.0],
         inv_detail_size: [1.0, 1.0, 0.0, 0.0],
+        raster: [0; 4],
     };
 
     let pipeline = TexturedPipeline::new(device, format, DEPTH_FORMAT);
@@ -4184,6 +4189,7 @@ fn render_lod_center(
             prim_lod_min,
             detail_mode,
         ],
+        raster: [0; 4],
     };
 
     let pipeline = TexturedPipeline::new(device, format, DEPTH_FORMAT);

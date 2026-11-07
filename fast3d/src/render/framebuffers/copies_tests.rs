@@ -68,8 +68,8 @@ fn pixels(request: &Arc<FramebufferTexture>) -> Vec<[u8; 4]> {
     let (device, queue) = crate::render::headless_device_forced_fallback();
     let recorder = Recorder::new(crate::profiling::Mode::Counters);
     let mut copies = Copies::default();
-    copies.begin(&device, request.tags.copies.iter().cloned());
-    copies.texture(&device, &queue, request, &recorder);
+    copies.begin(&device, request.tags.copies.iter().cloned(), 1);
+    copies.texture(&device, &queue, request, &recorder, false);
     let output = copies
         .pending
         .values()
@@ -79,7 +79,7 @@ fn pixels(request: &Arc<FramebufferTexture>) -> Vec<[u8; 4]> {
         .job
         .texture
         .clone();
-    copies.texture(&device, &queue, request, &recorder);
+    copies.texture(&device, &queue, request, &recorder, false);
     assert_eq!(copies.pending.values().map(Vec::len).sum::<usize>(), 1);
     let mut encoder = device.create_command_encoder(&Default::default());
     for copy in &request.tags.copies {
@@ -125,6 +125,7 @@ fn pixels(request: &Arc<FramebufferTexture>) -> Vec<[u8; 4]> {
             copy,
             &HashMap::new(),
             &versions,
+            &HashMap::new(),
             None,
             &recorder,
         );
@@ -453,4 +454,23 @@ fn framebuffer_decode_materialized_formats_without_tlut() {
             assert_eq!(pixels(&request), expected, "{fmt}/{siz}/tlut{tlut}");
         }
     }
+}
+
+#[test]
+fn image_route_requires_every_sample_to_use_complete_image_pairs() {
+    let mut rdp = Rdp::default();
+    copy(&mut rdp, 0, 2);
+    for fmt in [0, 3] {
+        assert!(request(&rdp, &tile(fmt, 2, 4, 2), 0).image_route());
+    }
+    let ci = request(&rdp, &tile(2, 1, 8, 2), 2);
+    assert!(!ci.materialize);
+    assert!(!ci.image_route());
+    let mut mixed = rdp.clone();
+    mixed.tmem_bank.write_tile(&[0x12, 0x34], 0, 1, 1, 1, 2, 1);
+    let mixed = request(&mixed, &tile(0, 2, 4, 2), 0);
+    assert!(!mixed.materialize);
+    assert!(!mixed.image_route());
+    rdp.tmem_bank.framebuffer_tags.as_mut().unwrap().bytes[1] = Tag::default();
+    assert!(!request(&rdp, &tile(0, 2, 4, 2), 0).image_route());
 }

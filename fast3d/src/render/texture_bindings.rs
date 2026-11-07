@@ -7,6 +7,7 @@ use super::{
 };
 use crate::hle::texture_request::TextureSource;
 
+#[derive(Clone)]
 enum BindingImage {
     Framebuffer,
     Encoded(Image),
@@ -54,11 +55,13 @@ impl PreparedImage {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct MaterialBinding {
     sampling: TileSamplingArray,
     wrap: [u8; 2],
     images: Vec<BindingImage>,
     pub bind_group: wgpu::BindGroup,
+    pub high_resolution_mask: u32,
 }
 
 impl MaterialBinding {
@@ -130,6 +133,7 @@ pub(super) struct BindingBuilder<'a> {
     pub copies: &'a mut super::framebuffers::copies::Copies,
     pub resources: &'a mut TextureResources,
     pub profiling: &'a crate::profiling::Recorder,
+    pub presentation: bool,
 }
 
 impl BindingBuilder<'_> {
@@ -137,6 +141,7 @@ impl BindingBuilder<'_> {
         let _span = self.profiling.span("resources");
         let roles = roles(mat);
         let mut mapped_sampling = None;
+        let mut high_resolution_mask = 0;
         let mut images = Vec::with_capacity(roles.len());
         for (index, role) in roles.into_iter().enumerate() {
             let Some(binding) = role else {
@@ -160,10 +165,20 @@ impl BindingBuilder<'_> {
                 "lod7",
             ][index];
             let image = match &binding.source {
-                TextureSource::Framebuffer(request) => PreparedImage::Framebuffer(
-                    self.copies
-                        .texture(self.device, self.queue, request, self.profiling),
-                ),
+                TextureSource::Framebuffer(request) => {
+                    let (view, scale) = self.copies.texture(
+                        self.device,
+                        self.queue,
+                        request,
+                        self.profiling,
+                        self.presentation,
+                    );
+                    if scale > 1 {
+                        high_resolution_mask |= 1 << index;
+                        mapped_sampling.get_or_insert(mat.sampling)[index].image[3] = scale;
+                    }
+                    PreparedImage::Framebuffer(view)
+                }
                 TextureSource::Encoded(request) => {
                     let replacement = self.resources.resolve_replacement(
                         self.device,
@@ -173,6 +188,7 @@ impl BindingBuilder<'_> {
                         self.profiling,
                     );
                     if let Some((image, scale)) = replacement {
+                        high_resolution_mask |= u32::from(scale > 1) << index;
                         mapped_sampling.get_or_insert(mat.sampling)[index].image[3] = scale;
                         PreparedImage::Replacement(image)
                     } else {
@@ -270,6 +286,7 @@ impl BindingBuilder<'_> {
             wrap,
             images: images.into_iter().map(PreparedImage::binding).collect(),
             bind_group,
+            high_resolution_mask,
         }
     }
 }

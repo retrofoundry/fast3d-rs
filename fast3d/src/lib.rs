@@ -63,10 +63,18 @@ pub enum DepthResetPolicy {
     FrameBoundary,
 }
 
+/// Presentation scale requested for the next frame boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScalePolicy {
+    Fixed(u32),
+    /// Ceiling of content height / native crop height, capped at 4.
+    Auto,
+}
+
 /// Renderer configuration. All fields are `Copy`; the `Renderer` stores it by value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RendererConfig {
-    /// Internal framebuffer scale. **v1: values > 1 are clamped to 1 with a `log::warn!`**.
+    /// Fixed presentation scale, from 1 through 4. Guest rendering stays native.
     pub resolution_multiplier: u32,
     /// MSAA sample count (1 = off). **v1: clamped to 1**.
     pub sample_count: u32,
@@ -76,6 +84,38 @@ pub struct RendererConfig {
     pub format: Option<wgpu::TextureFormat>,
     pub clear_policy: ClearPolicy,
     pub power_preference: wgpu::PowerPreference,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfigError {
+    ResolutionMultiplier(u32),
+    ReductionFactor(u32),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ReductionFactor(value) => {
+                write!(f, "reduction factor must be nonzero, got {value}")
+            }
+            Self::ResolutionMultiplier(value) => {
+                write!(f, "resolution_multiplier must be 1..=4, got {value}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl RendererConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !(1..=4).contains(&self.resolution_multiplier) {
+            return Err(ConfigError::ResolutionMultiplier(
+                self.resolution_multiplier,
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Where a `Renderer` scans out. `Surface` is an owned swapchain (built by `Renderer::new`, or
@@ -97,6 +137,7 @@ pub enum PresentTarget {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum InitError {
+    Config(ConfigError),
     Adapter(wgpu::RequestAdapterError),
     Device(wgpu::RequestDeviceError),
     Surface(wgpu::CreateSurfaceError),
@@ -105,6 +146,7 @@ pub enum InitError {
 impl std::fmt::Display for InitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InitError::Config(e) => write!(f, "invalid renderer configuration: {e}"),
             InitError::Adapter(e) => write!(f, "adapter request failed: {e}"),
             InitError::Device(e) => write!(f, "device request failed: {e}"),
             InitError::Surface(e) => write!(f, "surface creation failed: {e}"),
@@ -115,6 +157,7 @@ impl std::fmt::Display for InitError {
 impl std::error::Error for InitError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            InitError::Config(e) => Some(e),
             InitError::Adapter(e) => Some(e),
             InitError::Device(e) => Some(e),
             InitError::Surface(e) => Some(e),
@@ -159,14 +202,15 @@ fn render_format_of(config: &wgpu::SurfaceConfiguration) -> wgpu::TextureFormat 
         .unwrap_or(config.format)
 }
 
-/// v1 does not support supersampling or MSAA; warn (values are ignored, not normalized).
-fn warn_unsupported(config: &RendererConfig) {
-    if config.resolution_multiplier > 1 {
-        log::warn!("resolution_multiplier > 1 is unsupported in v1; treated as 1");
+fn normalize_config(mut config: RendererConfig) -> RendererConfig {
+    if let Err(error) = config.validate() {
+        log::warn!("{error}; treated as 1");
+        config.resolution_multiplier = 1;
     }
     if config.sample_count > 1 {
         log::warn!("sample_count > 1 (MSAA) is unsupported in v1; treated as 1");
     }
+    config
 }
 
 /// Deterministically choose the swapchain config format and an optional non-sRGB view format, so we
@@ -234,6 +278,11 @@ pub struct Renderer {
     /// egui-wgpu GPU resources drop first. Default-disabled; a no-op under `present_to` when off.
     #[cfg(feature = "debug-ui")]
     debugger: crate::debug::Debugger,
+    scale_policy: ScalePolicy,
+    content_height: u32,
+    auto_reference: Option<u32>,
+    previous_reference: Option<u32>,
+    frame_admission_error: Option<Diagnostic>,
     config: RendererConfig, // RA: clear_policy read as self.config.clear_policy
     queue: wgpu::Queue,
     device: wgpu::Device,
@@ -282,6 +331,51 @@ impl Renderer {
         Self::with_device_recorder(device, queue, target, config, Default::default())
     }
 
+    pub fn effective_resolution_multiplier(&self) -> u32 {
+        self.inner.render_scale
+    }
+
+    /// Queue a policy for the next `begin_frame` or `begin_frame_with_vi`.
+    pub fn set_scale_policy(&mut self, policy: ScalePolicy) -> Result<(), ConfigError> {
+        if let ScalePolicy::Fixed(value) = policy {
+            if !(1..=4).contains(&value) {
+                return Err(ConfigError::ResolutionMultiplier(value));
+            }
+        }
+        self.mark_mutation();
+        self.scale_policy = policy;
+        Ok(())
+    }
+
+    pub fn requested_scale_policy(&self) -> ScalePolicy {
+        self.scale_policy
+    }
+
+    /// Content area excluding outer letterboxing and UI, supplied before the frame boundary.
+    pub fn set_output_content_height(&mut self, height: u32) {
+        self.mark_mutation();
+        self.content_height = height;
+    }
+
+    /// Reference used by the effective Auto frame; `None` for a fixed frame.
+    pub fn auto_reference_height(&self) -> Option<u32> {
+        self.auto_reference
+    }
+
+    /// Integer box reduction at presentation. Native dumps bypass it.
+    pub fn set_reduction_factor(&mut self, factor: u32) -> Result<(), ConfigError> {
+        if factor == 0 {
+            return Err(ConfigError::ReductionFactor(factor));
+        }
+        self.mark_mutation();
+        self.inner.reduction_factor = factor;
+        Ok(())
+    }
+
+    pub fn reduction_factor(&self) -> u32 {
+        self.inner.reduction_factor
+    }
+
     #[cfg(feature = "profiling")]
     pub fn with_device_profiled(
         device: wgpu::Device,
@@ -310,11 +404,13 @@ impl Renderer {
                 height,
             } => (*format, (*width).max(1), (*height).max(1)),
         };
-        warn_unsupported(&config);
+        let config = normalize_config(config);
         let dual_source = device
             .features()
             .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
-        let inner = SceneRenderer::new_profiled(&device, render_fmt, w, h, dual_source, profiling);
+        let mut inner =
+            SceneRenderer::new_profiled(&device, render_fmt, w, h, dual_source, profiling);
+        inner.render_scale = config.resolution_multiplier;
         Self {
             target,
             inner,
@@ -333,6 +429,11 @@ impl Renderer {
             hook: None,
             #[cfg(feature = "debug-ui")]
             debugger: crate::debug::Debugger::new(),
+            scale_policy: ScalePolicy::Fixed(config.resolution_multiplier),
+            content_height: 0,
+            auto_reference: None,
+            previous_reference: None,
+            frame_admission_error: None,
             config,
             queue,
             device,
@@ -349,6 +450,7 @@ impl Renderer {
         height: u32,
         config: RendererConfig,
     ) -> Result<Self, InitError> {
+        config.validate().map_err(InitError::Config)?;
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(surface_target)?;
         let adapter = instance
@@ -378,7 +480,7 @@ impl Renderer {
         let (surface_fmt, view_fmt) = pick_surface_format(&caps.formats, config.format);
         let render_fmt = view_fmt.unwrap_or(surface_fmt);
         let (w, h) = (width.max(1), height.max(1));
-        warn_unsupported(&config);
+        let config = normalize_config(config);
 
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -392,7 +494,8 @@ impl Renderer {
         };
         surface.configure(&device, &surface_config);
 
-        let inner = SceneRenderer::new(&device, render_fmt, w, h, dual_source);
+        let mut inner = SceneRenderer::new(&device, render_fmt, w, h, dual_source);
+        inner.render_scale = config.resolution_multiplier;
         Ok(Self {
             target: PresentTarget::Surface {
                 surface,
@@ -414,6 +517,11 @@ impl Renderer {
             hook: None,
             #[cfg(feature = "debug-ui")]
             debugger: crate::debug::Debugger::new(),
+            scale_policy: ScalePolicy::Fixed(config.resolution_multiplier),
+            content_height: 0,
+            auto_reference: None,
+            previous_reference: None,
+            frame_admission_error: None,
             config,
             queue,
             device,
@@ -466,7 +574,7 @@ impl Renderer {
     pub fn reconfigure(&mut self, config: RendererConfig) {
         self.mark_mutation();
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely()); // #[must_use]; no-op on web
-        warn_unsupported(&config);
+        let config = normalize_config(config);
 
         let (render_fmt, w, h) = match &mut self.target {
             PresentTarget::Surface {
@@ -502,6 +610,7 @@ impl Renderer {
             dual_source,
             self.inner.profiling.clone(),
         );
+        self.inner.render_scale = config.resolution_multiplier;
         self.inner.coherence = self.guest_writeback.then(|| {
             render::framebuffers::coherence::Coherence::new(self.guest_writeback_encoding)
         });
@@ -513,6 +622,10 @@ impl Renderer {
         self.inner.dither_seed = dither_seed;
         self.surface_format = render_fmt;
         self.config = config;
+        self.scale_policy = ScalePolicy::Fixed(config.resolution_multiplier);
+        self.auto_reference = None;
+        self.previous_reference = None;
+        self.frame_admission_error = None;
         // The store was just dropped with the old `inner`; drop dangling scanout state too.
         self.last_scanout_addr = None;
         self.frame_scenes.clear();
@@ -817,6 +930,15 @@ impl Renderer {
         submission: Submission,
         bindings: &[(u64, Microcode)],
     ) -> DlSummary {
+        if let Some(mut diagnostic) = self.frame_admission_error {
+            diagnostic.at = entry;
+            diags.emit(diagnostic);
+            return DlSummary {
+                errors: 1,
+                termination: inspect::WalkTermination::Rejected,
+                ..Default::default()
+            };
+        }
         let _process = self.inner.profiling.span("process_dl");
         let mut released = Ok(());
         if let Some(coherence) = &mut self.inner.coherence {
@@ -933,21 +1055,36 @@ impl Renderer {
             result.scene.use_compatibility_policy();
             self.inner.coherence.as_mut().unwrap().begin_task();
         }
+        let prepared = match self
+            .inner
+            .prepare_inputs(&self.device, &result.scene, native)
+        {
+            Ok(inputs) => inputs,
+            Err(diagnostic) => {
+                diags.emit(diagnostic);
+                result.diags.push(diagnostic);
+                result.termination = inspect::WalkTermination::Rejected;
+                return result.summary(false);
+            }
+        };
         #[cfg(not(target_arch = "wasm32"))]
         let staged = native.then(|| {
             let target = workload.as_ref().unwrap().targets[0].id;
+            let depth = prepared
+                .as_ref()
+                .and_then(render::inputs::RenderInputs::strict_depth_id);
             self.inner
-                .stage_strict_task(&self.device, &self.queue, target)
+                .stage_strict_task(&self.device, &self.queue, target, depth)
         });
         if let Some(coherence) = &mut self.inner.coherence {
             coherence.strict_fills = native;
         }
-        let scanout = self.inner.render_into_store(
-            &self.device,
-            &self.queue,
-            &result.scene,
-            self.config.clear_policy,
-        );
+        self.inner.diagnostics.clear();
+        self.inner.dropped_runs = 0;
+        let scanout = prepared.as_ref().and_then(|inputs| {
+            self.inner
+                .render_prepared(&self.device, &self.queue, inputs, self.config.clear_policy)
+        });
         #[cfg(not(target_arch = "wasm32"))]
         let scanout = if let Some(task) = staged {
             let valid = self
@@ -1059,16 +1196,61 @@ impl Renderer {
         self.frame_scenes.clear();
         self.last_scanout_addr = None;
         self.last_backend_was_image = false;
+        self.previous_reference = None;
+        self.frame_admission_error = None;
     }
 
     /// Explicit frame boundary. Resets per-frame accumulation: the inner store's first-touch clear
     /// set (ClearPolicy::PerFrame) and the retained `frame_scenes`. Preserves guest RDP state
     /// and TMEM; advances the dither serial.
     pub fn begin_frame(&mut self) {
+        if let Err(diagnostic) = self.begin_frame_with_vi(None) {
+            log::warn!("frame scale admission failed: {diagnostic:?}");
+        }
+    }
+
+    /// Latch scale using the current native VI crop. Failure preserves the store and rejects
+    /// tasks until a subsequent frame boundary succeeds. Missing VI reuses the last reference.
+    pub fn begin_frame_with_vi(&mut self, vi: Option<ViRegisters>) -> Result<(), Diagnostic> {
         let _span = self.inner.profiling.span("begin_frame");
         self.mark_mutation();
+        let reference = if self.last_scanout_addr == Some(TargetId::Legacy) {
+            Some(self.inner.legacy_height())
+        } else {
+            vi.and_then(|vi| {
+                vi.scanout_height().map(|height| {
+                    self.scanout_source(Some(vi)).map_or(height, |source| {
+                        let retained = self
+                            .inner
+                            .scanout_images()
+                            .find(|(id, _, _)| *id == source.target)
+                            .unwrap()
+                            .2;
+                        let rows = source.rows.unwrap_or(0..retained);
+                        rows.end.min(retained).saturating_sub(rows.start)
+                    })
+                })
+            })
+            .filter(|height| *height > 0)
+            .map(|height| height.max(60))
+        };
+        let reference = reference.or(self.previous_reference).unwrap_or(240);
+        let scale = match self.scale_policy {
+            ScalePolicy::Fixed(scale) => scale,
+            ScalePolicy::Auto => self.content_height.div_ceil(reference).clamp(1, 4),
+        };
+        self.frame_admission_error = self
+            .inner
+            .change_scale(&self.device, &self.queue, scale)
+            .err();
+        if let Some(diagnostic) = self.frame_admission_error {
+            return Err(diagnostic);
+        }
+        self.previous_reference = Some(reference);
+        self.auto_reference = (self.scale_policy == ScalePolicy::Auto).then_some(reference);
         self.inner.begin_frame();
         self.frame_scenes.clear();
+        Ok(())
     }
 
     #[cfg(feature = "profiling")]
@@ -1274,18 +1456,18 @@ impl Renderer {
     /// golden capture). The caller owns acquisition + present. No-op if nothing has been rendered
     /// yet (leaves `target` as-is).
     pub fn present_to(&mut self, hw: &impl Hardware, target: &wgpu::TextureView) {
-        self.present_to_source(self.scanout_source(hw.vi()), target);
+        self.present_to_source(self.scanout_source(hw.vi()), target, false);
     }
 
     /// Scan out the last rendered framebuffer without consulting guest memory or VI registers.
     /// Uses that target's retained logical height.
     pub fn present_last_to(&mut self, target: &wgpu::TextureView) {
-        self.present_to_source(self.scanout_source(None), target);
+        self.present_to_source(self.scanout_source(None), target, false);
     }
 
     /// Present a full-width HOST color address into `target`, falling back to the last rendered target.
     pub fn present_host_to(&mut self, address: Option<u64>, target: &wgpu::TextureView) {
-        self.present_to_source(self.host_scanout_source(address), target);
+        self.present_to_source(self.host_scanout_source(address), target, false);
     }
 
     fn host_scanout_source(&self, address: Option<u64>) -> Option<ScanoutSource> {
@@ -1298,7 +1480,17 @@ impl Renderer {
             .or_else(|| self.scanout_source(None))
     }
 
-    fn present_to_source(&mut self, src: Option<ScanoutSource>, target: &wgpu::TextureView) {
+    /// Scan the selected native framebuffer into a caller-owned target.
+    pub fn present_native_to(&mut self, hw: &impl Hardware, target: &wgpu::TextureView) {
+        self.present_to_source(self.scanout_source(hw.vi()), target, true);
+    }
+
+    fn present_to_source(
+        &mut self,
+        src: Option<ScanoutSource>,
+        target: &wgpu::TextureView,
+        native: bool,
+    ) {
         let _span = self.inner.profiling.span("presentation");
         self.mark_mutation();
         // Always create an encoder + run the render hook, even when nothing has been scanned out yet
@@ -1310,8 +1502,13 @@ impl Renderer {
                 label: Some("present_to"),
             });
         if let Some(src) = src {
-            self.inner
-                .scanout(&self.device, &mut encoder, target, src.target, src.rows);
+            if native {
+                self.inner
+                    .scanout_native(&self.device, &mut encoder, target, src.target, src.rows);
+            } else {
+                self.inner
+                    .scanout(&self.device, &mut encoder, target, src.target, src.rows);
+            }
         }
         self.record_and_submit(encoder, target);
     }

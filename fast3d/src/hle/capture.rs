@@ -9,7 +9,7 @@ mod format;
 mod replay;
 pub use crate::scene::ColorImage;
 pub use format::{Fixture, Frame, Provenance, Sequence};
-pub use replay::{CaptureFrame, ReplayOutput};
+pub use replay::{CaptureFrame, ReplayOptions, ReplayOutput, ReplaySource};
 mod sequence;
 pub use sequence::{CaptureSequence, FrameLog, Presentation, SequenceOutput};
 #[cfg(feature = "profiling")]

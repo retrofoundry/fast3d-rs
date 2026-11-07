@@ -1,6 +1,7 @@
 pub(crate) mod coherence;
 mod native_fill;
 mod native_triangle;
+pub(super) mod presentation;
 pub(crate) mod targets;
 pub(super) mod writeback;
 
@@ -21,8 +22,29 @@ pub(super) struct ImageRequest {
     pub pc: u64,
 }
 
+pub(super) fn color_descriptor(label: &str, allocation: (u32, u32)) -> wgpu::TextureDescriptor<'_> {
+    wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: allocation.0,
+            height: allocation.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    }
+}
+
 pub(super) struct Framebuffer {
     pub color: wgpu::Texture,
+    pub presentation: Option<presentation::Color>,
     pub attach: wgpu::TextureView,
     pub sampled: wgpu::TextureView,
     pub present_bg: wgpu::BindGroup,
@@ -30,12 +52,14 @@ pub(super) struct Framebuffer {
     pub present_rows: std::ops::Range<u32>,
     pub height: u32,
     pub sampling: wgpu::Buffer,
+    pub presentation_sampling: Option<wgpu::Buffer>,
     pub layout: ImageLayout,
 }
 
 #[derive(Clone)]
 pub(crate) struct DepthImage {
     pub(crate) texture: wgpu::Texture,
+    pub(super) presentation: Option<Box<DepthImage>>,
     pub(super) attach: wgpu::TextureView,
     pub(super) layout: ImageLayout,
     pub(super) delta_view: wgpu::TextureView,
@@ -43,20 +67,29 @@ pub(crate) struct DepthImage {
 }
 
 impl DepthImage {
-    pub(super) fn new(device: &wgpu::Device, layout: ImageLayout, height: u32) -> Self {
-        Self::create(device, layout, height, true)
+    pub(super) fn new(device: &wgpu::Device, layout: ImageLayout, allocation: (u32, u32)) -> Self {
+        Self::create(device, layout, allocation, true)
     }
 
-    pub(super) fn snapshot(device: &wgpu::Device, layout: ImageLayout, height: u32) -> Self {
-        Self::create(device, layout, height, false)
+    pub(super) fn snapshot(
+        device: &wgpu::Device,
+        layout: ImageLayout,
+        allocation: (u32, u32),
+    ) -> Self {
+        Self::create(device, layout, allocation, false)
     }
 
-    fn create(device: &wgpu::Device, layout: ImageLayout, height: u32, writable: bool) -> Self {
+    fn create(
+        device: &wgpu::Device,
+        layout: ImageLayout,
+        allocation: (u32, u32),
+        writable: bool,
+    ) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth-store"),
             size: wgpu::Extent3d {
-                width: layout.width,
-                height,
+                width: allocation.0,
+                height: allocation.1,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -90,6 +123,7 @@ impl DepthImage {
         });
         Self {
             texture,
+            presentation: None,
             attach,
             layout,
             delta_view,
@@ -106,6 +140,8 @@ pub(super) struct DepthPipeline {
     copy_layout: wgpu::BindGroupLayout,
     import: wgpu::RenderPipeline,
     import_layout: wgpu::BindGroupLayout,
+    expand: wgpu::RenderPipeline,
+    expand_layout: wgpu::BindGroupLayout,
 }
 
 impl DepthPipeline {
@@ -165,6 +201,41 @@ impl DepthPipeline {
                 count: None,
             }],
         });
+        let expand_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("depth-expand"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Uint,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
         let make = |entry, attributes, group: &wgpu::BindGroupLayout| {
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(entry),
@@ -212,6 +283,8 @@ impl DepthPipeline {
             copy_attributes: make("copy_attributes", true, &copy_layout),
             copy: make("copy_depth", false, &copy_layout),
             import: make("import_depth", true, &import_layout),
+            expand: make("expand_depth", true, &expand_layout),
+            expand_layout,
             import_layout,
             fill_layout,
             copy_layout,
@@ -263,6 +336,79 @@ impl DepthPipeline {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn expand(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &DepthImage,
+        target: &DepthImage,
+        scale: u32,
+        spans: &[(u32, u32, u32)],
+        profiling: &crate::profiling::Recorder,
+    ) {
+        let buffer = super::buffer_init(
+            device,
+            profiling,
+            "presentation",
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("depth-expand-scale"),
+                contents: bytemuck::cast_slice(&[scale, 0, 0, 0]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        );
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("depth-expand"),
+            layout: &self.expand_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&source.attach),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&source.delta_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: buffer.as_entire_binding(),
+                },
+            ],
+        });
+        let mut pass = attribute_pass(encoder, target, wgpu::LoadOp::Load, 0);
+        pass.set_pipeline(&self.expand);
+        pass.set_bind_group(0, &group, &[]);
+        for &(x, y, width) in spans {
+            pass.set_scissor_rect(x * scale, y * scale, width * scale, scale);
+            pass.draw(0..3, 0..1);
+        }
+        drop(pass);
+        if let Some(&(x, y, width)) = spans.first() {
+            let (left, top, right, bottom) = spans.iter().fold(
+                (x, y, x + width, y + 1),
+                |(left, top, right, bottom), &(x, y, width)| {
+                    (
+                        left.min(x),
+                        top.min(y),
+                        right.max(x + width),
+                        bottom.max(y + 1),
+                    )
+                },
+            );
+            self.sync_delta_depth(
+                device,
+                encoder,
+                target,
+                (
+                    left * scale,
+                    top * scale,
+                    (right - left) * scale,
+                    (bottom - top) * scale,
+                ),
+            );
+        }
+    }
+
     pub(super) fn copy(
         &self,
         device: &wgpu::Device,
@@ -292,7 +438,7 @@ impl DepthPipeline {
         drop(pass);
     }
 
-    fn sync_delta_depth(
+    pub(super) fn sync_delta_depth(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
@@ -325,12 +471,14 @@ impl DepthPipeline {
         pass.draw(0..3, 0..1);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn fill(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         target: &DepthImage,
         word: u32,
+        scale: u32,
         bounds: (u32, u32, u32, u32),
         profiling: &crate::profiling::Recorder,
     ) {
@@ -365,7 +513,7 @@ impl DepthPipeline {
             "uniforms",
             &wgpu::util::BufferInitDescriptor {
                 label: Some("depth-fill"),
-                contents: bytemuck::cast_slice(&[word, target.layout.width, 0, 0]),
+                contents: bytemuck::cast_slice(&[word, target.layout.width / scale, scale, 0]),
                 usage: wgpu::BufferUsages::UNIFORM,
             },
         );
@@ -458,9 +606,14 @@ pub(super) fn clear_depth(encoder: &mut wgpu::CommandEncoder, view: &wgpu::Textu
     let _pass = depth_pass(encoder, view, wgpu::LoadOp::Clear(1.0));
 }
 
-pub(super) fn color_sampling(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Buffer {
+pub(super) fn color_sampling(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    scale: u32,
+) -> wgpu::Buffer {
     let tile = crate::hle::tile_sampling::TileSampling {
-        image: [1, 1, 2, 1],
+        image: [1, 1, 2, scale],
         modes: [2, 2, width, height],
         ..Default::default()
     };
@@ -491,7 +644,7 @@ impl SceneRenderer {
                 height: self.fb_h,
                 pc: 0,
             },
-            self.fb_h,
+            (self.fb_w, self.fb_h),
             ClearPolicy::Persist,
         );
         self.ensure_depth(
@@ -503,25 +656,29 @@ impl SceneRenderer {
                 height: self.fb_h,
                 pc: 0,
             },
+            (self.fb_w, self.fb_h),
             ClearPolicy::Persist,
         );
-        super::workload::clear_color(
-            &mut encoder,
-            &self.framebuffers[&TargetId::Legacy].attach,
-            wgpu::LoadOp::Clear(color),
-        );
+        let framebuffer = &self.framebuffers[&TargetId::Legacy];
+        for view in std::iter::once(&framebuffer.attach)
+            .chain(framebuffer.presentation.as_ref().map(|p| &p.attach))
+        {
+            super::workload::clear_color(&mut encoder, view, wgpu::LoadOp::Clear(color));
+        }
         let target = &self.depthbuffers[&TargetId::Legacy];
-        drop(attribute_pass(
-            &mut encoder,
-            target,
-            wgpu::LoadOp::Clear(depth),
-            0,
-        ));
-        drop(depth_pass(
-            &mut encoder,
-            target.delta_depth.as_ref().unwrap(),
-            wgpu::LoadOp::Clear(depth),
-        ));
+        for image in std::iter::once(target).chain(target.presentation.as_deref()) {
+            drop(attribute_pass(
+                &mut encoder,
+                image,
+                wgpu::LoadOp::Clear(depth),
+                0,
+            ));
+            drop(depth_pass(
+                &mut encoder,
+                image.delta_depth.as_ref().unwrap(),
+                wgpu::LoadOp::Clear(depth),
+            ));
+        }
         queue.submit([encoder.finish()]);
     }
 
@@ -530,7 +687,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         request: ImageRequest,
-        attachment_height: u32,
+        allocation: (u32, u32),
         policy: ClearPolicy,
     ) {
         let ImageRequest {
@@ -550,11 +707,13 @@ impl SceneRenderer {
         } else {
             height
         };
-        if compatible && old.unwrap().color.height() >= attachment_height {
+        if compatible && old.unwrap().color.height() >= allocation.1 {
             let old = self.framebuffers.get_mut(&id).unwrap();
             if old.height != height {
                 old.height = height;
-                old.sampling = color_sampling(device, layout.width, height);
+                old.sampling = color_sampling(device, layout.width, height, 1);
+                old.presentation_sampling = (self.render_scale > 1)
+                    .then(|| color_sampling(device, layout.width, height, self.render_scale));
                 self.profiling.buffer(
                     "uniforms",
                     old.sampling.size(),
@@ -568,6 +727,13 @@ impl SceneRenderer {
                     &old.attach,
                     wgpu::LoadOp::Clear(CLEAR_COLOR),
                 );
+                if let Some(presentation) = &old.presentation {
+                    super::workload::clear_color(
+                        encoder,
+                        &presentation.attach,
+                        wgpu::LoadOp::Clear(CLEAR_COLOR),
+                    );
+                }
             }
             return;
         }
@@ -582,12 +748,29 @@ impl SceneRenderer {
                         },
                         old.color.clone(),
                     );
+                    if let Some(image) = &old.presentation {
+                        self.presentation_versions.insert(
+                            coherence::Writer {
+                                address,
+                                layout: old.layout,
+                                depth: false,
+                            },
+                            image.texture.clone(),
+                        );
+                    }
                 }
             }
             self.reinterpretation(id, false, pc);
         }
-        let new = self.make_fb(device, layout, attachment_height, height);
+        let new = self.make_fb(device, layout, allocation, height);
         super::workload::clear_color(encoder, &new.attach, wgpu::LoadOp::Clear(CLEAR_COLOR));
+        if let Some(presentation) = &new.presentation {
+            super::workload::clear_color(
+                encoder,
+                &presentation.attach,
+                wgpu::LoadOp::Clear(CLEAR_COLOR),
+            );
+        }
         if compatible && !initialize {
             let old = &self.framebuffers[&id];
             self.profiling.count(
@@ -599,6 +782,13 @@ impl SceneRenderer {
                 new.color.as_image_copy(),
                 old.color.size(),
             );
+            if let (Some(old), Some(new)) = (&old.presentation, &new.presentation) {
+                encoder.copy_texture_to_texture(
+                    old.texture.as_image_copy(),
+                    new.texture.as_image_copy(),
+                    old.texture.size(),
+                );
+            }
         }
         self.framebuffers.insert(id, new);
     }
@@ -608,6 +798,7 @@ impl SceneRenderer {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         request: ImageRequest,
+        allocation: (u32, u32),
         policy: ClearPolicy,
     ) {
         let ImageRequest {
@@ -622,9 +813,12 @@ impl SceneRenderer {
             old.layout == layout && (id != TargetId::Legacy || old.texture.height() == height)
         });
         let initialize = first && policy == ClearPolicy::PerFrame;
-        if compatible && old.unwrap().texture.height() >= height {
+        if compatible && old.unwrap().texture.height() >= allocation.1 {
             if initialize {
                 clear_image(encoder, old.unwrap());
+                if let Some(presentation) = &old.unwrap().presentation {
+                    clear_image(encoder, presentation);
+                }
             }
             return;
         }
@@ -632,11 +826,36 @@ impl SceneRenderer {
             self.reinterpretation(id, true, pc);
         }
         let resources = self.profiling.span("resources");
-        let new = DepthImage::new(device, layout, height);
-        self.profiling
-            .texture("depth", u64::from(layout.width) * u64::from(height) * 9, 0);
+        let mut new = DepthImage::new(device, layout, allocation);
+        if self.render_scale > 1 {
+            let scaled = (
+                allocation.0 * self.render_scale,
+                allocation.1 * self.render_scale,
+            );
+            new.presentation = Some(Box::new(DepthImage::new(
+                device,
+                ImageLayout {
+                    width: scaled.0,
+                    ..layout
+                },
+                scaled,
+            )));
+            self.profiling.texture(
+                "presentation_depth",
+                u64::from(scaled.0) * u64::from(scaled.1) * 9,
+                0,
+            );
+        }
+        self.profiling.texture(
+            "depth",
+            u64::from(allocation.0) * u64::from(allocation.1) * 9,
+            0,
+        );
         drop(resources);
         clear_image(encoder, &new);
+        if let Some(presentation) = &new.presentation {
+            clear_image(encoder, presentation);
+        }
         if compatible && !initialize {
             let old = &self.depthbuffers[&id];
             self.profiling.count(
@@ -650,6 +869,15 @@ impl SceneRenderer {
                 &new,
                 (0, 0, old.texture.width(), old.texture.height()),
             );
+            if let (Some(old), Some(new)) = (&old.presentation, &new.presentation) {
+                self.depth_pipeline.copy(device, encoder, old, new);
+                self.depth_pipeline.sync_delta_depth(
+                    device,
+                    encoder,
+                    new,
+                    (0, 0, old.texture.width(), old.texture.height()),
+                );
+            }
         }
         self.depthbuffers.insert(id, new);
     }
@@ -779,7 +1007,7 @@ mod delta_tests {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(
-                        image.delta_depth.as_ref().unwrap(),
+                        image.delta_depth.as_ref().unwrap_or(&image.attach),
                     ),
                 },
             ],
@@ -818,6 +1046,123 @@ mod delta_tests {
     }
 
     #[test]
+    fn scaled_delta_growth_rebuild_and_strict_rollback() {
+        let (device, queue, _) = super::super::headless_device();
+        let mut renderer =
+            SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 64, 2, false);
+        renderer.set_test_scale(2, 256 * 1024 * 1024);
+        renderer.coherence = Some(Default::default());
+        let layout = ImageLayout {
+            width: 64,
+            fmt: 0,
+            siz: 2,
+        };
+        let id = TargetId::Guest(0x10000);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        renderer.ensure_depth(
+            &device,
+            &mut encoder,
+            ImageRequest {
+                id,
+                layout,
+                height: 2,
+                pc: 0,
+            },
+            (64, 2),
+            ClearPolicy::Persist,
+        );
+        let depth = &renderer.depthbuffers[&id];
+        for (image, scale) in [(depth, 1), (depth.presentation.as_deref().unwrap(), 2)] {
+            renderer.depth_pipeline.fill(
+                &device,
+                &mut encoder,
+                image,
+                0x60016002,
+                scale,
+                (0, 0, 64 * scale, 2 * scale),
+                &renderer.profiling,
+            );
+        }
+        renderer.ensure_depth(
+            &device,
+            &mut encoder,
+            ImageRequest {
+                id,
+                layout,
+                height: 4,
+                pc: 0,
+            },
+            (64, 4),
+            ClearPolicy::Persist,
+        );
+        queue.submit([encoder.finish()]);
+        for scale in [2, 4, 1, 2] {
+            renderer.change_scale(&device, &queue, scale).unwrap();
+            let depth = &renderer.depthbuffers[&id];
+            for (image, multiplier) in
+                std::iter::once((depth, 1)).chain(depth.presentation.as_deref().map(|p| (p, scale)))
+            {
+                let pixels = read(&device, &queue, image);
+                for (index, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
+                    let x = index as u32 % image.texture.width() / multiplier;
+                    let y = index as u32 / image.texture.width() / multiplier;
+                    let code = if y >= 2 {
+                        0
+                    } else if x.is_multiple_of(2) {
+                        7
+                    } else {
+                        8
+                    };
+                    assert_eq!(*pixel, [code, 0, 255, 255], "{scale}x, {x},{y}");
+                }
+                let snapshot = DepthImage::snapshot(
+                    &device,
+                    image.layout,
+                    (image.texture.width(), image.texture.height()),
+                );
+                let mut encoder = device.create_command_encoder(&Default::default());
+                renderer
+                    .depth_pipeline
+                    .copy(&device, &mut encoder, image, &snapshot);
+                queue.submit([encoder.finish()]);
+                assert!(snapshot.delta_depth.is_none());
+                assert_eq!(read(&device, &queue, &snapshot), pixels);
+            }
+        }
+        let depth = &renderer.depthbuffers[&id];
+        let before = (
+            read(&device, &queue, depth),
+            read(&device, &queue, depth.presentation.as_deref().unwrap()),
+        );
+        let staged =
+            renderer.stage_strict_task(&device, &queue, TargetId::Guest(0x20000), Some(id));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let depth = &renderer.depthbuffers[&id];
+        for (image, scale) in [(depth, 1), (depth.presentation.as_deref().unwrap(), 2)] {
+            renderer.depth_pipeline.fill(
+                &device,
+                &mut encoder,
+                image,
+                0xffffffff,
+                scale,
+                (0, 0, 64 * scale, 4 * scale),
+                &renderer.profiling,
+            );
+        }
+        queue.submit([encoder.finish()]);
+        assert_ne!(read(&device, &queue, &renderer.depthbuffers[&id]), before.0);
+        renderer.discard_strict_task(staged);
+        let depth = &renderer.depthbuffers[&id];
+        assert_eq!(
+            (
+                read(&device, &queue, depth),
+                read(&device, &queue, depth.presentation.as_deref().unwrap())
+            ),
+            before
+        );
+    }
+
+    #[test]
     fn authored_fill_growth_snapshot_clear_and_visible_only_import() {
         let (device, queue, _) = super::super::headless_device();
         let mut renderer =
@@ -838,6 +1183,7 @@ mod delta_tests {
                 height: 2,
                 pc: 0,
             },
+            (64, 2),
             ClearPolicy::Persist,
         );
         renderer.depth_pipeline.fill(
@@ -845,6 +1191,7 @@ mod delta_tests {
             &mut encoder,
             &renderer.depthbuffers[&id],
             0x60016002,
+            1,
             (0, 0, 64, 2),
             &renderer.profiling,
         );
@@ -857,10 +1204,11 @@ mod delta_tests {
                 height: 4,
                 pc: 0,
             },
+            (64, 4),
             ClearPolicy::Persist,
         );
         let image = &renderer.depthbuffers[&id];
-        let snapshot = DepthImage::new(&device, layout, 4);
+        let snapshot = DepthImage::new(&device, layout, (64, 4));
         renderer
             .depth_pipeline
             .copy(&device, &mut encoder, image, &snapshot);
@@ -889,6 +1237,7 @@ mod delta_tests {
             &mut encoder,
             &snapshot,
             0xffffffff,
+            1,
             (0, 0, 64, 4),
             &renderer.profiling,
         );
@@ -934,7 +1283,7 @@ mod delta_tests {
         let pixels = read(&device, &queue, &snapshot);
         assert_eq!(&pixels[(64 + 4) * 4..][..4], &[4, 0, 255, 255]);
         assert_eq!(&pixels[(64 + 3) * 4..][..4], &[15, 0, 255, 255]);
-        let readonly = DepthImage::snapshot(&device, layout, 4);
+        let readonly = DepthImage::snapshot(&device, layout, (64, 4));
         assert!(readonly.delta_depth.is_none());
         let mut encoder = device.create_command_encoder(&Default::default());
         clear_image(&mut encoder, &snapshot);

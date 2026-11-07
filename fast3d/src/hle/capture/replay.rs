@@ -277,7 +277,7 @@ impl CaptureFrame {
                 .get_or_insert_with(|| invalid("presentation target differs from captured target"));
         }
         let vi = hardware.vi();
-        renderer.present_to(&PresentationHardware(vi), target);
+        renderer.present_native_to(&PresentationHardware(vi), target);
         self.finish(vi)
     }
 
@@ -396,8 +396,36 @@ impl CaptureFrame {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReplaySource {
+    #[default]
+    Native,
+    Presentation,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplayOptions {
+    pub resolution_multiplier: Option<u32>,
+    pub source: ReplaySource,
+}
+
+impl ReplayOptions {
+    pub(super) fn validate(self) -> Result<()> {
+        if let Some(scale) = self.resolution_multiplier {
+            if !(1..=4).contains(&scale) {
+                return Err(invalid(
+                    &crate::ConfigError::ResolutionMultiplier(scale).to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct ReplayOutput {
+    pub effective_resolution_multiplier: u32,
+    pub source: ReplaySource,
     pub width: u32,
     pub height: u32,
     pub rgba8: Vec<u8>,
@@ -412,6 +440,17 @@ impl Fixture {
     /// Rejects dependence on prior color or depth attachments; each clear-policy probe starts from
     /// default registers while retaining its deliberately primed framebuffer contents.
     pub async fn replay(&self, device: wgpu::Device, queue: wgpu::Queue) -> Result<ReplayOutput> {
+        self.replay_with_options(device, queue, ReplayOptions::default())
+            .await
+    }
+
+    pub async fn replay_with_options(
+        &self,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        options: ReplayOptions,
+    ) -> Result<ReplayOutput> {
+        options.validate()?;
         self.validate()?;
         self.check_device(&device)?;
         let scopes = [
@@ -420,7 +459,7 @@ impl Fixture {
             wgpu::ErrorFilter::Validation,
         ]
         .map(|filter| device.push_error_scope(filter));
-        let result = self.replay_checked(device, queue).await;
+        let result = self.replay_checked(device, queue, options).await;
         for scope in scopes.into_iter().rev() {
             if let Some(error) = scope.pop().await {
                 return Err(CaptureError::Gpu(error.to_string()));
@@ -468,9 +507,18 @@ impl Fixture {
     }
 
     pub async fn replay_headless(&self) -> Result<ReplayOutput> {
+        self.replay_headless_with_options(ReplayOptions::default())
+            .await
+    }
+
+    pub async fn replay_headless_with_options(
+        &self,
+        options: ReplayOptions,
+    ) -> Result<ReplayOutput> {
+        options.validate()?;
         self.validate()?;
         let (device, queue, adapter_info) = self.headless_device().await?;
-        let mut output = self.replay(device, queue).await?;
+        let mut output = self.replay_with_options(device, queue, options).await?;
         output.adapter_info = Some(adapter_info);
         Ok(output)
     }
@@ -513,13 +561,15 @@ impl Fixture {
         &self,
         device: wgpu::Device,
         queue: wgpu::Queue,
+        options: ReplayOptions,
     ) -> Result<ReplayOutput> {
-        let mut renderer = self.renderer(
+        let mut renderer = self.renderer_with_options(
             device.clone(),
             queue.clone(),
             self.frame.config.clear_policy,
+            options,
         );
-        let output = self.render_frame(&mut renderer).await?;
+        let output = self.render_frame(&mut renderer, options.source).await?;
         if !output.summaries.iter().any(|summary| summary.renderable) {
             return Err(invalid("frame does not render a framebuffer"));
         }
@@ -563,7 +613,8 @@ impl Fixture {
         for policy in [ClearPolicy::PerFrame, ClearPolicy::Persist] {
             for color in [0xF801_F801, 0x07C1_07C1] {
                 for depth in [0x0000_0000, 0xFFFC_FFFC] {
-                    let mut renderer = self.renderer(device.clone(), queue.clone(), policy);
+                    let mut renderer =
+                        self.renderer_with_options(device.clone(), queue.clone(), policy, options);
                     prime_framebuffers(&mut renderer, &targets, color, false)?;
                     prime_framebuffers(&mut renderer, &depths, depth, true)?;
                     renderer.inner.prime_legacy_attachments(
@@ -576,7 +627,7 @@ impl Fixture {
                         },
                         if depth == 0 { 0.0 } else { 1.0 },
                     );
-                    let candidate = self.render_frame(&mut renderer).await?;
+                    let candidate = self.render_frame(&mut renderer, options.source).await?;
                     if candidate.rgba8 != output.rgba8 {
                         return Err(CaptureError::ClearPolicyMismatch);
                     }
@@ -586,11 +637,22 @@ impl Fixture {
         Ok(output)
     }
 
+    #[cfg(any(test, feature = "profiling"))]
     pub(super) fn renderer(
         &self,
         device: wgpu::Device,
         queue: wgpu::Queue,
         clear_policy: ClearPolicy,
+    ) -> Renderer {
+        self.renderer_with_options(device, queue, clear_policy, ReplayOptions::default())
+    }
+
+    pub(super) fn renderer_with_options(
+        &self,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        clear_policy: ClearPolicy,
+        options: ReplayOptions,
     ) -> Renderer {
         Renderer::with_device(
             device,
@@ -606,19 +668,27 @@ impl Fixture {
             },
             RendererConfig {
                 clear_policy,
+                resolution_multiplier: options
+                    .resolution_multiplier
+                    .unwrap_or(self.frame.config.resolution_multiplier),
                 ..self.frame.config
             },
         )
     }
 
-    async fn render_frame(&self, renderer: &mut Renderer) -> Result<ReplayOutput> {
+    async fn render_frame(
+        &self,
+        renderer: &mut Renderer,
+        source: ReplaySource,
+    ) -> Result<ReplayOutput> {
         renderer.reset_rdp_state();
-        self.render_sequence_frame(renderer).await
+        self.render_sequence_frame(renderer, source).await
     }
 
     pub(super) async fn render_sequence_frame(
         &self,
         renderer: &mut Renderer,
+        source: ReplaySource,
     ) -> Result<ReplayOutput> {
         renderer.begin_frame();
         renderer.inner.frame_serial = self.frame.serial;
@@ -647,11 +717,36 @@ impl Fixture {
             summaries.push(summary);
             diagnostics.push(task_diagnostics);
         }
+        let scale = renderer.effective_resolution_multiplier();
+        let (width, height) = if source == ReplaySource::Presentation {
+            let selected = renderer
+                .scanout_source(self.frame.vi)
+                .ok_or_else(|| invalid("frame has no scanout"))?;
+            let (_, layout, height) = renderer
+                .inner
+                .scanout_images()
+                .find(|(id, _, _)| *id == selected.target)
+                .ok_or_else(|| invalid("missing scanout target"))?;
+            let rows = selected.rows.unwrap_or(0..height);
+            (layout.width * scale, (rows.end - rows.start) * scale)
+        } else {
+            (self.frame.width, self.frame.height)
+        };
+        let limits = renderer.device().limits();
+        if width > limits.max_texture_dimension_2d
+            || height > limits.max_texture_dimension_2d
+            || u64::from((width * 4).next_multiple_of(256)) * u64::from(height)
+                > limits.max_buffer_size
+        {
+            return Err(CaptureError::Gpu(
+                "capture output exceeds device limits".into(),
+            ));
+        }
         let target = renderer.device().create_texture(&wgpu::TextureDescriptor {
             label: Some("capture-output"),
             size: wgpu::Extent3d {
-                width: self.frame.width,
-                height: self.frame.height,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -661,14 +756,18 @@ impl Fixture {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        renderer.present_to(
-            &PresentationHardware(self.frame.vi),
-            &target.create_view(&Default::default()),
-        );
+        let view = target.create_view(&Default::default());
+        if source == ReplaySource::Native {
+            renderer.present_native_to(&PresentationHardware(self.frame.vi), &view);
+        } else {
+            renderer.present_to(&PresentationHardware(self.frame.vi), &view);
+        }
         let rgba8 = read_rgba8(renderer, &target).await?;
         Ok(ReplayOutput {
-            width: self.frame.width,
-            height: self.frame.height,
+            effective_resolution_multiplier: scale,
+            source,
+            width,
+            height,
             rgba8,
             summaries,
             diagnostics,
@@ -681,6 +780,7 @@ impl Fixture {
 pub(super) fn effective_config(renderer: &Renderer) -> RendererConfig {
     RendererConfig {
         format: Some(renderer.surface_format),
+        resolution_multiplier: renderer.effective_resolution_multiplier(),
         ..renderer.config
     }
 }

@@ -5,8 +5,13 @@ use bytemuck::{Pod, Zeroable};
 mod texrect_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tmem_sampling_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod upscaling_tests;
 
+mod admission;
 mod decal;
+mod downsample;
+mod extents;
 pub(crate) mod framebuffers;
 pub(crate) mod inputs;
 mod replacement_resources;
@@ -207,8 +212,10 @@ pub struct CombinerUniform {
     /// Primitive depth source, Z and raw dz; `[3]` selects blend-color-only output.
     pub primitive_depth: [u32; 4],
     pub native_scale: [f32; 4],
+    /// Presentation scale, native width, identity texrect, and high-resolution texture-role mask.
+    pub raster: [u32; 4],
 }
-const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 224);
+const _: () = assert!(std::mem::size_of::<CombinerUniform>() == 240);
 
 impl CombinerUniform {
     fn alpha_flags(rm: &crate::hle::RenderMode) -> u32 {
@@ -303,6 +310,7 @@ impl CombinerUniform {
                 [dw, dh, mat.prim_min_level, sharpen_bit + detail_bit]
             },
             frame: [0; 4],
+            raster: [0; 4],
             is_rect: 0,
             coverage_slot: 0,
             fill_word: 0,
@@ -399,6 +407,7 @@ impl CombinerUniform {
             // No DETAIL tile on the fill path.
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
             frame: [0; 4],
+            raster: [0; 4],
             is_rect: 1,
             coverage_slot: 0,
             fill_word: color_raw,
@@ -439,6 +448,7 @@ impl CombinerUniform {
             // No DETAIL tile on the COPY-mode TexRect path.
             inv_detail_size: [1.0, 1.0, 0.0, 0.0],
             frame: [0; 4],
+            raster: [0; 4],
             is_rect: 1,
             coverage_slot: 0,
             fill_word: 0,
@@ -455,7 +465,7 @@ mod tests {
 
     #[test]
     fn tile_sampling_uniform_and_shaders_fit_webgpu() {
-        assert_eq!(std::mem::size_of::<CombinerUniform>(), 224);
+        assert_eq!(std::mem::size_of::<CombinerUniform>(), 240);
         assert_eq!(std::mem::size_of::<TileSamplingArray>(), 960);
         let limits = wgpu::Limits::default();
         assert!(
@@ -690,6 +700,10 @@ pub fn triangle_inv_tex_size(mat: &crate::hle::Material) -> [f32; 4] {
     }
 }
 
+fn texrect_steps(step: (i16, i16), copy_mode: bool) -> (i16, i16) {
+    (if copy_mode { step.0 >> 2 } else { step.0 }, step.1)
+}
+
 fn texrect_quad(
     rect: &crate::hle::TexRectBounds,
     base: (i16, i16),
@@ -711,8 +725,8 @@ fn texrect_quad(
     let bounds = [left, top, right.max(left), bottom.max(top)];
     let width = i64::from(bounds[2] - left);
     let height = i64::from(bounds[3] - top);
-    let ds = i64::from(if copy_mode { step.0 >> 2 } else { step.0 });
-    let dt = i64::from(step.1);
+    let (ds, dt) = texrect_steps(step, copy_mode);
+    let (ds, dt) = (i64::from(ds), i64::from(dt));
     let (sw, th) = if flip {
         (height, width)
     } else {
@@ -1779,7 +1793,7 @@ impl RspProcessPipeline {
         let extents = targets
             .iter()
             .filter(|target| !target.depth_clear)
-            .map(|target| target.logical_extent);
+            .map(|target| target.extents.logical);
         let mut vertices = std::collections::HashMap::new();
         for extent in extents {
             vertices.entry(extent).or_insert_with(|| {
@@ -1919,7 +1933,10 @@ pub struct SceneRenderer {
     pub(crate) framebuffer_copies: framebuffers::copies::Copies,
     pub(crate) color_versions:
         std::collections::HashMap<framebuffers::coherence::Writer, wgpu::Texture>,
+    presentation_versions:
+        std::collections::HashMap<framebuffers::coherence::Writer, wgpu::Texture>,
     material_bindings: Vec<texture_bindings::MaterialBinding>,
+    presentation_bindings: Vec<texture_bindings::MaterialBinding>,
     /// A 1×1 white `@group(0)` (tex + sampler) bind group used as the texture binding for
     /// `FillRect` draws (which carry no material, but the pipeline layout still requires group 0).
     /// The fill combine has `tex_enable = 0`, so this texture is never actually sampled.
@@ -1943,6 +1960,11 @@ pub struct SceneRenderer {
     coverage: Option<framebuffers::coherence::Coverage>,
     depth_pipeline: DepthPipeline,
     delta_pipeline: framebuffers::coherence::Coverage,
+    pub(crate) render_scale: u32,
+    attachment_budget: u64,
+    pub(crate) reduction_factor: u32,
+    downsample: std::sync::OnceLock<downsample::BoxFilter>,
+    presentation_transfers: std::sync::OnceLock<framebuffers::presentation::Transfers>,
     pub(crate) diagnostics: Vec<crate::Diagnostic>,
     pub(crate) dropped_runs: u32,
     #[cfg(feature = "capture")]
@@ -1977,6 +1999,29 @@ impl SceneRenderer {
                 .map(|f| u64::from(f.texture.width()) * u64::from(f.texture.height()) * 4)
                 .sum(),
         );
+        self.profiling.gauge(
+            "gpu_presentation_color_bytes",
+            self.framebuffers
+                .values()
+                .filter_map(|fb| fb.presentation.as_ref())
+                .map(|p| u64::from(p.texture.width()) * u64::from(p.texture.height()) * 4)
+                .sum(),
+        );
+        self.profiling.gauge(
+            "gpu_presentation_depth_bytes",
+            self.depthbuffers
+                .values()
+                .filter_map(|d| d.presentation.as_ref())
+                .map(|p| u64::from(p.texture.width()) * u64::from(p.texture.height()) * 4)
+                .sum(),
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_scale(&mut self, scale: u32, attachment_budget: u64) {
+        assert!(self.framebuffers.is_empty() && self.depthbuffers.is_empty());
+        self.render_scale = scale;
+        self.attachment_budget = attachment_budget;
     }
 
     pub fn new(
@@ -2153,7 +2198,9 @@ impl SceneRenderer {
             texture_resources: texture_resources::TextureResources::new(device),
             framebuffer_copies: Default::default(),
             color_versions: Default::default(),
+            presentation_versions: Default::default(),
             material_bindings: Vec::new(),
+            presentation_bindings: Vec::new(),
             fill_bind_group,
             dummy_view,
             fb_w: w,
@@ -2167,6 +2214,11 @@ impl SceneRenderer {
             coverage: None,
             depth_pipeline: DepthPipeline::new(device),
             delta_pipeline: framebuffers::coherence::Coverage::delta(device),
+            render_scale: 1,
+            reduction_factor: 1,
+            downsample: Default::default(),
+            attachment_budget: 256 * 1024 * 1024,
+            presentation_transfers: Default::default(),
             diagnostics: Vec::new(),
             dropped_runs: 0,
             #[cfg(feature = "capture")]
@@ -2230,6 +2282,7 @@ impl SceneRenderer {
         rect_idx: u32,
         any_depth: bool,
         pipeline_override: Option<&wgpu::RenderPipeline>,
+        presentation: bool,
     ) {
         let opt_fb_bg: Option<wgpu::BindGroup> = if let inputs::DrawInputs::Rectangle {
             fb_source: Some(descriptor),
@@ -2249,7 +2302,11 @@ impl SceneRenderer {
                     entries: &[
                         wgpu::BindGroupEntry {
                             binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&source.sampled),
+                            resource: wgpu::BindingResource::TextureView(if presentation {
+                                &source.presentation.as_ref().unwrap().attach
+                            } else {
+                                &source.sampled
+                            }),
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
@@ -2278,7 +2335,11 @@ impl SceneRenderer {
                     ]
                     .into_iter()
                     .chain(lod_level_entries(&self.dummy_view))
-                    .chain([sampling_entry(&source.sampling)])
+                    .chain([sampling_entry(if presentation {
+                        source.presentation_sampling.as_ref().unwrap()
+                    } else {
+                        &source.sampling
+                    })])
                     .collect::<Vec<_>>(),
                 }),
             )
@@ -2358,43 +2419,18 @@ impl SceneRenderer {
         })
     }
 
-    fn make_fb(
+    fn make_present_bindings(
         &self,
         device: &wgpu::Device,
-        layout: ImageLayout,
-        h: u32,
-        logical_height: u32,
-    ) -> Framebuffer {
-        let _span = self.profiling.span("resources");
-        let w = layout.width;
-        self.profiling
-            .texture("framebuffer", u64::from(w) * u64::from(h) * 4, 0);
-        let color = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("fb-store-color"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let attach = color.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampled = color.create_view(&wgpu::TextureViewDescriptor::default());
-        let present_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        sampled: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("fb-store-present-bg"),
             layout: self.textured.bind_group_layout(),
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&sampled),
+                    resource: wgpu::BindingResource::TextureView(sampled),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -2424,25 +2460,71 @@ impl SceneRenderer {
             .chain(lod_level_entries(&self.dummy_view))
             .chain([sampling_entry(&self.image_sampling)])
             .collect::<Vec<_>>(),
+        })
+    }
+
+    fn make_fb(
+        &self,
+        device: &wgpu::Device,
+        layout: ImageLayout,
+        allocation: (u32, u32),
+        native_height: u32,
+    ) -> Framebuffer {
+        let _span = self.profiling.span("resources");
+        let (w, h) = allocation;
+        self.profiling
+            .texture("framebuffer", u64::from(w) * u64::from(h) * 4, 0);
+        let color = device.create_texture(&framebuffers::color_descriptor(
+            "fb-store-color",
+            allocation,
+        ));
+        let attach = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampled = color.create_view(&wgpu::TextureViewDescriptor::default());
+        let presentation = (self.render_scale > 1).then(|| {
+            let allocation = (w * self.render_scale, h * self.render_scale);
+            self.profiling.texture(
+                "presentation_color",
+                u64::from(allocation.0) * u64::from(allocation.1) * 4,
+                0,
+            );
+            framebuffers::presentation::Color::new(device, allocation)
         });
-        let present_extent = self.make_present_extent(device, w, 0..logical_height, h);
-        let sampling = framebuffers::color_sampling(device, w, logical_height);
+        let present_bg = self.make_present_bindings(
+            device,
+            presentation.as_ref().map_or(&sampled, |p| &p.attach),
+        );
+        let present_extent = self.make_present_extent(
+            device,
+            w * self.render_scale,
+            0..native_height * self.render_scale,
+            h * self.render_scale,
+        );
+        let sampling = framebuffers::color_sampling(device, layout.width, native_height, 1);
+        let presentation_sampling = (self.render_scale > 1).then(|| {
+            framebuffers::color_sampling(device, layout.width, native_height, self.render_scale)
+        });
         self.profiling.buffer(
             "uniforms",
             sampling.size(),
             std::mem::size_of::<TileSamplingArray>() as u64,
         );
         Framebuffer {
-            height: logical_height,
+            height: native_height,
             sampling,
+            presentation_sampling,
             present_extent,
-            present_rows: 0..logical_height,
+            present_rows: 0..native_height,
             color,
+            presentation,
             attach,
             sampled,
             present_bg,
             layout,
         }
+    }
+
+    pub(crate) fn legacy_height(&self) -> u32 {
+        self.fb_h
     }
 
     pub(crate) fn scanout_images(
@@ -2474,15 +2556,65 @@ impl SceneRenderer {
             .get(&src_addr)
             .expect("scanout: src_addr not in the store");
         let rows = rows.unwrap_or(0..fb.height);
+        if self.reduction_factor > 1 {
+            let source = fb.presentation.as_ref().map_or(&fb.color, |p| &p.texture);
+            let reduced = self
+                .downsample
+                .get_or_init(|| downsample::BoxFilter::new(device))
+                .reduce(
+                    device,
+                    encoder,
+                    source,
+                    rows.start * self.render_scale..rows.end.min(fb.height) * self.render_scale,
+                    self.reduction_factor,
+                );
+            let bindings =
+                self.make_present_bindings(device, &reduced.create_view(&Default::default()));
+            let extent = self.make_present_extent(
+                device,
+                reduced.width(),
+                0..reduced.height(),
+                reduced.height(),
+            );
+            self.blit_to(encoder, target, &bindings, &extent);
+            return;
+        }
         if rows != fb.present_rows {
-            let extent =
-                self.make_present_extent(device, fb.layout.width, rows.clone(), fb.color.height());
+            let extent = self.make_present_extent(
+                device,
+                fb.layout.width * self.render_scale,
+                rows.start * self.render_scale..rows.end * self.render_scale,
+                fb.color.height() * self.render_scale,
+            );
             let fb = self.framebuffers.get_mut(&src_addr).unwrap();
             fb.present_extent = extent;
             fb.present_rows = rows;
         }
         let fb = &self.framebuffers[&src_addr];
         self.blit_to(encoder, target, &fb.present_bg, &fb.present_extent);
+    }
+
+    pub(crate) fn scanout_native(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        src: workload::TargetId,
+        rows: Option<std::ops::Range<u32>>,
+    ) {
+        if self.render_scale == 1 && self.reduction_factor == 1 {
+            self.scanout(device, encoder, target, src, rows);
+            return;
+        }
+        let fb = &self.framebuffers[&src];
+        let extent = self.make_present_extent(
+            device,
+            fb.layout.width,
+            rows.unwrap_or(0..fb.height),
+            fb.color.height(),
+        );
+        let bindings = self.make_present_bindings(device, &fb.sampled);
+        self.blit_to(encoder, target, &bindings, &extent);
     }
 
     pub(crate) fn reset(&mut self) {
@@ -2493,6 +2625,7 @@ impl SceneRenderer {
         self.target_descriptors = Default::default();
         self.framebuffers.clear();
         self.color_versions.clear();
+        self.presentation_versions.clear();
         self.framebuffer_copies = Default::default();
         self.depthbuffers.clear();
         self.depth_first_touch.clear();

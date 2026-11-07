@@ -84,56 +84,62 @@ fn scene(case: Case<'_>) -> Scene {
 #[test]
 fn depth_replay_batches_writeback_segments_before_readers() {
     let (device, queue, dual) = headless_device();
-    let mut renderer = SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 320, 240, dual);
-    for writeback in [false, true] {
-        for (decal, trailing) in [(false, false), (true, false), (true, true)] {
-            let mut scene = scene(Case {
-                name: "batched-writers",
-                stored_z: 229376.0,
-                stored_dz: 32,
-                seed_prim: true,
-                incoming_z: 229632.0,
-                incoming_dz: 1,
-                prim: false,
-                slope: 0.0,
-                compare: true,
-                passes: true,
-            });
-            let query = scene.draw_runs.pop().unwrap();
-            scene.draw_runs = vec![scene.draw_runs[0]; 4];
-            if decal {
-                scene.render_modes[1].z_write = trailing;
-                scene.draw_runs.push(query);
-            }
-            if trailing {
-                scene.draw_runs.push(scene.draw_runs[0]);
-            }
-            renderer.coherence = writeback.then(Default::default);
-            let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
-            renderer.profiling = recorder.clone();
-            let pixels = render_to_pixels(&device, &queue, &mut renderer, &scene, 320, 240);
-            assert_eq!(
-                &pixels[(120 * 320 + 160) * 4..][..3],
-                if decal && !trailing {
-                    [0, 255, 0]
-                } else {
-                    [255, 0, 0]
-                },
-                "writeback {writeback}, decal {decal}"
-            );
-            let counters = recorder.snapshot().counters;
-            assert_eq!(
-                counters.get("depth_delta.passes"),
-                Some(&(1 + u64::from(trailing)))
-            );
-            assert_eq!(
-                counters["workload.segments"],
-                if writeback {
-                    4 + u64::from(decal) + u64::from(trailing)
-                } else {
-                    1 + u64::from(decal) + u64::from(trailing)
+    for scale in [1, 2, 4] {
+        let mut renderer =
+            SceneRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, 320, 240, dual);
+        renderer.set_test_scale(scale, 256 * 1024 * 1024);
+        let passes = if scale > 1 { 2 } else { 1 };
+        for writeback in [false, true] {
+            for (decal, trailing) in [(false, false), (true, false), (true, true)] {
+                let mut scene = scene(Case {
+                    name: "batched-writers",
+                    stored_z: 229376.0,
+                    stored_dz: 32,
+                    seed_prim: true,
+                    incoming_z: 229632.0,
+                    incoming_dz: 1,
+                    prim: false,
+                    slope: 0.0,
+                    compare: true,
+                    passes: true,
+                });
+                let query = scene.draw_runs.pop().unwrap();
+                scene.draw_runs = vec![scene.draw_runs[0]; 4];
+                if decal {
+                    scene.render_modes[1].z_write = trailing;
+                    scene.draw_runs.push(query);
                 }
-            );
+                if trailing {
+                    scene.draw_runs.push(scene.draw_runs[0]);
+                }
+                renderer.coherence = writeback.then(Default::default);
+                let recorder = crate::profiling::Recorder::new(crate::profiling::Mode::Counters);
+                renderer.profiling = recorder.clone();
+                let pixels = render_to_pixels(&device, &queue, &mut renderer, &scene, 320, 240);
+                assert_eq!(
+                    &pixels[(120 * 320 + 160) * 4..][..3],
+                    if decal && !trailing {
+                        [0, 255, 0]
+                    } else {
+                        [255, 0, 0]
+                    },
+                    "writeback {writeback}, decal {decal}"
+                );
+                let counters = recorder.snapshot().counters;
+                assert_eq!(
+                    counters.get("depth_delta.passes"),
+                    Some(&(passes * (1 + u64::from(trailing))))
+                );
+                assert_eq!(
+                    counters["workload.segments"],
+                    passes
+                        * if writeback {
+                            4 + u64::from(decal) + u64::from(trailing)
+                        } else {
+                            1 + u64::from(decal) + u64::from(trailing)
+                        }
+                );
+            }
         }
     }
 }

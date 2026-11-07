@@ -86,6 +86,7 @@ struct Combiner {
     fill_siz:        u32,       // FillRect color-image siz + 1; 0 for other draws
     primitive_depth: vec4<u32>,
     native_scale: vec4<f32>,
+    raster:          vec4<u32>,
 };
 
 @group(0) @binding(0) var tex0:  texture_2d<f32>;
@@ -335,8 +336,11 @@ fn tile_shift(value: f32, shift: u32) -> f32 {
     return value * f32(1u << (16u - shift));
 }
 
-fn tile_coordinate(tile: TileSampling, uv: vec2<f32>) -> vec2<f32> {
+fn tile_coordinate(tile: TileSampling, uv: vec2<f32>, high_resolution: bool) -> vec2<f32> {
     let shifted = vec2<f32>(tile_shift(uv.x, tile.shift_mask.x), tile_shift(uv.y, tile.shift_mask.y));
+    if high_resolution {
+        return shifted - vec2<f32>(tile.bounds.xy) / 4.0;
+    }
     return round(shifted * 128.0) / 128.0 - vec2<f32>(tile.bounds.xy) / 4.0;
 }
 
@@ -457,19 +461,26 @@ struct TileQuad {
     c11: vec4<f32>,
 };
 
+struct SampleCoordinates {
+    unsnapped: vec2<f32>,
+    snapped: vec2<f32>,
+};
+
 // Texture-independent work, planned once per sample so the per-binding switches only select
 // loads: inlining the whole filter for every binding produced a shader WARP miscompiles.
-fn tile_plan(index: u32, uv: vec2<f32>, cycle: u32, dimensions: vec2<u32>) -> TilePlan {
+fn tile_plan(index: u32, coordinates: SampleCoordinates, cycle: u32, dimensions: vec2<u32>) -> TilePlan {
+    let high_resolution = (combiner.raster.w & (1u << index)) != 0u;
+    let uv = select(coordinates.snapped, coordinates.unsnapped, high_resolution);
     var tile = tile_sampling[index];
     var coordinate: vec2<f32>;
     if tile.image.z == 2u {
         let extent = select(dimensions, tile.modes.zw, tile.image.w != 0u);
         tile.modes = vec4<u32>(2u, 2u, extent.x, extent.y);
-        coordinate = tile_coordinate(tile, uv * vec2<f32>(extent));
+        coordinate = tile_coordinate(tile, uv * vec2<f32>(extent), high_resolution);
     } else {
-        coordinate = tile_coordinate(tile, uv);
+        coordinate = tile_coordinate(tile, uv, high_resolution);
     }
-    let scaled = tile.image.z == 0u && tile.image.w > 1u;
+    let scaled = tile.image.z != 1u && tile.image.w > 1u;
     if scaled { coordinate *= f32(tile.image.w); }
     let base = vec2<i32>(floor(coordinate));
     var plan: TilePlan;
@@ -551,13 +562,13 @@ fn tile_resolve(quad: TileQuad, plan: TilePlan) -> vec4<f32> {
     return result;
 }
 
-fn sample_physical(texture: texture_2d<f32>, index: u32, uv: vec2<f32>, cycle: u32) -> vec4<f32> {
+fn sample_physical(texture: texture_2d<f32>, index: u32, uv: SampleCoordinates, cycle: u32) -> vec4<f32> {
     let plan = tile_plan(index, uv, cycle, textureDimensions(texture));
     return tile_resolve(tile_load(texture, plan), plan);
 }
 
 // Levels 0..7 select tex0 and tex_lod1..7 (sampling slots 0 and 3..9); 8 selects tex_detail.
-fn sample_tile(idx: f32, uv: vec2<f32>, detail_active: bool, cycle: u32) -> vec4<f32> {
+fn sample_tile(idx: f32, uv: SampleCoordinates, detail_active: bool, cycle: u32) -> vec4<f32> {
     let detail = detail_active && idx == 0.0;
     let level = u32(clamp(select(idx, idx - 1.0, detail_active), 0.0, 7.0));
     let texture = select(level, 8u, detail);
@@ -599,12 +610,23 @@ fn eval_combiner(in: VsOut) -> CycleResult {
     // tcScale is needed).
     let ddx_uv = dpdx(in.uv);
     let ddy_uv = dpdy(in.uv);
-    let uv = in.uv * combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
+    let uv_scale = combiner.inv_tex_size.xy * vec2<f32>(tile_sampling[0].image.xy);
+    let target_uv = in.uv * uv_scale;
+    var uv = SampleCoordinates(target_uv, target_uv);
+    if combiner.raster.x > 1u && combiner.raster.z != 0u {
+        let m = f32(combiner.raster.x);
+        let delta = in.clip_position.xy - (floor(in.clip_position.xy / m) + 0.5) * m;
+        uv.snapped -= (delta.x * ddx_uv + delta.y * ddy_uv) * uv_scale;
+    }
 
     if combiner.primitive_depth.w != 0u {
         return CycleResult(1.0, combiner.blend_color.rgb, 1.0);
     }
-    let pixel = u32(in.clip_position.y) * combiner.frame.z + u32(in.clip_position.x);
+    var pixel = u32(in.clip_position.y) * combiner.frame.z + u32(in.clip_position.x);
+    if combiner.raster.x > 1u {
+        let native = vec2<u32>(in.clip_position.xy / f32(combiner.raster.x));
+        pixel = native.y * combiner.raster.y + native.x;
+    }
     if combiner.fill_siz == 3u {
         let word = select(combiner.fill_word >> 16u, combiner.fill_word & 0xffffu, (pixel & 1u) != 0u);
         let rgb5 = vec3<u32>((word >> 11u) & 31u, (word >> 6u) & 31u, (word >> 1u) & 31u);

@@ -23,7 +23,8 @@ fn unpack_z(packed: u32) -> f32 {
 
 @fragment
 fn fill_depth(@builtin(position) position: vec4<f32>) -> Attributes {
-    let pixel = u32(position.y) * fill.y + u32(position.x);
+    let native = vec2<u32>(position.xy) / fill.z;
+    let pixel = native.y * fill.y + native.x;
     let packed = select(fill.x >> 16u, fill.x & 0xffffu, (pixel & 1u) != 0u);
     let code = ((packed & 3u) << 2u) | (3u * (packed & 1u));
     return Attributes(code, unpack_z(packed));
@@ -47,4 +48,12 @@ fn import_depth(@builtin(position) position: vec4<f32>) -> Attributes {
     let word = textureLoad(imported, vec2<i32>(position.xy), 0).r;
     // Coherent imports contain visible words only; missing hidden dz bits are zero.
     return Attributes((word & 3u) << 2u, unpack_z(word));
+}
+
+@group(0) @binding(4) var<uniform> scale: vec4<u32>;
+
+@fragment
+fn expand_depth(@builtin(position) position: vec4<f32>) -> Attributes {
+    let coord = vec2<i32>(vec2<u32>(position.xy) / scale.x);
+    return Attributes(textureLoad(source_delta, coord, 0).r, textureLoad(source, coord, 0));
 }
