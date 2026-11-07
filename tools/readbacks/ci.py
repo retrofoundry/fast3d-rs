@@ -17,11 +17,11 @@ from readbacks import artifact_file, compare, file_hash, gpu_decode_inventory, g
 
 
 HERE = Path(__file__).resolve().parent
-GPU_DECODE_TEST = "fast3d/tests/texture_decode_gpu.rs"
+GPU_DECODE_TEST = "ultragfx/tests/texture_decode_gpu.rs"
 INVENTORY = json.loads((HERE / "inventory.json").read_text(encoding="utf-8"))
 COMMANDS = {
     "default": ["cargo", "test", "--locked", "--no-fail-fast", "--workspace"],
-    "debug-ui": ["cargo", "test", "--locked", "--no-fail-fast", "-p", "fast3d", "--features", "debug-ui"],
+    "debug-ui": ["cargo", "test", "--locked", "--no-fail-fast", "-p", "ultragfx", "--features", "debug-ui"],
     "all-features": ["cargo", "test", "--locked", "--no-fail-fast", "--workspace", "--all-features"],
 }
 
@@ -31,7 +31,7 @@ def test_commands(checkout, config, system):
     if system != "Windows":
         return [command]
     features = {"default": [], "debug-ui": ["--features", "debug-ui"], "all-features": ["--all-features"]}
-    command = ["cargo", "test", "--locked", "--no-fail-fast", "-p", "fast3d"] + features[config]
+    command = ["cargo", "test", "--locked", "--no-fail-fast", "-p", "ultragfx"] + features[config]
     commands = [command + ["--lib", "--", "tests::goldens::", "tests::tmem_witnesses::",
                            "render::texture_decode::gpu_tests::",
                            "tests::framebuffer_coherence::gpu::guest_route_",
@@ -39,9 +39,9 @@ def test_commands(checkout, config, system):
                            "tests::framebuffer_coherence::gpu::triangles::batches::guest_route_gpu_batch",
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_matches_f4b3240",
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_then_invalid_projection_matches_67345dc"]]
-    if (checkout / "fast3d/src/render/upscaling_tests.rs").is_file():
+    if (checkout / "ultragfx/src/render/upscaling_tests.rs").is_file():
         commands[0].append("render::upscaling_tests::")
-    if (checkout / "fast3d/src/render/framebuffers/copies_tests.rs").is_file():
+    if (checkout / "ultragfx/src/render/framebuffers/copies_tests.rs").is_file():
         commands[0].append("render::framebuffers::copies::tests::")
     commands[0].extend(["hle::capture::tests::legacy_scales_are_ignored_and_v3_preserves_effective_scale",
                         "hle::capture::replay::state_tests::captures_record_the_effective_fixed_scale",
@@ -51,7 +51,7 @@ def test_commands(checkout, config, system):
     if config == "all-features":
         targets = ["--test", "tmem_fixture_replay"]
         for target in ["texture_decode_gpu", "texture_residency", "texture_residency_pressure", "rt64_v5", "upscaling"]:
-            if (checkout / "fast3d/tests" / (target + ".rs")).is_file():
+            if (checkout / "ultragfx/tests" / (target + ".rs")).is_file():
                 targets.extend(["--test", target])
         commands.append(command + targets)
     return commands
@@ -72,7 +72,7 @@ def harness_files(checkout):
     names = json.loads((HERE / "harness-files.json").read_text(encoding="utf-8"))
     files = {name: file_hash(artifact_file(checkout, name)) for name in names}
     files["Cargo.lock"] = file_hash(checkout / "Cargo.lock")
-    files["fast3d/Cargo.toml#dev-dependencies"] = json_hash(dev_dependencies((checkout / "fast3d/Cargo.toml").read_text(encoding="utf-8")))
+    files["ultragfx/Cargo.toml#dev-dependencies"] = json_hash(dev_dependencies((checkout / "ultragfx/Cargo.toml").read_text(encoding="utf-8")))
     return files
 
 
@@ -187,7 +187,7 @@ def capture(checkout, output, base_sha, harness_checkout):
     source_sha = command_output(["git", "rev-parse", "HEAD"], checkout)
     goldens = json.loads((HERE / "goldens.json").read_text(encoding="utf-8"))
     actual_goldens = {path.relative_to(checkout).as_posix(): file_hash(path)
-                      for path in sorted((checkout / "fast3d/goldens").glob("*.bin"))}
+                      for path in sorted((checkout / "ultragfx/goldens").glob("*.bin"))}
     if actual_goldens != goldens:
         raise ValueError("committed golden inventory or bytes changed")
     harness = harness_files(harness_checkout)
@@ -236,11 +236,11 @@ def capture(checkout, output, base_sha, harness_checkout):
         for config, configuration in manifest["configurations"].items():
             directory = output / config
             directory.mkdir()
-            env = dict(os.environ, FAST3D_GOLDEN_OUTPUT=str(directory / "final"),
-                       FAST3D_DECODE_OUTPUT=str(directory / "decode"),
-                       FAST3D_GPU_DECODE_OUTPUT=str(directory / "gpu-decode"),
-                       FAST3D_RESIDENCY_OUTPUT=str(directory / "residency"),
-                       FAST3D_REPLACEMENT_OUTPUT=str(directory / "replacements"))
+            env = dict(os.environ, ULTRAGFX_GOLDEN_OUTPUT=str(directory / "final"),
+                       ULTRAGFX_DECODE_OUTPUT=str(directory / "decode"),
+                       ULTRAGFX_GPU_DECODE_OUTPUT=str(directory / "gpu-decode"),
+                       ULTRAGFX_RESIDENCY_OUTPUT=str(directory / "residency"),
+                       ULTRAGFX_REPLACEMENT_OUTPUT=str(directory / "replacements"))
             if target is not None:
                 env["CARGO_TARGET_DIR"] = target.name
             binaries = {}
@@ -276,7 +276,7 @@ def capture(checkout, output, base_sha, harness_checkout):
                 "failed_tests": sorted(set(re.findall(r"(?m)^test (\S+) \.\.\. FAILED\s*$", test_log))),
                 "failed_targets": sorted(set(re.findall(r"(?m)^error: test failed, to rerun pass (.+)$", test_log))),
                 "build_log": f"{config}/build.log", "test_log": f"{config}/test.log",
-                "binaries": binaries, "environment": {key: env[key] for key in ["FAST3D_GOLDEN_OUTPUT", "FAST3D_DECODE_OUTPUT", "FAST3D_GPU_DECODE_OUTPUT", "FAST3D_RESIDENCY_OUTPUT", "FAST3D_REPLACEMENT_OUTPUT", "CARGO_TARGET_DIR"] if key in env},
+                "binaries": binaries, "environment": {key: env[key] for key in ["ULTRAGFX_GOLDEN_OUTPUT", "ULTRAGFX_DECODE_OUTPUT", "ULTRAGFX_GPU_DECODE_OUTPUT", "ULTRAGFX_RESIDENCY_OUTPUT", "ULTRAGFX_REPLACEMENT_OUTPUT", "CARGO_TARGET_DIR"] if key in env},
             }
             save_manifest(output, manifest)
     finally:
@@ -302,15 +302,15 @@ def overlay(base, candidate, source_sha):
     }
     original_lock = file_hash(base / "Cargo.lock")
     for name in files:
-        if name in ["Cargo.lock", "fast3d/Cargo.toml#dev-dependencies"]:
+        if name in ["Cargo.lock", "ultragfx/Cargo.toml#dev-dependencies"]:
             continue
-        if not name.startswith(("fast3d/src/tests/", "fast3d/tests/", "tools/readbacks/")) and name not in ["tools/tmem/vectors.json", "tools/tmem/gpu-decode-inventory.json", "tools/tmem/gpu-decode-warp.json", replacements.INVENTORY]:
+        if not name.startswith(("ultragfx/src/tests/", "ultragfx/tests/", "tools/readbacks/")) and name not in ["tools/tmem/vectors.json", "tools/tmem/gpu-decode-inventory.json", "tools/tmem/gpu-decode-warp.json", replacements.INVENTORY]:
             raise ValueError(f"production file forbidden in test harness overlay: {name}")
         destination = base / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(candidate / name, destination)
-    cargo_toml = base / "fast3d/Cargo.toml"
-    cargo_toml.write_text(replace_dev_dependencies(cargo_toml.read_text(encoding="utf-8"), (candidate / "fast3d/Cargo.toml").read_text(encoding="utf-8")))
+    cargo_toml = base / "ultragfx/Cargo.toml"
+    cargo_toml.write_text(replace_dev_dependencies(cargo_toml.read_text(encoding="utf-8"), (candidate / "ultragfx/Cargo.toml").read_text(encoding="utf-8")))
     shutil.copyfile(candidate / "Cargo.lock", base / "Cargo.lock")
     overlaid_dependencies = {
         name: command_output(tree_command + ["--locked", "--offline"] + features, base).replace(str(base), "<checkout>")

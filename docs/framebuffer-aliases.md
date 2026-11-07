@@ -1,7 +1,7 @@
 # Bounded framebuffer texture aliases
 
 A load-free TexRect can sample a previously rendered colour image at its exact base
-address. This is a fast3d convenience. It does not implement libultra framebuffer
+address. This is a ultragfx convenience. It does not implement libultra framebuffer
 LoadTile or LoadBlock semantics and must not be exported as an rt64 agreement test.
 
 The render tile must have no written byte in its reachable TMEM footprint. Its format and texel size must

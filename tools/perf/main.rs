@@ -1,5 +1,5 @@
 use b1_perf::{cache, *};
-use fast3d::{
+use ultragfx::{
     capture::{MeasurementOptions, ReplayHardware, Sequence},
     profiling::{CpuInterpreter, Mode, Recorder},
     Hardware,
@@ -20,9 +20,9 @@ fn write_timed(
     writer: &mut impl Write,
     value: &impl serde::Serialize,
 ) {
-    let start = fast3d::profiling::now_ms();
+    let start = ultragfx::profiling::now_ms();
     write(writer, value);
-    clock.set(clock.get() + fast3d::profiling::now_ms() - start);
+    clock.set(clock.get() + ultragfx::profiling::now_ms() - start);
 }
 fn file(path: impl AsRef<Path>) -> BufWriter<File> {
     BufWriter::new(File::create(path).unwrap())
@@ -57,7 +57,7 @@ fn admission(sequence: &Sequence) -> serde_json::Value {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let driver_start = fast3d::profiling::now_ms();
+    let driver_start = ultragfx::profiling::now_ms();
     let formatting_ms = std::cell::Cell::new(0.0);
     let args: Vec<_> = std::env::args().collect();
     let command = args
@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?
         .unwrap_or(16 * 1024 * 1024);
     let mut collector = TraceCollector::new(cache_budget);
-    let mut trace = |serial, observed, snapshot: &fast3d::profiling::Snapshot| {
+    let mut trace = |serial, observed, snapshot: &ultragfx::profiling::Snapshot| {
         write_timed(
             &formatting_ms,
             &mut hits,
@@ -102,11 +102,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     match command.as_str() {
         "inspect" | "sequence" | "ordinary" => {
-            let start = fast3d::profiling::now_ms();
+            let start = ultragfx::profiling::now_ms();
             let bytes = sequence_input(input)?;
             let sequence = Sequence::from_bytes(&bytes)?;
-            let input_ms = fast3d::profiling::now_ms() - start;
-            let metadata = json!({"capture":input,"sha256":sha(&bytes),"frames":sequence.frames.len(),"warmup":sequence.warmup_frames,"presentations":sequence.presentations,"config":format!("{:?}",sequence.frames[0].frame),"provenance":format!("{:?}",sequence.frames[0].provenance),"input_loading_validation_ms":input_ms,"clock":fast3d::profiling::clock_probe(),"execution":command,"all_frame_admission":admission(&sequence)});
+            let input_ms = ultragfx::profiling::now_ms() - start;
+            let metadata = json!({"capture":input,"sha256":sha(&bytes),"frames":sequence.frames.len(),"warmup":sequence.warmup_frames,"presentations":sequence.presentations,"config":format!("{:?}",sequence.frames[0].frame),"provenance":format!("{:?}",sequence.frames[0].provenance),"input_loading_validation_ms":input_ms,"clock":ultragfx::profiling::clock_probe(),"execution":command,"all_frame_admission":admission(&sequence)});
             fs::write(
                 out.join("input.json"),
                 serde_json::to_vec_pretty(&metadata)?,
@@ -140,9 +140,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
             } else {
-                let start = fast3d::profiling::now_ms();
+                let start = ultragfx::profiling::now_ms();
                 let (device, queue, info) = pollster::block_on(sequence.measurement_device())?;
-                let device_ms = fast3d::profiling::now_ms() - start;
+                let device_ms = ultragfx::profiling::now_ms() - start;
                 let features = format!("{:?}", device.features());
                 let limits = format!("{:?}", device.limits());
                 if command == "ordinary" {
@@ -236,8 +236,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         "preflight" => {
-            let cases: Vec<fast3d::profiling::Request> = if input == "authored" {
-                fast3d::profiling::authored_requests()
+            let cases: Vec<ultragfx::profiling::Request> = if input == "authored" {
+                ultragfx::profiling::authored_requests()
                     .into_iter()
                     .flat_map(|r| (0..16).map(move |xor| r.diagnostic_variant(xor)))
                     .collect()
@@ -282,7 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(
         out.join("driver.json"),
         serde_json::to_vec_pretty(
-            &json!({"total_elapsed_ms":fast3d::profiling::now_ms()-driver_start,"serialization_write_ms":formatting_ms.get(),"cache_budget_bytes":cache_budget,"request_sets":"all distinct canonical inputs by class; complete ordered trace retained"}),
+            &json!({"total_elapsed_ms":ultragfx::profiling::now_ms()-driver_start,"serialization_write_ms":formatting_ms.get(),"cache_budget_bytes":cache_budget,"request_sets":"all distinct canonical inputs by class; complete ordered trace retained"}),
         )?,
     )?;
     Ok(())

@@ -75,7 +75,7 @@ pub fn write_row(
 fn raw_export_preserves_alpha_and_refuses_an_overwrite() {
     let thread = std::thread::current();
     let name = thread.name().unwrap().replace("::", "_");
-    let variable = format!("FAST3D_EXPORT_TEST_{}_{}", std::process::id(), name);
+    let variable = format!("ULTRAGFX_EXPORT_TEST_{}_{}", std::process::id(), name);
     let directory = std::env::temp_dir().join(&variable);
     std::env::set_var(&variable, &directory);
     let export = || {

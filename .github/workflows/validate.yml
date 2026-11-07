@@ -30,7 +30,7 @@ jobs:
       - name: clippy (--all-features)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: clippy (--features debug-ui)
-        run: cargo clippy -p fast3d --features debug-ui --all-targets -- -D warnings
+        run: cargo clippy -p ultragfx --features debug-ui --all-targets -- -D warnings
 
   # Metal runs the full suites. WARP runs the frozen comparison rows, bounded compute
   # corpus and residency targets; ci.py applies the same profile to a bootstrap base.
@@ -108,13 +108,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: build for wasm32
-        run: cargo build -p fast3d --target wasm32-unknown-unknown
+        run: cargo build -p ultragfx --target wasm32-unknown-unknown
       - name: build for wasm32 (--features capture)
-        run: cargo build -p fast3d --target wasm32-unknown-unknown --features capture
+        run: cargo build -p ultragfx --target wasm32-unknown-unknown --features capture
       - name: build for wasm32 (--features debug-ui)
-        run: cargo build -p fast3d --target wasm32-unknown-unknown --features debug-ui
+        run: cargo build -p ultragfx --target wasm32-unknown-unknown --features debug-ui
       - name: build for wasm32 (--features capture,debug-ui)
-        run: cargo build -p fast3d --target wasm32-unknown-unknown --features capture,debug-ui
+        run: cargo build -p ultragfx --target wasm32-unknown-unknown --features capture,debug-ui
 
   browser:
     runs-on: macos-latest
@@ -126,7 +126,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: install matching wasm-bindgen runner
         run: |
-          version=$(cargo tree -p fast3d --target wasm32-unknown-unknown --features capture -e normal,dev --prefix none \
+          version=$(cargo tree -p ultragfx --target wasm32-unknown-unknown --features capture -e normal,dev --prefix none \
             | awk '$1 == "wasm-bindgen" {print substr($2, 2); exit}')
           echo "wasm-bindgen $version"
           cargo install --locked wasm-bindgen-cli --version "$version"
@@ -137,22 +137,22 @@ jobs:
           "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version
           "$CHROMEWEBDRIVER/chromedriver" --version
           echo "CHROMEDRIVER=$CHROMEWEBDRIVER/chromedriver" >> "$GITHUB_ENV"
-          echo "WASM_BINDGEN_TEST_WEBDRIVER_JSON=$PWD/fast3d/webdriver.json" >> "$GITHUB_ENV"
+          echo "WASM_BINDGEN_TEST_WEBDRIVER_JSON=$PWD/ultragfx/webdriver.json" >> "$GITHUB_ENV"
       - name: browser TMEM preimages
-        run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test tmem_preimage --test rt64_v5 -- --nocapture
+        run: cargo test -p ultragfx --features capture,profiling --target wasm32-unknown-unknown --test tmem_preimage --test rt64_v5 -- --nocapture
       - name: browser owned texture requests
         if: ${{ !cancelled() }}
-        run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test owned_texture_requests -- --nocapture
+        run: cargo test -p ultragfx --features capture,profiling --target wasm32-unknown-unknown --test owned_texture_requests -- --nocapture
       - name: browser TMEM IMAGE replay
         if: ${{ !cancelled() }}
-        run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test tmem_fixture_replay -- --nocapture
+        run: cargo test -p ultragfx --features capture,profiling --target wasm32-unknown-unknown --test tmem_fixture_replay -- --nocapture
       - name: browser TMEM compute and residency
         if: ${{ !cancelled() }}
-        run: cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown --test texture_decode_gpu --test texture_residency --test texture_residency_pressure -- --nocapture
+        run: cargo test -p ultragfx --features capture,profiling --target wasm32-unknown-unknown --test texture_decode_gpu --test texture_residency --test texture_residency_pressure -- --nocapture
       - name: browser WebGPU replay
         if: ${{ !cancelled() }}
         run: |
-          cargo test -p fast3d --no-fail-fast --features capture,profiling --target wasm32-unknown-unknown \
+          cargo test -p ultragfx --no-fail-fast --features capture,profiling --target wasm32-unknown-unknown \
             --test browser_sm64_fixture_replay --test capture_facade \
             --test capture_memory_wasm --test capture_s2dex_wasm --test profiling_capture \
             --test framebuffer_load_evidence --test upscaling -- --nocapture

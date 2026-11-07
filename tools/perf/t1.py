@@ -49,7 +49,7 @@ def row_manifest():
             else:
                 argv = ['{python}', '{repo}/tools/perf/browser_run.py', '--build', '{bb0fea3-browser-build}',
                         '--scene', '{scene}', '--out', '{fresh-output}', '--chromedriver', '{chromedriver}',
-                        '--webdriver', '{repo}/fast3d/webdriver.json', '--mode', '{configuration}',
+                        '--webdriver', '{repo}/ultragfx/webdriver.json', '--mode', '{configuration}',
                         '--kind', 'sequence' if capture else 'source']
                 if capture:
                     argv += ['--capture', '{captures}/'+workload+'.f3dcap']

@@ -1,5 +1,5 @@
 mod shared;
-use fast3d::{
+use ultragfx::{
     capture::{ReplayHardware, ReplayOutput, Sequence},
     ClearPolicy, DataFormat, Hardware, Microcode, PresentTarget, Rdram, RdramImage, Renderer,
     RendererConfig, ViRegisters,
@@ -310,7 +310,7 @@ mod browser {
                 "parent driver is for correctness readback",
             ));
         }
-        let sequence = fast3d::capture::Sequence::from_bytes(&bytes)
+        let sequence = ultragfx::capture::Sequence::from_bytes(&bytes)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let mut frames = Vec::new();
         super::sequence(&sequence, |row| frames.push(row))

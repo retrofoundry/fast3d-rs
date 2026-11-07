@@ -1,15 +1,15 @@
 # rt64 capture oracle
 
-This compares fast3d replay with rt64's native framebuffer written back to RDRAM.
+This compares ultragfx replay with rt64's native framebuffer written back to RDRAM.
 It needs the separately built rt64 static library and an SDL/Metal session. The C++
 project is outside the Cargo workspace; normal Cargo CI does not build it.
 
 [F0 framebuffer-load evidence](../../docs/framebuffer-load-evidence.md) uses a
-dedicated writer that asserts fast3d's expected rejection before exporting the
+dedicated writer that asserts ultragfx's expected rejection before exporting the
 authored IMAGE commands. Its rectangle/triangle packing and snapshot gates are
 separate from supported-fixture comparisons below; hardware results are pending.
 
-Run these commands from the fast3d worktree. The reference build on ci4 is
+Run these commands from the ultragfx worktree. The reference build on ci4 is
 `/Volumes/DS Vault/hub/wt/rt64-reference`, revision
 `43373749dac9bbc1b653e6a02aed40a9e1783bed`, configured with `RT64_STATIC=ON`.
 Nothing here rebuilds or changes that checkout. Build output goes to `/tmp`.
@@ -44,8 +44,8 @@ Generate the fixtures without a GPU. The tests are ignored by default and need
 
 ```sh
 mkdir -p /tmp/fast3d-oracle
-FAST3D_WRITE_FIXTURES=/tmp/fast3d-oracle \
-  devenv shell -- cargo test -p fast3d --features 'capture' --lib \
+ULTRAGFX_WRITE_FIXTURES=/tmp/fast3d-oracle \
+  devenv shell -- cargo test -p ultragfx --features 'capture' --lib \
   write_rt64_ -- --ignored
 ```
 
@@ -53,7 +53,7 @@ The writers reuse the Metal Mario and mixed JRB scene builders. They append a
 wrapper that sets the framebuffer, viewport, scissor, identity matrices and a
 black clear, calls the scene, then performs FullSync. Both output 320x240 RGBA16
 at `0x00100000`. Mario's original pairless test still renders at 256x256; the
-capture uses 320x240 so fast3d's current fixed viewport fold does not introduce
+capture uses 320x240 so ultragfx's current fixed viewport fold does not introduce
 an unrelated size discrepancy. Geometry, normals, textures and other payloads
 are synthetic, as recorded in fixture provenance. These are isolated command
 scenes, not captured game frames.
@@ -63,12 +63,12 @@ fill rectangles, and a later transparent depth writer. Its writer is
 `write_rt64_workload_interleaving_fixture`; it also exports independently derived
 `.expected.rgba8` pixels and an `.overlap.rgba8` mask. The expected colors are
 literal primary colors under rectangular coverage rules in
-`fast3d/tests/common/workload_semantics.rs`. The overlap mask contains 12,288
+`ultragfx/tests/common/workload_semantics.rs`. The overlap mask contains 12,288
 pixels, bounded by `[64,256) × [64,192)`. The decisive later-depth region is
 `[64,96) × [64,96)` minus `[72,88) × [72,88)`: all 768 pixels retain the earlier
 red decal. Both renderers match the independent RGB image exactly; use
 `--ignore-alpha --threshold 0 --max-diff-pixels 0`. Alpha remains an exact
-fast3d assertion. The checked-in IMAGE fixture also runs in the browser replay
+ultragfx assertion. The checked-in IMAGE fixture also runs in the browser replay
 job under both clear policies.
 
 `sm64-hud-us-copy` and `sm64-hud-eu-point` reuse the regional
@@ -105,17 +105,17 @@ later copy, so that case is not an rt64 parity claim.
 exactly and can be gated with `--threshold 0 --max-diff-pixels 0`.
 `f3dex2-quad-winding` also matches rt64 exactly after the integer-pixel-origin
 coverage change. Its independent per-pixel and culling assertions remain in
-`fast3d/src/tests/f3dex2_fixtures.rs`. Replacing each `07000204/0006080A`
+`ultragfx/src/tests/f3dex2_fixtures.rs`. Replacing each `07000204/0006080A`
 command with TRI2 (`06000204/0006080A`) produces byte-identical rt64 output.
 The frozen [TMEM oracle ledger](../tmem/README.md) records zero RGBA residual
 for this row; the old 192-pixel residual is closed.
 
-`f3dex2-modify-z` is not an rt64 parity claim. fast3d reads a ZSCREEN word as
+`f3dex2-modify-z` is not an rt64 parity claim. ultragfx reads a ZSCREEN word as
 raw s15.16 screen Z, the units `G_DEPTOZSrg` produces and BRANCH_Z compares,
 so `03000000` and `01000000` are Z=768 and Z=256 of the 1024 depth range. rt64
 uses the word divided by 65536 as normalized depth, which puts both modified
 strips past the far plane, so its right strip at `[176,248) × [40,112)` stays
-blue where fast3d draws red.
+blue where ultragfx draws red.
 
 The two BRANCH_Z fixtures are oracle-gated; neither uses equality or MODIFYVTX.
 CULLDL, threshold equality (`<=`), and modified raw Z have SDK-derived command-read
@@ -142,7 +142,7 @@ for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point \
   tlut-ci4-rgba16-banks tlut-ci4-ia16-banks \
   f3dex2-modify-rgba f3dex2-modify-st f3dex2-modify-xy f3dex2-modify-z \
   f3dex2-quad-winding f3dex2-branchz-below f3dex2-branchz-above; do
-  devenv shell -- cargo run -p fast3d --features capture \
+  devenv shell -- cargo run -p ultragfx --features capture \
     --example export_capture_rdram -- \
     "/tmp/fast3d-oracle/$scene.f3dcap" "/tmp/fast3d-oracle/$scene" || break
 
@@ -150,18 +150,18 @@ for scene in mario-metal-butt jrb-mixed-fog sm64-hud-us-copy sm64-hud-eu-point \
     "/tmp/fast3d-oracle/$scene.rdram" "/tmp/fast3d-oracle/$scene.json" \
     "/tmp/fast3d-oracle/$scene-rt64" || break
 
-  devenv shell -- cargo run -p fast3d --features capture \
+  devenv shell -- cargo run -p ultragfx --features capture \
     --example replay_capture -- \
     "/tmp/fast3d-oracle/$scene.f3dcap" "/tmp/fast3d-oracle/$scene-fast3d" || break
 
-  devenv shell -- cargo run -p fast3d --example compare_rgba8 -- \
+  devenv shell -- cargo run -p ultragfx --example compare_rgba8 -- \
     "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
     320 240 --diff-mask "/tmp/fast3d-oracle/$scene-diff.png" || break
 done
 
 for scene in tlut-ci4-rgba16-banks tlut-ci4-ia16-banks \
   f3dex2-branchz-below f3dex2-branchz-above; do
-  devenv shell -- cargo run -p fast3d --example compare_rgba8 -- \
+  devenv shell -- cargo run -p ultragfx --example compare_rgba8 -- \
     "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
     320 240 --threshold 7 --max-diff-pixels 0 \
     --diff-mask "/tmp/fast3d-oracle/$scene-diff.png" || break
@@ -177,7 +177,7 @@ budget the command reports differences and succeeds. No budget or golden is
 established by this tool: current filtering, coverage and blending differences
 can still produce a mask. Review that mask before using it as a gate.
 
-Use `--ignore-alpha` to compare RGB only, including dither-background matching, when rt64's RGBA16 coverage alpha differs from fast3d's blended alpha.
+Use `--ignore-alpha` to compare RGB only, including dither-background matching, when rt64's RGBA16 coverage alpha differs from ultragfx's blended alpha.
 
 The exporter accepts only IMAGE layout: big-endian data and eight-byte commands.
 It preserves physical addresses in an 8 MiB image, zeroes uncaptured gaps, walks
@@ -192,7 +192,7 @@ A single image cannot represent changing task snapshots. The fixture must
 initialize its starting state and colour attachments; later tasks can inherit RDP
 state. RAM feedback and dependence on earlier GPU contents are outside this comparison. The final target must be RGBA16 or
 RGBA32, have an eight-byte aligned address, fit RDRAM and match the output width.
-A recorded fast3d VI must select that target. The harness currently supports the
+A recorded ultragfx VI must select that target. The harness currently supports the
 macOS static build, widths 1..1022 and heights 4..512 divisible by four; RGBA16
 rows need an even width. Use only trusted fixtures: rt64's HLE walker does not
 bounds-check arbitrary display-list graphs.
@@ -231,13 +231,13 @@ are relative to the pinned rt64 checkout.
   subtracts one row from VI origin, so the supplied origin is the colour address
   plus one row. `:115` accounts for the extra rows in its height estimate.
 
-## First results (2026-09-05, rt64 `4337374`, fast3d at PR 5)
+## First results (2026-09-05, rt64 `4337374`, ultragfx at PR 5)
 
 `jrb-mixed-fog`: max channel difference 7/255, no pixel over 8/255. rt64 writes RGBA16 back to
 RAM, so a difference below 8 is quantisation; the two fog settings in one frame come out the same
 in both renderers.
 
-`mario-metal-butt`: 12000 pixels differ, up to 128/255, all inside the ten patches. fast3d still
+`mario-metal-butt`: 12000 pixels differ, up to 128/255, all inside the ten patches. ultragfx still
 samples with GPU bilinear at normalised coordinates, so an integer texel coordinate straddles two
 texels, while rt64 addresses the texel exactly. The fixture's coordinate-coded texture turns that
 half-texel disagreement into a large colour difference on purpose. This is the baseline the tile
@@ -247,7 +247,7 @@ For PR 7 acceptance, require the maximum channel difference to be below 8 and no
 that limit. Use this stricter gate for each scene after rendering both frames:
 
 ```sh
-devenv shell -- cargo run -p fast3d --example compare_rgba8 -- \
+devenv shell -- cargo run -p ultragfx --example compare_rgba8 -- \
   "/tmp/fast3d-oracle/$scene-rt64.rgba8" "/tmp/fast3d-oracle/$scene-fast3d.rgba8" \
   320 240 --threshold 7 --max-diff-pixels 0 \
   --diff-mask "/tmp/fast3d-oracle/$scene-diff.png"
@@ -256,7 +256,7 @@ devenv shell -- cargo run -p fast3d --example compare_rgba8 -- \
 The filter implementation and authored probe expectations are not a measured oracle result.
 The comparison still needs to run in an SDL/Metal session.
 
-Two things the oracle caught in the fixtures themselves, both invisible to fast3d because it never
+Two things the oracle caught in the fixtures themselves, both invisible to ultragfx because it never
 writes depth to memory: a Z-buffered scene needs `SETZIMG`, or rt64's RAM write-back puts depth
 values at address 0 and overwrites the display list; and it needs the depth buffer cleared, or
 every fragment fails the depth test. The wrapper in `fixture.rs` now does both, the way sm64 does.
@@ -270,7 +270,7 @@ A/Z, with Z at `0x200000` shared by A=`0x100000` and B=`0x300000`. Its final
 image has red at `[32,144) × [32,208)`, blue at `[144,176) × [32,208)`, and
 black elsewhere. The right region stays black because B wrote nearer depth.
 `write_rt64_shared_depth_fixture` exports the IMAGE fixture, independent expected
-pixels and the `PersistentDepthByAddress` mask to `FAST3D_WRITE_FIXTURES`.
+pixels and the `PersistentDepthByAddress` mask to `ULTRAGFX_WRITE_FIXTURES`.
 `shared_depth_fixture_pixels` and the browser corpus check its pixels. Export
 and replay it with the commands above; compare rt64 RGB using `--ignore-alpha
 --threshold 0 --max-diff-pixels 0` (RGBA16 coverage alpha is separate).

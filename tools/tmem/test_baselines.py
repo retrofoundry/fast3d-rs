@@ -27,7 +27,7 @@ class FrozenBaselines(unittest.TestCase):
         rows = ledger['goldens']
         self.assertEqual(len(rows), 27)
         self.assertEqual({row['file'] for row in rows},
-                         {str(path.relative_to(ROOT)) for path in (ROOT / 'fast3d/goldens').glob('*.bin')})
+                         {str(path.relative_to(ROOT)) for path in (ROOT / 'ultragfx/goldens').glob('*.bin')})
         for row in rows:
             with self.subTest(file=row['file']):
                 data = (ROOT / row['file']).read_bytes()

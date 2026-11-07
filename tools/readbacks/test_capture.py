@@ -19,14 +19,14 @@ class CaptureFailures(unittest.TestCase):
         self.harness = self.root / "harness"
         self.checkout.mkdir()
         self.harness.mkdir()
-        (self.checkout / "fast3d/goldens").mkdir(parents=True)
-        (self.checkout / "fast3d/goldens/quad.bin").write_bytes(bytes([1, 2, 3, 4]))
+        (self.checkout / "ultragfx/goldens").mkdir(parents=True)
+        (self.checkout / "ultragfx/goldens/quad.bin").write_bytes(bytes([1, 2, 3, 4]))
         (self.checkout / "Cargo.lock").write_text("frozen test lock")
-        (self.checkout / "fast3d/Cargo.toml").write_text("[dev-dependencies]\n")
+        (self.checkout / "ultragfx/Cargo.toml").write_text("[dev-dependencies]\n")
         (self.checkout / "test-harness").write_text("test input")
         (self.harness / "harness-files.json").write_text('["test-harness"]')
         (self.harness / "goldens.json").write_text(json.dumps({
-            "fast3d/goldens/quad.bin": "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a"}))
+            "ultragfx/goldens/quad.bin": "9f64a747e1b97f131fabb6b447296c9b6f0201e79fb3c5356e6c77e89b6a806a"}))
         self.output = self.root / "output"
 
     def external_metadata(self, command, cwd, text, encoding):
@@ -35,9 +35,9 @@ class CaptureFailures(unittest.TestCase):
         if command == ["rustc", "-Vv"]:
             return "rustc test\nhost: aarch64-apple-darwin"
         if command[:2] == ["cargo", "tree"]:
-            return "fast3d v1.0.0"
+            return "ultragfx v1.0.0"
         if command[:2] == ["cargo", "metadata"]:
-            return json.dumps({"resolve": {"nodes": [{"id": "fast3d", "features": [], "deps": []}]}})
+            return json.dumps({"resolve": {"nodes": [{"id": "ultragfx", "features": [], "deps": []}]}})
         raise AssertionError(command)
 
     def capture(self, runner):
@@ -65,13 +65,13 @@ class CaptureFailures(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, stdout="")
             self.assertIn("--no-fail-fast", command)
             kwargs["stdout"].write("test tmem_layouts ... FAILED\n"
-                                   "error: test failed, to rerun pass `-p fast3d --test tmem_fixture_replay`\n")
+                                   "error: test failed, to rerun pass `-p ultragfx --test tmem_fixture_replay`\n")
             return subprocess.CompletedProcess(command, 101)
         self.capture(runner)
         manifest = json.loads((self.output / "manifest.json").read_text())
         for result in manifest["configurations"].values():
             self.assertEqual(result["failed_tests"], ["tmem_layouts"])
-            self.assertEqual(result["failed_targets"], ["`-p fast3d --test tmem_fixture_replay`"])
+            self.assertEqual(result["failed_targets"], ["`-p ultragfx --test tmem_fixture_replay`"])
         with self.assertRaisesRegex(ValueError, "failed configuration: default.*tmem_layouts.*test.log"):
             ci.load_capture(self.output, ci.INVENTORY, "a" * 40, "1")
 
@@ -85,7 +85,7 @@ class CaptureFailures(unittest.TestCase):
         self.assertIsNone(manifest["configurations"]["default"]["exit_code"])
 
     def test_windows_capture_bounds_targets_and_keeps_failures_and_build_cleanup(self):
-        tests = self.checkout / "fast3d/tests"
+        tests = self.checkout / "ultragfx/tests"
         tests.mkdir()
         for target in ["tmem_fixture_replay", "texture_decode_gpu", "texture_residency", "texture_residency_pressure"]:
             (tests / (target + ".rs")).write_text("test target")
@@ -140,7 +140,7 @@ class CaptureFailures(unittest.TestCase):
             self.assertEqual(ci.test_commands(self.checkout, config, "Darwin"), [ci.COMMANDS[config]])
 
     def test_windows_selects_scaled_feedback_and_public_api_when_present(self):
-        for name in ["fast3d/src/render/upscaling_tests.rs", "fast3d/src/render/framebuffers/copies_tests.rs", "fast3d/tests/upscaling.rs"]:
+        for name in ["ultragfx/src/render/upscaling_tests.rs", "ultragfx/src/render/framebuffers/copies_tests.rs", "ultragfx/tests/upscaling.rs"]:
             path = self.checkout / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.touch()

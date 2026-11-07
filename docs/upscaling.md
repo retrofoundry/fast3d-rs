@@ -38,7 +38,7 @@ effective fixed frame), and `reduction_factor()`.
 
 The 4x cap keeps Auto within the same attachment envelope as fixed rendering:
 colour/depth storage at 4x is 16 times native. RT64's Auto formula has no global
-cap and separately limits individual targets. Fast3d keeps one scale for all
+cap and separately limits individual targets. ultragfx keeps one scale for all
 targets and rejects allocations that exceed device limits or its 256 MiB
 attachment budget. Transition admission includes old and new attachments. A
 rejected boundary returns a structured `ResourceAdmission` diagnostic, preserves

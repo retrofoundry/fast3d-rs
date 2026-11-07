@@ -22,9 +22,9 @@ tree as `bb0fea3`. No golden was regenerated.
 `oracle-bb0fea3.json` records 60 existing Metal/rt64 rows, including all 38 coverage
 captures. It retains the per-row channel policy, channel maxima, exact residual
 and mask hashes, input hashes and both output hashes. The compressed files in
-`residuals/` contain signed fast3d-minus-rt64 channel differences, as little-endian
+`residuals/` contain signed ultragfx-minus-rt64 channel differences, as little-endian
 i16 values in pixel order. RGB rows omit alpha only from the reference residual;
-fast3d parent/candidate comparison always checks RGBA and authenticates the full
+ultragfx parent/candidate comparison always checks RGBA and authenticates the full
 parent against the frozen hash. Transparent Mario retains its statistical policy.
 The three rejected real framebuffer-load rows and the compatibility shortcut have
 separate F0 policies; they are not generic IMAGE agreement rows.
@@ -95,12 +95,12 @@ background. Native and browser replay use the same independent expectations.
 The writer and CPU draw-snapshot tests do not need an adapter. Replay requires one.
 
 ```sh
-FAST3D_WRITE_FIXTURES=/absolute/fresh/fixtures \
-  cargo test -p fast3d --features capture --lib \
+ULTRAGFX_WRITE_FIXTURES=/absolute/fresh/fixtures \
+  cargo test -p ultragfx --features capture --lib \
   tests::tmem_fixtures::write_tmem_fixtures -- --ignored --exact
-cargo test -p fast3d --features capture --lib tests::tmem_
-cargo test -p fast3d --features capture --test tmem_fixture_replay
-cargo test -p fast3d --features capture,profiling --target wasm32-unknown-unknown \
+cargo test -p ultragfx --features capture --lib tests::tmem_
+cargo test -p ultragfx --features capture --test tmem_fixture_replay
+cargo test -p ultragfx --features capture,profiling --target wasm32-unknown-unknown \
   --test tmem_fixture_replay --test tmem_preimage
 ```
 

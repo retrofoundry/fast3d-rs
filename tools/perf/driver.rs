@@ -1,5 +1,5 @@
 pub mod cache;
-use fast3d::{
+use ultragfx::{
     capture::MeasuredFrame,
     profiling::{now_ms, CpuInterpreter, Mode, Recorder, Snapshot},
     DataFormat, Microcode, RdramImage,
@@ -41,7 +41,7 @@ pub fn frame_record(frame: &MeasuredFrame) -> Value {
 
 pub struct TraceCollector {
     pub simulator: cache::Simulator,
-    pub cases: BTreeMap<String, Vec<fast3d::profiling::Request>>,
+    pub cases: BTreeMap<String, Vec<ultragfx::profiling::Request>>,
     seen: std::collections::HashSet<Vec<u8>>,
 }
 impl TraceCollector {
@@ -115,7 +115,7 @@ pub async fn source_gpu(
     frames_in_flight: usize,
     mut emit: impl FnMut(Value),
 ) -> Result<Value, String> {
-    use fast3d::{ClearPolicy, PresentTarget, Renderer, RendererConfig};
+    use ultragfx::{ClearPolicy, PresentTarget, Renderer, RendererConfig};
     if !(1..=2).contains(&frames_in_flight) {
         return Err("frames_in_flight must be 1 or 2".into());
     }
@@ -231,7 +231,7 @@ pub async fn source_gpu(
         wait(renderer.device(), completion).await?;
     }
     Ok(
-        json!({"input":input,"adapter":format!("{info:?}"),"features":format!("{:?}",renderer.device().features()),"limits":format!("{:?}",renderer.device().limits()),"device_ms":device_ms,"renderer_ms":renderer_ms,"setup":setup,"final_wait_ms":now_ms()-start,"frames_in_flight":frames_in_flight,"mode":mode,"readback":readback,"clock":fast3d::profiling::clock_probe()}),
+        json!({"input":input,"adapter":format!("{info:?}"),"features":format!("{:?}",renderer.device().features()),"limits":format!("{:?}",renderer.device().limits()),"device_ms":device_ms,"renderer_ms":renderer_ms,"setup":setup,"final_wait_ms":now_ms()-start,"frames_in_flight":frames_in_flight,"mode":mode,"readback":readback,"clock":ultragfx::profiling::clock_probe()}),
     )
 }
 
@@ -256,7 +256,7 @@ mod tests {
     use super::*;
     #[test]
     fn trace_collector_analyzes_owned_input_without_mutating_live_trace() {
-        let mut request = fast3d::profiling::authored_requests().remove(0);
+        let mut request = ultragfx::profiling::authored_requests().remove(0);
         let expected = std::mem::take(&mut request.output);
         request.reachable_bytes = 0;
         request.read_operations = 0;

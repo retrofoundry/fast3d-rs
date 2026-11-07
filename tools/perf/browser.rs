@@ -32,12 +32,12 @@ pub async fn source(
 #[wasm_bindgen]
 pub fn preflight(cases: String) -> Result<String, JsValue> {
     let requests = if cases.is_empty() {
-        fast3d::profiling::authored_requests()
+        ultragfx::profiling::authored_requests()
             .into_iter()
             .flat_map(|r| (0..16).map(move |xor| r.diagnostic_variant(xor)))
             .collect()
     } else {
-        serde_json::from_str::<Vec<fast3d::profiling::Request>>(&cases)
+        serde_json::from_str::<Vec<ultragfx::profiling::Request>>(&cases)
             .map_err(|e| JsValue::from_str(&e.to_string()))?
     };
     let hash_inputs = cache::verify_hash_inputs(&requests);
@@ -60,7 +60,7 @@ pub fn preflight(cases: String) -> Result<String, JsValue> {
         }
     }
     serde_json::to_string(
-        &json!({"clock":fast3d::profiling::clock_probe(),"hash_inputs":hash_inputs,"costs":rows}),
+        &json!({"clock":ultragfx::profiling::clock_probe(),"hash_inputs":hash_inputs,"costs":rows}),
     )
     .map_err(|e| JsValue::from_str(&e.to_string()))
 }
@@ -79,7 +79,7 @@ pub async fn sequence(
         "trace" => Mode::Trace,
         _ => return Err(JsValue::from_str("unknown mode")),
     };
-    let sequence = fast3d::capture::Sequence::from_bytes(&bytes)
+    let sequence = ultragfx::capture::Sequence::from_bytes(&bytes)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let (device, queue, adapter) = sequence
         .measurement_device()
@@ -93,7 +93,7 @@ pub async fn sequence(
         .measure(
             device,
             queue,
-            fast3d::capture::MeasurementOptions {
+            ultragfx::capture::MeasurementOptions {
                 readback,
                 mode,
                 frames_in_flight: if one_frame { 1 } else { 2 },

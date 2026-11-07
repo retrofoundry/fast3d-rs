@@ -14,7 +14,7 @@ needs T wrapping, or YUV TLUT filtering can fetch outside the nominal tile. Load
 select a decoder or reject an ordinary request.
 
 The bank starts at zero and both reset APIs clear it. `begin_frame` preserves it.
-This is fast3d's reset policy, not a hardware power-on claim. `NoTextureLoaded`
+This is ultragfx's reset policy, not a hardware power-on claim. `NoTextureLoaded`
 still rejects ordinary textured draws before any texture load. A 4096-bit written
 map distinguishes untouched bytes from loaded zeros for the load-free framebuffer
 rectangle shortcut and its triangle rejection. Every load writer updates the map,

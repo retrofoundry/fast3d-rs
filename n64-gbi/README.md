@@ -11,7 +11,7 @@ interface fixed by the hardware and the SDK rather than by any particular consum
   row-vector convention.
 
 Both halves of the encoding agreement depend on it: the interpreter that decodes display lists
-([fast3d](https://github.com/retrofoundry/fast3d-rs)) and any tool that produces them. Its test
+([ultragfx](https://github.com/retrofoundry/ultragfx)) and any tool that produces them. Its test
 suite is a set of literal conformance vectors checked against the libultra macro definitions —
 the independent oracle that a round-trip test between an encoder and its own interpreter cannot
 provide.
