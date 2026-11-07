@@ -177,8 +177,6 @@ pub struct Scene {
 impl Scene {
     pub(crate) fn use_compatibility_policy(&mut self) {
         for mode in &mut self.render_modes {
-            mode.rgb_dither = 0;
-            mode.alpha_dither = 0;
             mode.key_enabled = false;
         }
     }

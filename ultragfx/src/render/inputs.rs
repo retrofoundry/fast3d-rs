@@ -107,6 +107,18 @@ impl TargetInputs {
             .or_else(|| self.any_depth.then_some(TargetId::Legacy))
     }
 
+    pub(super) fn copy_material(&self, slot: usize) -> Option<u32> {
+        let DrawInputs::Rectangle { material_index, .. } = self.operations[slot].draw else {
+            return None;
+        };
+        let uniform: CombinerUniform = bytemuck::pod_read_unaligned(
+            &self.uniforms[slot * 256..slot * 256 + std::mem::size_of::<CombinerUniform>()],
+        );
+        (uniform.cycle_type == 2)
+            .then_some(material_index)
+            .flatten()
+    }
+
     pub(super) fn presentation_scissor(&self, slot: usize) -> (u32, u32, u32, u32) {
         let scissor = super::workload::output_scissor(
             self.logical_scissors[slot],

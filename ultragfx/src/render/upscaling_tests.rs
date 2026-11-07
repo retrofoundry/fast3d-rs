@@ -877,7 +877,7 @@ fn task_boundary_discards_depth_before_an_early_return() {
         .as_ref()
         .unwrap()
         .owners
-        .0
+        .ranges
         .is_empty());
     let mut diagnostics = Vec::new();
     let summary = renderer.process_dl(
@@ -897,7 +897,7 @@ fn task_boundary_discards_depth_before_an_early_return() {
         .as_ref()
         .unwrap()
         .owners
-        .0
+        .ranges
         .is_empty());
 }
 

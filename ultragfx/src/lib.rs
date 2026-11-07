@@ -1004,11 +1004,6 @@ impl Renderer {
             return result.summary(false);
         }
 
-        if self.guest_writeback && !result.scene.unsupported_native_policy {
-            for mode in &mut result.scene.render_modes {
-                mode.alpha_dither = 3;
-            }
-        }
         let workload = self
             .guest_writeback
             .then(|| crate::render::workload::Workload::new(&result.scene));
@@ -1137,7 +1132,7 @@ impl Renderer {
                 .as_ref()
                 .unwrap()
                 .owners
-                .0
+                .ranges
                 .values()
                 .map(|range| range.writer)
                 .collect();

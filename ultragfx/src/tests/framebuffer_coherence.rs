@@ -145,6 +145,73 @@ fn built(mut b: DlBuilder, mut dl: Vec<Command>) -> Built {
 }
 
 #[test]
+fn guest_dither_selectors_survive_later_othermode_and_split_batches() {
+    for triangle in [false, true] {
+        let mut b = DlBuilder::new();
+        let vertices = b.vertices(&[[-1, -1], [1, -1], [0, 1]].map(|[x, y]| VtxColored {
+            x,
+            y,
+            z: 0,
+            flag: 0,
+            s: 0,
+            t: 0,
+            r: 19,
+            g: 85,
+            b: 141,
+            a: 255,
+        }));
+        let mut dl = Vec::new();
+        image(&mut dl, FB, 32, 24, 0, 2);
+        dl.extend([combine(3, 3), gsp_vertex(0, 3, vertices)]);
+        for high in [0x30, 0x70, 0x80, 0xf0] {
+            dl.push((0xef000000 | G_TC_FILT | high, CVG_DST_FULL));
+            dl.push(if triangle {
+                gsp_1triangle(0, 1, 2)
+            } else {
+                gdp_fill_rectangle(0, 0, 32, 32)
+            });
+        }
+        dl.push((0xef000000 | G_TC_FILT | 0x20, CVG_DST_FULL));
+        let task = built(b, dl);
+        let result = crate::hle::interp::interpret_borrowed(
+            &mut crate::RdramImage::new(&task.rdram),
+            task.entry.into(),
+            crate::hle::gbi::GbiUcode::F3dex2,
+            crate::hle::mem::GbiDataFormat::Fixed,
+            Default::default(),
+            Default::default(),
+            None,
+            Default::default(),
+            &[],
+            false,
+        );
+        assert!(result.diags.is_empty(), "{:?}", result.diags);
+        let modes: Vec<_> = result
+            .scene
+            .framebuffer_pairs
+            .iter()
+            .flat_map(|p| &p.ops)
+            .filter_map(|op| {
+                let index = match op {
+                    crate::scene::SceneOp::Tris(run) => run.render_mode_index,
+                    crate::scene::SceneOp::TexRect {
+                        render_mode_index, ..
+                    } => *render_mode_index,
+                    _ => return None,
+                };
+                let mode = result.scene.render_modes[index as usize];
+                Some((mode.rgb_dither, mode.alpha_dither))
+            })
+            .collect();
+        assert_eq!(
+            modes,
+            [(0, 3), (1, 3), (2, 0), (3, 3)],
+            "triangle={triangle}"
+        );
+    }
+}
+
+#[test]
 fn writeback_cvg_policy_survives_later_othermode() {
     for triangle in [false, true] {
         let mut b = DlBuilder::new();
@@ -464,6 +531,7 @@ fn viscvg_render_mode_switch_rebuilds_triangle_texture_dependencies() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu {
+    mod guest_bytes;
     mod triangles;
     use super::*;
     use crate::{Hardware, Rdram, RdramImage, Renderer};
@@ -607,10 +675,11 @@ mod gpu {
 
     fn run_compatibility(r: &mut Renderer, memory: &mut Memory, task: Built) {
         memory.0[..FB as usize].copy_from_slice(&task.rdram[..FB as usize]);
-        let coherence = r.inner.coherence.as_mut().unwrap();
-        coherence.begin_task();
-        coherence.release_changed(&memory.rdram()).unwrap();
-        r.inner.import_existing(&r.device, &r.queue);
+        if let Some(coherence) = &mut r.inner.coherence {
+            coherence.begin_task();
+            coherence.release_changed(&memory.rdram()).unwrap();
+            r.inner.import_existing(&r.device, &r.queue);
+        }
         let result = crate::hle::interp::interpret_borrowed(
             &mut memory.rdram(),
             task.entry.into(),
@@ -636,9 +705,11 @@ mod gpu {
             r.last_scanout_addr = Some(id);
             r.last_backend_was_image = true;
         }
-        for patch in r.inner.coherence.as_mut().unwrap().finish(&r.device) {
-            memory.0[patch.address as usize..patch.address as usize + patch.bytes.len()]
-                .copy_from_slice(&patch.bytes);
+        if let Some(coherence) = &mut r.inner.coherence {
+            for patch in coherence.finish(&r.device) {
+                memory.0[patch.address as usize..patch.address as usize + patch.bytes.len()]
+                    .copy_from_slice(&patch.bytes);
+            }
         }
         r.frame_scenes.push(result.scene);
     }
@@ -1091,20 +1162,18 @@ mod gpu {
                         .as_ref()
                         .unwrap()
                         .owners
-                        .0
+                        .ranges
                         .iter()
                         .map(|(&address, range)| {
-                            (
-                                address,
-                                range.writer,
-                                range.generation,
-                                range.bytes.clone(),
-                                range.foreign,
-                            )
+                            (address, range.writer, range.generation, range.bytes.clone())
                         })
                         .collect::<Vec<_>>()
                 };
                 assert_eq!(owners(&r), owners(&control));
+                assert_eq!(
+                    r.inner.coherence.as_ref().unwrap().owners.foreign,
+                    control.inner.coherence.as_ref().unwrap().owners.foreign
+                );
                 assert_eq!(pixels(&mut r, FB, 2, 1), pixels(&mut control, FB, 2, 1));
                 assert_eq!(pixels(&mut r, FB, 2, 1), [0, 0, 0, 255, 0, 0, 255, 255]);
                 assert_eq!(r.rdp, control.rdp);
@@ -1147,6 +1216,10 @@ mod gpu {
                 assert_eq!(r.rdp, control.rdp);
                 assert_eq!(r.inner.target_descriptors, control.inner.target_descriptors);
                 assert_eq!(owners(&r), owners(&control));
+                assert_eq!(
+                    r.inner.coherence.as_ref().unwrap().owners.foreign,
+                    control.inner.coherence.as_ref().unwrap().owners.foreign
+                );
             }
         }
     }
@@ -1174,7 +1247,7 @@ mod gpu {
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert!(!r.take_guest_writes().is_empty());
         assert!(r.inner.has_fb(u64::from(FB)));
-        assert!(!r.inner.coherence.as_ref().unwrap().owners.0.is_empty());
+        assert!(!r.inner.coherence.as_ref().unwrap().owners.ranges.is_empty());
     }
 
     #[test]
@@ -1472,7 +1545,7 @@ mod gpu {
                 }
             })
             .collect::<Vec<_>>();
-        assert_eq!(counts, [3, 6]);
+        assert_eq!(counts, [3, 3, 3]);
         for patch in r.take_guest_writes() {
             memory.0[patch.address as usize..patch.address as usize + patch.bytes.len()]
                 .copy_from_slice(&patch.bytes);
@@ -1554,7 +1627,7 @@ mod gpu {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(runs, [6]);
+            assert_eq!(runs, [3, 3]);
         }
     }
 
@@ -2080,7 +2153,7 @@ mod gpu {
             assert_eq!(summary.termination, crate::inspect::WalkTermination::End);
             r.set_guest_writeback(true);
             assert!(r.take_guest_writes().is_empty());
-            assert!(r.inner.coherence.as_ref().unwrap().owners.0.is_empty());
+            assert!(r.inner.coherence.as_ref().unwrap().owners.ranges.is_empty());
             let summary = r.process_dl(
                 &memory,
                 entry,

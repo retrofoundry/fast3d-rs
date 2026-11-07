@@ -17,12 +17,14 @@ pub(crate) struct Copies {
     pending: HashMap<usize, Vec<PendingDecode>>,
     order: HashMap<usize, usize>,
     pipeline: Option<DecodePipeline>,
+    word_pipeline: Option<wgpu::RenderPipeline>,
     failed: HashMap<usize, crate::DiagKind>,
 }
 
 struct Snapshot {
     owner: Weak<FramebufferCopy>,
     native: wgpu::Buffer,
+    guest: Option<wgpu::Buffer>,
     image: Option<SnapshotImage>,
 }
 
@@ -69,6 +71,62 @@ pub(crate) fn key(copy: &Arc<FramebufferCopy>) -> usize {
 }
 
 impl Copies {
+    pub(in crate::render) fn word_pipeline(
+        &mut self,
+        device: &wgpu::Device,
+        textured: &super::super::TexturedPipeline,
+    ) -> &wgpu::RenderPipeline {
+        self.word_pipeline.get_or_insert_with(|| {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("copy-guest-words"),
+                source: wgpu::ShaderSource::Wgsl(
+                    format!(
+                        "{}\n{}",
+                        include_str!("../combiner_prelude.wgsl"),
+                        "@fragment fn fs_copy_words(in: VsOut) -> @location(0) vec4<f32> {
+    let r = eval_combiner(in);
+    return vec4<f32>(r.rgb, r.alpha);
+}",
+                    )
+                    .into(),
+                ),
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("copy-guest-words"),
+                bind_group_layouts: &[
+                    Some(textured.bind_group_layout()),
+                    Some(textured.uniform_bind_group_layout()),
+                ],
+                immediate_size: 0,
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("copy-guest-words"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[super::super::OutVertex::layout()],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_copy_words"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        })
+    }
+
     pub(crate) fn source_scale(&self, copy: &Arc<FramebufferCopy>, current: u32) -> u32 {
         self.snapshots.get(&key(copy)).map_or(current, |snapshot| {
             snapshot
@@ -83,6 +141,7 @@ impl Copies {
         device: &wgpu::Device,
         copies: impl Iterator<Item = Arc<FramebufferCopy>>,
         scale: u32,
+        writeback: bool,
     ) {
         self.snapshots
             .retain(|_, snapshot| snapshot.owner.strong_count() != 0);
@@ -119,6 +178,14 @@ impl Copies {
                 Snapshot {
                     owner: Arc::downgrade(&copy),
                     native: buffer,
+                    guest: writeback.then(|| {
+                        device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("framebuffer-guest-words"),
+                            size: u64::from(copy.size),
+                            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                            mapped_at_creation: false,
+                        })
+                    }),
                     image,
                 },
             );
@@ -140,7 +207,7 @@ impl Copies {
         }
         let EncodedInput::Tmem(bank) = request.encoded.input();
         let mut bytes = bank.to_vec();
-        bytes.resize(4096 + 4096 * 4, 0);
+        bytes.resize(4096 + 4096 * 8, 0);
         let scale = if enhanced {
             request
                 .tags
@@ -183,7 +250,13 @@ impl Copies {
                 };
                 bytes.resize(bytes.len() + source.size() as usize, 0);
                 sources.push((source.clone(), offset));
-                (offset / 4) as u32
+                let guest_offset = snapshot.guest.as_ref().map_or(0, |guest| {
+                    let guest_offset = bytes.len() as u64;
+                    bytes.resize(bytes.len() + guest.size() as usize, 0);
+                    sources.push((guest.clone(), guest_offset));
+                    (guest_offset / 4) as u32
+                });
+                [(offset / 4) as u32, guest_offset]
             });
         }
         for (index, tag) in request.tags.bytes.iter().enumerate() {
@@ -208,13 +281,18 @@ impl Copies {
                     let meta = (metadata + index * 2) * 4;
                     bytes[meta..meta + 4].copy_from_slice(&(span.stride / 4).to_le_bytes());
                     bytes[meta + 4..meta + 8].copy_from_slice(&image.source_scale.to_le_bytes());
-                    (offsets[&tag.copy] + (span.offset / 4) as u32 + x * image.source_scale) * 2
+                    (offsets[&tag.copy][0] + (span.offset / 4) as u32 + x * image.source_scale) * 2
                         + (tag.pointer & 1)
                         + 1
                 } else {
-                    offsets[&tag.copy] * 2 + tag.pointer + 1
+                    offsets[&tag.copy][0] * 2 + tag.pointer + 1
                 };
                 bytes[4096 + index * 4..4100 + index * 4].copy_from_slice(&pointer.to_le_bytes());
+                if offsets[&tag.copy][1] != 0 {
+                    let guest_pointer = offsets[&tag.copy][1] * 2 + tag.pointer + 1;
+                    let start = 4096 + (4096 + index) * 4;
+                    bytes[start..start + 4].copy_from_slice(&guest_pointer.to_le_bytes());
+                }
             }
         }
         let pipeline = self
@@ -271,11 +349,12 @@ impl Copies {
     pub(in crate::render) fn copy(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
         copy: &Arc<FramebufferCopy>,
         targets: &HashMap<super::super::workload::TargetId, super::Framebuffer>,
         versions: &HashMap<super::coherence::Writer, wgpu::Texture>,
         presentation_versions: &HashMap<super::coherence::Writer, wgpu::Texture>,
-        owners: Option<&super::coherence::Ownership>,
+        coherence: Option<&super::coherence::Coherence>,
         profiling: &Recorder,
     ) {
         use super::super::workload::TargetId;
@@ -283,6 +362,11 @@ impl Copies {
         let key = key(copy);
         let snapshot = &self.snapshots[&key];
         let buffer = &snapshot.native;
+        let owners = coherence.map(|c| &c.owners);
+        let mut guest = snapshot
+            .guest
+            .as_ref()
+            .map(|_| vec![0u8; copy.size as usize]);
         for (span_index, span) in copy.spans.iter().enumerate() {
             let start = copy.source.address
                 + u64::from(span.origin[1] * copy.source.layout.width + span.origin[0]) * 2;
@@ -290,10 +374,10 @@ impl Copies {
             while x < span.width {
                 let address = start + u64::from(x) * 2;
                 let owned = owners
-                    .and_then(|owners| owners.0.range(..=address).next_back())
+                    .and_then(|owners| owners.ranges.range(..=address).next_back())
                     .filter(|(start, range)| address < **start + range.bytes.len() as u64);
                 let end = owners
-                    .and_then(|owners| owners.0.range(address..).next())
+                    .and_then(|owners| owners.ranges.range(address..).next())
                     .map_or(start + u64::from(span.width) * 2, |(&next, _)| next);
                 let (writer, end) = owned.map_or(
                     (
@@ -406,8 +490,20 @@ impl Copies {
                     );
                 }
                 profiling.count("framebuffer.copy_bytes", u64::from(width) * 4);
+                if let (Some(coherence), Some(guest)) = (coherence, guest.as_mut()) {
+                    for i in 0..width {
+                        if let Some(word) = coherence.guest_word(address + u64::from(i) * 2) {
+                            let packed = u32::from(word) | (1 << 16);
+                            let offset = (span.buffer_offset + (x + i) * 4) as usize;
+                            guest[offset..offset + 4].copy_from_slice(&packed.to_le_bytes());
+                        }
+                    }
+                }
                 x += width;
             }
+        }
+        if let Some(guest) = guest {
+            queue.write_buffer(snapshot.guest.as_ref().unwrap(), 0, &guest);
         }
         self.encode(encoder, self.order[&key], profiling);
     }

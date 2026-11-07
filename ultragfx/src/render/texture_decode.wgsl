@@ -29,8 +29,14 @@ fn framebuffer_ia(color: vec4<f32>) -> vec4<f32> {
 fn byte_at(address: u32) -> u32 {
     let pointer = framebuffer_pointer(address);
     if pointer != 0u {
+        let guest_pointer = encoded[params.input.y + 4096u + address];
+        if guest_pointer != 0u {
+            let guest = encoded[(guest_pointer - 1u) >> 1u];
+            if (guest & 65536u) != 0u {
+                return (guest >> (8u * (1u - ((guest_pointer - 1u) & 1u)))) & 255u;
+            }
+        }
         let color = vec4<u32>(round(framebuffer_color(pointer) * 255.0));
-        // RGBA16 keeps RGB's top five bits and bit 2 of the stored coverage alpha.
         let packed = ((color.r >> 3u) << 11u) | ((color.g >> 3u) << 6u) | ((color.b >> 3u) << 1u) | ((color.a >> 2u) & 1u);
         return (packed >> (8u * (1u - ((pointer - 1u) & 1u)))) & 255u;
     }

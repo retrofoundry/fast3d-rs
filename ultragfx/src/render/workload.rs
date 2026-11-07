@@ -629,8 +629,53 @@ impl SceneRenderer {
                     _ => None,
                 }),
             self.render_scale,
+            self.coherence.is_some(),
         );
         self.upload_materials(device, queue, &inputs.textures);
+        let mut copy_bindings = std::collections::HashMap::new();
+        if self.coherence.is_some() {
+            use crate::hle::{
+                framebuffer_load::FramebufferTexture,
+                texture_request::{EncodedTextureRequest, TextureSource},
+            };
+            use std::sync::Arc;
+            let mut builder = super::texture_bindings::BindingBuilder {
+                device,
+                queue,
+                layout: self.textured.bind_group_layout(),
+                samplers: &self.samplers,
+                dummy: &self.dummy_view,
+                resources: &mut self.texture_resources,
+                copies: &mut self.framebuffer_copies,
+                profiling: &self.profiling,
+                presentation: false,
+            };
+            for target in &inputs.targets {
+                for slot in 0..target.operations.len() {
+                    let Some(index) = target.copy_material(slot) else {
+                        continue;
+                    };
+                    let TextureSource::Framebuffer(request) =
+                        &inputs.textures[index as usize].texture.source
+                    else {
+                        continue;
+                    };
+                    copy_bindings.entry(index).or_insert_with(|| {
+                        let guest = Arc::new(FramebufferTexture {
+                            encoded: EncodedTextureRequest::from_owned_parts(
+                                request.encoded.input().clone(),
+                                request.encoded.recipe().clone(),
+                            ),
+                            tags: request.tags.clone(),
+                            materialize: true,
+                        });
+                        let mut texture = inputs.textures[index as usize].clone();
+                        texture.texture.source = TextureSource::Framebuffer(guest.clone());
+                        (builder.build(&texture, None), guest)
+                    });
+                }
+            }
+        }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("workload"),
         });
@@ -655,13 +700,32 @@ impl SceneRenderer {
             {
                 for op in &target.operations {
                     if let DrawInputs::FramebufferCopy(copy) = &op.draw {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(coherence) = &mut self.coherence {
+                            let writer = super::framebuffers::coherence::Writer {
+                                address: copy.source.address,
+                                layout: copy.source.layout,
+                                depth: false,
+                            };
+                            if coherence.pending_overlaps(writer, copy.source.height) {
+                                queue.submit([encoder.finish()]);
+                                self.profiling.count("submissions", 1);
+                                coherence.resolve(device);
+                                encoder = device.create_command_encoder(
+                                    &wgpu::CommandEncoderDescriptor {
+                                        label: Some("framebuffer-load"),
+                                    },
+                                );
+                            }
+                        }
                         self.framebuffer_copies.copy(
                             &mut encoder,
+                            queue,
                             copy,
                             &self.framebuffers,
                             &self.color_versions,
                             &self.presentation_versions,
-                            self.coherence.as_ref().map(|c| &c.owners),
+                            self.coherence.as_ref(),
                             &self.profiling,
                         );
                     }
@@ -861,11 +925,12 @@ impl SceneRenderer {
                         }
                         self.framebuffer_copies.copy(
                             &mut encoder,
+                            queue,
                             copy,
                             &self.framebuffers,
                             &self.color_versions,
                             &self.presentation_versions,
-                            self.coherence.as_ref().map(|c| &c.owners),
+                            self.coherence.as_ref(),
                             &self.profiling,
                         );
                     } else {
@@ -1310,11 +1375,12 @@ impl SceneRenderer {
                     }
                     self.framebuffer_copies.copy(
                         &mut encoder,
+                        queue,
                         copy,
                         &self.framebuffers,
                         &self.color_versions,
                         &self.presentation_versions,
-                        self.coherence.as_ref().map(|c| &c.owners),
+                        self.coherence.as_ref(),
                         &self.profiling,
                     );
                     start += 1;
@@ -1658,6 +1724,60 @@ impl SceneRenderer {
                     drop(pass);
                     if snapshot_bg.is_some() {
                         delta_snapshot_bgs[usize::from(presentation)] = snapshot_bg;
+                    }
+                }
+                if source_valid[start] {
+                    if let Some(binding) = target
+                        .copy_material(start)
+                        .and_then(|index| copy_bindings.get(&index).map(|(binding, _)| binding))
+                    {
+                        let texture =
+                            device.create_texture(&super::framebuffers::color_descriptor(
+                                "copy-guest-words",
+                                (native_w, native_allocation_height),
+                            ));
+                        let view = texture.create_view(&Default::default());
+                        let pipeline = self
+                            .framebuffer_copies
+                            .word_pipeline(device, &self.textured_fb)
+                            .clone();
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("copy-guest-words"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                        pass.set_pipeline(&pipeline);
+                        pass.set_viewport(0.0, 0.0, native_w as f32, native_h as f32, 0.0, 1.0);
+                        let (x, y, w, h) = target.operations[start].scissor;
+                        if w != 0 && h != 0 {
+                            pass.set_scissor_rect(x, y, w, h);
+                            pass.set_vertex_buffer(
+                                0,
+                                upload.rectangles.as_ref().unwrap().slice(..),
+                            );
+                            pass.set_bind_group(0, &binding.bind_group, &[]);
+                            pass.set_bind_group(1, &upload.uniforms, &[(start * 256) as u32]);
+                            let vertex = target.rect_indices[start] * 6;
+                            pass.draw(vertex..vertex + 6, 0..1);
+                        }
+                        drop(pass);
+                        self.coherence.as_mut().unwrap().snapshot_copy_words(
+                            device,
+                            &mut encoder,
+                            &texture,
+                            start,
+                        );
                     }
                 }
                 start = end;
