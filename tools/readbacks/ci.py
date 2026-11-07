@@ -40,7 +40,13 @@ def test_commands(checkout, config, system):
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_matches_f4b3240",
                            "tests::framebuffer_coherence::gpu::compatibility_literal_fill_then_invalid_projection_matches_67345dc"]]
     if (checkout / "ultragfx/src/render/upscaling_tests.rs").is_file():
-        commands[0].append("render::upscaling_tests::")
+        if config == "all-features":
+            commands[0].append("render::upscaling_tests::")
+        else:
+            commands[0].extend([
+                "render::upscaling_tests::triangle_half_target_pixel_offset_uses_draw_height_after_retained_growth",
+                "render::upscaling_tests::native_stream_is_identical_and_presentation_has_new_samples_without_writeback",
+            ])
     if (checkout / "ultragfx/src/render/framebuffers/copies_tests.rs").is_file():
         commands[0].append("render::framebuffers::copies::tests::")
     commands[0].extend(["hle::capture::tests::legacy_scales_are_ignored_and_v3_preserves_effective_scale",

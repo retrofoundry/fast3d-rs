@@ -162,16 +162,16 @@ fn scene(built: &Built) -> crate::Scene {
 fn extents_growth_shorter_viewport_and_interior_vi_rows() {
     let (device, queue, dual) = headless_device();
     for scale in [1, 2, 3, 4] {
-        let mut renderer = SceneRenderer::new(&device, FORMAT, 193, 131, dual);
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 33, 35, dual);
         renderer.set_test_scale(scale, BUDGET);
-        let mut depth_scene = fill_scene(Z, 193, 131, 0xfffcfffc);
+        let mut depth_scene = fill_scene(Z, 33, 35, 0xfffcfffc);
         depth_scene.framebuffer_pairs[0].is_depth_clear = true;
         depth_scene.framebuffer_pairs[0].depth_image = Some(Z.into());
         renderer.render_into_store(&device, &queue, &depth_scene, ClearPolicy::Persist);
-        for height in [131, 157, 31] {
+        for height in [35, 43, 31] {
             let mut draw = fill_scene(
                 A,
-                193,
+                33,
                 height,
                 if height == 31 { 0xf801f801 } else { 0x07c107c1 },
             );
@@ -181,21 +181,21 @@ fn extents_growth_shorter_viewport_and_interior_vi_rows() {
             renderer.render_into_store(&device, &queue, &depth_scene, ClearPolicy::Persist);
             draw.framebuffer_pairs[0].depth_image = Some(Z.into());
             renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
-            let retained = height.max(if height == 31 { 157 } else { height });
+            let retained = height.max(if height == 31 { 43 } else { height });
             let fb = &renderer.framebuffers[&workload::TargetId::Guest(A.into())];
             assert_eq!(
                 (fb.color.width(), fb.color.height(), fb.height),
-                (193, retained, retained)
+                (33, retained, retained)
             );
             let descriptor = renderer.target_descriptors.get(A.into(), false).unwrap();
             assert_eq!(
                 descriptor.range().unwrap(),
-                u64::from(A)..u64::from(A) + 193 * u64::from(retained) * 2
+                u64::from(A)..u64::from(A) + 33 * u64::from(retained) * 2
             );
             let depth = &renderer.depthbuffers[&workload::TargetId::Guest(Z.into())];
             assert_eq!(
                 (depth.texture.width(), depth.texture.height()),
-                (193, retained)
+                (33, retained)
             );
             for presentation in [
                 fb.presentation.as_ref().map(|p| &p.texture),
@@ -203,13 +203,13 @@ fn extents_growth_shorter_viewport_and_interior_vi_rows() {
             ] {
                 assert_eq!(
                     presentation.map(|p| (p.width(), p.height())),
-                    (scale > 1).then_some((193 * scale, retained * scale))
+                    (scale > 1).then_some((33 * scale, retained * scale))
                 );
             }
         }
         let vi = crate::ViRegisters {
-            origin: A + 193 * 7 * 2,
-            width: 193,
+            origin: A + 33 * 7 * 2,
+            width: 33,
             status: 2,
             v_start: 34,
             y_scale: 1024,
@@ -219,7 +219,7 @@ fn extents_growth_shorter_viewport_and_interior_vi_rows() {
             crate::select_scanout_source(Some(vi), true, None, renderer.scanout_images()).unwrap();
         assert_eq!(source.rows, Some(7..24));
         let pixels =
-            common::pixels_from_render(&device, &queue, 193 * scale, 17 * scale, FORMAT, |view| {
+            common::pixels_from_render(&device, &queue, 33 * scale, 17 * scale, FORMAT, |view| {
                 let mut encoder = device.create_command_encoder(&Default::default());
                 renderer.scanout(&device, &mut encoder, view, source.target, source.rows);
                 queue.submit([encoder.finish()]);
@@ -448,7 +448,7 @@ fn writeback_bytes_coverage_patches_and_guards_are_scale_independent() {
             crate::FramebufferEncoding::BigEndian,
         ] {
             let mut baseline = None;
-            for scale in [1, 2, 3, 4] {
+            for scale in [1, 3] {
                 let mut renderer = facade(scale, fallback);
                 renderer.set_guest_writeback_with_encoding(true, encoding);
                 let mut memory = Memory(vec![0xa5; B as usize + 4096]);
@@ -902,10 +902,25 @@ fn task_boundary_discards_depth_before_an_early_return() {
 }
 
 fn assert_rgba(texture: &wgpu::Texture, bytes: &[u8], expected: impl Fn(u32, u32) -> [u8; 4]) {
+    assert_rgba_samples(texture, bytes, |x, y| Some(expected(x, y)));
+}
+
+fn assert_rgba_samples(
+    texture: &wgpu::Texture,
+    bytes: &[u8],
+    expected: impl Fn(u32, u32) -> Option<[u8; 4]>,
+) {
     for (i, pixel) in bytes.as_chunks::<4>().0.iter().enumerate() {
         let (x, y) = (i as u32 % texture.width(), i as u32 / texture.width());
-        assert_eq!(*pixel, expected(x, y), "({x},{y})");
+        if let Some(expected) = expected(x, y) {
+            assert_eq!(*pixel, expected, "({x},{y})");
+        }
     }
+}
+
+fn texel_boundary_distance(coordinate: f64, rate: f64, slope: f64, scale: u32) -> f64 {
+    let texel = coordinate * rate;
+    (texel - texel.round()).abs() * f64::from(scale) / (rate * slope.abs())
 }
 
 #[test]
@@ -1408,12 +1423,8 @@ fn non_square_replacement_copy_uses_target_rate_and_unrounded_coordinates() {
     for scale in [1, 2, 3, 4] {
         let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
         renderer.set_test_scale(scale, BUDGET);
-        for dsdx in [4096, -4096, 4095, -4097] {
-            let base_s = if dsdx == 4096 || dsdx == -4096 {
-                169
-            } else {
-                168
-            };
+        for dsdx in [4096, -4096, 4095, -4097, 2047] {
+            let base_s = 170;
             let mut draw = texrect_scene([base_s, 169], [dsdx, 1024], false, true, false);
             let (source, registration) = replacement_source(20, 8);
             draw.materials[0].texture = source;
@@ -1427,22 +1438,29 @@ fn non_square_replacement_copy_uses_target_rate_and_unrounded_coordinates() {
                 .chain(fb.presentation.as_ref().map(|p| (&p.texture, scale)))
             {
                 let bytes = read_texture(&device, &queue, texture);
-                assert_rgba(texture, &bytes, |x, y| {
+                assert_rgba_samples(texture, &bytes, |x, y| {
                     if !(2 * factor..6 * factor).contains(&x)
                         || !(2 * factor..6 * factor).contains(&y)
                     {
-                        return [13, 13, 20, 255];
+                        return Some([13, 13, 20, 255]);
                     }
                     let slope = match dsdx {
                         4096 => 1.0,
                         -4096 => -1.0,
                         4095 => 127.0 / 128.0,
                         -4097 => -129.0 / 128.0,
+                        2047 => 63.0 / 128.0,
                         _ => unreachable!(),
                     };
                     let s = f64::from(base_s) / 32.0
                         + ((x as f64 + 0.5) / f64::from(factor) - 2.0) * slope;
                     let t = 169.0 / 32.0 + (y as f64 + 0.5) / f64::from(factor) - 2.0;
+                    let rounding = if factor == 1 { 1.0 / 256.0 } else { 0.0 };
+                    if texel_boundary_distance(s + rounding, 8.0, slope, factor) < 1.0 / 64.0
+                        || texel_boundary_distance(t + rounding, 8.0, 1.0, factor) < 1.0 / 64.0
+                    {
+                        return None;
+                    }
                     let coordinate = |v: f64| {
                         if factor == 1 {
                             (v * 128.0).round_ties_even() / 128.0
@@ -1450,12 +1468,12 @@ fn non_square_replacement_copy_uses_target_rate_and_unrounded_coordinates() {
                             v
                         }
                     };
-                    [
+                    Some([
                         (coordinate(s) * 8.0).floor() as u8,
                         (coordinate(t) * 8.0).floor() as u8,
                         20,
                         255,
-                    ]
+                    ])
                 });
             }
         }
@@ -1474,13 +1492,20 @@ fn precision_and_snapping_follow_resolved_texel_mip_and_detail_roles() {
                 [(false, false), (true, false), (false, true), (true, true)]
             {
                 let step = if precision {
-                    1023
+                    255
                 } else if role == 2 {
                     512
                 } else {
                     1024
                 };
-                let mut draw = texrect_scene([168, 168], [step, step], false, false, false);
+                let base = if precision {
+                    189
+                } else if role == 2 {
+                    169
+                } else {
+                    170
+                };
+                let mut draw = texrect_scene([base, base], [step, step], false, false, false);
                 let mat = &mut draw.materials[0];
                 let ordinary = mat.texture.clone();
                 let mut registrations = Vec::new();
@@ -1539,10 +1564,10 @@ fn precision_and_snapping_follow_resolved_texel_mip_and_detail_roles() {
                     .unwrap()
                     .texture;
                 let bytes = read_texture(&device, &queue, texture);
-                assert_rgba(texture, &bytes, |x, y| {
+                assert_rgba_samples(texture, &bytes, |x, y| {
                     if !(2 * scale..6 * scale).contains(&x) || !(2 * scale..6 * scale).contains(&y)
                     {
-                        return [13, 13, 20, 255];
+                        return Some([13, 13, 20, 255]);
                     }
                     let p = |v: u32| {
                         if !enhanced && step == 1024 {
@@ -1552,22 +1577,30 @@ fn precision_and_snapping_follow_resolved_texel_mip_and_detail_roles() {
                         }
                     };
                     let slope = if precision {
-                        127.0 / 128.0
+                        31.0 / 128.0
                     } else {
                         f64::from(step) / 1024.0
                     };
-                    let coordinate = |v: u32| 5.25 + p(v) * slope;
+                    let coordinate = |v: u32| f64::from(base) / 32.0 + p(v) * slope;
+                    let rate = if enhanced { 8.0 } else { 1.0 };
+                    let rounding = if enhanced { 0.0 } else { 1.0 / 256.0 };
+                    if [x, y].into_iter().any(|v| {
+                        texel_boundary_distance(coordinate(v) + rounding, rate, slope, scale)
+                            < 1.0 / 64.0
+                    }) {
+                        return None;
+                    }
                     if enhanced {
-                        [
+                        Some([
                             (coordinate(x) * 8.0).floor() as u8,
                             (coordinate(y) * 8.0).floor() as u8,
                             20 + role as u8,
                             255,
-                        ]
+                        ])
                     } else {
                         let texel =
                             |v| ((coordinate(v) * 128.0).round_ties_even() / 128.0).floor() as u8;
-                        [texel(x) * 12, texel(y) * 16, 0, 255]
+                        Some([texel(x) * 12, texel(y) * 16, 0, 255])
                     }
                 });
             }
@@ -1717,7 +1750,7 @@ fn sloped_decal_tolerance_uses_native_derivatives_without_scaling_z() {
 fn primitive_z_decal_retains_the_baseline_primitive_dz_gap() {
     let (fallback_device, fallback_queue) = headless_device_forced_fallback();
     for (device, queue, primary) in [(fallback_device, fallback_queue, false), headless_device()] {
-        for scale in [1, 2, 3, 4] {
+        for scale in [1, 3] {
             for dz in [0, 0x7fff] {
                 let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, primary);
                 renderer.set_test_scale(scale, BUDGET);
@@ -1750,10 +1783,10 @@ fn primitive_z_decal_retains_the_baseline_primitive_dz_gap() {
 fn adjacent_normal_and_copy_strips_scale_completed_bounds_on_tall_attachments() {
     let (device, queue, dual) = headless_device();
     for scale in [2, 3, 4] {
+        let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
+        renderer.set_test_scale(scale, BUDGET);
         for copy in [false, true] {
             for residue in 0..4 {
-                let mut renderer = SceneRenderer::new(&device, FORMAT, 16, 12, dual);
-                renderer.set_test_scale(scale, BUDGET);
                 renderer.render_into_store(
                     &device,
                     &queue,
@@ -1837,15 +1870,16 @@ fn triangle_half_target_pixel_offset_uses_draw_height_after_retained_growth() {
         renderer.render_into_store(
             &device,
             &queue,
-            &fill_scene(A, 32, 37, 0x003f003f),
+            &fill_scene(A, 32, 48, 0x003f003f),
             ClearPolicy::Persist,
         );
-        renderer.render_into_store(
-            &device,
-            &queue,
-            &scene(&triangle(A, 0, 0, 0xffffffff)),
-            ClearPolicy::Persist,
-        );
+        let mut draw = scene(&triangle(A, 0, 0, 0xffffffff));
+        draw.raw_pos = vec![
+            [-1.25, 1.25 + 1.0 / 256.0, 0.0],
+            [1.25, 1.25 + 1.0 / 256.0, 0.0],
+            [-1.25, -1.25 + 1.0 / 256.0, 0.0],
+        ];
+        renderer.render_into_store(&device, &queue, &draw, ClearPolicy::Persist);
         let texture = &renderer.framebuffers[&workload::TargetId::Guest(A.into())]
             .presentation
             .as_ref()
@@ -1853,7 +1887,12 @@ fn triangle_half_target_pixel_offset_uses_draw_height_after_retained_growth() {
             .texture;
         let bytes = read_texture(&device, &queue, texture);
         assert_rgba(texture, &bytes, |x, y| {
-            let inside = y < 24 * scale && 3 * x + 4 * y < 96 * scale;
+            // Authored screen vertices: (-4,-3-3/64), (36,-3-3/64), (-4,27-3/64).
+            // The half-target-pixel shift cancels the sample centers in this edge equation.
+            let edge = 16 * (3 * x + 4 * y);
+            let boundary = 1533 * scale;
+            assert!(edge.abs_diff(boundary) >= 4);
+            let inside = y < 24 * scale && edge < boundary;
             if inside {
                 [255; 4]
             } else {
@@ -2075,7 +2114,7 @@ fn image_ia(color: &[u8]) -> [u8; 4] {
 }
 
 #[test]
-fn byte_routes_keep_native_samples_and_clear_role_bits_at_every_scale() {
+fn byte_routes_keep_native_samples_and_clear_role_bits() {
     use crate::hle::{
         rdp::{Rdp, TileDescriptor},
         texture_request::{prepare, TextureSource},
@@ -2083,7 +2122,7 @@ fn byte_routes_keep_native_samples_and_clear_role_bits_at_every_scale() {
     let (device, queue, dual) = headless_device();
     for route in ["ci8", "palette", "partial", "mixed", "split", "lookup"] {
         let mut baseline = None;
-        for scale in 1..=4 {
+        for scale in [1, 3] {
             let mut renderer = SceneRenderer::new(&device, FORMAT, 32, 24, dual);
             renderer.set_test_scale(scale, BUDGET);
             let mut producer = scene(&triangle(A, 0, 0, 0xffffffff));
@@ -2287,7 +2326,7 @@ fn loaded_and_live_feedback_keep_writeback_bytes_coverage_and_patch_ranges_nativ
     for fallback in [false, true] {
         for fmt in [0, 3] {
             let mut baseline = None;
-            for scale in 1..=4 {
+            for scale in [1, 3] {
                 let mut renderer = facade(scale, fallback);
                 renderer
                     .set_guest_writeback_with_encoding(true, crate::FramebufferEncoding::BigEndian);

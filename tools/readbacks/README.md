@@ -32,7 +32,9 @@ modules in each configuration. The feature-independent `tests::fog` and
 `tests::fog_mirror` suites run once under default to limit repeated WARP shader
 compilation. All-features also runs `tmem_fixture_replay` and the
 tested checkout's `texture_decode_gpu`, `texture_residency`,
-`texture_residency_pressure` and `rt64_v5` integration targets. Metal still runs
+`texture_residency_pressure`, `rt64_v5` and `upscaling` integration targets.
+The full upscaling library module runs under all-features; default and debug-ui
+repeat only the retained-height triangle and native-stream checks. Metal still runs
 the complete workspace suites. This limits repeated WARP shader compilation while
 preserving all 171 parent-comparison rows and the compute/residency execution gates.
 
